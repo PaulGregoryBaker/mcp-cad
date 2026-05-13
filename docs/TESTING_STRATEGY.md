@@ -213,6 +213,16 @@ These tests deploy all BCs together and run realistic user flows.
 - Coverage thresholds
 - Gate evidence bundle generation
 
+## Windows Compatibility Notes
+
+1. Keep Catch2 test and section names ASCII-only
+- Prefer `->` over Unicode arrows in `TEST_CASE` and `SECTION` names.
+- Reason: Windows code page conversion can corrupt non-ASCII names in CTest filter arguments and XML output paths.
+
+2. Do not call fixture helpers that can `SKIP` inside `REQUIRE_NOTHROW`
+- Resolve the fixture path first, then run the non-throw assertion.
+- Reason: nested `SKIP` inside assertions can be interpreted as a failure in Catch2.
+
 ---
 
 ## Traceability Matrix
