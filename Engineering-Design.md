@@ -1,4 +1,4 @@
-# Engineering Design: AI-Driven Sheet Metal MCP
+Engineering Design: AI-Driven Sheet Metal MCP
 
 **Version:** 1.0  
 **Status:** Draft  
@@ -779,7 +779,7 @@ All resources are read-only for the AI Harness. They reflect the current session
 ```json
 {
   "name": "export_production_pack",
-  "description": "Generates the full production output: nested DXFs, STEP assemblies, BOM CSV, and assembly instruction JSON.",
+  "description": "Starts an asynchronous export job that generates the full production output: nested DXFs, STEP assemblies, BOM CSV, and assembly instruction JSON.",
   "inputSchema": {
     "type": "object",
     "properties": {
@@ -797,6 +797,66 @@ All resources are read-only for the AI Harness. They reflect the current session
   "outputSchema": {
     "type": "object",
     "properties": {
+      "job_id": { "type": "string" },
+      "status": {
+        "type": "string",
+        "enum": ["queued", "running", "succeeded", "failed"]
+      },
+      "accepted_at": { "type": "string", "description": "ISO-8601 UTC timestamp when the job was accepted." }
+    },
+    "required": ["job_id", "status", "accepted_at"]
+  }
+}
+```
+
+#### `get_export_job_status`
+
+```json
+{
+  "name": "get_export_job_status",
+  "description": "Returns status and progress information for an export job.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "job_id": { "type": "string" }
+    },
+    "required": ["job_id"]
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "job_id": { "type": "string" },
+      "status": {
+        "type": "string",
+        "enum": ["queued", "running", "succeeded", "failed"]
+      },
+      "progress_pct": { "type": "number", "description": "0 to 100 inclusive." },
+      "started_at": { "type": "string", "description": "ISO-8601 UTC timestamp. Null when queued." },
+      "finished_at": { "type": "string", "description": "ISO-8601 UTC timestamp. Null unless terminal state." },
+      "error_message": { "type": "string", "description": "Populated only when status=failed." }
+    },
+    "required": ["job_id", "status", "progress_pct"]
+  }
+}
+```
+
+#### `get_export_job_result`
+
+```json
+{
+  "name": "get_export_job_result",
+  "description": "Returns generated files and aggregate metadata for a completed export job.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "job_id": { "type": "string" }
+    },
+    "required": ["job_id"]
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "job_id": { "type": "string" },
       "files": {
         "type": "array",
         "items": {
@@ -813,7 +873,7 @@ All resources are read-only for the AI Harness. They reflect the current session
         "description": "Estimated raw material cost based on utilisation and sheet count. Null if material costs not configured."
       }
     },
-    "required": ["files", "part_count"]
+    "required": ["job_id", "files", "part_count"]
   }
 }
 ```
@@ -867,6 +927,9 @@ All tool errors return a structured error with the following fields:
 | `BEND_SEQUENCE_INVALID` | No valid press brake sequence exists | Maybe — redesign geometry |
 | `MATERIAL_NOT_FOUND` | `material_id` not in inventory | No — fix input |
 | `ROLLBACK_TOKEN_EXPIRED` | Session state no longer holds this snapshot | No — session has advanced too far |
+| `EXPORT_JOB_NOT_FOUND` | `job_id` not found in active session | No — fix input |
+| `EXPORT_JOB_NOT_READY` | Export job is not in `succeeded` state yet | Yes — poll `get_export_job_status` |
+| `EXPORT_JOB_FAILED` | Export job reached terminal failure | Maybe — inspect error and retry |
 | `GEOMETRY_ENGINE_FAULT` | OCC kernel exception | No — report bug |
 
 ---
@@ -962,7 +1025,7 @@ For each tool, this table records the split between the underlying geometry stac
 | **OCC/CadQuery** | STEP assembly export; DXF wire export |
 | **Geometry Engine Service** | Retrieves all `UnfoldId`s and `NestLayout` from `NestId`; writes DXF files per sheet |
 | **Manufacturing Domain** | Generates BOM (part number, material, gauge, quantity, weight estimate); generates assembly instruction sequence |
-| **MCP Layer** | Orchestrates file writes to `output_dir`; assembles manifest; returns file list |
+| **MCP Layer** | Enqueues async export job; returns `job_id`; exposes `get_export_job_status` and `get_export_job_result`; enforces job retention for single-session lifecycle |
 
 ### `rollback`
 
@@ -1089,13 +1152,33 @@ Phase D (Production Output + MVP):
 
 ## 6. Open Questions
 
-These must be resolved by the team before or during Phase A.
+Resolved decisions for MVP (updated May 13, 2026).
 
-| # | Question | Impact |
+| # | Decision for MVP | Impact |
 |---|---|---|
-| OQ-01 | Is CadQuery's sheet metal unfold sufficient, or do we need a custom K-factor unfold implementation? | Determines GE-09 complexity (S vs XL) |
-| OQ-02 | Which nesting library? libnest2d has Python bindings but is C++ build complexity. SVGnest is pure JS but requires a Node subprocess. | Determines GE-12 implementation |
-| OQ-03 | Is the bend sequence validator for MVP rule-based (MD-11 as written) or full 3D collision simulation? | MD-11 is M vs L |
-| OQ-04 | Does the MCP need to support multiple concurrent sessions, or is it single-session for MVP? | Changes MCP state management model significantly |
-| OQ-05 | What is the config authoring experience for material inventory and tooling? (Hand-edited YAML vs. admin UI) | Determines INF-02 scope |
-| OQ-06 | Is `export_production_pack` a synchronous MCP tool call or an async job with polling? | Large exports may exceed MCP timeout limits |
+| OQ-01 | CadQuery unfold is sufficient for MVP. Revisit custom unfold only if validation drift appears in production. | Keeps GE-09 at S/M scope for MVP |
+| OQ-02 | Use `libnest2d` for MVP nesting. Prefer native C++ implementation with a thin integration layer. | Improves deterministic nesting quality; adds native build complexity |
+| OQ-03 | Bend sequence validation is rule-based for MVP. 3D collision simulation is deferred. | Keeps MD-11 at M scope |
+| OQ-04 | MCP session model is single-session for MVP. | Simplifies state and rollback model |
+| OQ-05 | Configuration is authored and updated through MCP tools/APIs (no admin UI in MVP). Tenant-specific overlays are deferred to cloud phase. | Keeps INF-02 scoped to schema + MCP config endpoints |
+| OQ-06 | `export_production_pack` runs as an asynchronous job for MVP. | Avoids MCP timeout pressure; requires job status/polling contract |
+
+### 6.1 Bounded Context Language Recommendations
+
+Language preference order provided: C++ first, then TypeScript, then Python.
+
+| Bounded Context | Recommended Language | Why this is appropriate | MVP Implementation Note |
+|---|---|---|---|
+| Geometry Engine | C++ | Native fit for OCC and `libnest2d`; best runtime and memory characteristics for geometry-heavy workloads. | Expose via a stable C ABI or RPC boundary to keep integration simple. |
+| Anti-Corruption Layer (Feature Extractor) | C++ | Runs close to topology traversal and geometric classification; avoids expensive cross-language data marshalling. | Keep extracted feature DTOs plain and serialization-friendly. |
+| Manufacturing Domain | TypeScript | Strong schema typing and maintainable rules engine ergonomics; good fit for JSON-centric constraints and policy logic. | Implement deterministic rule evaluation with explicit versioned rule packs. |
+| MCP Protocol Layer | TypeScript | Excellent async model, mature MCP/JSON tooling, and clean orchestration for job-based workflows. | Implement async `export_production_pack` with `job_id`, `status`, and result retrieval tool/resource. |
+
+### 6.2 Async Export Contract Status
+
+OQ-06 is now reflected directly in Section 3.3:
+
+1. `export_production_pack` now returns `job_id`, `status`, and `accepted_at`.
+2. `get_export_job_status(job_id)` is defined for queue/progress/terminal states.
+3. `get_export_job_result(job_id)` is defined for completed output retrieval.
+4. Job scope and retention are defined as single-session lifecycle behavior.
