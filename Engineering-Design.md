@@ -24,13 +24,140 @@ These decisions must be resolved before detailed implementation begins. Each one
 
 | # | Decision | Options | Impact |
 |---|---|---|---|
-| D1 | **Geometry stack** | A) Local OCC/CadQuery only  B) Cloud API (Onshape/Fusion) primary  C) Local with cloud fallback | Determines Geometry Engine interface — local calls vs HTTP client |
+| D1 | **Geometry stack** | A) Local **OCCT (official)** only  B) Cloud API (Onshape/Fusion) primary  C) Local with cloud fallback | Determines Geometry Engine interface — local calls vs HTTP client. **OCCT selected for license terms**. Stability mitigations required (see below). |
 | D2 | **Nesting library** | A) libnest2d (C++, local)  B) SVGnest (JS, local)  C) Cloud nesting API | Determines whether nesting is inside Geometry Engine context or a fourth context |
 | D3 | **State persistence** | A) In-memory, session-scoped only  B) Persisted to local SQLite  C) Persisted to remote store | Determines rollback model and version history complexity |
 | D4 | **Auth model** | A) No auth (local only)  B) API key  C) OAuth2 | Determines MCP transport security layer |
 | D5 | **MCP transport** | A) stdio (local Claude Desktop)  B) HTTP/SSE (server mode)  C) Both | Determines deployment topology and session model |
 
-**Recommended defaults for MVP:** D1-A, D2-A (libnest2d via Python bindings), D3-A, D4-A, D5-A. Revisit D5 for cloud/Kubernetes deployment.
+**Recommended defaults for MVP:** D1-A, D2-A (libnest2d via native C++ or Rust FFI), D3-A, D4-A, D5-A. Revisit D5 for cloud/Kubernetes deployment.
+
+#### D1-A Mitigation: OCCT (Official) Stability Strategy
+
+OCCT is the enterprise B-Rep kernel, but its size, build time, and API surface carry stability risk. The following mitigation strategy reduces that risk:
+
+**1. Version Pinning & Stability Baseline**
+- Pin to OCCT LTS release (currently 7.8.x). LTS branches have extended stability windows and fewer breaking API changes.
+- Document the chosen OCCT version in `vcpkg.json` as a lock file. vcpkg will always download the same OCCT commit hash.
+- Test GE-01 through GE-03 (STEP import, topology analysis, manifold check) against the pinned version in a dedicated spike. These are the riskiest OCCT subsystems (file I/O, topology traversal).
+- **Lock file example**: `vcpkg.json` specifies `"opencascade": "7.8.1"` with exact version constraint.
+
+**2. Wrapper/Facade Layer (Critical)**
+- **Do not** call OCCT APIs directly from the MCP layer or Feature Extractor. Instead, create a thin C++ `GeometryServicePort` interface that wraps all OCCT calls.
+- Example structure:
+  ```cpp
+  // geometry_service.hpp — stable interface
+  class GeometryService {
+    TopologyGraph get_topology(const SolidId& id);
+    ManifoldReport check_manifold(const SolidId& id);
+    // ... all operations return stable, serializable types
+  };
+  
+  // geometry_service_impl.cc — OCC-internal implementation
+  // (All BRepAlgoAPI_*, BRepCheck_*, etc. calls hidden here)
+  ```
+- This facade ensures that when OCCT APIs change (e.g., function signature, behavior), you only update the implementation, not 20 call sites.
+- **Risk reduction**: Isolates OCCT API churn from the rest of the codebase.
+
+**3. Compile-Time Risk Mitigation**
+- Use a **dedicated Docker build layer** that caches the OCCT build artifact. Rebuild OCC only on version pin change.
+  ```dockerfile
+  FROM ubuntu:22.04 AS occt-builder
+  RUN apt-get update && apt-get install -y build-essential cmake git
+  # OCCT build takes 40–90 minutes; cache this layer aggressively
+  RUN git clone --branch V7_8_1 https://github.com/Open-Cascade-SRL/OCCT.git \
+    && cd OCCT && mkdir build && cd build && cmake .. && make -j8 && make install
+  
+  FROM ubuntu:22.04 AS app-builder
+  COPY --from=occt-builder /usr/local/lib /usr/local/lib
+  # (Now OCCT is pre-built; your vcpkg/CMake just links it)
+  ```
+- This reduces CI rebuild time from 90 min to 5 min (link-only) until OCCT version changes.
+
+**4. Runtime Stability & Testing**
+- **Unit test each OCCT sub-module independently** (in Phase A spike):
+  - GE-01: `STEPControl_Reader` load + write roundtrip (3–5 test STEP files covering solids, shells, complex topology)
+  - GE-02: Topology traversal (iterate 1000x on a complex part, verify no crashes or memory leaks under AddressSanitizer)
+  - GE-03: `BRepCheck_Analyzer` + `ShapeFix_Shape` (heal non-manifold geometry, verify result is valid)
+- Use **Valgrind** or **AddressSanitizer** in test builds to catch memory corruption early.
+- **Fuzz test** STEP import with malformed files (via libFuzzer) — OCC is robust, but corrupted STEP can reveal edge cases.
+
+**5. API Surface Reduction**
+- Document **which** OCCT APIs are actually used in `docs/OCCT_API_Usage.md`:
+  ```markdown
+  ## OCCT API Surface (MVP)
+  
+  ### Used Classes/Functions
+  - STEPControl_Reader (load STEP files)
+  - STEPControl_Writer (export STEP)
+  - BRepAlgoAPI_Cut (decomposition)
+  - BRepOffsetAPI_MakeFlatFace (unfolding)
+  - BRepTools::Write (DXF export)
+  
+  ### NOT Used (explicitly deferred)
+  - Blend/Fillet (GE-07 spike only)
+  - Parametric modeling (no design history needed)
+  - 2D sketcher (not in scope)
+  ```
+- This keeps the API surface small and makes version upgrades auditable.
+
+**6. OCCT Subsystem Quarantine**
+- High-risk OCCT subsystems for geometry problems:
+  - **Unfolding** (BRepOffsetAPI_MakeFlatFace) — known to fail on complex bend sequences. **Mitigate**: Wrap in error handling; return detailed error on failure, don't crash. Implement GE-09 with fallback to simpler unfold heuristic if official API fails.
+  - **Tab-slot generation** (BRepAlgoAPI_Cut + extrude) — sensitive to exact tolerances. **Mitigate**: Test with kerf offsets 0.1–0.2mm; log tolerance values; validate that cuts actually succeed before registering geometry.
+  - **Heal** (ShapeFix_Shape) — can succeed but produce unexpected topology. **Mitigate**: Always compare `is_manifold` before/after healing; warn if topology changed unexpectedly.
+
+**7. Error Handling & Graceful Degradation**
+- All OCCT calls must be wrapped in try-catch (OCCT can throw on corrupted geometry):
+  ```cpp
+  try {
+    auto result = BRepAlgoAPI_Cut(solid, cutter).Shape();
+  } catch (const Standard_Failure& e) {
+    return Error::GEOMETRY_ENGINE_FAULT with message "Boolean cut failed: " + e.GetMessageString();
+  }
+  ```
+- Return structured errors (not crashes) to the MCP layer. MCP can then decide whether to retry, suggest_tool, or fail the operation.
+
+**8. Pre-built OCCT Binaries (Optional, High-ROI)**
+- After stabilizing on OCCT 7.8.1, **pre-build and host OCCT binaries** in a private artifact repository (GitHub Releases, or cloud storage).
+- This eliminates the 90-minute OCCT build from every CI run.
+- Update the Docker build to download pre-built OCCT instead of compiling:
+  ```dockerfile
+  RUN curl -L https://releases.example.com/occt-7.8.1-ubuntu22.tar.gz | tar xz -C /usr/local
+  ```
+- **Trade-off**: Requires hosting infrastructure, but saves 90+ minutes per CI run across the whole team.
+
+**9. OCCT Upgrade Path**
+- Plan OCCT upgrades in **minor version steps only** (7.8.1 → 7.8.2, not 7.7.x → 7.9.x).
+- Each minor upgrade: re-run the Phase A spike tests (GE-01, GE-02, GE-03) before merging.
+- Major version upgrades (7.x → 8.x) deferred to post-MVP.
+- Document upgrade decisions and blockers in `OCCT_UPGRADES.md`.
+
+**10. Monitoring & Observability**
+- Add logging to Geometry Engine:
+  ```cpp
+  LOG(INFO) << "BRepAlgoAPI_Cut: solid_id=" << solid_id 
+            << " cutter_bounds_mm=" << cutter.bounds() 
+            << " result_face_count=" << result_faces.size();
+  ```
+- This makes it easy to correlate failures to specific geometry characteristics.
+- In production, collect logs from failed exports — they become the data for post-MVP refinement.
+
+---
+
+**Summary Risk Reduction:**
+- **Version pinning** ✓ Eliminate API churn surprises
+- **Facade layer** ✓ Isolate OCCT API changes
+- **Docker layer caching** ✓ Reduce CI time from 90→5 min
+- **Comprehensive testing** ✓ Catch failures in development, not production
+- **API surface audit** ✓ Know exactly which OCCT you're using
+- **Subsystem quarantine** ✓ Understand known-brittle areas
+- **Graceful errors** ✓ Never crash; return actionable errors
+- **Pre-built binaries** ✓ Eliminate repeated 90-minute builds
+- **Upgrade strategy** ✓ Controlled version progression
+- **Observability** ✓ Debug production issues with logs
+
+With these mitigations, OCCT stability risk is **reduced to acceptable** for MVP scope.
 
 ---
 
@@ -1095,7 +1222,7 @@ Stories are sized as S (< 1 day), M (1–2 days), L (3–5 days).
 
 | ID | Story | Size | Notes |
 |---|---|---|---|
-| MCP-01 | MCP server scaffold (FastMCP or mcp-python-sdk, stdio transport) | M | |
+| MCP-01 | MCP server scaffold (`@modelcontextprotocol/sdk`, stdio transport) | M | NAPI addon exposes geometry layer to TypeScript MCP SDK |
 | MCP-02 | Resource server: `context://`, `logistics://`, `manufacturing://` | M | Read from config YAML |
 | MCP-03 | Resource server: `geometry://part/{id}/topology` | S | Reads from Geometry Engine registry |
 | MCP-04 | Resource server: `geometry://part/{id}/features` | S | Calls Feature Extractor |
@@ -1165,14 +1292,27 @@ Resolved decisions for MVP (updated May 13, 2026).
 
 ### 6.1 Bounded Context Language Recommendations
 
-Language preference order provided: C++ first, then TypeScript, then Python.
+Language preference order provided: C++ first, then TypeScript, then Python. Rust is included as a co-primary option for geometry-layer contexts.
 
-| Bounded Context | Recommended Language | Why this is appropriate | MVP Implementation Note |
-|---|---|---|---|
-| Geometry Engine | C++ | Native fit for OCC and `libnest2d`; best runtime and memory characteristics for geometry-heavy workloads. | Expose via a stable C ABI or RPC boundary to keep integration simple. |
-| Anti-Corruption Layer (Feature Extractor) | C++ | Runs close to topology traversal and geometric classification; avoids expensive cross-language data marshalling. | Keep extracted feature DTOs plain and serialization-friendly. |
-| Manufacturing Domain | TypeScript | Strong schema typing and maintainable rules engine ergonomics; good fit for JSON-centric constraints and policy logic. | Implement deterministic rule evaluation with explicit versioned rule packs. |
-| MCP Protocol Layer | TypeScript | Excellent async model, mature MCP/JSON tooling, and clean orchestration for job-based workflows. | Implement async `export_production_pack` with `job_id`, `status`, and result retrieval tool/resource. |
+| Bounded Context | Primary Option | Alternative Option | Why | MVP Implementation Note |
+|---|---|---|---|---|
+| Geometry Engine | C++ | **Rust** (cxx or autocxx crate for OCC bindings) | C++ provides native OCC integration with zero overhead. Rust provides equivalent performance with memory safety, no undefined behaviour, and safer concurrency — at the cost of a steeper FFI binding setup. | Expose via a stable C ABI (C++) or NAPI/cdylib (Rust) boundary to keep TypeScript integration consistent. |
+| Anti-Corruption Layer (Feature Extractor) | C++ | **Rust** | Feature extraction is traversal-heavy and pure logic — Rust's ownership model is a natural fit, making topology graph traversal safe and concurrent. | Keep extracted feature DTOs as plain, serialization-friendly structs. Serde (Rust) or plain C structs (C++) both map cleanly to JSON for the TypeScript layer. |
+| Manufacturing Domain | TypeScript | — | Strong schema typing and maintainable rules engine ergonomics; good fit for JSON-centric constraints and policy logic. | Implement deterministic rule evaluation with explicit versioned rule packs. |
+| MCP Protocol Layer | TypeScript | — | Excellent async model, mature MCP/JSON tooling, and clean orchestration for job-based workflows. | Implement async `export_production_pack` with `job_id`, `status`, and result retrieval tool/resource. |
+
+#### Rust vs C++ Trade-off for Geometry Contexts
+
+| Factor | C++ | Rust |
+|---|---|---|
+| OCC binding maturity | Native — OCC is C++, zero friction | Thin — `cxx` crate or manual `extern C` wrappers required |
+| Memory safety | Manual — UB and dangling pointers are possible | Guaranteed — borrow checker enforces at compile time |
+| Build toolchain | CMake + Conan/vcpkg (complex) | Cargo (excellent) + cxx build.rs (moderate complexity) |
+| `libnest2d` integration | Direct — C++ to C++ | Via `cxx` or raw `extern C` bindings |
+| Debug ergonomics | GDB/LLDB + sanitisers | LLDB + cargo test; excellent compiler error messages |
+| Concurrency safety | Manually managed | Enforced by type system — ideal for geometry worker pool |
+| Cloud scalability | Shared library or Docker layer | Single static binary; minimal Docker image |
+| Team learning curve | Moderate (assumes OCC knowledge) | Steep (borrow checker) + moderate (OCC binding setup) |
 
 ### 6.2 Async Export Contract Status
 
@@ -1182,3 +1322,121 @@ OQ-06 is now reflected directly in Section 3.3:
 2. `get_export_job_status(job_id)` is defined for queue/progress/terminal states.
 3. `get_export_job_result(job_id)` is defined for completed output retrieval.
 4. Job scope and retention are defined as single-session lifecycle behavior.
+
+### 6.3 Recommended Technology Stack & Tool Selection
+
+**Full Stack: C++ + TypeScript for MVP**
+
+| Layer | Component | Chosen Tool | Why Selected |
+|-------|-----------|-------------|-------------|
+| **Geometry Library** | B-Rep kernel | OCCT (official v7.8.x) | License compliance, full feature set, all B-Rep/topology APIs. See §1 pre-decisions for stability mitigations. |
+| **C++ Build System** | Build orchestration | CMake | OCCT native integration; all OCC tutorials use it; NAPI addon patterns well-established with `cmake-js` |
+| **C++ Package Manager** | Dependency management | vcpkg (manifest mode) | First-class CMake integration; OCC recipe included; pre-built binaries reduce build time; `vcpkg.json` provides version lock |
+| **C++ → TS Interop** | Native binding layer | NAPI via `cmake-js` | Zero IPC latency; in-process geometry registry; matches single-session architecture; no serialization overhead for topology graphs |
+| **Nesting Library** | 2D bin-packing | libnest2d (C++, direct link) | Header-heavy, links directly into NAPI addon; avoids subprocess overhead; deterministic polygon packing |
+| **TypeScript Runtime** | Node.js execution | Node.js LTS 22.x | NAPI first-class support; official MCP SDK designed for Node; mature Docker/Kubernetes patterns |
+| **MCP SDK** | Protocol implementation | `@modelcontextprotocol/sdk` | Official Anthropic SDK; stdio transport native; tool/resource/async support; actively maintained |
+| **Async Job Queue** | Export job management | In-process Promise queue | Single-session MVP; design interface so BullMQ/Redis can slot in for cloud phase |
+| **TypeScript Testing** | Unit & integration test | Vitest | Fast, TS-native, modern tooling; excellent ESM/NAPI addon support |
+| **C++ Testing** | Unit test framework | Catch2 | Header-only, CMake-integrated, BDD-style syntax; excellent for feature-level acceptance tests |
+| **Container OS** | Docker base image | Ubuntu 22.04 multi-stage | Reliable apt ecosystem; OCC builds stably; cached OCCT build layer eliminates 90-min rebuilds |
+| **CI Optimization** | Build artifact caching | Docker layer caching + pre-built OCCT binaries | Reduces typical CI build from 90+ min to 5 min (link-only) after OCCT version pins |
+
+#### Rationale for Key Decisions
+
+**NAPI (not gRPC sidecar)**
+- Geometry state is in-memory and session-scoped; direct memory access is simpler than RPC.
+- Topology graphs are large (thousands of face/edge records); serialization would be expensive.
+- Single-session constraint means process lifecycle is simple — no need for independent service management.
+- **Cloud migration path**: After MVP, replace NAPI addon with gRPC sidecar without changing MCP tool contracts.
+
+**libnest2d (not SVGnest or cloud API)**
+- Keeps nesting deterministic and fast; no external API dependency.
+- Header-only library; links directly; no subprocess latency.
+- Complements C++ geometry layer; avoids jumping to JavaScript for critical logic.
+
+**In-process Promise queue (not BullMQ)**
+- Single-session MVP has no need for job persistence or cross-process coordination.
+- Job interface designed to accept future `jobId` standard (compatible with BullMQ).
+- Avoids Redis dependency for MVP; adds zero operational complexity.
+
+**Vitest (not Jest)**
+- Modern, faster; zero config for TypeScript via Vite.
+- Native ESM support; better NAPI addon integration.
+- Smaller footprint; no unnecessary Jest plugins.
+
+**Multi-stage Docker + cached OCCT**
+- OCCT compilation takes 40–90 minutes and dominates build time.
+- Caching the first stage eliminates rebuild unless OCCT version pin changes.
+- Pre-built OCCT binaries (optional, post-MVP) further reduce CI from 5 min to 30 sec.
+
+---
+
+#### OCCT Stability Mitigations (Detailed Implementation)
+
+Because OCCT is large and complex, the following mitigations reduce runtime and build-time risk:
+
+**Version Pinning** 
+- Lock OCCT to 7.8.x LTS in `vcpkg.json` with exact version constraint.
+- Document in `docs/OCCT_VERSION.md` why this version was chosen and when upgrades are planned.
+- Only minor version bumps (7.8.1 → 7.8.2) in MVP; major upgrades (7.x → 8.x) post-MVP.
+
+**Facade/Wrapper Layer**
+- All OCCT calls hidden behind a `GeometryService` C++ interface.
+- Implementation details (BRepAlgoAPI_*, BRepCheck_*, etc.) isolated in one translation unit.
+- Benefits: When OCCT APIs change, only the implementation needs updating; call sites unaffected.
+
+**Build Layer Caching**
+- Docker multi-stage: OCCT build in first stage, cached aggressively; app build uses cached OCCT in second stage.
+- Typical CI: first build (90 min), subsequent builds (5 min) until OCCT version pin changes.
+- Example:
+  ```dockerfile
+  FROM ubuntu:22.04 AS occt-builder
+  RUN mkdir -p /build/occt && cd /build/occt \
+    && git clone --branch V7_8_1 https://github.com/Open-Cascade-SRL/OCCT.git . \
+    && mkdir build && cd build && cmake .. && make -j8 && make install
+  
+  FROM ubuntu:22.04 AS app-builder
+  COPY --from=occt-builder /usr/local/lib /usr/local/lib
+  # (Rest of app build; OCCT already compiled, just linking)
+  ```
+
+**Subsystem Quarantine**
+- Document known-brittle OCCT operations:
+  - **Unfolding** (BRepOffsetAPI_MakeFlatFace): wrap with error handling; return graceful error if fails; implement GE-09 with fallback heuristic.
+  - **Tab-slot generation** (BRepAlgoAPI_Cut): test with exact kerf offsets (0.1–0.2 mm); log tolerance; validate success before registering.
+  - **Healing** (ShapeFix_Shape): always compare `is_manifold` before/after; warn if topology unexpectedly changed.
+
+**Comprehensive Testing**
+- Unit test each OCCT subsystem in Phase A spike: GE-01 (STEP import), GE-02 (topology), GE-03 (healing).
+- Use AddressSanitizer (`-fsanitize=address`) to catch memory corruption early.
+- Fuzz test STEP import with malformed files (libFuzzer) to expose edge cases.
+- Test matrix: 3–5 real STEP files covering simple solids, complex assemblies, and edge cases.
+
+**API Surface Audit**
+- Maintain `docs/OCCT_API_USAGE.md` listing exactly which OCCT classes are used (e.g., STEPControl_Reader, BRepAlgoAPI_Cut, BRepOffsetAPI_MakeFlatFace).
+- Explicitly list **not used** classes (Blend, Fillet, parametric modeling, 2D sketcher).
+- Keeps the surface small, intentional, and auditable for future upgrades.
+
+**Graceful Error Handling**
+- Every OCCT call wrapped in try-catch.
+- Return structured `Error` objects (not silent crashes).
+- Example:
+  ```cpp
+  try {
+    auto result = BRepAlgoAPI_Cut(solid, cutter).Shape();
+  } catch (const Standard_Failure& e) {
+    return Error{ code: GEOMETRY_ENGINE_FAULT, 
+                  message: "Boolean cut failed: " + e.GetMessageString() };
+  }
+  ```
+
+**Observability & Logging**
+- Log geometry operation details: solid ID, cutter bounds, result topology.
+- Correlate failures to specific geometry characteristics.
+- Collect logs from failed exports post-MVP to identify refinement areas.
+
+---
+
+**Risk Reduction Summary:**
+With these mitigations, OCCT stability transitions from **hidden liability** to **managed, known-risk**. Compile failures are caught once and cached. API changes are isolated to one wrapper layer. Subsystem failures are graceful and logged. The result is a stable foundation that does not become a blocker in Phase A or beyond.

@@ -48,8 +48,8 @@ Material inventory, tooling specifications, logistics constraints, and environme
 **MVP implementation posture:** CadQuery unfold is sufficient for MVP; single-session state model; async export jobs with polling/result retrieval.
 
 **Language allocation by bounded context (MVP):**
-- Geometry Engine: C++
-- Anti-Corruption Layer (Feature Extractor): C++
+- Geometry Engine: C++ (primary) or Rust (alternative — equivalent performance, stronger memory safety)
+- Anti-Corruption Layer (Feature Extractor): C++ (primary) or Rust (alternative — borrow checker well-suited to topology traversal)
 - Manufacturing Domain: TypeScript
 - MCP Protocol Layer: TypeScript
 
