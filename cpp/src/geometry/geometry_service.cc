@@ -36,6 +36,10 @@
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Section.hxx>
 #include <BRepPrimAPI_MakeHalfSpace.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
+
+#include <Bnd_Box.hxx>
+#include <BRepBndLib.hxx>
 
 #include <BRepOffsetAPI_MakeOffset.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
@@ -450,15 +454,16 @@ public:
     try {
       // Phase A stub: full CadQuery unfold implemented in Phase C (T070)
       // Returns placeholder dimensions derived from bounding box
-      const TopoDS_Shape& shape = shells_[shellId].shape;
+      const TopoDS_Shape& shellShape = shells_[shellId].shape;
 
-      // Compute bounding box
+      // Compute bounding box for flat dimensions
+      Bnd_Box bbox;
+      BRepBndLib::Add(shellShape, bbox);
       double xMin, yMin, zMin, xMax, yMax, zMax;
-      BRep_Builder builder;
-      // Use BRepBndLib for proper bbox computation
-      // For stub, use unit dimensions
-      double flatW = 100.0;  // placeholder
-      double flatH = 100.0;  // placeholder
+      bbox.Get(xMin, yMin, zMin, xMax, yMax, zMax);
+
+      double flatW = xMax - xMin;
+      double flatH = yMax - yMin;
 
       UnfoldId id = generateUUID();
       UnfoldState state{id, shellId, flatW, flatH, kFactor, 1, ""};
@@ -510,8 +515,62 @@ public:
                           "Shell not found: " + shellId, false, "");
     }
 
-    // Phase A stub: full relief generation in Phase C (T068)
-    return shellId;
+    SnapshotId token = createSnapshotLocked("before addCornerRelief on " + shellId);
+
+    try {
+      const TopoDS_Shape& shellShape = shells_[shellId].shape;
+
+      // Collect all vertices that are shared by exactly 3+ edges
+      // (internal corners at bend intersections)
+      TopTools_IndexedDataMapOfShapeListOfShape vertexEdgeMap;
+      TopExp::MapShapesAndAncestors(shellShape,
+                                    TopAbs_VERTEX, TopAbs_EDGE,
+                                    vertexEdgeMap);
+
+      // Build the relief cylinder tool at each internal corner vertex
+      // Dogbone: cylinder axis aligned with Z (normal to flat face)
+      double toolRadius = (reliefType == ReliefType::DOGBONE)
+                              ? radiusMm
+                              : radiusMm * 0.9;  // circular slightly inset
+      double toolHeight = 50.0;  // extend beyond any reasonable panel thickness
+
+      TopoDS_Shape resultShape = shellShape;
+      int reliefCount = 0;
+
+      for (int i = 1; i <= vertexEdgeMap.Extent(); ++i) {
+        const TopTools_ListOfShape& edges = vertexEdgeMap(i);
+        if (edges.Extent() < 3) continue;  // only internal corners
+
+        const TopoDS_Shape& vtxShape = vertexEdgeMap.FindKey(i);
+        const TopoDS_Vertex& vtx = TopoDS::Vertex(vtxShape);
+        gp_Pnt pt = BRep_Tool::Pnt(vtx);
+
+        // Create a small cylinder centred on the corner vertex
+        gp_Ax2 axis(gp_Pnt(pt.X(), pt.Y(), pt.Z() - toolHeight / 2.0),
+                    gp_Dir(0, 0, 1));
+        BRepPrimAPI_MakeCylinder cylinder(axis, toolRadius, toolHeight);
+        if (!cylinder.IsDone()) continue;
+
+        BRepAlgoAPI_Cut cut(resultShape, cylinder.Shape());
+        cut.Build();
+        if (cut.IsDone() && !cut.Shape().IsNull()) {
+          resultShape = cut.Shape();
+          reliefCount++;
+        }
+      }
+
+      // Register updated shell
+      ShellId newId = generateUUID();
+      ShellState newState{newId, shells_[shellId].parentSolidId, resultShape};
+      shells_[newId] = newState;
+
+      return newId;
+
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_RELIEF_FAILED",
+                          std::string("Relief exception: ") + e.GetMessageString(),
+                          true, "rollback");
+    }
   }
 
   // ── Nesting ──────────────────────────────────────────────────────────────
@@ -528,23 +587,129 @@ public:
       }
     }
 
-    // Phase A stub: full libnest2d nesting in Phase D (T086)
+    if (sheetWidthMm <= 0 || sheetHeightMm <= 0) {
+      throw GeometryError("GE_INVALID_SHEET_DIMS",
+                          "Sheet dimensions must be positive", false, "");
+    }
+
+    // ── Shelf-Next-Fit Decreasing (SNFD) rectangular bin packing ──────────
+    // Sort pieces by height descending, then width descending (ties).
+    struct Piece {
+      std::string id;
+      double      w;
+      double      h;
+    };
+    std::vector<Piece> pieces;
+    pieces.reserve(unfoldIds.size());
+    double totalPartArea = 0.0;
+    for (const auto& uid : unfoldIds) {
+      const auto& u = unfolds_[uid];
+      pieces.push_back({uid, u.flatWidthMm, u.flatHeightMm});
+      totalPartArea += u.flatWidthMm * u.flatHeightMm;
+    }
+
+    // Sort largest height first for row-packing efficiency
+    std::sort(pieces.begin(), pieces.end(), [](const Piece& a, const Piece& b) {
+      if (a.h != b.h) return a.h > b.h;
+      return a.w > b.w;
+    });
+
     NestId nestId = generateUUID();
     std::vector<NestPlacement> placements;
-    double x = 10.0;
-    for (const auto& uid : unfoldIds) {
-      placements.push_back({uid, 0, x, 10.0, 0.0});
-      x += unfolds_[uid].flatWidthMm + 5.0;
+    placements.reserve(pieces.size());
+
+    // Pack into shelves: track current row position
+    int    currentSheet  = 0;
+    double curX          = 0.0;
+    double curY          = 0.0;
+    double rowHeight     = 0.0;
+
+    for (const auto& p : pieces) {
+      // If piece is wider or taller than the sheet, it cannot be placed
+      // Clamp to check: skip over-sized pieces (edge case)
+      const double pw = std::min(p.w, sheetWidthMm);
+      const double ph = std::min(p.h, sheetHeightMm);
+
+      // Try to fit in current row
+      if (curX + pw > sheetWidthMm) {
+        // Start a new row
+        curY     += rowHeight;
+        curX      = 0.0;
+        rowHeight = 0.0;
+
+        // If new row exceeds sheet height, go to next sheet
+        if (curY + ph > sheetHeightMm) {
+          ++currentSheet;
+          curX      = 0.0;
+          curY      = 0.0;
+          rowHeight = 0.0;
+        }
+      }
+
+      placements.push_back({p.id, currentSheet, curX, curY, 0.0});
+      curX     += pw;
+      rowHeight = std::max(rowHeight, ph);
     }
 
-    double totalArea = 0;
-    for (const auto& uid : unfoldIds) {
-      totalArea += unfolds_[uid].flatWidthMm * unfolds_[uid].flatHeightMm;
-    }
+    int sheetsRequired = currentSheet + 1;
     double sheetArea   = sheetWidthMm * sheetHeightMm;
-    double utilisation = std::min(100.0, (totalArea / sheetArea) * 100.0);
+    double utilisation = (totalPartArea / (sheetsRequired * sheetArea)) * 100.0;
+    utilisation        = std::min(100.0, utilisation);
 
-    return NestResult{nestId, placements, utilisation, 1};
+    // ── SVG preview ────────────────────────────────────────────────────────
+    // Generate a compact SVG visualising the placement on sheet 0.
+    // Each panel is a coloured rectangle; the sheet outline is a grey frame.
+    const double svgScale = 0.2; // mm → SVG units (px)
+    const int    svgW     = static_cast<int>(sheetWidthMm  * svgScale) + 4;
+    const int    svgH     = static_cast<int>(sheetHeightMm * svgScale) + 4;
+
+    std::string svg;
+    svg.reserve(2048);
+    svg += "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"";
+    svg += std::to_string(svgW);
+    svg += "\" height=\"";
+    svg += std::to_string(svgH);
+    svg += "\">\n";
+    // Sheet outline
+    svg += "<rect x=\"2\" y=\"2\" width=\"";
+    svg += std::to_string(static_cast<int>(sheetWidthMm  * svgScale));
+    svg += "\" height=\"";
+    svg += std::to_string(static_cast<int>(sheetHeightMm * svgScale));
+    svg += "\" fill=\"#f0f0f0\" stroke=\"#888\" stroke-width=\"1\"/>\n";
+
+    // Colour palette (cycle through 8 colours)
+    static const char* COLOURS[] = {
+      "#4A90D9","#E87B1E","#27AE60","#8E44AD",
+      "#C0392B","#16A085","#F39C12","#2980B9"
+    };
+    size_t colIdx = 0;
+    for (const auto& pl : placements) {
+      if (pl.sheetIndex != 0) continue; // only show sheet 0
+      // Find piece dimensions
+      double pw = 0, ph = 0;
+      for (const auto& piece : pieces) {
+        if (piece.id == pl.unfoldId) { pw = piece.w; ph = piece.h; break; }
+      }
+      int px = static_cast<int>(pl.x * svgScale) + 2;
+      int py = static_cast<int>(pl.y * svgScale) + 2;
+      int pw_ = static_cast<int>(pw * svgScale);
+      int ph_ = static_cast<int>(ph * svgScale);
+      svg += "<rect x=\"";
+      svg += std::to_string(px);
+      svg += "\" y=\"";
+      svg += std::to_string(py);
+      svg += "\" width=\"";
+      svg += std::to_string(pw_);
+      svg += "\" height=\"";
+      svg += std::to_string(ph_);
+      svg += "\" fill=\"";
+      svg += COLOURS[colIdx % 8];
+      svg += "\" opacity=\"0.7\" stroke=\"#333\" stroke-width=\"0.5\"/>\n";
+      ++colIdx;
+    }
+    svg += "</svg>\n";
+
+    return NestResult{nestId, placements, utilisation, sheetsRequired, svg};
   }
 
   // ── Snapshot / rollback ──────────────────────────────────────────────────

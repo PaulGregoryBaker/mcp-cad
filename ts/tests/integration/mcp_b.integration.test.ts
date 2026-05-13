@@ -68,5 +68,21 @@ describe('MCP Phase B integration', () => {
 
     expect(joint.kerf_offset_mm).toBeGreaterThanOrEqual(0.1);
     expect(joint.kerf_offset_mm).toBeLessThanOrEqual(0.2);
+
+    // Phase C: extend with unfold step (SYS-JTBD-01 partial — T084)
+    const unfold = (await dispatchTool(
+      'apply_unfold',
+      {
+        panel_id: decompose.panel_ids[0],
+        material_id: cfg.materials[0]!.id,
+      },
+      cfg,
+    )) as { unfold_id: string; flat_width_mm: number; flat_height_mm: number; k_factor_used: number };
+
+    expect(typeof unfold.unfold_id).toBe('string');
+    expect(unfold.flat_width_mm).toBeGreaterThan(0);
+    expect(unfold.flat_height_mm).toBeGreaterThan(0);
+    expect(unfold.k_factor_used).toBeGreaterThan(0);
+    expect(unfold.k_factor_used).toBeLessThanOrEqual(1);
   });
 });

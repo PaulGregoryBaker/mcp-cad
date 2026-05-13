@@ -21,39 +21,8 @@ endif()
 find_package(OpenCASCADE REQUIRED)
 find_package(Catch2 3 REQUIRED)
 
-# libnest2d is header-only.
-# Resolution order:
-#   1) System include paths (e.g. Debian libnest2d-dev)
-#   2) Vendored source path
-#   3) Fetch from upstream repository
-set(LIBNEST2D_GIT_TAG "master" CACHE STRING "Git ref to fetch for libnest2d")
-option(MCPCAD_FETCH_LIBNEST2D "Fetch libnest2d from source when not installed" ON)
-
-find_path(LIBNEST2D_INCLUDE_DIR
-  NAMES libnest2d/libnest2d.hpp
-  PATHS
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/libnest2d/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/external/libnest2d/include
-)
-
-if(NOT LIBNEST2D_INCLUDE_DIR AND MCPCAD_FETCH_LIBNEST2D)
-  message(STATUS "libnest2d headers not found locally. Fetching from source (${LIBNEST2D_GIT_TAG})...")
-  FetchContent_Declare(libnest2d_src
-    GIT_REPOSITORY https://github.com/tamasmeszaros/libnest2d.git
-    GIT_TAG        ${LIBNEST2D_GIT_TAG}
-    GIT_SHALLOW    TRUE
-  )
-  # Header-only usage: populate sources without configuring/building upstream CMake project.
-  FetchContent_GetProperties(libnest2d_src)
-  if(NOT libnest2d_src_POPULATED)
-    FetchContent_Populate(libnest2d_src)
-  endif()
-  set(LIBNEST2D_INCLUDE_DIR "${libnest2d_src_SOURCE_DIR}/include")
-endif()
-
-if(NOT LIBNEST2D_INCLUDE_DIR OR NOT EXISTS "${LIBNEST2D_INCLUDE_DIR}/libnest2d/libnest2d.hpp")
-  message(FATAL_ERROR "libnest2d headers not found. Install libnest2d-dev, vendor headers under third_party/libnest2d/include, or enable MCPCAD_FETCH_LIBNEST2D.")
-endif()
+# libnest2d is NOT required — the project uses a built-in Shelf-Next-Fit
+# Decreasing rectangular bin-packing algorithm (see nesting.hpp).
 
 # ─── Compile flags ───────────────────────────────────────────────────────────
 if(MSVC)
@@ -74,8 +43,16 @@ endif()
 # AddressSanitizer support (enabled via cmake -DASAN=ON)
 option(ASAN "Enable AddressSanitizer" OFF)
 if(ASAN)
-  add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
-  add_link_options(-fsanitize=address)
+  if(MSVC)
+    # MSVC AddressSanitizer (VS 2019 16.9+)
+    add_compile_options(/fsanitize=address)
+    # MSVC ASAN does not need a separate link flag; the runtime is linked automatically.
+    # Disable incremental linking which is incompatible with ASAN on MSVC.
+    add_link_options(/INCREMENTAL:NO)
+  else()
+    add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address)
+  endif()
 endif()
 
 # ─── Geometry Engine Library ─────────────────────────────────────────────────
@@ -87,7 +64,6 @@ add_library(geometry_engine STATIC
 
 target_include_directories(geometry_engine
   PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/src
-  PRIVATE ${LIBNEST2D_INCLUDE_DIR}
 )
 
 # Link all OCCT modules exported by this package revision.
@@ -104,13 +80,15 @@ add_executable(geometry_tests
   tests/geometry_test.cc
   tests/tab_slot_test.cc
   tests/feature_extractor_test.cc
+  tests/acl_integration_test.cc
   tests/ge_integration_test.cc
   tests/ge_decompose_integration_test.cc
+  tests/determinism_test.cc
+  tests/nesting_test.cc
 )
 
 target_include_directories(geometry_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
-  ${LIBNEST2D_INCLUDE_DIR}
 )
 
 target_link_libraries(geometry_tests PRIVATE
@@ -130,6 +108,17 @@ target_include_directories(napi_contract_tests PRIVATE
 target_link_libraries(napi_contract_tests PRIVATE
   geometry_engine
   Catch2::Catch2WithMain
+)
+
+# ─── Fixture generator utility (T120) ───────────────────────────────────────
+add_executable(generate_fixtures
+  tools/generate_fixtures.cc
+)
+target_include_directories(generate_fixtures PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(generate_fixtures PRIVATE
+  ${OpenCASCADE_LIBRARIES}
 )
 
 # ─── CTest integration ───────────────────────────────────────────────────────

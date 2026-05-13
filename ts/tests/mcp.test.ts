@@ -6,10 +6,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { getToolDefinitions, dispatchTool } from '../../src/mcp/tools';
-import { getAllResources } from '../../src/mcp/resources';
-import { loadConfig } from '../../src/config/loader';
-import type { ManufacturingConfig } from '../../src/config/loader';
+import { getToolDefinitions, dispatchTool } from '../src/mcp/tools';
+import { getAllResources } from '../src/mcp/resources';
+import { loadConfig } from '../src/config/loader';
+import type { ManufacturingConfig } from '../src/config/loader';
 
 // ─── Test configuration ──────────────────────────────────────────────────────
 

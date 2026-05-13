@@ -325,6 +325,7 @@ Napi::Value NestShells(const Napi::CallbackInfo& info) {
       placements.Set(i, placement);
     }
     result.Set("placements", placements);
+    result.Set("svgPreview",  Napi::String::New(env, res.svgPreview));
     return result;
   })
   return env.Undefined();

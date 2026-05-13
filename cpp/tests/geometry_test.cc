@@ -5,6 +5,7 @@
  */
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
@@ -13,6 +14,8 @@
 #include <filesystem>
 #include <fstream>
 #include <set>
+#include <cmath>
+using Catch::Approx;
 #include <cmath>
 #include <string>
 
@@ -246,4 +249,162 @@ TEST_CASE("GE-14: Snapshot creation and restoration", "[ge-14][snapshot][rollbac
     REQUIRE_NOTHROW(svc->getTopology(id1));
     REQUIRE_THROWS_AS(svc->getTopology(id2), GeometryError);
   }
+}
+
+// ─── GE-08: Corner relief generation ─────────────────────────────────────────
+
+TEST_CASE("GE-08: addCornerRelief returns a new ShellId", "[ge-08][relief]") {
+  auto svc = GeometryService::create();
+
+  SECTION("addCornerRelief on valid shell returns non-empty ID") {
+    // Decompose a solid to get a shell
+    SolidId solid = svc->loadStep(fixture("simple_box.stp"));
+    BooleanCutResult cut = svc->booleanCut(solid, 0, 0, 1, 0, 0, 0);
+    REQUIRE_FALSE(cut.shellIds.empty());
+    ShellId shell = cut.shellIds[0];
+
+    ShellId relieved = svc->addCornerRelief(
+        shell, GeometryService::ReliefType::DOGBONE, 2.0);
+    REQUIRE_FALSE(relieved.empty());
+    REQUIRE_FALSE(relieved == shell);  // new distinct ID
+  }
+
+  SECTION("addCornerRelief throws GE_SHELL_NOT_FOUND for unknown shell") {
+    try {
+      svc->addCornerRelief("unknown-shell-id",
+                           GeometryService::ReliefType::DOGBONE, 2.0);
+      FAIL("Expected GeometryError");
+    } catch (const GeometryError& e) {
+      REQUIRE(e.code == "GE_SHELL_NOT_FOUND");
+    }
+  }
+}
+
+// ─── GE-09: Sheet metal unfolding ─────────────────────────────────────────────
+
+TEST_CASE("GE-09: unfoldShell produces valid flat dimensions", "[ge-09][unfold]") {
+  auto svc = GeometryService::create();
+
+  SECTION("unfoldShell on valid shell returns positive flat dimensions") {
+    SolidId solid = svc->loadStep(fixture("simple_box.stp"));
+    BooleanCutResult cut = svc->booleanCut(solid, 0, 0, 1, 0, 0, 0);
+    REQUIRE_FALSE(cut.shellIds.empty());
+    ShellId shell = cut.shellIds[0];
+
+    UnfoldResult result = svc->unfoldShell(shell, 0.33);
+
+    REQUIRE_FALSE(result.unfoldId.empty());
+    REQUIRE(result.flatWidthMm > 0.0);
+    REQUIRE(result.flatHeightMm > 0.0);
+    REQUIRE(result.kFactorUsed == Approx(0.33));
+    REQUIRE(result.bendCount >= 0);
+    REQUIRE_FALSE(result.rollbackToken.empty());
+  }
+
+  SECTION("unfoldShell throws GE_SHELL_NOT_FOUND for unknown shell") {
+    try {
+      svc->unfoldShell("unknown-shell-id", 0.33);
+      FAIL("Expected GeometryError");
+    } catch (const GeometryError& e) {
+      REQUIRE(e.code == "GE_SHELL_NOT_FOUND");
+    }
+  }
+}
+
+// ─── GE-10: DXF export ────────────────────────────────────────────────────────
+
+TEST_CASE("GE-10: exportDxf produces valid DXF content", "[ge-10][dxf]") {
+  auto svc = GeometryService::create();
+
+  SECTION("exportDxf returns non-empty DXF string with wire count > 0") {
+    SolidId solid = svc->loadStep(fixture("simple_box.stp"));
+    BooleanCutResult cut = svc->booleanCut(solid, 0, 0, 1, 0, 0, 0);
+    ShellId shell = cut.shellIds[0];
+
+    UnfoldResult unfold = svc->unfoldShell(shell, 0.33);
+    DxfExportResult dxf = svc->exportDxf(unfold.unfoldId);
+
+    REQUIRE_FALSE(dxf.dxfContent.empty());
+    REQUIRE(dxf.wireCount > 0);
+    REQUIRE(dxf.bboxWidthMm > 0.0);
+    REQUIRE(dxf.bboxHeightMm > 0.0);
+  }
+
+  SECTION("DXF content contains SECTION and EOF markers") {
+    SolidId solid = svc->loadStep(fixture("simple_box.stp"));
+    BooleanCutResult cut = svc->booleanCut(solid, 0, 0, 1, 0, 0, 0);
+    ShellId shell = cut.shellIds[0];
+
+    UnfoldResult unfold = svc->unfoldShell(shell, 0.33);
+    DxfExportResult dxf = svc->exportDxf(unfold.unfoldId);
+
+    REQUIRE(dxf.dxfContent.find("SECTION") != std::string::npos);
+    REQUIRE(dxf.dxfContent.find("EOF") != std::string::npos);
+  }
+
+  SECTION("exportDxf throws GE_UNFOLD_NOT_FOUND for unknown unfold ID") {
+    try {
+      svc->exportDxf("unknown-unfold-id");
+      FAIL("Expected GeometryError");
+    } catch (const GeometryError& e) {
+      REQUIRE(e.code == "GE_UNFOLD_NOT_FOUND");
+    }
+  }
+}
+// ─── GE-12: Nesting ───────────────────────────────────────────────────────────
+
+TEST_CASE("GE-12: nestShells places all panels and returns a nest ID", "[ge-12][nesting]") {
+  auto svc = GeometryService::create();
+
+  SECTION("nestShells requires valid unfold IDs") {
+    REQUIRE_THROWS_AS(
+      svc->nestShells({"unknown-id"}, 2440, 1220),
+      GeometryError
+    );
+  }
+
+  SECTION("nestShells returns valid NestResult for real unfolds") {
+    if (!std::filesystem::exists(fixture("simple_box.stp"))) {
+      SKIP("simple_box.stp fixture not found");
+    }
+    SolidId solid = svc->loadStep(fixture("simple_box.stp"));
+    BooleanCutResult cut = svc->booleanCut(solid, 0, 0, 1, 0, 0, 0);
+    UnfoldResult ur = svc->unfoldShell(cut.shellIds[0], 0.33);
+
+    NestResult nr = svc->nestShells({ur.unfoldId}, 2440, 1220);
+
+    REQUIRE_FALSE(nr.nestId.empty());
+    REQUIRE(nr.placements.size() == 1);
+    REQUIRE(nr.utilisationPct > 0.0);
+    REQUIRE(nr.sheetsRequired >= 1);
+    REQUIRE_FALSE(nr.svgPreview.empty());
+  }
+}
+
+// ─── GE-13: Nesting determinism ───────────────────────────────────────────────
+
+TEST_CASE("GE-13: nestShells is deterministic across repeated calls", "[ge-13][nesting]") {
+  if (!std::filesystem::exists(fixture("simple_box.stp"))) {
+    SKIP("simple_box.stp fixture not found");
+  }
+
+  auto svc = GeometryService::create();
+  SolidId solid = svc->loadStep(fixture("simple_box.stp"));
+  BooleanCutResult cut = svc->booleanCut(solid, 0, 0, 1, 0, 0, 0);
+
+  std::vector<UnfoldId> unfoldIds;
+  for (int i = 0; i < 3; ++i) {
+    UnfoldResult ur = svc->unfoldShell(cut.shellIds[0], 0.33);
+    unfoldIds.push_back(ur.unfoldId);
+  }
+
+  // Run nesting 3 times on the same unfold IDs
+  NestResult r1 = svc->nestShells({unfoldIds[0]}, 2440, 1220);
+  NestResult r2 = svc->nestShells({unfoldIds[1]}, 2440, 1220);
+  NestResult r3 = svc->nestShells({unfoldIds[2]}, 2440, 1220);
+
+  REQUIRE(r1.utilisationPct == Approx(r2.utilisationPct).epsilon(0.001));
+  REQUIRE(r2.utilisationPct == Approx(r3.utilisationPct).epsilon(0.001));
+  REQUIRE(r1.placements[0].x == Approx(r2.placements[0].x).margin(0.01));
+  REQUIRE(r1.placements[0].y == Approx(r2.placements[0].y).margin(0.01));
 }

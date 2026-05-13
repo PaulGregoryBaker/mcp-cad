@@ -25,11 +25,43 @@ export interface AdjacencyEntry {
   dihedralAngleDeg: number;
 }
 
+// Phase C: manufactured features extracted from topology (populated when C++ ACL is wired in)
+export interface TopologyBend {
+  featureId: string;
+  angleDeg: number;
+  radiusMm: number;
+  lengthMm: number;
+  kFactor: number;
+  bendAllowanceMm: number;
+  faceIds: string[];
+}
+
+export interface TopologyHole {
+  featureId: string;
+  centerX: number;
+  centerY: number;
+  diameterMm: number;
+  throughHole: boolean;
+  faceId: string;
+}
+
+export interface TopologyFlange {
+  featureId: string;
+  widthMm: number;
+  lengthMm: number;
+  adjacentBendId: string;
+  faceId: string;
+}
+
 export interface TopologyGraph {
   solidId: string;
   faces: FaceNode[];
   edges: EdgeNode[];
   adjacency: AdjacencyEntry[];
+  // Optional: populated after ACL feature extraction (Phase C/D)
+  bends?: TopologyBend[];
+  holes?: TopologyHole[];
+  flanges?: TopologyFlange[];
 }
 
 export interface ManifoldIssue {

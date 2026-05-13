@@ -86,7 +86,7 @@ description: "Actionable task list for Apply Architecture and Engineering Design
 - [x] T089 [GE] Create cpp/src/geometry/snapshot.hpp (GeometrySnapshot, SnapshotRegistry interface; required by Constitution Principle IV — rollback registry must exist before any Phase B mutating tool)
 - [x] T090 [GE] Implement createSnapshot(), restoreSnapshot(), clearSnapshots() in geometry_service.cc (atomic rollback support; must be in place before Phase B mutating operations begin)
 - [x] T026 [GE] Create cpp/tests/geometry_test.cc (Catch2 unit tests for GE-01, GE-02, GE-03, and GE-14 snapshot/rollback)
-- [ ] T092 [GE] [P] Run GE Phase A tests under AddressSanitizer (detect memory leaks/corruption in geometry foundation; full Phase D sweep in T123)
+- [x] T092 [GE] [P] Run GE Phase A tests under AddressSanitizer (detect memory leaks/corruption in geometry foundation; full Phase D sweep in T123)
 - [x] T027 [GE] [P] Configure cpp/CMakeLists.txt (OCC linkage, vcpkg integration, compile flags)
 
 ### Manufacturing Domain - Config Stores (MD-01, MD-02, MD-03, MD-04)
@@ -160,11 +160,6 @@ description: "Actionable task list for Apply Architecture and Engineering Design
 
 ### Geometry Engine - Decomposition & Joints (GE-04, GE-05, GE-06)
 
-- [ ] T044 [GE] Implement booleanCut() in cpp/src/geometry/geometry_service.cc (plane-based solid decomposition; register child shells)
-- [ ] T045 [GE] Implement addTabSlot() with kerf offset in cpp/src/geometry/geometry_service.cc (tab-slot geometry generation; include 0.1–0.2 mm kerf)
-- [ ] T046 [GE] Create cpp/tests/tab_slot_test.cc (unit tests for tab-slot with kerf; tolerance ±0.05 mm)
-- [ ] T047 [GE] Implement addRivetHole() in cpp/src/geometry/geometry_service.cc (rivet hole generation on shell faces)
-- [ ] T048 [GE] [P] Add exception wrapping to geometry_service.cc (catch OCC exceptions; throw JavaScript Error with code + message)
 - [x] T044 [GE] Implement booleanCut() in cpp/src/geometry/geometry_service.cc (plane-based solid decomposition; register child shells)
 - [x] T045 [GE] Implement addTabSlot() with kerf offset in cpp/src/geometry/geometry_service.cc (tab-slot geometry generation; include 0.1–0.2 mm kerf)
 - [x] T046 [GE] Create cpp/tests/tab_slot_test.cc (unit tests for tab-slot with kerf; tolerance ±0.05 mm)
@@ -173,12 +168,6 @@ description: "Actionable task list for Apply Architecture and Engineering Design
 
 ### Manufacturing Domain - Rules & Validators (MD-05, MD-06, MD-07, MD-10)
 
-- [ ] T049 [MD] Create ts/src/manufacturing/rules.ts (rule definitions: MIN_HOLE_DIAMETER, MIN_FLANGE_WIDTH, KERF_OFFSET, etc.)
-- [ ] T050 [MD] Create ts/src/manufacturing/rules_engine.ts (rule aggregation, validation result composition)
-- [ ] T051 [MD] Implement K-factor computation in ts/src/manufacturing/material.ts (bend allowance formula)
-- [ ] T052 [MD] Implement validateBend(), validateHole(), validateFlange() in rules.ts
-- [ ] T053 [MD] Implement isJointTypeAllowed() safety filter in ts/src/manufacturing/rules.ts (gated by environmental context)
-- [ ] T054 [MD] Create ts/tests/rules.test.ts (Vitest: 100% coverage of MD-05–07, MD-10; test edge cases)
 - [x] T049 [MD] Create ts/src/manufacturing/rules.ts (rule definitions: MIN_HOLE_DIAMETER, MIN_FLANGE_WIDTH, KERF_OFFSET, etc.)
 - [x] T050 [MD] Create ts/src/manufacturing/rules_engine.ts (rule aggregation, validation result composition)
 - [x] T051 [MD] Implement K-factor computation in ts/src/manufacturing/material.ts (bend allowance formula)
@@ -199,9 +188,6 @@ description: "Actionable task list for Apply Architecture and Engineering Design
 
 ### MCP Tools - Core Operations (MCP-06, MCP-07, MCP-08)
 
-- [ ] T063 [MCP] Implement clean_geometry tool in ts/src/mcp/tools.ts (load STEP, check manifold, heal if needed)
-- [ ] T064 [MCP] Implement decompose_volume tool in ts/src/mcp/tools.ts (dispatch to GE-04; filter shells by size; call Manufacturing Domain validators)
-- [ ] T065 [MCP] Implement synthesize_joints tool in ts/src/mcp/tools.ts (call GE-05 tab-slot; enforce MD-10 safety filter)
 - [x] T063 [MCP] Implement clean_geometry tool in ts/src/mcp/tools.ts (load STEP, check manifold, heal if needed)
 - [x] T064 [MCP] Implement decompose_volume tool in ts/src/mcp/tools.ts (dispatch to GE-04; filter shells by size; call Manufacturing Domain validators)
 - [x] T065 [MCP] Implement synthesize_joints tool in ts/src/mcp/tools.ts (call GE-05 tab-slot; enforce MD-10 safety filter)
@@ -211,8 +197,6 @@ description: "Actionable task list for Apply Architecture and Engineering Design
 
 *Validates new contracts introduced by decomposition and joint synthesis APIs.*
 
-- [ ] T145 [P] Create ts/tests/contracts/decompose.contract.test.ts (Vitest: assert decompose_volume tool input/output schema; verify panel_ids array, rollback_token present; error shape for invalid input)
-- [ ] T146 [P] Create ts/tests/contracts/synthesize-joints.contract.test.ts (Vitest: assert synthesize_joints schema; verify kerf_offset_mm field present in response; safety rejection returns structured error)
 - [x] T145 [P] Create ts/tests/contracts/decompose.contract.test.ts (Vitest: assert decompose_volume tool input/output schema; verify panel_ids array, rollback_token present; error shape for invalid input)
 - [x] T146 [P] Create ts/tests/contracts/synthesize-joints.contract.test.ts (Vitest: assert synthesize_joints schema; verify kerf_offset_mm field present in response; safety rejection returns structured error)
 
@@ -220,21 +204,19 @@ description: "Actionable task list for Apply Architecture and Engineering Design
 
 *Implements GE-JTBD-04: decompose + joint geometry as a realistic GE-internal flow.*
 
-- [ ] T147 Create cpp/tests/ge_decompose_integration_test.cc (Catch2 BC integration: loadStep → booleanCut → extractShell → addTabSlot; assert child shell count, kerf tolerance ±0.05 mm, deterministic across 3 runs)
 - [x] T147 Create cpp/tests/ge_decompose_integration_test.cc (Catch2 BC integration: loadStep → booleanCut → extractShell → addTabSlot; assert child shell count, kerf tolerance ±0.05 mm, deterministic across 3 runs)
 
 ### BC Integration Tests — MD Phase B
 
 *Implements MD-JTBD-02, MD-JTBD-03: rule validation + safety enforcement as a realistic MD-internal flow.*
 
-- [ ] T148 Create ts/tests/integration/md_rules.integration.test.ts (Vitest BC integration: load config → supply FeatureSet with intentional violations → assert violations detected; fire-rated context → assert adhesive joint rejected)
 - [x] T148 Create ts/tests/integration/md_rules.integration.test.ts (Vitest BC integration: load config → supply FeatureSet with intentional violations → assert violations detected; fire-rated context → assert adhesive joint rejected)
 
 ### BC Integration Tests — ACL Phase B
 
 *Implements ACL-JTBD-01 to ACL-JTBD-03: topology to FeatureSet pipeline as a realistic ACL-internal flow.*
 
-- [ ] T149 Create cpp/tests/acl_integration_test.cc (Catch2 BC integration: load tier-1 and tier-2 STEP fixtures → run full feature extraction pipeline → assert Bend/Hole/Flange count and attribute accuracy >90% on 10 fixtures)
+- [x] T149 Create cpp/tests/acl_integration_test.cc (Catch2 BC integration: load tier-1 and tier-2 STEP fixtures → run full feature extraction pipeline → assert Bend/Hole/Flange count and attribute accuracy >90% on 10 fixtures)
 
 **Risk Flags**: 
 - 🔴 GE-05: Tab-slot with kerf is geometrically complex; highest risk. Mitigation: spike with simple test case; validate boolean cut before shell registration.
@@ -261,55 +243,55 @@ description: "Actionable task list for Apply Architecture and Engineering Design
 
 ### Geometry Engine - Unfolding & Reliefs (GE-08, GE-09, GE-10)
 
-- [ ] T067 [GE] Create cpp/src/geometry/relief.hpp (corner relief generation interface)
-- [ ] T068 [GE] Implement addCornerRelief() in cpp/src/geometry/geometry_service.cc (dogbone and circular relief types; verify relief geometry)
-- [ ] T069 [GE] Create cpp/src/geometry/unfold.hpp (sheet metal unfolding interface; K-factor parameterized)
-- [ ] T070 [GE] Implement unfold() in cpp/src/geometry/unfold.cc (CadQuery Python call OR custom OCC-based unfolding; extract 2D wire DXF representation)
-- [ ] T071 [GE] Test unfold accuracy on 10 varied sheet metal designs; document K-factor validation (±0.5% tolerance); add tests/unfold_test.cc
-- [ ] T072 [GE] Implement exportDxf() in cpp/src/geometry/geometry_service.cc (DXF wire export from UnfoldId)
-- [ ] T073 [GE] [P] Update cpp/tests/geometry_test.cc with GE-08, GE-09, GE-10 test cases
+- [x] T067 [GE] Create cpp/src/geometry/relief.hpp (corner relief generation interface)
+- [x] T068 [GE] Implement addCornerRelief() in cpp/src/geometry/geometry_service.cc (dogbone and circular relief types; verify relief geometry)
+- [x] T069 [GE] Create cpp/src/geometry/unfold.hpp (sheet metal unfolding interface; K-factor parameterized)
+- [x] T070 [GE] Implement unfold() in cpp/src/geometry/unfold.cc (CadQuery Python call OR custom OCC-based unfolding; extract 2D wire DXF representation)
+- [x] T071 [GE] Test unfold accuracy on 10 varied sheet metal designs; document K-factor validation (±0.5% tolerance); add tests/unfold_test.cc
+- [x] T072 [GE] Implement exportDxf() in cpp/src/geometry/geometry_service.cc (DXF wire export from UnfoldId)
+- [x] T073 [GE] [P] Update cpp/tests/geometry_test.cc with GE-08, GE-09, GE-10 test cases
 
 ### Manufacturing Domain - Bend Sequence & Scoring (MD-11, MD-12)
 
-- [ ] T074 [MD] Create ts/src/manufacturing/bend_sequence.ts (rule-based bend order validation; detect non-colliding sequences)
-- [ ] T075 [MD] Implement validateBendSequence() in bend_sequence.ts (topological validation; document assumptions and edge cases)
-- [ ] T076 [MD] Create ts/src/manufacturing/manufacturability.ts (scoring function combining all rule violations)
-- [ ] T077 [MD] Implement scorePanel() in manufacturability.ts (aggregate violations → 0.0–1.0 score; >90% violation detection on test suite)
-- [ ] T078 [MD] Create ts/tests/bend_sequence.test.ts (Vitest: comprehensive bend order scenarios; document limitations)
-- [ ] T079 [MD] Create ts/tests/manufacturability.test.ts (Vitest: >95% rule violation flag accuracy)
+- [x] T074 [MD] Create ts/src/manufacturing/bend_sequence.ts (rule-based bend order validation; detect non-colliding sequences)
+- [x] T075 [MD] Implement validateBendSequence() in bend_sequence.ts (topological validation; document assumptions and edge cases)
+- [x] T076 [MD] Create ts/src/manufacturing/manufacturability.ts (scoring function combining all rule violations)
+- [x] T077 [MD] Implement scorePanel() in manufacturability.ts (aggregate violations → 0.0–1.0 score; >90% violation detection on test suite)
+- [x] T078 [MD] Create ts/tests/bend_sequence.test.ts (Vitest: comprehensive bend order scenarios; document limitations)
+- [x] T079 [MD] Create ts/tests/manufacturability.test.ts (Vitest: >95% rule violation flag accuracy)
 
 ### MCP Tools - Sheet Metal (MCP-09, MCP-10, MCP-12, MCP-13)
 
-- [ ] T080 [MCP] Implement generate_reliefs tool in ts/src/mcp/tools.ts (dispatch to GE-08; return updated shell ID)
-- [ ] T081 [MCP] Implement apply_unfold tool in ts/src/mcp/tools.ts (dispatch to GE-09 with material K-factor; return UnfoldId with flat dimensions)
-- [ ] T082 [MCP] Implement evaluate_manufacturability tool in ts/src/mcp/tools.ts (extract features via ACL-05; call MD-12 scorer; return score + violations)
-- [ ] T083 [MCP] Implement validate_bend_sequence tool in ts/src/mcp/tools.ts (dispatch to MD-11; return suggested sequence + collision warnings)
-- [ ] T084 [MCP] Update ts/tests/integration/mcp_b.integration.test.ts (extend SYS-JTBD-01 partial → add unfold step: STEP → clean → decompose → tab-slot → unfold)
+- [x] T080 [MCP] Implement generate_reliefs tool in ts/src/mcp/tools.ts (dispatch to GE-08; return updated shell ID)
+- [x] T081 [MCP] Implement apply_unfold tool in ts/src/mcp/tools.ts (dispatch to GE-09 with material K-factor; return UnfoldId with flat dimensions)
+- [x] T082 [MCP] Implement evaluate_manufacturability tool in ts/src/mcp/tools.ts (extract features via ACL-05; call MD-12 scorer; return score + violations)
+- [x] T083 [MCP] Implement validate_bend_sequence tool in ts/src/mcp/tools.ts (dispatch to MD-11; return suggested sequence + collision warnings)
+- [x] T084 [MCP] Update ts/tests/integration/mcp_b.integration.test.ts (extend SYS-JTBD-01 partial -> add unfold step: STEP -> clean -> decompose -> tab-slot -> unfold)
 
 ### Contract Tests — Phase C
 
 *Validates new contracts introduced by unfold, relief, and manufacturability tools.*
 
-- [ ] T150 [P] Create ts/tests/contracts/apply-unfold.contract.test.ts (Vitest: assert apply_unfold output schema; flat_width_mm, flat_height_mm, unfold_id, k_factor_used present; error shape for non-sheet-metal geometry)
-- [ ] T151 [P] Create ts/tests/contracts/evaluate-manufacturability.contract.test.ts (Vitest: assert evaluate_manufacturability response includes score (0.0–1.0), violations array, each violation has rule_code + severity + feature_id)
+- [x] T150 [P] Create ts/tests/contracts/apply-unfold.contract.test.ts (Vitest: assert apply_unfold output schema; flat_width_mm, flat_height_mm, unfold_id, k_factor_used present; error shape for non-sheet-metal geometry)
+- [x] T151 [P] Create ts/tests/contracts/evaluate-manufacturability.contract.test.ts (Vitest: assert evaluate_manufacturability response includes score (0.0–1.0), violations array, each violation has rule_code + severity + feature_id)
 
 ### BC Integration Tests — GE Phase C
 
 *Implements GE-JTBD-05: unfold and DXF export as a realistic GE-internal flow.*
 
-- [ ] T152 Create cpp/tests/ge_unfold_integration_test.cc (Catch2 BC integration: load tier-2 fixtures → addCornerRelief → unfold → exportDxf; assert flat dimensions within ±0.5% of manual reference; DXF wire count > 0)
+- [x] T152 Create cpp/tests/ge_unfold_integration_test.cc (Catch2 BC integration: load tier-2 fixtures -> addCornerRelief -> unfold -> exportDxf; assert flat dimensions within ±0.5% of manual reference; DXF wire count > 0)
 
 ### BC Integration Tests — MD Phase C
 
 *Implements MD-JTBD-02, MD-JTBD-05: bend sequence + manufacturability scoring as a realistic MD-internal flow.*
 
-- [ ] T153 Create ts/tests/integration/md_scoring.integration.test.ts (Vitest BC integration: compose FeatureSet with known bend/hole violations → scorePanel → assert score < 0.5 and violations match expected rule codes; test with passing FeatureSet → score > 0.9)
+- [x] T153 Create ts/tests/integration/md_scoring.integration.test.ts (Vitest BC integration: compose FeatureSet with known bend/hole violations -> scorePanel -> assert score < 0.5 and violations match expected rule codes; test with passing FeatureSet -> score > 0.9)
 
 ### Non-Functional: Determinism Replay (Phase C)
 
 *Implements TESTING_STRATEGY.md non-functional requirement: deterministic geometry.*
 
-- [ ] T154 [P] Create cpp/tests/determinism_test.cc (Catch2: run unfold() on 5 tier-2 fixtures 3 times each; compare output flat dimensions and DXF wire hash; assert byte-for-byte identical across runs)
+- [x] T154 [P] Create cpp/tests/determinism_test.cc (Catch2: run unfold() on 5 tier-2 fixtures 3 times each; compare output flat dimensions and DXF wire hash; assert byte-for-byte identical across runs)
 
 **Risk Flags**: 
 - 🔴 GE-09: Sheet metal unfolding is highest geometric risk. Mitigation: spike with 5 test designs; if CadQuery insufficient, implement fallback heuristic.

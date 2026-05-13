@@ -1,0 +1,35 @@
+# MCP-CAD local development docker-compose
+# Run: docker-compose up --build
+#
+# Services:
+#   mcp-cad  — Node.js MCP server (port 8080)
+#              The geometry addon (.node) must be pre-built via cmake-js
+#              before starting. See cpp/Dockerfile for the build image.
+#
+# Volume mounts:
+#   ./ts/config  → /app/config   (editable config without rebuild)
+#   ./ts/exports → /app/exports  (output DXF/CSV/SVG files)
+#
+# Task: T111
+
+services:
+  mcp-cad:
+    build:
+      context: .
+      dockerfile: cpp/Dockerfile
+    image: mcp-cad:dev
+    ports:
+      - "8080:8080"
+    environment:
+      - NODE_ENV=development
+      - MCPCAD_CONFIG=/app/config/config.yaml
+    volumes:
+      - ./ts/config:/app/config:ro
+      - ./ts/exports:/app/exports:rw
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8080/healthz', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped

@@ -6,8 +6,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { MaterialStore, computeBendAllowance } from '../../src/manufacturing/material';
-import type { MaterialSpec } from '../../src/manufacturing/material';
+import { MaterialStore, computeBendAllowance } from '../src/manufacturing/material';
+import type { MaterialSpec } from '../src/manufacturing/material';
 
 // ─── Test fixtures ───────────────────────────────────────────────────────────
 

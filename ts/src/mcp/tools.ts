@@ -11,6 +11,9 @@ import { toStructuredError, throwError, ErrorCodes } from './errors';
 import type { ManufacturingConfig } from '../config/loader';
 import { MaterialStore } from '../manufacturing/material';
 import { isJointTypeAllowed } from '../manufacturing/rules';
+import { scorePanel } from '../manufacturing/manufacturability';
+import { validateBendSequence } from '../manufacturing/bend_sequence';
+import type { FeatureSet } from '../manufacturing/feature';
 
 // ─── Tool definitions ─────────────────────────────────────────────────────────
 
@@ -377,7 +380,7 @@ function handleEvaluateManufacturability(
   args: Record<string, unknown>,
   config: ManufacturingConfig,
 ): unknown {
-  requireString(args, 'panel_id');
+  const panelId = requireString(args, 'panel_id');
   const materialId = requireString(args, 'material_id');
 
   const matStore = new MaterialStore(config.materials);
@@ -385,22 +388,58 @@ function handleEvaluateManufacturability(
     throwError(ErrorCodes.MD_MATERIAL_NOT_FOUND, `Material not found: ${materialId}`, false);
   }
 
-  // Phase A stub: full scoring in Phase C (T076-T077)
+  const material = matStore.get(materialId);
+
+  // Extract features from geometry binding
+  const topology = geometryBinding.getTopology(panelId);
+  const featureSet: FeatureSet = {
+    shellId: panelId,
+    bends: topology.bends ?? [],
+    holes: topology.holes ?? [],
+    flanges: topology.flanges ?? [],
+    reliefs: [],
+  };
+
+  const report = scorePanel(featureSet, material, config.tooling);
+
   return {
-    score: 1.0,
-    violations: [],
-    summary: 'No violations detected (Phase A stub; full scoring in Phase C)',
+    score: report.score,
+    feasible: report.feasible,
+    violations: report.violations.map(v => ({
+      rule_code: v.ruleCode,
+      severity: v.severity,
+      feature_id: v.featureId,
+      description: v.description,
+      measured_value_mm: v.measuredValueMm,
+      limit_value_mm: v.limitValueMm,
+    })),
+    summary: `${report.summary.errorCount} error(s), ${report.summary.warningCount} warning(s) out of ${report.summary.totalChecks} checks`,
   };
 }
 
 function handleValidateBendSequence(args: Record<string, unknown>): unknown {
-  requireString(args, 'panel_id');
+  const panelId = requireString(args, 'panel_id');
 
-  // Phase A stub: full validation in Phase C (T075)
+  const topology = geometryBinding.getTopology(panelId);
+  const bends = topology.bends ?? [];
+  const flanges = topology.flanges ?? [];
+
+  const result = validateBendSequence(bends, flanges);
+
   return {
-    valid: true,
-    suggested_sequence: [],
-    collision_warnings: [],
+    feasible: result.feasible,
+    suggested_sequence: result.sequence.map(s => ({
+      step_index: s.stepIndex,
+      bend_feature_id: s.bendFeatureId,
+      angle_deg: s.angleDeg,
+      can_parallel: s.canParallel,
+    })),
+    collision_warnings: result.collisionWarnings.map(w => ({
+      bend_id_a: w.bendIdA,
+      bend_id_b: w.bendIdB,
+      shared_face_id: w.sharedFaceId,
+      description: w.description,
+    })),
   };
 }
 

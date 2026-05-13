@@ -152,10 +152,10 @@ export function isJointTypeAllowed(
     };
   }
 
-  if (env.marineGrade && jointType === 'adhesive') {
+  if (env.marineGrade && (jointType === 'adhesive' || jointType === 'plastic_fastener')) {
     return {
       allowed: false,
-      reason: "Joint type 'adhesive' is blocked for marine-grade context",
+      reason: `Joint type '${jointType}' is blocked for marine-grade context`,
       overrideable: false,
     };
   }

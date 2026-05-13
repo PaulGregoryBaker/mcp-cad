@@ -89,6 +89,7 @@ struct NestResult {
   std::vector<NestPlacement>   placements;
   double                       utilisationPct;  // 0–100
   int                          sheetsRequired;
+  std::string                  svgPreview;      // SVG visualisation for debugging
 };
 
 struct RestoreResult {
