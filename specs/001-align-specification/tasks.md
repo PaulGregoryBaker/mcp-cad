@@ -18,12 +18,12 @@ description: "Actionable task list for Apply Architecture and Engineering Design
 
 **Objective**: Resolve OCCT stability, libnest2d integration, NAPI build toolchain, and async export contract unknowns.
 
-- [ ] T001 Research OCCT v7.8.1 API stability & release notes; document findings in docs/OCCT_STABILITY.md with sections: APIs confirmed, brittle operations, fixture outcomes, benchmark timings, remaining unknowns
-- [ ] T002 [P] Spike libnest2d integration pattern; test polygon extraction from DXF geometry; document outcomes in specs/001-align-specification/research.md§libnest2d (include: header-only linkage validation result, polygon extraction prototype result, and performance estimate for a 10-part layout)
-- [ ] T003 [P] Validate cmake-js NAPI build toolchain on Ubuntu 22.04 and macOS; document pass/fail matrix, reproducible build steps, and known issues in docs/DEVELOPMENT.md
-- [ ] T004 [P] Test CadQuery sheet metal unfold and custom OCC fallback on 5 varied designs; select MVP default with rationale and accuracy tolerance results in specs/001-align-specification/research.md
-- [ ] T005 [P] Design in-process Promise job queue interface for future BullMQ migration; load test with 20 concurrent jobs and record queue correctness metrics (status transitions, completion latency)
-- [ ] T006 Create Phase 0 research summary in specs/001-align-specification/research.md including decisions, rejected alternatives, and explicit "No remaining blockers" statement
+- [x] T001 Research OCCT v7.8.1 API stability & release notes; document findings in docs/OCCT_STABILITY.md with sections: APIs confirmed, brittle operations, fixture outcomes, benchmark timings, remaining unknowns
+- [x] T002 [P] Spike libnest2d integration pattern; test polygon extraction from DXF geometry; document outcomes in specs/001-align-specification/research.md§libnest2d (include: header-only linkage validation result, polygon extraction prototype result, and performance estimate for a 10-part layout)
+- [x] T003 [P] Validate cmake-js NAPI build toolchain on Ubuntu 22.04 and macOS; document pass/fail matrix, reproducible build steps, and known issues in docs/DEVELOPMENT.md
+- [x] T004 [P] Test CadQuery sheet metal unfold and custom OCC fallback on 5 varied designs; select MVP default with rationale and accuracy tolerance results in specs/001-align-specification/research.md
+- [x] T005 [P] Design in-process Promise job queue interface for future BullMQ migration; load test with 20 concurrent jobs and record queue correctness metrics (status transitions, completion latency)
+- [x] T006 Create Phase 0 research summary in specs/001-align-specification/research.md including decisions, rejected alternatives, and explicit "No remaining blockers" statement
 
 **Gate Criteria**:
 - All unknowns resolved with explicit decision records in specs/001-align-specification/research.md
@@ -39,34 +39,34 @@ description: "Actionable task list for Apply Architecture and Engineering Design
 
 ### Setup & Configuration
 
-- [ ] T007 Create project directory structure per plan.md (cpp/, ts/, docs/, docker/)
-- [ ] T008 [P] Initialize C++ project: CMakeLists.txt root, vcpkg.json manifest (OCCT 7.8.1, libnest2d pinned)
-- [ ] T009 [P] Initialize TypeScript project: package.json, tsconfig.json, .npmrc (Node 22.x)
-- [ ] T010 [P] Create Docker multi-stage Dockerfile (OCCT builder stage, app stage); verify layer caching
-- [ ] T011 [P] Create .github/workflows/ directory skeleton with placeholder CI/CD triggers (Docker build, lint, test stubs); *directory scaffold only — superseded by T138 which configures the full four-job model; T161 adds the release evidence job*
-- [ ] T012 Configure ESLint and Prettier for TypeScript; add pre-commit hooks
+- [x] T007 Create project directory structure per plan.md (cpp/, ts/, docs/, docker/)
+- [x] T008 [P] Initialize C++ project: CMakeLists.txt root, vcpkg.json manifest (OCCT 7.8.1, libnest2d pinned)
+- [x] T009 [P] Initialize TypeScript project: package.json, tsconfig.json, .npmrc (Node 22.x)
+- [x] T010 [P] Create Docker multi-stage Dockerfile (OCCT builder stage, app stage); verify layer caching
+- [x] T011 [P] Create .github/workflows/ directory skeleton with placeholder CI/CD triggers (Docker build, lint, test stubs); *directory scaffold only — superseded by T138 which configures the full four-job model; T161 adds the release evidence job*
+- [x] T012 Configure ESLint and Prettier for TypeScript; add pre-commit hooks
 
 ### Design Artifacts
 
-- [ ] T013 Generate specs/001-align-specification/data-model.md with entity definitions (SolidId, ShellId, UnfoldId, NestId, Snapshot, ManufacturingConfig)
-- [ ] T014 [P] Generate specs/001-align-specification/contracts/geometry-port.md (NAPI boundary interface with FFI signatures)
-- [ ] T015 [P] Generate specs/001-align-specification/contracts/manufacturing-port.md (rules, validation, scoring interface)
-- [ ] T016 [P] Generate specs/001-align-specification/contracts/mcp-tools.md (reference to Engineering-Design §3.3 tool schemas)
-- [ ] T017 Generate specs/001-align-specification/quickstart.md (local dev setup: Docker build, NAPI addon, config.yaml)
-- [ ] T018 Create docs/OCCT_API_USAGE.md (document which OCCT APIs we use; audit surface for stability)
-- [ ] T019 Create docs/DEVELOPMENT.md (debugging, building, testing locally; cmake-js troubleshooting)
-- [ ] T020 Create docs/MVP_SCOPE.md (explicit deferred capabilities: cloud APIs, multi-session, 3D collision, tenant overlays)
-- [ ] T133 Validate specs/001-align-specification/checklists/requirements.md is fully passing and record sign-off before implementation starts
+- [x] T013 Generate specs/001-align-specification/data-model.md with entity definitions (SolidId, ShellId, UnfoldId, NestId, Snapshot, ManufacturingConfig)
+- [x] T014 [P] Generate specs/001-align-specification/contracts/geometry-port.md (NAPI boundary interface with FFI signatures)
+- [x] T015 [P] Generate specs/001-align-specification/contracts/manufacturing-port.md (rules, validation, scoring interface)
+- [x] T016 [P] Generate specs/001-align-specification/contracts/mcp-tools.md (reference to Engineering-Design §3.3 tool schemas)
+- [x] T017 Generate specs/001-align-specification/quickstart.md (local dev setup: Docker build, NAPI addon, config.yaml)
+- [x] T018 Create docs/OCCT_API_USAGE.md (document which OCCT APIs we use; audit surface for stability)
+- [x] T019 Create docs/DEVELOPMENT.md (debugging, building, testing locally; cmake-js troubleshooting)
+- [x] T020 Create docs/MVP_SCOPE.md (explicit deferred capabilities: cloud APIs, multi-session, 3D collision, tenant overlays)
+- [x] T133 Validate specs/001-align-specification/checklists/requirements.md is fully passing and record sign-off before implementation starts
 
 ### Test Infrastructure Scaffolding
 
 *Aligns with docs/TESTING_STRATEGY.md — create test directories and tooling before any test files are written.*
 
-- [ ] T134 [P] Create test directory structure per TESTING_STRATEGY.md: cpp/tests/napi_contract/, ts/tests/contracts/, ts/tests/integration/, ts/tests/e2e/, docs/test-reports/
-- [ ] T135 [P] Configure Vitest for TypeScript: add vitest.config.ts with coverage provider (v8), reporters (verbose, junit), and test path mappings for unit, contract, integration, e2e suites
-- [ ] T136 [P] Configure Catch2 for C++: integrate with CMakeLists.txt via vcpkg; add CTest target; configure XML output for CI collection
-- [ ] T137 [P] Create ts/tests/helpers/fixtures.ts (shared fixture loader: resolves STEP paths from cpp/tests/fixtures/; exports canonical MVP fixture path for INF-03)
-- [ ] T138 Configure .github/workflows/ci.yml: define four job types from TESTING_STRATEGY.md — pr-ci (lint + unit + contract), merge-ci (+ bc-integration + sanitizer), nightly (full sweep), release-gate (matrix + evidence bundle)
+- [x] T134 [P] Create test directory structure per TESTING_STRATEGY.md: cpp/tests/napi_contract/, ts/tests/contracts/, ts/tests/integration/, ts/tests/e2e/, docs/test-reports/
+- [x] T135 [P] Configure Vitest for TypeScript: add vitest.config.ts with coverage provider (v8), reporters (verbose, junit), and test path mappings for unit, contract, integration, e2e suites
+- [x] T136 [P] Configure Catch2 for C++: integrate with CMakeLists.txt via vcpkg; add CTest target; configure XML output for CI collection
+- [x] T137 [P] Create ts/tests/helpers/fixtures.ts (shared fixture loader: resolves STEP paths from cpp/tests/fixtures/; exports canonical MVP fixture path for INF-03)
+- [x] T138 Configure .github/workflows/ci.yml: define four job types from TESTING_STRATEGY.md — pr-ci (lint + unit + contract), merge-ci (+ bc-integration + sanitizer), nightly (full sweep), release-gate (matrix + evidence bundle)
 
 **Gate Criteria**: All design documents complete; contracts define clear boundaries; quickstart is testable; test infrastructure is runnable on a fresh checkout.
 
@@ -78,62 +78,62 @@ description: "Actionable task list for Apply Architecture and Engineering Design
 
 ### Geometry Engine - STEP Import & Topology (GE-01, GE-02, GE-03)
 
-- [ ] T021 [GE] Create cpp/src/geometry/geometry_service.hpp (facade interface for OCC operations)
-- [ ] T022 [GE] Implement cpp/src/geometry/geometry_service.cc (STEP import via OccStepReaderConfigurator; load test with fixture files)
-- [ ] T023 [GE] Create cpp/src/geometry/topology_graph.hpp (Face, Edge, Adjacency data structures)
-- [ ] T024 [GE] Implement topology_graph.cc (face-face adjacency extraction from OCC topology; test on 5 fixtures)
-- [ ] T025 [GE] Implement checkManifold() and healGeometry() in geometry_service.cc (manifold detection + topological healing)
-- [ ] T089 [GE] Create cpp/src/geometry/snapshot.hpp (GeometrySnapshot, SnapshotRegistry interface; required by Constitution Principle IV — rollback registry must exist before any Phase B mutating tool)
-- [ ] T090 [GE] Implement createSnapshot(), restoreSnapshot(), clearSnapshots() in geometry_service.cc (atomic rollback support; must be in place before Phase B mutating operations begin)
-- [ ] T026 [GE] Create cpp/tests/geometry_test.cc (Catch2 unit tests for GE-01, GE-02, GE-03, and GE-14 snapshot/rollback)
+- [x] T021 [GE] Create cpp/src/geometry/geometry_service.hpp (facade interface for OCC operations)
+- [x] T022 [GE] Implement cpp/src/geometry/geometry_service.cc (STEP import via OccStepReaderConfigurator; load test with fixture files)
+- [x] T023 [GE] Create cpp/src/geometry/topology_graph.hpp (Face, Edge, Adjacency data structures)
+- [x] T024 [GE] Implement topology_graph.cc (face-face adjacency extraction from OCC topology; test on 5 fixtures)
+- [x] T025 [GE] Implement checkManifold() and healGeometry() in geometry_service.cc (manifold detection + topological healing)
+- [x] T089 [GE] Create cpp/src/geometry/snapshot.hpp (GeometrySnapshot, SnapshotRegistry interface; required by Constitution Principle IV — rollback registry must exist before any Phase B mutating tool)
+- [x] T090 [GE] Implement createSnapshot(), restoreSnapshot(), clearSnapshots() in geometry_service.cc (atomic rollback support; must be in place before Phase B mutating operations begin)
+- [x] T026 [GE] Create cpp/tests/geometry_test.cc (Catch2 unit tests for GE-01, GE-02, GE-03, and GE-14 snapshot/rollback)
 - [ ] T092 [GE] [P] Run GE Phase A tests under AddressSanitizer (detect memory leaks/corruption in geometry foundation; full Phase D sweep in T123)
-- [ ] T027 [GE] [P] Configure cpp/CMakeLists.txt (OCC linkage, vcpkg integration, compile flags)
+- [x] T027 [GE] [P] Configure cpp/CMakeLists.txt (OCC linkage, vcpkg integration, compile flags)
 
 ### Manufacturing Domain - Config Stores (MD-01, MD-02, MD-03, MD-04)
 
-- [ ] T028 [MD] Create ts/src/manufacturing/material.ts (MaterialSpec store; load from YAML)
-- [ ] T029 [MD] [P] Create ts/src/manufacturing/tooling.ts (ToolingCapability store)
-- [ ] T030 [MD] [P] Create ts/src/manufacturing/logistics.ts (LogisticsConstraints store)
-- [ ] T031 [MD] [P] Create ts/src/manufacturing/environmental.ts (EnvironmentalContext store)
-- [ ] T032 [MD] Create ts/config/config.yaml template (materials, tooling, logistics, environmental sections)
-- [ ] T033 [MD] Create ts/src/config/loader.ts (YAML schema validation + parsing)
-- [ ] T034 [MD] Create ts/tests/manufacturing.test.ts (Vitest tests for MD-01–04 stores)
+- [x] T028 [MD] Create ts/src/manufacturing/material.ts (MaterialSpec store; load from YAML)
+- [x] T029 [MD] [P] Create ts/src/manufacturing/tooling.ts (ToolingCapability store)
+- [x] T030 [MD] [P] Create ts/src/manufacturing/logistics.ts (LogisticsConstraints store)
+- [x] T031 [MD] [P] Create ts/src/manufacturing/environmental.ts (EnvironmentalContext store)
+- [x] T032 [MD] Create ts/config/config.yaml template (materials, tooling, logistics, environmental sections)
+- [x] T033 [MD] Create ts/src/config/loader.ts (YAML schema validation + parsing)
+- [x] T034 [MD] Create ts/tests/manufacturing.test.ts (Vitest tests for MD-01–04 stores)
 
 ### MCP Server Scaffold (MCP-01, MCP-02)
 
-- [ ] T035 [MCP] Create ts/src/index.ts (MCP server entry point; stdio transport setup)
-- [ ] T036 [MCP] Create ts/src/mcp/resources.ts (static resource handlers: context://, logistics://, manufacturing://, geometry://)
-- [ ] T037 [MCP] Create ts/src/mcp/errors.ts (structured error model with codes from Engineering-Design §3.4)
-- [ ] T038 [MCP] Create ts/src/geometry/binding.ts (load NAPI addon; wrap geometry operations)
-- [ ] T039 [MCP] Create ts/src/geometry/session.ts (SessionState, GeometrySnapshot, RollbackToken management)
-- [ ] T040 [MCP] Create ts/tests/mcp.test.ts (Vitest tests for MCP server startup, resource serving)
+- [x] T035 [MCP] Create ts/src/index.ts (MCP server entry point; stdio transport setup)
+- [x] T036 [MCP] Create ts/src/mcp/resources.ts (static resource handlers: context://, logistics://, manufacturing://, geometry://)
+- [x] T037 [MCP] Create ts/src/mcp/errors.ts (structured error model with codes from Engineering-Design §3.4)
+- [x] T038 [MCP] Create ts/src/geometry/binding.ts (load NAPI addon; wrap geometry operations)
+- [x] T039 [MCP] Create ts/src/geometry/session.ts (SessionState, GeometrySnapshot, RollbackToken management)
+- [x] T040 [MCP] Create ts/tests/mcp.test.ts (Vitest tests for MCP server startup, resource serving)
 
 ### NAPI Addon Scaffolding
 
-- [ ] T041 [NAPI] Create cpp/src/napi/CMakeLists.txt (NAPI module build via cmake-js)
-- [ ] T042 [NAPI] Create cpp/src/napi/addon.cc (NAPI module initialization; register geometry methods)
-- [ ] T043 [NAPI] [P] Create cpp/src/napi/geometry_binding.cc (TypeScript ↔ C++ geometry serialization for topology graph, IDs)
+- [x] T041 [NAPI] Create cpp/src/napi/CMakeLists.txt (NAPI module build via cmake-js)
+- [x] T042 [NAPI] Create cpp/src/napi/addon.cc (NAPI module initialization; register geometry methods)
+- [x] T043 [NAPI] [P] Create cpp/src/napi/geometry_binding.cc (TypeScript ↔ C++ geometry serialization for topology graph, IDs)
 
 ### Contract Tests — NAPI Boundary (Phase A)
 
 *Implements TESTING_STRATEGY.md contract layer: validate TypeScript ↔ C++ interface serialisation invariants.*
 
-- [ ] T139 [P] Create cpp/tests/napi_contract/napi_types_test.cc (Catch2: roundtrip tests for SolidId, ShellId, TopologyGraph serialisation; assert no precision loss across NAPI boundary)
-- [ ] T140 [P] Create ts/tests/contracts/geometry-binding.contract.test.ts (Vitest: call loadStep(), getTopology(), booleanCut() via NAPI wrapper; assert return shapes match geometry-port.md contract)
-- [ ] T141 [P] Create ts/tests/contracts/mcp-errors.contract.test.ts (Vitest: assert every error code in Engineering-Design §3.4 returns {code, message, recoverable, suggested_tool}; no unstructured throws)
-- [ ] T142 [P] Create ts/tests/contracts/mcp-resources.contract.test.ts (Vitest: assert resource URI handlers return correct schema for context://, logistics://, manufacturing://, geometry://)
+- [x] T139 [P] Create cpp/tests/napi_contract/napi_types_test.cc (Catch2: roundtrip tests for SolidId, ShellId, TopologyGraph serialisation; assert no precision loss across NAPI boundary)
+- [x] T140 [P] Create ts/tests/contracts/geometry-binding.contract.test.ts (Vitest: call loadStep(), getTopology(), booleanCut() via NAPI wrapper; assert return shapes match geometry-port.md contract)
+- [x] T141 [P] Create ts/tests/contracts/mcp-errors.contract.test.ts (Vitest: assert every error code in Engineering-Design §3.4 returns {code, message, recoverable, suggested_tool}; no unstructured throws)
+- [x] T142 [P] Create ts/tests/contracts/mcp-resources.contract.test.ts (Vitest: assert resource URI handlers return correct schema for context://, logistics://, manufacturing://, geometry://)
 
 ### BC Integration Tests — GE (Phase A)
 
 *Implements TESTING_STRATEGY.md GE-JTBD-01 to GE-JTBD-03: ingest, topology, manifest heal as a realistic in-context flow.*
 
-- [ ] T143 Create cpp/tests/ge_integration_test.cc (Catch2 BC integration: STEP ingest → topology build → manifold check → heal on 5 tier-1 and 5 tier-2 fixtures; assert deterministic output across repeated runs)
+- [x] T143 Create cpp/tests/ge_integration_test.cc (Catch2 BC integration: STEP ingest → topology build → manifold check → heal on 5 tier-1 and 5 tier-2 fixtures; assert deterministic output across repeated runs)
 
 ### BC Integration Tests — MD (Phase A)
 
 *Implements TESTING_STRATEGY.md MD-JTBD-01: config store load → schema validity → runtime access as a realistic in-context flow.*
 
-- [ ] T144 Create ts/tests/integration/md_config.integration.test.ts (Vitest BC integration: load config.yaml → populate MaterialSpec, ToolingCapability, LogisticsConstraints, EnvironmentalContext → assert valid schemas and expected defaults)
+- [x] T144 Create ts/tests/integration/md_config.integration.test.ts (Vitest BC integration: load config.yaml → populate MaterialSpec, ToolingCapability, LogisticsConstraints, EnvironmentalContext → assert valid schemas and expected defaults)
 
 **Risk Flags**: 
 - 🟡 GE-02: OCC topology traversal on complex geometries may fail; mitigation: test on 10 fixture files
@@ -165,6 +165,11 @@ description: "Actionable task list for Apply Architecture and Engineering Design
 - [ ] T046 [GE] Create cpp/tests/tab_slot_test.cc (unit tests for tab-slot with kerf; tolerance ±0.05 mm)
 - [ ] T047 [GE] Implement addRivetHole() in cpp/src/geometry/geometry_service.cc (rivet hole generation on shell faces)
 - [ ] T048 [GE] [P] Add exception wrapping to geometry_service.cc (catch OCC exceptions; throw JavaScript Error with code + message)
+- [x] T044 [GE] Implement booleanCut() in cpp/src/geometry/geometry_service.cc (plane-based solid decomposition; register child shells)
+- [x] T045 [GE] Implement addTabSlot() with kerf offset in cpp/src/geometry/geometry_service.cc (tab-slot geometry generation; include 0.1–0.2 mm kerf)
+- [x] T046 [GE] Create cpp/tests/tab_slot_test.cc (unit tests for tab-slot with kerf; tolerance ±0.05 mm)
+- [x] T047 [GE] Implement addRivetHole() in cpp/src/geometry/geometry_service.cc (rivet hole generation on shell faces)
+- [x] T048 [GE] [P] Add exception wrapping to geometry_service.cc (catch OCC exceptions; throw JavaScript Error with code + message)
 
 ### Manufacturing Domain - Rules & Validators (MD-05, MD-06, MD-07, MD-10)
 
@@ -174,24 +179,33 @@ description: "Actionable task list for Apply Architecture and Engineering Design
 - [ ] T052 [MD] Implement validateBend(), validateHole(), validateFlange() in rules.ts
 - [ ] T053 [MD] Implement isJointTypeAllowed() safety filter in ts/src/manufacturing/rules.ts (gated by environmental context)
 - [ ] T054 [MD] Create ts/tests/rules.test.ts (Vitest: 100% coverage of MD-05–07, MD-10; test edge cases)
+- [x] T049 [MD] Create ts/src/manufacturing/rules.ts (rule definitions: MIN_HOLE_DIAMETER, MIN_FLANGE_WIDTH, KERF_OFFSET, etc.)
+- [x] T050 [MD] Create ts/src/manufacturing/rules_engine.ts (rule aggregation, validation result composition)
+- [x] T051 [MD] Implement K-factor computation in ts/src/manufacturing/material.ts (bend allowance formula)
+- [x] T052 [MD] Implement validateBend(), validateHole(), validateFlange() in rules.ts
+- [x] T053 [MD] Implement isJointTypeAllowed() safety filter in ts/src/manufacturing/rules.ts (gated by environmental context)
+- [x] T054 [MD] Create ts/tests/rules.test.ts (Vitest: 100% coverage of MD-05–07, MD-10; test edge cases)
 
 ### Anti-Corruption Layer - Feature Extraction (ACL-01, ACL-02, ACL-03, ACL-04, ACL-05)
 
-- [ ] T055 [ACL] Create ts/src/manufacturing/feature.ts (Bend, Hole, Flange, Relief entity definitions)
-- [ ] T056 [ACL] Create cpp/src/acl/feature_extractor.hpp (topology → feature classification interface)
-- [ ] T057 [ACL] Implement face classification in cpp/src/acl/feature_extractor.cc (identify bent faces vs flat vs curved)
-- [ ] T058 [ACL] Implement edge classification → bend detection in feature_extractor.cc (extract bend angle, radius, length)
-- [ ] T059 [ACL] [P] Implement hole detection in feature_extractor.cc (center, diameter extraction from face boundary)
-- [ ] T060 [ACL] [P] Implement flange detection in feature_extractor.cc (planar faces adjacent to bends)
-- [ ] T061 [ACL] Implement composeFeatureSet() in feature_extractor.cc (aggregate Bend, Hole, Flange → FeatureSet)
-- [ ] T062 [ACL] Create cpp/tests/feature_extractor_test.cc (Catch2: >90% accuracy on 10 test fixtures)
+- [x] T055 [ACL] Create ts/src/manufacturing/feature.ts (Bend, Hole, Flange, Relief entity definitions)
+- [x] T056 [ACL] Create cpp/src/acl/feature_extractor.hpp (topology → feature classification interface)
+- [x] T057 [ACL] Implement face classification in cpp/src/acl/feature_extractor.cc (identify bent faces vs flat vs curved)
+- [x] T058 [ACL] Implement edge classification → bend detection in feature_extractor.cc (extract bend angle, radius, length)
+- [x] T059 [ACL] [P] Implement hole detection in feature_extractor.cc (center, diameter extraction from face boundary)
+- [x] T060 [ACL] [P] Implement flange detection in feature_extractor.cc (planar faces adjacent to bends)
+- [x] T061 [ACL] Implement composeFeatureSet() in feature_extractor.cc (aggregate Bend, Hole, Flange → FeatureSet)
+- [x] T062 [ACL] Create cpp/tests/feature_extractor_test.cc (Catch2: >90% accuracy on 10 test fixtures)
 
 ### MCP Tools - Core Operations (MCP-06, MCP-07, MCP-08)
 
 - [ ] T063 [MCP] Implement clean_geometry tool in ts/src/mcp/tools.ts (load STEP, check manifold, heal if needed)
 - [ ] T064 [MCP] Implement decompose_volume tool in ts/src/mcp/tools.ts (dispatch to GE-04; filter shells by size; call Manufacturing Domain validators)
 - [ ] T065 [MCP] Implement synthesize_joints tool in ts/src/mcp/tools.ts (call GE-05 tab-slot; enforce MD-10 safety filter)
-- [ ] T066 [MCP] Create ts/tests/integration/mcp_b.integration.test.ts (system integration: SYS-JTBD-01 partial — STEP → clean → decompose → synthesize_joints; assert topology correctness and kerf presence)
+- [x] T063 [MCP] Implement clean_geometry tool in ts/src/mcp/tools.ts (load STEP, check manifold, heal if needed)
+- [x] T064 [MCP] Implement decompose_volume tool in ts/src/mcp/tools.ts (dispatch to GE-04; filter shells by size; call Manufacturing Domain validators)
+- [x] T065 [MCP] Implement synthesize_joints tool in ts/src/mcp/tools.ts (call GE-05 tab-slot; enforce MD-10 safety filter)
+- [x] T066 [MCP] Create ts/tests/integration/mcp_b.integration.test.ts (system integration: SYS-JTBD-01 partial — STEP → clean → decompose → synthesize_joints; assert topology correctness and kerf presence)
 
 ### Contract Tests — Phase B
 
@@ -199,18 +213,22 @@ description: "Actionable task list for Apply Architecture and Engineering Design
 
 - [ ] T145 [P] Create ts/tests/contracts/decompose.contract.test.ts (Vitest: assert decompose_volume tool input/output schema; verify panel_ids array, rollback_token present; error shape for invalid input)
 - [ ] T146 [P] Create ts/tests/contracts/synthesize-joints.contract.test.ts (Vitest: assert synthesize_joints schema; verify kerf_offset_mm field present in response; safety rejection returns structured error)
+- [x] T145 [P] Create ts/tests/contracts/decompose.contract.test.ts (Vitest: assert decompose_volume tool input/output schema; verify panel_ids array, rollback_token present; error shape for invalid input)
+- [x] T146 [P] Create ts/tests/contracts/synthesize-joints.contract.test.ts (Vitest: assert synthesize_joints schema; verify kerf_offset_mm field present in response; safety rejection returns structured error)
 
 ### BC Integration Tests — GE Phase B
 
 *Implements GE-JTBD-04: decompose + joint geometry as a realistic GE-internal flow.*
 
 - [ ] T147 Create cpp/tests/ge_decompose_integration_test.cc (Catch2 BC integration: loadStep → booleanCut → extractShell → addTabSlot; assert child shell count, kerf tolerance ±0.05 mm, deterministic across 3 runs)
+- [x] T147 Create cpp/tests/ge_decompose_integration_test.cc (Catch2 BC integration: loadStep → booleanCut → extractShell → addTabSlot; assert child shell count, kerf tolerance ±0.05 mm, deterministic across 3 runs)
 
 ### BC Integration Tests — MD Phase B
 
 *Implements MD-JTBD-02, MD-JTBD-03: rule validation + safety enforcement as a realistic MD-internal flow.*
 
 - [ ] T148 Create ts/tests/integration/md_rules.integration.test.ts (Vitest BC integration: load config → supply FeatureSet with intentional violations → assert violations detected; fire-rated context → assert adhesive joint rejected)
+- [x] T148 Create ts/tests/integration/md_rules.integration.test.ts (Vitest BC integration: load config → supply FeatureSet with intentional violations → assert violations detected; fire-rated context → assert adhesive joint rejected)
 
 ### BC Integration Tests — ACL Phase B
 

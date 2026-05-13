@@ -1,0 +1,65 @@
+# MCP-CAD Manufacturing Configuration Template
+# Copy to config.yaml and edit for your shop.
+# Task: T032
+
+materials:
+  - id: mild_steel_1.5mm
+    name: "Mild Steel 1.5mm"
+    thickness_mm: 1.5
+    k_factor: 0.33
+    yield_strength_mpa: 250
+    grain_direction: any
+    inventory_sheets:
+      - width_mm: 1220
+        height_mm: 2440
+        label: "4x8ft"
+      - width_mm: 1500
+        height_mm: 3000
+        label: "1.5x3m"
+
+  - id: stainless_304_2mm
+    name: "Stainless Steel 304 2mm"
+    thickness_mm: 2.0
+    k_factor: 0.38
+    yield_strength_mpa: 310
+    grain_direction: x
+    inventory_sheets:
+      - width_mm: 1220
+        height_mm: 2440
+        label: "4x8ft"
+
+  - id: aluminium_5052_1mm
+    name: "Aluminium 5052 1mm"
+    thickness_mm: 1.0
+    k_factor: 0.40
+    yield_strength_mpa: 195
+    grain_direction: any
+    inventory_sheets:
+      - width_mm: 1220
+        height_mm: 2440
+        label: "4x8ft"
+
+tooling:
+  press_brake:
+    max_tonnage: 1000
+    max_bend_length_mm: 3000
+    v_die_widths_mm: [6, 8, 10, 16, 25]
+    punch_radii_mm: [0.5, 1.0, 2.0, 3.0]
+  laser:
+    max_kerf_width_mm: 0.15
+    min_hole_diameter_mm: 1.5
+
+logistics:
+  shipping_envelope:
+    max_length_mm: 2400
+    max_width_mm: 1200
+    max_height_mm: 800
+  max_weight_kg: 23.0
+  coating_envelope:
+    max_length_mm: 2000
+    max_width_mm: 1000
+
+environmental:
+  fire_rated: false
+  marine_grade: false
+  high_vibration: false

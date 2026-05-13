@@ -1,0 +1,16 @@
+# Docker build context exclusions
+.git/
+.github/
+node_modules/
+**/node_modules/
+cpp/build/
+cpp/build-asan/
+ts/dist/
+ts/coverage/
+*.log
+*.log.*
+.env
+.env.*
+docs/test-reports/
+Dockerfile*
+.dockerignore

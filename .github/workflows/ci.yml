@@ -1,0 +1,230 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    # Nightly at 02:00 UTC
+    - cron: '0 2 * * *'
+
+env:
+  NODE_VERSION: '22'
+  VCPKG_ROOT: /opt/vcpkg
+
+jobs:
+  # ─── Job 1: PR CI — lint + unit + contract ─────────────────────────────────
+  pr-ci:
+    name: PR CI (lint + unit + contract)
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: ts/package-lock.json
+
+      - name: Install TypeScript dependencies
+        run: cd ts && npm ci
+
+      - name: Lint TypeScript
+        run: cd ts && npm run lint
+
+      - name: Type check
+        run: cd ts && npm run typecheck
+
+      - name: Format check
+        run: cd ts && npm run format:check
+
+      - name: Install vcpkg + C++ deps
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git $VCPKG_ROOT
+          $VCPKG_ROOT/bootstrap-vcpkg.sh -disableMetrics
+          cd cpp && $VCPKG_ROOT/vcpkg install --triplet x64-linux
+
+      - name: Build C++ (geometry_engine)
+        run: |
+          cd cpp
+          cmake -B build \
+            -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j$(nproc)
+
+      - name: Run TypeScript unit tests
+        run: cd ts && npm run test:unit
+
+      - name: Run TypeScript contract tests
+        run: cd ts && npm run test:contract
+
+      - name: Run C++ unit tests
+        run: cd cpp/build && ctest --output-on-failure -R "geometry|napi_contract"
+
+  # ─── Job 2: Merge CI — + BC integration + sanitizer ───────────────────────
+  merge-ci:
+    name: Merge CI (+ BC integration + sanitizer)
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: []
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: ts/package-lock.json
+
+      - name: Install TypeScript dependencies
+        run: cd ts && npm ci
+
+      - name: Install vcpkg + C++ deps
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git $VCPKG_ROOT
+          $VCPKG_ROOT/bootstrap-vcpkg.sh -disableMetrics
+          cd cpp && $VCPKG_ROOT/vcpkg install --triplet x64-linux
+
+      - name: Build C++ with AddressSanitizer
+        run: |
+          cd cpp
+          cmake -B build-asan \
+            -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DASAN=ON
+          cmake --build build-asan -j$(nproc)
+
+      - name: Run all TypeScript tests
+        run: cd ts && npm test
+
+      - name: Run C++ tests under AddressSanitizer
+        run: |
+          cd cpp/build-asan
+          ASAN_OPTIONS=abort_on_error=0:log_path=asan.log ctest --output-on-failure
+          if grep -q "ERROR: AddressSanitizer" asan.log 2>/dev/null; then
+            echo "AddressSanitizer errors detected" && cat asan.log && exit 1
+          fi
+
+      - name: Upload sanitizer log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sanitizer-log-merge
+          path: cpp/build-asan/asan.log
+
+  # ─── Job 3: Nightly — full sweep ───────────────────────────────────────────
+  nightly:
+    name: Nightly (full sweep)
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'schedule'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: ts/package-lock.json
+
+      - name: Install TypeScript dependencies
+        run: cd ts && npm ci
+
+      - name: Install vcpkg + C++ deps
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git $VCPKG_ROOT
+          $VCPKG_ROOT/bootstrap-vcpkg.sh -disableMetrics
+          cd cpp && $VCPKG_ROOT/vcpkg install --triplet x64-linux
+
+      - name: Build C++
+        run: |
+          cd cpp
+          cmake -B build \
+            -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j$(nproc)
+
+      - name: Run full TypeScript test suite with coverage
+        run: cd ts && npm run test:coverage
+
+      - name: Run all C++ tests
+        run: cd cpp/build && ctest --output-on-failure
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-nightly
+          path: ts/coverage/
+
+  # ─── Job 4: Release Gate — matrix + evidence bundle ───────────────────────
+  release-gate:
+    name: Release Gate (matrix + evidence)
+    runs-on: ${{ matrix.os }}
+    if: startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, macos-14]
+        node: ['22']
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: 'npm'
+          cache-dependency-path: ts/package-lock.json
+
+      - name: Install TypeScript dependencies
+        run: cd ts && npm ci
+
+      - name: Install vcpkg + C++ deps
+        run: |
+          if [ "${{ runner.os }}" == "Linux" ]; then
+            git clone https://github.com/microsoft/vcpkg.git $VCPKG_ROOT
+            $VCPKG_ROOT/bootstrap-vcpkg.sh -disableMetrics
+          else
+            brew install vcpkg
+          fi
+          cd cpp && $VCPKG_ROOT/vcpkg install
+
+      - name: Build C++
+        run: |
+          cd cpp
+          cmake -B build \
+            -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j$(nproc)
+
+      - name: Run complete test suite
+        run: |
+          cd ts && npm run test:coverage
+          cd cpp/build && ctest --output-on-failure -T Test
+
+      - name: Collect evidence bundle
+        run: |
+          mkdir -p docs/test-reports
+          cp ts/coverage/junit.xml docs/test-reports/vitest_${{ matrix.os }}.xml || true
+          cp cpp/build/test-reports/*.xml docs/test-reports/ || true
+
+      - name: Upload evidence bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-${{ matrix.os }}-node${{ matrix.node }}
+          path: docs/test-reports/

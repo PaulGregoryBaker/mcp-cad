@@ -1,0 +1,12 @@
+# Package publishing exclusions
+src/
+tests/
+config/
+coverage/
+node_modules/
+*.log
+*.tsbuildinfo
+vitest.config.ts
+tsconfig.json
+.eslintrc.json
+.prettierrc.json

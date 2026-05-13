@@ -1,0 +1,13 @@
+# Docker build context ignores
+.git/
+.github/
+node_modules/
+cpp/build/
+ts/dist/
+ts/node_modules/
+**/*.log
+**/.env*
+docs/test-reports/
+*.tmp
+.DS_Store
+Thumbs.db

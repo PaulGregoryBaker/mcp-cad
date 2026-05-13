@@ -1,0 +1,56 @@
+# ─── Build outputs ──────────────────────────────────────────────────────────
+cpp/build/
+cpp/build-asan/
+cpp/build-debug/
+cpp/build-vcpkg/
+ts/dist/
+ts/coverage/
+
+# ─── Dependencies ────────────────────────────────────────────────────────────
+ts/node_modules/
+/opt/vcpkg/
+
+# ─── C++ artifacts ───────────────────────────────────────────────────────────
+*.o
+*.so
+*.a
+*.node
+*.exe
+*.dll
+*.lib
+
+# ─── Python artifacts ────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# ─── Logs and temp ───────────────────────────────────────────────────────────
+*.log
+*.tmp
+*.swp
+*.bak
+asan.log*
+docs/test-reports/*.xml
+docs/test-reports/*.log
+docs/test-reports/*.json
+
+# ─── Environment ─────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ─── IDE ─────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.suo
+*.user
+
+# ─── OS ──────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ─── vcpkg installed ─────────────────────────────────────────────────────────
+cpp/vcpkg_installed/

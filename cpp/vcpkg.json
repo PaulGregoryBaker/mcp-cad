@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "mcp-cad-geometry",
+  "version": "0.1.0",
+  "dependencies": [
+    {
+      "name": "opencascade",
+      "version>=": "7.8.1"
+    },
+    {
+      "name": "catch2",
+      "version>=": "3.5.0"
+    },
+    {
+      "name": "nlohmann-json",
+      "version>=": "3.11.3"
+    }
+  ],
+  "overrides": [
+    {
+      "name": "opencascade",
+      "version": "7.8.1"
+    }
+  ],
+  "builtin-baseline": "8defa4b8bc4c35071c678e87a0e140dd433489bb"
+}
