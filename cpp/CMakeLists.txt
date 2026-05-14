@@ -1,19 +1,29 @@
 cmake_minimum_required(VERSION 3.26)
+
+# ─── vcpkg integration ───────────────────────────────────────────────────────
+# Expects VCPKG_ROOT or CMAKE_TOOLCHAIN_FILE set externally.
+# Fallback: auto-detect from environment variable or common paths.
+if(DEFINED ENV{VCPKG_ROOT} AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+  set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      CACHE STRING "vcpkg toolchain file")
+elseif(EXISTS "C:/vcpkg/scripts/buildsystems/vcpkg.cmake" AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+  set(CMAKE_TOOLCHAIN_FILE "C:/vcpkg/scripts/buildsystems/vcpkg.cmake"
+      CACHE STRING "vcpkg toolchain file")
+endif()
+
 project(mcp_cad_geometry VERSION 0.1.0 LANGUAGES CXX)
 
-include(FetchContent)
+if (MSVC AND CMAKE_JS_VERSION)
+  # Override cmake-js forced /MT to be compatible with vcpkg libraries compiled with /MD
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# ─── vcpkg integration ───────────────────────────────────────────────────────
-# Expects VCPKG_ROOT or CMAKE_TOOLCHAIN_FILE set externally.
-# Fallback: auto-detect from environment variable.
-if(DEFINED ENV{VCPKG_ROOT} AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
-  set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
-      CACHE STRING "vcpkg toolchain file")
-endif()
+include(FetchContent)
 
 # ─── Find packages (via vcpkg) ───────────────────────────────────────────────
 # OpenCASCADE's config package expects module components (e.g. FoundationClasses),
@@ -36,7 +46,8 @@ else()
   add_compile_options(
     -Wall -Wextra -Wpedantic
     $<$<CONFIG:Release>:-O2>
-    $<$<CONFIG:Debug>:-g -O0>
+    $<$<CONFIG:Debug>:-g>
+    $<$<CONFIG:Debug>:-O0>
   )
 endif()
 
@@ -74,6 +85,10 @@ target_link_libraries(geometry_engine PUBLIC
 # ─── NAPI Addon (built separately via cmake-js) ───────────────────────────────
 # See src/napi/CMakeLists.txt for addon build.
 # Run: cmake-js build from cpp/ directory.
+if (CMAKE_JS_VERSION)
+  set(node-addon-api_SOURCE_DIR "${CMAKE_SOURCE_DIR}/../ts/node_modules/node-addon-api" CACHE STRING "")
+  add_subdirectory(src/napi)
+endif()
 
 # ─── Test Executable ─────────────────────────────────────────────────────────
 add_executable(geometry_tests

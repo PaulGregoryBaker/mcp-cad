@@ -1,0 +1,6 @@
+set(CMAKE_RC_COMPILER "C:/Users/PaulG/AppData/Local/npm-cache/_npx/df44183e4145658d/node_modules/.bin/rc")
+set(CMAKE_RC_COMPILER_ARG1 "")
+set(CMAKE_RC_COMPILER_LOADED 1)
+set(CMAKE_RC_SOURCE_FILE_EXTENSIONS rc;RC)
+set(CMAKE_RC_OUTPUT_EXTENSION .res)
+set(CMAKE_RC_COMPILER_ENV_VAR "RC")

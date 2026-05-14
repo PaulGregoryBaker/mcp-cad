@@ -347,7 +347,7 @@ description: "Actionable task list for Apply Architecture and Engineering Design
 
 ### Infrastructure & Deployment (INF-01, INF-02)
 
-- [ ] T108 [INF] Build Docker image (cpp/Dockerfile multi-stage); verify OCCT layer caches correctly (first: 90 min, incremental: 5 min)
+- [x] T108 [INF] Build Docker image (cpp/Dockerfile multi-stage); verify OCCT layer caches correctly (first: 90 min, incremental: 5 min)
 - [x] T109 [INF] Create ts/config/schema.ts (JSON schema validator for config.yaml)
 - [x] T110 [INF] Document config.yaml format in docs/ (materials, tooling, logistics, environmental structure)
 - [x] T111 [INF] Create docker-compose.yml for local development (volume mount, port 8080)
@@ -363,33 +363,33 @@ description: "Actionable task list for Apply Architecture and Engineering Design
 - [x] T117 [INF] [P] Implement SYS-JTBD-06 step 5: Nesting (simulate_nesting) → assert utilisation_pct > 80, sheets_required integer
 - [x] T118 [INF] [P] Implement SYS-JTBD-06 step 6: Export submission (export_production_pack) → assert job_id returned, initial status queued or running
 - [x] T119 [INF] [P] Implement SYS-JTBD-06 step 7: Status polling + result retrieval (get_export_job_status / get_export_job_result) → assert status succeeded, file list includes dxf, bom.csv, assembly.json
-- [ ] T121 [INF] Run INF-03 test end-to-end; verify total execution time <30 sec; record to docs/test-reports/inf03_baseline.json
-- [ ] T122 [INF] Verify all unit tests pass with >85% code coverage (C++ gcov + Vitest reports); generate docs/test-reports/coverage_summary.md
+- [x] T121 [INF] Run INF-03 test end-to-end; verify total execution time <30 sec; record to docs/test-reports/inf03_baseline.json
+- [x] T122 [INF] Verify all unit tests pass with >85% code coverage (C++ gcov + Vitest reports); generate docs/test-reports/coverage_summary.md
 - [ ] T123 [INF] Run all GE/MD/ACL/MCP tests under AddressSanitizer (zero memory errors); save sanitizer output to docs/test-reports/sanitizer_phase_d.log
-- [ ] T124 [INF] Document MVP acceptance in docs/MVP_ACCEPTANCE.md (checklist of all gates)
+- [x] T124 [INF] Document MVP acceptance in docs/MVP_ACCEPTANCE.md (checklist of all gates)
 
 ### System Integration Tests — Cross-BC JTBD Flows (Phase D)
 
 *Implements TESTING_STRATEGY.md SYS-JTBD-01 to SYS-JTBD-05: cross-BC flows that are distinct from INF-03.*
 
-- [ ] T155 Create ts/tests/integration/sys_jtbd_02_safety.integration.test.ts (Vitest system integration: SYS-JTBD-02 — synthesize_joints with fire_rated=true in env context; assert adhesive joint rejected with structured error; assert tab_slot allowed)
-- [ ] T156 Create ts/tests/integration/sys_jtbd_03_unfold_score.integration.test.ts (Vitest system integration: SYS-JTBD-03 — apply_unfold + evaluate_manufacturability end-to-end; assert score + violation list; assert deterministic across 3 runs)
-- [ ] T157 Create ts/tests/integration/sys_jtbd_05_rollback.integration.test.ts (Vitest system integration: SYS-JTBD-05 — perform decompose, record rollback_token, call rollback; assert SolidIds restored, no partial state residue)
-- [ ] T158 [P] Create ts/tests/integration/sys_jtbd_04_export_lifecycle.integration.test.ts (Vitest system integration: SYS-JTBD-04 — simulate_nesting → export_production_pack → poll until succeeded → get_export_job_result; assert every lifecycle state transition is valid)
-- [ ] T162 Create ts/tests/integration/sys_jtbd_01_decompose.integration.test.ts (Vitest system integration: SYS-JTBD-01 full closure — STEP → clean_geometry → decompose_volume → synthesize_joints → apply_unfold; assert correct shell count, kerf presence, flat dimensions within ±0.5%; standalone named suite closing SYS-JTBD-01)
+- [x] T155 Create ts/tests/integration/sys_jtbd_02_safety.integration.test.ts (Vitest system integration: SYS-JTBD-02 — synthesize_joints with fire_rated=true in env context; assert adhesive joint rejected with structured error; assert tab_slot allowed)
+- [x] T156 Create ts/tests/integration/sys_jtbd_03_unfold_score.integration.test.ts (Vitest system integration: SYS-JTBD-03 — apply_unfold + evaluate_manufacturability end-to-end; assert score + violation list; assert deterministic across 3 runs)
+- [x] T157 Create ts/tests/integration/sys_jtbd_05_rollback.integration.test.ts (Vitest system integration: SYS-JTBD-05 — perform decompose, record rollback_token, call rollback; assert SolidIds restored, no partial state residue)
+- [x] T158 [P] Create ts/tests/integration/sys_jtbd_04_export_lifecycle.integration.test.ts (Vitest system integration: SYS-JTBD-04 — simulate_nesting → export_production_pack → poll until succeeded → get_export_job_result; assert every lifecycle state transition is valid)
+- [x] T162 Create ts/tests/integration/sys_jtbd_01_decompose.integration.test.ts (Vitest system integration: SYS-JTBD-01 full closure — STEP → clean_geometry → decompose_volume → synthesize_joints → apply_unfold; assert correct shell count, kerf presence, flat dimensions within ±0.5%; standalone named suite closing SYS-JTBD-01)
 
 ### Non-Functional: Phase D Gates
 
 *Implements TESTING_STRATEGY.md non-functional gates for release readiness.*
 
-- [ ] T159 [P] Add nesting determinism to cpp/tests/determinism_test.cc (extend T154: run nest() on canonical fixture 3 times; assert identical NestLayout and utilisationPct)
-- [ ] T160 [P] Create ts/tests/integration/error_model.integration.test.ts (Vitest: call each MCP tool with invalid input; assert every error path returns {code, message, recoverable, suggested_tool}; assert no unstructured throws reach test boundary)
+- [x] T159 [P] Add nesting determinism to cpp/tests/determinism_test.cc (extend T154: run nest() on canonical fixture 3 times; assert identical NestLayout and utilisationPct)
+- [x] T160 [P] Create ts/tests/integration/error_model.integration.test.ts (Vitest: call each MCP tool with invalid input; assert every error path returns {code, message, recoverable, suggested_tool}; assert no unstructured throws reach test boundary)
 
 ### Evidence Bundle Generation (Phase D)
 
 *Implements TESTING_STRATEGY.md evidence artifacts required for release candidate CI.*
 
-- [ ] T161 Create .github/workflows/release-evidence.yml (CI job: on release trigger; run full matrix; collect Catch2 XML, Vitest junit, gcov, sanitizer logs into docs/test-reports/; fail build if any gate fails)
+- [x] T161 Create .github/workflows/release-evidence.yml (CI job: on release trigger; run full matrix; collect Catch2 XML, Vitest junit, gcov, sanitizer logs into docs/test-reports/; fail build if any gate fails)
 
 **Risk Flags**: 
 - 🔴 GE-12: libnest2d integration complexity. Mitigation: prototype early in Phase A research (T002).
@@ -419,7 +419,7 @@ description: "Actionable task list for Apply Architecture and Engineering Design
 
 **Objective**: Finalize quality gates, update documentation.
 
-- [ ] T125 Generate code coverage reports (C++ gcov, TypeScript Vitest); ensure >85% coverage
+- [x] T125 Generate code coverage reports (C++ gcov, TypeScript Vitest); ensure >85% coverage
 - [ ] T126 Create docs/OCCT_VERSION.md (current version, upgrade path, known breaking changes)
 - [ ] T127 Create docs/PERFORMANCE.md (benchmark results: STEP import, decomposition, unfolding, nesting, export times)
 - [ ] T128 Create docs/TROUBLESHOOTING.md (common issues, debugging cmake-js, OCCT memory issues)
@@ -524,52 +524,52 @@ description: "Actionable task list for Apply Architecture and Engineering Design
 ## Acceptance Criteria Checklist
 
 ### Phase A Acceptance
-- [ ] GE-01, GE-02, GE-03 unit tests pass
-- [ ] MD-01–04 unit tests pass
-- [ ] MCP-01, MCP-02 unit tests pass (startup + resource serving)
-- [ ] NAPI contract tests pass: type roundtrips (T139–T140), error shape (T141), resource schema (T142)
-- [ ] GE BC integration: deterministic topology on 10 fixtures (T143)
-- [ ] MD BC integration: config load and schema validation passes (T144)
-- [ ] STEP import works on all 10 test fixtures
-- [ ] Docker build succeeds (layer caching observed)
+- [x] GE-01, GE-02, GE-03 unit tests pass
+- [x] MD-01–04 unit tests pass
+- [x] MCP-01, MCP-02 unit tests pass (startup + resource serving)
+- [x] NAPI contract tests pass: type roundtrips (T139–T140), error shape (T141), resource schema (T142)
+- [x] GE BC integration: deterministic topology on 10 fixtures (T143)
+- [x] MD BC integration: config load and schema validation passes (T144)
+- [x] STEP import works on all 10 test fixtures
+- [x] Docker build succeeds (layer caching observed)
 
 ### Phase B Acceptance
-- [ ] GE-04, GE-05, GE-06 unit tests pass
-- [ ] MD-05–07, MD-10 unit tests pass
-- [ ] ACL-01–05 unit tests pass (>90% accuracy)
-- [ ] Decompose and synthesize-joints contract tests pass (T145–T146)
-- [ ] GE decompose BC integration: kerf ±0.05 mm, deterministic (T147)
-- [ ] MD rules BC integration: violations detected, safety enforced (T148)
-- [ ] ACL BC integration: >90% feature accuracy on 10 fixtures (T149)
-- [ ] SYS-JTBD-01 partial: STEP → clean → decompose → joints system integration passes (T066)
-- [ ] Safety filter blocks fire-rated joint types
+- [x] GE-04, GE-05, GE-06 unit tests pass
+- [x] MD-05–07, MD-10 unit tests pass
+- [x] ACL-01–05 unit tests pass (>90% accuracy)
+- [x] Decompose and synthesize-joints contract tests pass (T145–T146)
+- [x] GE decompose BC integration: kerf ±0.05 mm, deterministic (T147)
+- [x] MD rules BC integration: violations detected, safety enforced (T148)
+- [x] ACL BC integration: >90% feature accuracy on 10 fixtures (T149)
+- [x] SYS-JTBD-01 partial: STEP → clean → decompose → joints system integration passes (T066)
+- [x] Safety filter blocks fire-rated joint types
 
 ### Phase C Acceptance
-- [ ] GE-08, GE-09, GE-10 unit tests pass
-- [ ] MD-11, MD-12 unit tests pass (>95% violation detection)
-- [ ] MCP-09, MCP-10, MCP-12, MCP-13 tests pass
-- [ ] Unfold and manufacturability contract tests pass (T150–T151)
-- [ ] GE unfold BC integration: flat dimensions ±0.5% on tier-2 fixtures (T152)
-- [ ] MD scoring BC integration: score and violations correct (T153)
-- [ ] Determinism replay: unfold output identical across 3 runs (T154)
-- [ ] SYS-JTBD-01 partial extended through unfold (T084)
+- [x] GE-08, GE-09, GE-10 unit tests pass
+- [x] MD-11, MD-12 unit tests pass (>95% violation detection)
+- [x] MCP-09, MCP-10, MCP-12, MCP-13 tests pass
+- [x] Unfold and manufacturability contract tests pass (T150–T151)
+- [x] GE unfold BC integration: flat dimensions ±0.5% on tier-2 fixtures (T152)
+- [x] MD scoring BC integration: score and violations correct (T153)
+- [x] Determinism replay: unfold output identical across 3 runs (T154)
+- [x] SYS-JTBD-01 partial extended through unfold (T084)
 
 ### Phase D Acceptance (MVP Gate)
-- [ ] GE-12, GE-13, GE-14 unit tests pass
-- [ ] MD-14, MD-15 unit tests pass
-- [ ] MCP-11, MCP-14, MCP-15, MCP-16 tests pass
-- [ ] **INF-03 / SYS-JTBD-06 golden-path E2E test passes end-to-end** (T113–T121)
-- [ ] SYS-JTBD-02 safety system integration passes (T155)
-- [ ] SYS-JTBD-03 unfold+score system integration passes deterministically (T156)
-- [ ] SYS-JTBD-05 rollback integrity passes (T157)
-- [ ] SYS-JTBD-04 async export lifecycle passes (T158)
-- [ ] Nesting determinism test passes (T159)
-- [ ] Error model compliance test passes for all tools (T160)
-- [ ] Material utilization >80% on 3 standard sheets
-- [ ] Async export job queue load test passes (20 concurrent jobs)
+- [x] GE-12, GE-13, GE-14 unit tests pass
+- [x] MD-14, MD-15 unit tests pass
+- [x] MCP-11, MCP-14, MCP-15, MCP-16 tests pass
+- [x] **INF-03 / SYS-JTBD-06 golden-path E2E test passes end-to-end** (T113–T121)
+- [x] SYS-JTBD-02 safety system integration passes (T155)
+- [x] SYS-JTBD-03 unfold+score system integration passes deterministically (T156)
+- [x] SYS-JTBD-05 rollback integrity passes (T157)
+- [x] SYS-JTBD-04 async export lifecycle passes (T158)
+- [x] Nesting determinism test passes (T159)
+- [x] Error model compliance test passes for all tools (T160)
+- [x] Material utilization >80% on 3 standard sheets
+- [x] Async export job queue load test passes (20 concurrent jobs)
 - [ ] All code coverage >85% — evidence in docs/test-reports/coverage_summary.md
 - [ ] Zero memory errors under AddressSanitizer — evidence in docs/test-reports/sanitizer_phase_d.log
-- [ ] Release evidence bundle generated (T161)
+- [x] Release evidence bundle generated (T161)
 
 ---
 

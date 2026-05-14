@@ -1,0 +1,3 @@
+C:/Projects/mcp-cad/cpp/src/napi/build/CMakeFiles/geometry_addon.dir
+C:/Projects/mcp-cad/cpp/src/napi/build/CMakeFiles/ALL_BUILD.dir
+C:/Projects/mcp-cad/cpp/src/napi/build/CMakeFiles/ZERO_CHECK.dir

@@ -1,0 +1,1645 @@
+
+---
+events:
+  -
+    kind: "message-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineSystem.cmake:212 (message)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      The system is: Windows - 10.0.26200 - AMD64
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:468 (find_file)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:506 (CMAKE_DETERMINE_COMPILER_ID_WRITE)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:8 (CMAKE_DETERMINE_COMPILER_ID_BUILD)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCCompiler.cmake:122 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "file"
+    variable: "src_in"
+    description: "Path to a file."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "CMakeCCompilerId.c.in"
+    candidate_directories:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/"
+    found: "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeCCompilerId.c.in"
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\PaulG\\AppData\\Local\\npm-cache\\_npx\\df44183e4145658d\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\src\\napi\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\src\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\node_modules\\.bin"
+        - "C:\\Projects\\node_modules\\.bin"
+        - "C:\\node_modules\\.bin"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm\\v24.13.0\\node_modules\\npm\\node_modules\\@npmcli\\run-script\\lib\\node-gyp-bin"
+        - "C:\\Program Files\\PowerShell\\7"
+        - "c:\\Users\\PaulG\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\debugCommand"
+        - "c:\\Users\\PaulG\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\copilotCli"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Programs\\Microsoft VS Code"
+        - "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\javapath"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm"
+        - "C:\\Program Files\\nodejs"
+        - "C:\\Program Files\\Netbird"
+        - "C:\\Program Files\\GitHub CLI\\"
+        - "C:\\Program Files\\Docker\\Docker\\resources\\bin"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\PowerShell\\7\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\Program Files\\CMake\\bin"
+        - "C:\\Users\\PaulG\\.local\\bin"
+        - "C:\\Users\\PaulG\\.cargo\\bin"
+        - "C:\\Program Files\\MySQL\\MySQL Shell 8.0\\bin\\"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\npm"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm"
+        - "C:\\Program Files\\nodejs"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Pandoc\\"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "C:\\Users\\PaulG\\develop\\flutter\\bin"
+        - "C:\\Gradle\\gradle-8.14.3\\bin"
+        - "C:\\Projects\\android\\sdk\\platform-tools"
+        - "C:\\Program Files\\OpenSCAD\\"
+        - "C:\\Projects\\flutter\\bin"
+        - "C:\\Users\\PaulG\\.local\\bin\\"
+        - "C:\\Users\\PaulG\\.dotnet\\tools"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCCompiler.cmake:122 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" succeeded.
+      Compiler:  
+      Build flags: 
+      Id flags:  
+      
+      The output was:
+      0
+      MSBuild version 18.5.4+cb4e32d21 for .NET Framework
+      Build started 14/05/2026 08:24:26.
+      
+      Project "C:\\Projects\\mcp-cad\\cpp\\src\\napi\\build\\CMakeFiles\\4.3.2\\CompilerIdC\\CompilerIdC.vcxproj" on node 1 (default targets).
+      PrepareForBuild:
+        Creating directory "Debug\\".
+        Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
+        Creating directory "Debug\\CompilerIdC.tlog\\".
+      InitializeBuildStatus:
+        Creating "Debug\\CompilerIdC.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
+        Touching "Debug\\CompilerIdC.tlog\\unsuccessfulbuild".
+      ClCompile:
+        C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\CL.exe /c /nologo /W0 /WX- /diagnostics:column /Od /D _MBCS /Gm- /EHsc /RTC1 /MDd /GS /fp:precise /Zc:wchar_t /Zc:forScope /Zc:inline /Fo"Debug\\\\" /Fd"Debug\\vc145.pdb" /external:W0 /Gd /TC /FC /errorReport:queue CMakeCCompilerId.c
+        CMakeCCompilerId.c
+      Link:
+        C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\link.exe /ERRORREPORT:QUEUE /OUT:".\\CompilerIdC.exe" /INCREMENTAL:NO /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /PDB:".\\CompilerIdC.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /DYNAMICBASE /NXCOMPAT /IMPLIB:".\\CompilerIdC.lib" /MACHINE:X64 Debug\\CMakeCCompilerId.obj
+        CompilerIdC.vcxproj -> C:\\Projects\\mcp-cad\\cpp\\src\\napi\\build\\CMakeFiles\\4.3.2\\CompilerIdC\\CompilerIdC.exe
+      PostBuildEvent:
+        for %%i in (cl.exe) do @echo CMAKE_C_COMPILER=%%~$PATH:i
+        :VCEnd
+        CMAKE_C_COMPILER=C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\Hostx64\\x64\\cl.exe
+      FinalizeBuildStatus:
+        Deleting file "Debug\\CompilerIdC.tlog\\unsuccessfulbuild".
+        Touching "Debug\\CompilerIdC.tlog\\CompilerIdC.lastbuildstate".
+      Done Building Project "C:\\Projects\\mcp-cad\\cpp\\src\\napi\\build\\CMakeFiles\\4.3.2\\CompilerIdC\\CompilerIdC.vcxproj" (default targets).
+      
+      Build succeeded.
+          0 Warning(s)
+          0 Error(s)
+      
+      Time Elapsed 00:00:01.31
+      
+      
+      Compilation of the C compiler identification source "CMakeCCompilerId.c" produced "CompilerIdC.exe"
+      
+      Compilation of the C compiler identification source "CMakeCCompilerId.c" produced "CompilerIdC.vcxproj"
+      
+      The C compiler identification is MSVC, found in:
+        C:/Projects/mcp-cad/cpp/src/napi/build/CMakeFiles/4.3.2/CompilerIdC/CompilerIdC.exe
+      
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:37 (find_program)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:65 (__resolve_tool_path)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:103 (__resolve_linker_path)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "_CMAKE_TOOL_WITH_PATH"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "link"
+    candidate_directories:
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/"
+      - "C:/Users/PaulG/AppData/Local/npm-cache/_npx/df44183e4145658d/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/cpp/src/napi/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/cpp/src/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/cpp/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/node_modules/.bin/"
+      - "C:/Projects/node_modules/.bin/"
+      - "C:/node_modules/.bin/"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/v24.13.0/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin/"
+      - "C:/Program Files/PowerShell/7/"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/javapath/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/"
+      - "C:/Program Files/nodejs/"
+      - "C:/Program Files/Netbird/"
+      - "C:/Program Files/GitHub CLI/"
+      - "C:/Program Files/Docker/Docker/resources/bin/"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/Program Files/CMake/bin/"
+      - "C:/Users/PaulG/.local/bin/"
+      - "C:/Users/PaulG/.cargo/bin/"
+      - "C:/Program Files/MySQL/MySQL Shell 8.0/bin/"
+      - "C:/Users/PaulG/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/PaulG/AppData/Roaming/npm/"
+      - "C:/Users/PaulG/AppData/Local/Pandoc/"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/bin/"
+      - "C:/Users/PaulG/develop/flutter/bin/"
+      - "C:/Gradle/gradle-8.14.3/bin/"
+      - "C:/Projects/android/sdk/platform-tools/"
+      - "C:/Program Files/OpenSCAD/"
+      - "C:/Projects/flutter/bin/"
+      - "C:/Users/PaulG/.dotnet/tools/"
+    searched_directories:
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/link.com"
+    found: "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/link.exe"
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\PaulG\\AppData\\Local\\npm-cache\\_npx\\df44183e4145658d\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\src\\napi\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\src\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\node_modules\\.bin"
+        - "C:\\Projects\\node_modules\\.bin"
+        - "C:\\node_modules\\.bin"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm\\v24.13.0\\node_modules\\npm\\node_modules\\@npmcli\\run-script\\lib\\node-gyp-bin"
+        - "C:\\Program Files\\PowerShell\\7"
+        - "c:\\Users\\PaulG\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\debugCommand"
+        - "c:\\Users\\PaulG\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\copilotCli"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Programs\\Microsoft VS Code"
+        - "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\javapath"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm"
+        - "C:\\Program Files\\nodejs"
+        - "C:\\Program Files\\Netbird"
+        - "C:\\Program Files\\GitHub CLI\\"
+        - "C:\\Program Files\\Docker\\Docker\\resources\\bin"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\PowerShell\\7\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\Program Files\\CMake\\bin"
+        - "C:\\Users\\PaulG\\.local\\bin"
+        - "C:\\Users\\PaulG\\.cargo\\bin"
+        - "C:\\Program Files\\MySQL\\MySQL Shell 8.0\\bin\\"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\npm"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm"
+        - "C:\\Program Files\\nodejs"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Pandoc\\"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "C:\\Users\\PaulG\\develop\\flutter\\bin"
+        - "C:\\Gradle\\gradle-8.14.3\\bin"
+        - "C:\\Projects\\android\\sdk\\platform-tools"
+        - "C:\\Program Files\\OpenSCAD\\"
+        - "C:\\Projects\\flutter\\bin"
+        - "C:\\Users\\PaulG\\.local\\bin\\"
+        - "C:\\Users\\PaulG\\.dotnet\\tools"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:37 (find_program)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:65 (__resolve_tool_path)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:104 (__resolve_linker_path)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "_CMAKE_TOOL_WITH_PATH"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "lld-link"
+    candidate_directories:
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/"
+      - "C:/Users/PaulG/AppData/Local/npm-cache/_npx/df44183e4145658d/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/cpp/src/napi/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/cpp/src/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/cpp/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/node_modules/.bin/"
+      - "C:/Projects/node_modules/.bin/"
+      - "C:/node_modules/.bin/"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/v24.13.0/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin/"
+      - "C:/Program Files/PowerShell/7/"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/javapath/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/"
+      - "C:/Program Files/nodejs/"
+      - "C:/Program Files/Netbird/"
+      - "C:/Program Files/GitHub CLI/"
+      - "C:/Program Files/Docker/Docker/resources/bin/"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/Program Files/CMake/bin/"
+      - "C:/Users/PaulG/.local/bin/"
+      - "C:/Users/PaulG/.cargo/bin/"
+      - "C:/Program Files/MySQL/MySQL Shell 8.0/bin/"
+      - "C:/Users/PaulG/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/PaulG/AppData/Roaming/npm/"
+      - "C:/Users/PaulG/AppData/Local/Pandoc/"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/bin/"
+      - "C:/Users/PaulG/develop/flutter/bin/"
+      - "C:/Gradle/gradle-8.14.3/bin/"
+      - "C:/Projects/android/sdk/platform-tools/"
+      - "C:/Program Files/OpenSCAD/"
+      - "C:/Projects/flutter/bin/"
+      - "C:/Users/PaulG/.dotnet/tools/"
+    searched_directories:
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/lld-link.com"
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/lld-link.exe"
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/lld-link"
+      - "C:/Users/PaulG/AppData/Local/npm-cache/_npx/df44183e4145658d/node_modules/.bin/lld-link.com"
+      - "C:/Users/PaulG/AppData/Local/npm-cache/_npx/df44183e4145658d/node_modules/.bin/lld-link.exe"
+      - "C:/Users/PaulG/AppData/Local/npm-cache/_npx/df44183e4145658d/node_modules/.bin/lld-link"
+      - "C:/Projects/mcp-cad/cpp/src/napi/node_modules/.bin/lld-link.com"
+      - "C:/Projects/mcp-cad/cpp/src/napi/node_modules/.bin/lld-link.exe"
+      - "C:/Projects/mcp-cad/cpp/src/napi/node_modules/.bin/lld-link"
+      - "C:/Projects/mcp-cad/cpp/src/node_modules/.bin/lld-link.com"
+      - "C:/Projects/mcp-cad/cpp/src/node_modules/.bin/lld-link.exe"
+      - "C:/Projects/mcp-cad/cpp/src/node_modules/.bin/lld-link"
+      - "C:/Projects/mcp-cad/cpp/node_modules/.bin/lld-link.com"
+      - "C:/Projects/mcp-cad/cpp/node_modules/.bin/lld-link.exe"
+      - "C:/Projects/mcp-cad/cpp/node_modules/.bin/lld-link"
+      - "C:/Projects/mcp-cad/node_modules/.bin/lld-link.com"
+      - "C:/Projects/mcp-cad/node_modules/.bin/lld-link.exe"
+      - "C:/Projects/mcp-cad/node_modules/.bin/lld-link"
+      - "C:/Projects/node_modules/.bin/lld-link.com"
+      - "C:/Projects/node_modules/.bin/lld-link.exe"
+      - "C:/Projects/node_modules/.bin/lld-link"
+      - "C:/node_modules/.bin/lld-link.com"
+      - "C:/node_modules/.bin/lld-link.exe"
+      - "C:/node_modules/.bin/lld-link"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/v24.13.0/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin/lld-link.com"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/v24.13.0/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin/lld-link.exe"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/v24.13.0/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin/lld-link"
+      - "C:/Program Files/PowerShell/7/lld-link.com"
+      - "C:/Program Files/PowerShell/7/lld-link.exe"
+      - "C:/Program Files/PowerShell/7/lld-link"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/lld-link.com"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/lld-link.exe"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/lld-link"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/lld-link.com"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/lld-link.exe"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/lld-link"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/lld-link.com"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/lld-link.exe"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/lld-link"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/javapath/lld-link.com"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/javapath/lld-link.exe"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/javapath/lld-link"
+      - "C:/Windows/System32/lld-link.com"
+      - "C:/Windows/System32/lld-link.exe"
+      - "C:/Windows/System32/lld-link"
+      - "C:/Windows/lld-link.com"
+      - "C:/Windows/lld-link.exe"
+      - "C:/Windows/lld-link"
+      - "C:/Windows/System32/wbem/lld-link.com"
+      - "C:/Windows/System32/wbem/lld-link.exe"
+      - "C:/Windows/System32/wbem/lld-link"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/lld-link.com"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/lld-link.exe"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/lld-link"
+      - "C:/Windows/System32/OpenSSH/lld-link.com"
+      - "C:/Windows/System32/OpenSSH/lld-link.exe"
+      - "C:/Windows/System32/OpenSSH/lld-link"
+      - "C:/Program Files/Git/cmd/lld-link.com"
+      - "C:/Program Files/Git/cmd/lld-link.exe"
+      - "C:/Program Files/Git/cmd/lld-link"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/lld-link.com"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/lld-link.exe"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/lld-link"
+      - "C:/Program Files/nodejs/lld-link.com"
+      - "C:/Program Files/nodejs/lld-link.exe"
+      - "C:/Program Files/nodejs/lld-link"
+      - "C:/Program Files/Netbird/lld-link.com"
+      - "C:/Program Files/Netbird/lld-link.exe"
+      - "C:/Program Files/Netbird/lld-link"
+      - "C:/Program Files/GitHub CLI/lld-link.com"
+      - "C:/Program Files/GitHub CLI/lld-link.exe"
+      - "C:/Program Files/GitHub CLI/lld-link"
+      - "C:/Program Files/Docker/Docker/resources/bin/lld-link.com"
+      - "C:/Program Files/Docker/Docker/resources/bin/lld-link.exe"
+      - "C:/Program Files/Docker/Docker/resources/bin/lld-link"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/lld-link.com"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/lld-link.exe"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/lld-link"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/lld-link.com"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/lld-link.exe"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/lld-link"
+      - "C:/Program Files/dotnet/lld-link.com"
+      - "C:/Program Files/dotnet/lld-link.exe"
+      - "C:/Program Files/dotnet/lld-link"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/lld-link.com"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/lld-link.exe"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/lld-link"
+      - "C:/Program Files/CMake/bin/lld-link.com"
+      - "C:/Program Files/CMake/bin/lld-link.exe"
+      - "C:/Program Files/CMake/bin/lld-link"
+      - "C:/Users/PaulG/.local/bin/lld-link.com"
+      - "C:/Users/PaulG/.local/bin/lld-link.exe"
+      - "C:/Users/PaulG/.local/bin/lld-link"
+      - "C:/Users/PaulG/.cargo/bin/lld-link.com"
+      - "C:/Users/PaulG/.cargo/bin/lld-link.exe"
+      - "C:/Users/PaulG/.cargo/bin/lld-link"
+      - "C:/Program Files/MySQL/MySQL Shell 8.0/bin/lld-link.com"
+      - "C:/Program Files/MySQL/MySQL Shell 8.0/bin/lld-link.exe"
+      - "C:/Program Files/MySQL/MySQL Shell 8.0/bin/lld-link"
+      - "C:/Users/PaulG/AppData/Local/Microsoft/WindowsApps/lld-link.com"
+      - "C:/Users/PaulG/AppData/Local/Microsoft/WindowsApps/lld-link.exe"
+      - "C:/Users/PaulG/AppData/Local/Microsoft/WindowsApps/lld-link"
+      - "C:/Users/PaulG/AppData/Roaming/npm/lld-link.com"
+      - "C:/Users/PaulG/AppData/Roaming/npm/lld-link.exe"
+      - "C:/Users/PaulG/AppData/Roaming/npm/lld-link"
+      - "C:/Users/PaulG/AppData/Local/Pandoc/lld-link.com"
+      - "C:/Users/PaulG/AppData/Local/Pandoc/lld-link.exe"
+      - "C:/Users/PaulG/AppData/Local/Pandoc/lld-link"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/bin/lld-link.com"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/bin/lld-link.exe"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/bin/lld-link"
+      - "C:/Users/PaulG/develop/flutter/bin/lld-link.com"
+      - "C:/Users/PaulG/develop/flutter/bin/lld-link.exe"
+      - "C:/Users/PaulG/develop/flutter/bin/lld-link"
+      - "C:/Gradle/gradle-8.14.3/bin/lld-link.com"
+      - "C:/Gradle/gradle-8.14.3/bin/lld-link.exe"
+      - "C:/Gradle/gradle-8.14.3/bin/lld-link"
+      - "C:/Projects/android/sdk/platform-tools/lld-link.com"
+      - "C:/Projects/android/sdk/platform-tools/lld-link.exe"
+      - "C:/Projects/android/sdk/platform-tools/lld-link"
+      - "C:/Program Files/OpenSCAD/lld-link.com"
+      - "C:/Program Files/OpenSCAD/lld-link.exe"
+      - "C:/Program Files/OpenSCAD/lld-link"
+      - "C:/Projects/flutter/bin/lld-link.com"
+      - "C:/Projects/flutter/bin/lld-link.exe"
+      - "C:/Projects/flutter/bin/lld-link"
+      - "C:/Users/PaulG/.dotnet/tools/lld-link.com"
+      - "C:/Users/PaulG/.dotnet/tools/lld-link.exe"
+      - "C:/Users/PaulG/.dotnet/tools/lld-link"
+    found: false
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\PaulG\\AppData\\Local\\npm-cache\\_npx\\df44183e4145658d\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\src\\napi\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\src\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\node_modules\\.bin"
+        - "C:\\Projects\\node_modules\\.bin"
+        - "C:\\node_modules\\.bin"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm\\v24.13.0\\node_modules\\npm\\node_modules\\@npmcli\\run-script\\lib\\node-gyp-bin"
+        - "C:\\Program Files\\PowerShell\\7"
+        - "c:\\Users\\PaulG\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\debugCommand"
+        - "c:\\Users\\PaulG\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\copilotCli"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Programs\\Microsoft VS Code"
+        - "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\javapath"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm"
+        - "C:\\Program Files\\nodejs"
+        - "C:\\Program Files\\Netbird"
+        - "C:\\Program Files\\GitHub CLI\\"
+        - "C:\\Program Files\\Docker\\Docker\\resources\\bin"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\PowerShell\\7\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\Program Files\\CMake\\bin"
+        - "C:\\Users\\PaulG\\.local\\bin"
+        - "C:\\Users\\PaulG\\.cargo\\bin"
+        - "C:\\Program Files\\MySQL\\MySQL Shell 8.0\\bin\\"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\npm"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm"
+        - "C:\\Program Files\\nodejs"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Pandoc\\"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "C:\\Users\\PaulG\\develop\\flutter\\bin"
+        - "C:\\Gradle\\gradle-8.14.3\\bin"
+        - "C:\\Projects\\android\\sdk\\platform-tools"
+        - "C:\\Program Files\\OpenSCAD\\"
+        - "C:\\Projects\\flutter\\bin"
+        - "C:\\Users\\PaulG\\.local\\bin\\"
+        - "C:\\Users\\PaulG\\.dotnet\\tools"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_LINKER"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "link"
+    candidate_directories:
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/"
+      - "C:/Users/PaulG/AppData/Local/npm-cache/_npx/df44183e4145658d/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/cpp/src/napi/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/cpp/src/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/cpp/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/node_modules/.bin/"
+      - "C:/Projects/node_modules/.bin/"
+      - "C:/node_modules/.bin/"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/v24.13.0/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin/"
+      - "C:/Program Files/PowerShell/7/"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/javapath/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/"
+      - "C:/Program Files/nodejs/"
+      - "C:/Program Files/Netbird/"
+      - "C:/Program Files/GitHub CLI/"
+      - "C:/Program Files/Docker/Docker/resources/bin/"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/Program Files/CMake/bin/"
+      - "C:/Users/PaulG/.local/bin/"
+      - "C:/Users/PaulG/.cargo/bin/"
+      - "C:/Program Files/MySQL/MySQL Shell 8.0/bin/"
+      - "C:/Users/PaulG/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/PaulG/AppData/Roaming/npm/"
+      - "C:/Users/PaulG/AppData/Local/Pandoc/"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/bin/"
+      - "C:/Users/PaulG/develop/flutter/bin/"
+      - "C:/Gradle/gradle-8.14.3/bin/"
+      - "C:/Projects/android/sdk/platform-tools/"
+      - "C:/Program Files/OpenSCAD/"
+      - "C:/Projects/flutter/bin/"
+      - "C:/Users/PaulG/.dotnet/tools/"
+    searched_directories:
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/link.com"
+    found: "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/link.exe"
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\PaulG\\AppData\\Local\\npm-cache\\_npx\\df44183e4145658d\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\src\\napi\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\src\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\node_modules\\.bin"
+        - "C:\\Projects\\node_modules\\.bin"
+        - "C:\\node_modules\\.bin"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm\\v24.13.0\\node_modules\\npm\\node_modules\\@npmcli\\run-script\\lib\\node-gyp-bin"
+        - "C:\\Program Files\\PowerShell\\7"
+        - "c:\\Users\\PaulG\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\debugCommand"
+        - "c:\\Users\\PaulG\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\copilotCli"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Programs\\Microsoft VS Code"
+        - "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\javapath"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm"
+        - "C:\\Program Files\\nodejs"
+        - "C:\\Program Files\\Netbird"
+        - "C:\\Program Files\\GitHub CLI\\"
+        - "C:\\Program Files\\Docker\\Docker\\resources\\bin"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\PowerShell\\7\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\Program Files\\CMake\\bin"
+        - "C:\\Users\\PaulG\\.local\\bin"
+        - "C:\\Users\\PaulG\\.cargo\\bin"
+        - "C:\\Program Files\\MySQL\\MySQL Shell 8.0\\bin\\"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\npm"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm"
+        - "C:\\Program Files\\nodejs"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Pandoc\\"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "C:\\Users\\PaulG\\develop\\flutter\\bin"
+        - "C:\\Gradle\\gradle-8.14.3\\bin"
+        - "C:\\Projects\\android\\sdk\\platform-tools"
+        - "C:\\Program Files\\OpenSCAD\\"
+        - "C:\\Projects\\flutter\\bin"
+        - "C:\\Users\\PaulG\\.local\\bin\\"
+        - "C:\\Users\\PaulG\\.dotnet\\tools"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_MT"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "mt"
+    candidate_directories:
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/"
+      - "C:/Users/PaulG/AppData/Local/npm-cache/_npx/df44183e4145658d/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/cpp/src/napi/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/cpp/src/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/cpp/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/node_modules/.bin/"
+      - "C:/Projects/node_modules/.bin/"
+      - "C:/node_modules/.bin/"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/v24.13.0/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin/"
+      - "C:/Program Files/PowerShell/7/"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/javapath/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/"
+      - "C:/Program Files/nodejs/"
+      - "C:/Program Files/Netbird/"
+      - "C:/Program Files/GitHub CLI/"
+      - "C:/Program Files/Docker/Docker/resources/bin/"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/Program Files/CMake/bin/"
+      - "C:/Users/PaulG/.local/bin/"
+      - "C:/Users/PaulG/.cargo/bin/"
+      - "C:/Program Files/MySQL/MySQL Shell 8.0/bin/"
+      - "C:/Users/PaulG/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/PaulG/AppData/Roaming/npm/"
+      - "C:/Users/PaulG/AppData/Local/Pandoc/"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/bin/"
+      - "C:/Users/PaulG/develop/flutter/bin/"
+      - "C:/Gradle/gradle-8.14.3/bin/"
+      - "C:/Projects/android/sdk/platform-tools/"
+      - "C:/Program Files/OpenSCAD/"
+      - "C:/Projects/flutter/bin/"
+      - "C:/Users/PaulG/.dotnet/tools/"
+    searched_directories:
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/mt.com"
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/mt.exe"
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/mt"
+      - "C:/Users/PaulG/AppData/Local/npm-cache/_npx/df44183e4145658d/node_modules/.bin/mt.com"
+      - "C:/Users/PaulG/AppData/Local/npm-cache/_npx/df44183e4145658d/node_modules/.bin/mt.exe"
+      - "C:/Users/PaulG/AppData/Local/npm-cache/_npx/df44183e4145658d/node_modules/.bin/mt"
+      - "C:/Projects/mcp-cad/cpp/src/napi/node_modules/.bin/mt.com"
+      - "C:/Projects/mcp-cad/cpp/src/napi/node_modules/.bin/mt.exe"
+      - "C:/Projects/mcp-cad/cpp/src/napi/node_modules/.bin/mt"
+      - "C:/Projects/mcp-cad/cpp/src/node_modules/.bin/mt.com"
+      - "C:/Projects/mcp-cad/cpp/src/node_modules/.bin/mt.exe"
+      - "C:/Projects/mcp-cad/cpp/src/node_modules/.bin/mt"
+      - "C:/Projects/mcp-cad/cpp/node_modules/.bin/mt.com"
+      - "C:/Projects/mcp-cad/cpp/node_modules/.bin/mt.exe"
+      - "C:/Projects/mcp-cad/cpp/node_modules/.bin/mt"
+      - "C:/Projects/mcp-cad/node_modules/.bin/mt.com"
+      - "C:/Projects/mcp-cad/node_modules/.bin/mt.exe"
+      - "C:/Projects/mcp-cad/node_modules/.bin/mt"
+      - "C:/Projects/node_modules/.bin/mt.com"
+      - "C:/Projects/node_modules/.bin/mt.exe"
+      - "C:/Projects/node_modules/.bin/mt"
+      - "C:/node_modules/.bin/mt.com"
+      - "C:/node_modules/.bin/mt.exe"
+      - "C:/node_modules/.bin/mt"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/v24.13.0/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin/mt.com"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/v24.13.0/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin/mt.exe"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/v24.13.0/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin/mt"
+      - "C:/Program Files/PowerShell/7/mt.com"
+      - "C:/Program Files/PowerShell/7/mt.exe"
+      - "C:/Program Files/PowerShell/7/mt"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/mt.com"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/mt.exe"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/mt"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/mt.com"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/mt.exe"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/mt"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/mt.com"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/mt.exe"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/mt"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/javapath/mt.com"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/javapath/mt.exe"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/javapath/mt"
+      - "C:/Windows/System32/mt.com"
+      - "C:/Windows/System32/mt.exe"
+      - "C:/Windows/System32/mt"
+      - "C:/Windows/mt.com"
+      - "C:/Windows/mt.exe"
+      - "C:/Windows/mt"
+      - "C:/Windows/System32/wbem/mt.com"
+      - "C:/Windows/System32/wbem/mt.exe"
+      - "C:/Windows/System32/wbem/mt"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/mt.com"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/mt.exe"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/mt"
+      - "C:/Windows/System32/OpenSSH/mt.com"
+      - "C:/Windows/System32/OpenSSH/mt.exe"
+      - "C:/Windows/System32/OpenSSH/mt"
+      - "C:/Program Files/Git/cmd/mt.com"
+      - "C:/Program Files/Git/cmd/mt.exe"
+      - "C:/Program Files/Git/cmd/mt"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/mt.com"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/mt.exe"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/mt"
+      - "C:/Program Files/nodejs/mt.com"
+      - "C:/Program Files/nodejs/mt.exe"
+      - "C:/Program Files/nodejs/mt"
+      - "C:/Program Files/Netbird/mt.com"
+      - "C:/Program Files/Netbird/mt.exe"
+      - "C:/Program Files/Netbird/mt"
+      - "C:/Program Files/GitHub CLI/mt.com"
+      - "C:/Program Files/GitHub CLI/mt.exe"
+      - "C:/Program Files/GitHub CLI/mt"
+      - "C:/Program Files/Docker/Docker/resources/bin/mt.com"
+      - "C:/Program Files/Docker/Docker/resources/bin/mt.exe"
+      - "C:/Program Files/Docker/Docker/resources/bin/mt"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/mt.com"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/mt.exe"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/mt"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/mt.com"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/mt.exe"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/mt"
+      - "C:/Program Files/dotnet/mt.com"
+      - "C:/Program Files/dotnet/mt.exe"
+      - "C:/Program Files/dotnet/mt"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/mt.com"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/mt.exe"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/mt"
+      - "C:/Program Files/CMake/bin/mt.com"
+      - "C:/Program Files/CMake/bin/mt.exe"
+      - "C:/Program Files/CMake/bin/mt"
+      - "C:/Users/PaulG/.local/bin/mt.com"
+      - "C:/Users/PaulG/.local/bin/mt.exe"
+      - "C:/Users/PaulG/.local/bin/mt"
+      - "C:/Users/PaulG/.cargo/bin/mt.com"
+      - "C:/Users/PaulG/.cargo/bin/mt.exe"
+      - "C:/Users/PaulG/.cargo/bin/mt"
+      - "C:/Program Files/MySQL/MySQL Shell 8.0/bin/mt.com"
+      - "C:/Program Files/MySQL/MySQL Shell 8.0/bin/mt.exe"
+      - "C:/Program Files/MySQL/MySQL Shell 8.0/bin/mt"
+      - "C:/Users/PaulG/AppData/Local/Microsoft/WindowsApps/mt.com"
+      - "C:/Users/PaulG/AppData/Local/Microsoft/WindowsApps/mt.exe"
+      - "C:/Users/PaulG/AppData/Local/Microsoft/WindowsApps/mt"
+      - "C:/Users/PaulG/AppData/Roaming/npm/mt.com"
+      - "C:/Users/PaulG/AppData/Roaming/npm/mt.exe"
+      - "C:/Users/PaulG/AppData/Roaming/npm/mt"
+      - "C:/Users/PaulG/AppData/Local/Pandoc/mt.com"
+      - "C:/Users/PaulG/AppData/Local/Pandoc/mt.exe"
+      - "C:/Users/PaulG/AppData/Local/Pandoc/mt"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/bin/mt.com"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/bin/mt.exe"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/bin/mt"
+      - "C:/Users/PaulG/develop/flutter/bin/mt.com"
+      - "C:/Users/PaulG/develop/flutter/bin/mt.exe"
+      - "C:/Users/PaulG/develop/flutter/bin/mt"
+      - "C:/Gradle/gradle-8.14.3/bin/mt.com"
+      - "C:/Gradle/gradle-8.14.3/bin/mt.exe"
+      - "C:/Gradle/gradle-8.14.3/bin/mt"
+      - "C:/Projects/android/sdk/platform-tools/mt.com"
+      - "C:/Projects/android/sdk/platform-tools/mt.exe"
+      - "C:/Projects/android/sdk/platform-tools/mt"
+      - "C:/Program Files/OpenSCAD/mt.com"
+      - "C:/Program Files/OpenSCAD/mt.exe"
+      - "C:/Program Files/OpenSCAD/mt"
+      - "C:/Projects/flutter/bin/mt.com"
+      - "C:/Projects/flutter/bin/mt.exe"
+      - "C:/Projects/flutter/bin/mt"
+      - "C:/Users/PaulG/.dotnet/tools/mt.com"
+      - "C:/Users/PaulG/.dotnet/tools/mt.exe"
+      - "C:/Users/PaulG/.dotnet/tools/mt"
+    found: false
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\PaulG\\AppData\\Local\\npm-cache\\_npx\\df44183e4145658d\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\src\\napi\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\src\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\node_modules\\.bin"
+        - "C:\\Projects\\node_modules\\.bin"
+        - "C:\\node_modules\\.bin"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm\\v24.13.0\\node_modules\\npm\\node_modules\\@npmcli\\run-script\\lib\\node-gyp-bin"
+        - "C:\\Program Files\\PowerShell\\7"
+        - "c:\\Users\\PaulG\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\debugCommand"
+        - "c:\\Users\\PaulG\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\copilotCli"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Programs\\Microsoft VS Code"
+        - "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\javapath"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm"
+        - "C:\\Program Files\\nodejs"
+        - "C:\\Program Files\\Netbird"
+        - "C:\\Program Files\\GitHub CLI\\"
+        - "C:\\Program Files\\Docker\\Docker\\resources\\bin"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\PowerShell\\7\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\Program Files\\CMake\\bin"
+        - "C:\\Users\\PaulG\\.local\\bin"
+        - "C:\\Users\\PaulG\\.cargo\\bin"
+        - "C:\\Program Files\\MySQL\\MySQL Shell 8.0\\bin\\"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\npm"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm"
+        - "C:\\Program Files\\nodejs"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Pandoc\\"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "C:\\Users\\PaulG\\develop\\flutter\\bin"
+        - "C:\\Gradle\\gradle-8.14.3\\bin"
+        - "C:\\Projects\\android\\sdk\\platform-tools"
+        - "C:\\Program Files\\OpenSCAD\\"
+        - "C:\\Projects\\flutter\\bin"
+        - "C:\\Users\\PaulG\\.local\\bin\\"
+        - "C:\\Users\\PaulG\\.dotnet\\tools"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_AR"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "lib"
+    candidate_directories:
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/"
+      - "C:/Users/PaulG/AppData/Local/npm-cache/_npx/df44183e4145658d/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/cpp/src/napi/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/cpp/src/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/cpp/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/node_modules/.bin/"
+      - "C:/Projects/node_modules/.bin/"
+      - "C:/node_modules/.bin/"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/v24.13.0/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin/"
+      - "C:/Program Files/PowerShell/7/"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/javapath/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/"
+      - "C:/Program Files/nodejs/"
+      - "C:/Program Files/Netbird/"
+      - "C:/Program Files/GitHub CLI/"
+      - "C:/Program Files/Docker/Docker/resources/bin/"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/Program Files/CMake/bin/"
+      - "C:/Users/PaulG/.local/bin/"
+      - "C:/Users/PaulG/.cargo/bin/"
+      - "C:/Program Files/MySQL/MySQL Shell 8.0/bin/"
+      - "C:/Users/PaulG/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/PaulG/AppData/Roaming/npm/"
+      - "C:/Users/PaulG/AppData/Local/Pandoc/"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/bin/"
+      - "C:/Users/PaulG/develop/flutter/bin/"
+      - "C:/Gradle/gradle-8.14.3/bin/"
+      - "C:/Projects/android/sdk/platform-tools/"
+      - "C:/Program Files/OpenSCAD/"
+      - "C:/Projects/flutter/bin/"
+      - "C:/Users/PaulG/.dotnet/tools/"
+    searched_directories:
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/lib.com"
+    found: "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/lib.exe"
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\PaulG\\AppData\\Local\\npm-cache\\_npx\\df44183e4145658d\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\src\\napi\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\src\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\node_modules\\.bin"
+        - "C:\\Projects\\node_modules\\.bin"
+        - "C:\\node_modules\\.bin"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm\\v24.13.0\\node_modules\\npm\\node_modules\\@npmcli\\run-script\\lib\\node-gyp-bin"
+        - "C:\\Program Files\\PowerShell\\7"
+        - "c:\\Users\\PaulG\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\debugCommand"
+        - "c:\\Users\\PaulG\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\copilotCli"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Programs\\Microsoft VS Code"
+        - "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\javapath"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm"
+        - "C:\\Program Files\\nodejs"
+        - "C:\\Program Files\\Netbird"
+        - "C:\\Program Files\\GitHub CLI\\"
+        - "C:\\Program Files\\Docker\\Docker\\resources\\bin"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\PowerShell\\7\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\Program Files\\CMake\\bin"
+        - "C:\\Users\\PaulG\\.local\\bin"
+        - "C:\\Users\\PaulG\\.cargo\\bin"
+        - "C:\\Program Files\\MySQL\\MySQL Shell 8.0\\bin\\"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\npm"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm"
+        - "C:\\Program Files\\nodejs"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Pandoc\\"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "C:\\Users\\PaulG\\develop\\flutter\\bin"
+        - "C:\\Gradle\\gradle-8.14.3\\bin"
+        - "C:\\Projects\\android\\sdk\\platform-tools"
+        - "C:\\Program Files\\OpenSCAD\\"
+        - "C:\\Projects\\flutter\\bin"
+        - "C:\\Users\\PaulG\\.local\\bin\\"
+        - "C:\\Users\\PaulG\\.dotnet\\tools"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:468 (find_file)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:506 (CMAKE_DETERMINE_COMPILER_ID_WRITE)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:8 (CMAKE_DETERMINE_COMPILER_ID_BUILD)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:125 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "file"
+    variable: "src_in"
+    description: "Path to a file."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "CMakeCXXCompilerId.cpp.in"
+    candidate_directories:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/"
+    found: "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeCXXCompilerId.cpp.in"
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\PaulG\\AppData\\Local\\npm-cache\\_npx\\df44183e4145658d\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\src\\napi\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\src\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\node_modules\\.bin"
+        - "C:\\Projects\\node_modules\\.bin"
+        - "C:\\node_modules\\.bin"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm\\v24.13.0\\node_modules\\npm\\node_modules\\@npmcli\\run-script\\lib\\node-gyp-bin"
+        - "C:\\Program Files\\PowerShell\\7"
+        - "c:\\Users\\PaulG\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\debugCommand"
+        - "c:\\Users\\PaulG\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\copilotCli"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Programs\\Microsoft VS Code"
+        - "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\javapath"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm"
+        - "C:\\Program Files\\nodejs"
+        - "C:\\Program Files\\Netbird"
+        - "C:\\Program Files\\GitHub CLI\\"
+        - "C:\\Program Files\\Docker\\Docker\\resources\\bin"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\PowerShell\\7\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\Program Files\\CMake\\bin"
+        - "C:\\Users\\PaulG\\.local\\bin"
+        - "C:\\Users\\PaulG\\.cargo\\bin"
+        - "C:\\Program Files\\MySQL\\MySQL Shell 8.0\\bin\\"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\npm"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm"
+        - "C:\\Program Files\\nodejs"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Pandoc\\"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "C:\\Users\\PaulG\\develop\\flutter\\bin"
+        - "C:\\Gradle\\gradle-8.14.3\\bin"
+        - "C:\\Projects\\android\\sdk\\platform-tools"
+        - "C:\\Program Files\\OpenSCAD\\"
+        - "C:\\Projects\\flutter\\bin"
+        - "C:\\Users\\PaulG\\.local\\bin\\"
+        - "C:\\Users\\PaulG\\.dotnet\\tools"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:125 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" succeeded.
+      Compiler:  
+      Build flags: 
+      Id flags:  
+      
+      The output was:
+      0
+      MSBuild version 18.5.4+cb4e32d21 for .NET Framework
+      Build started 14/05/2026 08:24:27.
+      
+      Project "C:\\Projects\\mcp-cad\\cpp\\src\\napi\\build\\CMakeFiles\\4.3.2\\CompilerIdCXX\\CompilerIdCXX.vcxproj" on node 1 (default targets).
+      PrepareForBuild:
+        Creating directory "Debug\\".
+        Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
+        Creating directory "Debug\\CompilerIdCXX.tlog\\".
+      InitializeBuildStatus:
+        Creating "Debug\\CompilerIdCXX.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
+        Touching "Debug\\CompilerIdCXX.tlog\\unsuccessfulbuild".
+      ClCompile:
+        C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\CL.exe /c /nologo /W0 /WX- /diagnostics:column /Od /D _MBCS /Gm- /EHsc /RTC1 /MDd /GS /fp:precise /Zc:wchar_t /Zc:forScope /Zc:inline /Fo"Debug\\\\" /Fd"Debug\\vc145.pdb" /external:W0 /Gd /TP /FC /errorReport:queue CMakeCXXCompilerId.cpp
+        CMakeCXXCompilerId.cpp
+      Link:
+        C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\link.exe /ERRORREPORT:QUEUE /OUT:".\\CompilerIdCXX.exe" /INCREMENTAL:NO /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /PDB:".\\CompilerIdCXX.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /DYNAMICBASE /NXCOMPAT /IMPLIB:".\\CompilerIdCXX.lib" /MACHINE:X64 Debug\\CMakeCXXCompilerId.obj
+        CompilerIdCXX.vcxproj -> C:\\Projects\\mcp-cad\\cpp\\src\\napi\\build\\CMakeFiles\\4.3.2\\CompilerIdCXX\\CompilerIdCXX.exe
+      PostBuildEvent:
+        for %%i in (cl.exe) do @echo CMAKE_CXX_COMPILER=%%~$PATH:i
+        :VCEnd
+        CMAKE_CXX_COMPILER=C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\Hostx64\\x64\\cl.exe
+      FinalizeBuildStatus:
+        Deleting file "Debug\\CompilerIdCXX.tlog\\unsuccessfulbuild".
+        Touching "Debug\\CompilerIdCXX.tlog\\CompilerIdCXX.lastbuildstate".
+      Done Building Project "C:\\Projects\\mcp-cad\\cpp\\src\\napi\\build\\CMakeFiles\\4.3.2\\CompilerIdCXX\\CompilerIdCXX.vcxproj" (default targets).
+      
+      Build succeeded.
+          0 Warning(s)
+          0 Error(s)
+      
+      Time Elapsed 00:00:01.10
+      
+      
+      Compilation of the CXX compiler identification source "CMakeCXXCompilerId.cpp" produced "CompilerIdCXX.exe"
+      
+      Compilation of the CXX compiler identification source "CMakeCXXCompilerId.cpp" produced "CompilerIdCXX.vcxproj"
+      
+      The CXX compiler identification is MSVC, found in:
+        C:/Projects/mcp-cad/cpp/src/napi/build/CMakeFiles/4.3.2/CompilerIdCXX/CompilerIdCXX.exe
+      
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:37 (find_program)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:65 (__resolve_tool_path)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:104 (__resolve_linker_path)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:206 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "_CMAKE_TOOL_WITH_PATH"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "lld-link"
+    candidate_directories:
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/"
+      - "C:/Users/PaulG/AppData/Local/npm-cache/_npx/df44183e4145658d/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/cpp/src/napi/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/cpp/src/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/cpp/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/node_modules/.bin/"
+      - "C:/Projects/node_modules/.bin/"
+      - "C:/node_modules/.bin/"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/v24.13.0/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin/"
+      - "C:/Program Files/PowerShell/7/"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/javapath/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/"
+      - "C:/Program Files/nodejs/"
+      - "C:/Program Files/Netbird/"
+      - "C:/Program Files/GitHub CLI/"
+      - "C:/Program Files/Docker/Docker/resources/bin/"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/Program Files/CMake/bin/"
+      - "C:/Users/PaulG/.local/bin/"
+      - "C:/Users/PaulG/.cargo/bin/"
+      - "C:/Program Files/MySQL/MySQL Shell 8.0/bin/"
+      - "C:/Users/PaulG/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/PaulG/AppData/Roaming/npm/"
+      - "C:/Users/PaulG/AppData/Local/Pandoc/"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/bin/"
+      - "C:/Users/PaulG/develop/flutter/bin/"
+      - "C:/Gradle/gradle-8.14.3/bin/"
+      - "C:/Projects/android/sdk/platform-tools/"
+      - "C:/Program Files/OpenSCAD/"
+      - "C:/Projects/flutter/bin/"
+      - "C:/Users/PaulG/.dotnet/tools/"
+    searched_directories:
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/lld-link.com"
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/lld-link.exe"
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/lld-link"
+      - "C:/Users/PaulG/AppData/Local/npm-cache/_npx/df44183e4145658d/node_modules/.bin/lld-link.com"
+      - "C:/Users/PaulG/AppData/Local/npm-cache/_npx/df44183e4145658d/node_modules/.bin/lld-link.exe"
+      - "C:/Users/PaulG/AppData/Local/npm-cache/_npx/df44183e4145658d/node_modules/.bin/lld-link"
+      - "C:/Projects/mcp-cad/cpp/src/napi/node_modules/.bin/lld-link.com"
+      - "C:/Projects/mcp-cad/cpp/src/napi/node_modules/.bin/lld-link.exe"
+      - "C:/Projects/mcp-cad/cpp/src/napi/node_modules/.bin/lld-link"
+      - "C:/Projects/mcp-cad/cpp/src/node_modules/.bin/lld-link.com"
+      - "C:/Projects/mcp-cad/cpp/src/node_modules/.bin/lld-link.exe"
+      - "C:/Projects/mcp-cad/cpp/src/node_modules/.bin/lld-link"
+      - "C:/Projects/mcp-cad/cpp/node_modules/.bin/lld-link.com"
+      - "C:/Projects/mcp-cad/cpp/node_modules/.bin/lld-link.exe"
+      - "C:/Projects/mcp-cad/cpp/node_modules/.bin/lld-link"
+      - "C:/Projects/mcp-cad/node_modules/.bin/lld-link.com"
+      - "C:/Projects/mcp-cad/node_modules/.bin/lld-link.exe"
+      - "C:/Projects/mcp-cad/node_modules/.bin/lld-link"
+      - "C:/Projects/node_modules/.bin/lld-link.com"
+      - "C:/Projects/node_modules/.bin/lld-link.exe"
+      - "C:/Projects/node_modules/.bin/lld-link"
+      - "C:/node_modules/.bin/lld-link.com"
+      - "C:/node_modules/.bin/lld-link.exe"
+      - "C:/node_modules/.bin/lld-link"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/v24.13.0/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin/lld-link.com"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/v24.13.0/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin/lld-link.exe"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/v24.13.0/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin/lld-link"
+      - "C:/Program Files/PowerShell/7/lld-link.com"
+      - "C:/Program Files/PowerShell/7/lld-link.exe"
+      - "C:/Program Files/PowerShell/7/lld-link"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/lld-link.com"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/lld-link.exe"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/lld-link"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/lld-link.com"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/lld-link.exe"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/lld-link"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/lld-link.com"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/lld-link.exe"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/lld-link"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/javapath/lld-link.com"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/javapath/lld-link.exe"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/javapath/lld-link"
+      - "C:/Windows/System32/lld-link.com"
+      - "C:/Windows/System32/lld-link.exe"
+      - "C:/Windows/System32/lld-link"
+      - "C:/Windows/lld-link.com"
+      - "C:/Windows/lld-link.exe"
+      - "C:/Windows/lld-link"
+      - "C:/Windows/System32/wbem/lld-link.com"
+      - "C:/Windows/System32/wbem/lld-link.exe"
+      - "C:/Windows/System32/wbem/lld-link"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/lld-link.com"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/lld-link.exe"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/lld-link"
+      - "C:/Windows/System32/OpenSSH/lld-link.com"
+      - "C:/Windows/System32/OpenSSH/lld-link.exe"
+      - "C:/Windows/System32/OpenSSH/lld-link"
+      - "C:/Program Files/Git/cmd/lld-link.com"
+      - "C:/Program Files/Git/cmd/lld-link.exe"
+      - "C:/Program Files/Git/cmd/lld-link"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/lld-link.com"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/lld-link.exe"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/lld-link"
+      - "C:/Program Files/nodejs/lld-link.com"
+      - "C:/Program Files/nodejs/lld-link.exe"
+      - "C:/Program Files/nodejs/lld-link"
+      - "C:/Program Files/Netbird/lld-link.com"
+      - "C:/Program Files/Netbird/lld-link.exe"
+      - "C:/Program Files/Netbird/lld-link"
+      - "C:/Program Files/GitHub CLI/lld-link.com"
+      - "C:/Program Files/GitHub CLI/lld-link.exe"
+      - "C:/Program Files/GitHub CLI/lld-link"
+      - "C:/Program Files/Docker/Docker/resources/bin/lld-link.com"
+      - "C:/Program Files/Docker/Docker/resources/bin/lld-link.exe"
+      - "C:/Program Files/Docker/Docker/resources/bin/lld-link"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/lld-link.com"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/lld-link.exe"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/lld-link"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/lld-link.com"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/lld-link.exe"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/lld-link"
+      - "C:/Program Files/dotnet/lld-link.com"
+      - "C:/Program Files/dotnet/lld-link.exe"
+      - "C:/Program Files/dotnet/lld-link"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/lld-link.com"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/lld-link.exe"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/lld-link"
+      - "C:/Program Files/CMake/bin/lld-link.com"
+      - "C:/Program Files/CMake/bin/lld-link.exe"
+      - "C:/Program Files/CMake/bin/lld-link"
+      - "C:/Users/PaulG/.local/bin/lld-link.com"
+      - "C:/Users/PaulG/.local/bin/lld-link.exe"
+      - "C:/Users/PaulG/.local/bin/lld-link"
+      - "C:/Users/PaulG/.cargo/bin/lld-link.com"
+      - "C:/Users/PaulG/.cargo/bin/lld-link.exe"
+      - "C:/Users/PaulG/.cargo/bin/lld-link"
+      - "C:/Program Files/MySQL/MySQL Shell 8.0/bin/lld-link.com"
+      - "C:/Program Files/MySQL/MySQL Shell 8.0/bin/lld-link.exe"
+      - "C:/Program Files/MySQL/MySQL Shell 8.0/bin/lld-link"
+      - "C:/Users/PaulG/AppData/Local/Microsoft/WindowsApps/lld-link.com"
+      - "C:/Users/PaulG/AppData/Local/Microsoft/WindowsApps/lld-link.exe"
+      - "C:/Users/PaulG/AppData/Local/Microsoft/WindowsApps/lld-link"
+      - "C:/Users/PaulG/AppData/Roaming/npm/lld-link.com"
+      - "C:/Users/PaulG/AppData/Roaming/npm/lld-link.exe"
+      - "C:/Users/PaulG/AppData/Roaming/npm/lld-link"
+      - "C:/Users/PaulG/AppData/Local/Pandoc/lld-link.com"
+      - "C:/Users/PaulG/AppData/Local/Pandoc/lld-link.exe"
+      - "C:/Users/PaulG/AppData/Local/Pandoc/lld-link"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/bin/lld-link.com"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/bin/lld-link.exe"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/bin/lld-link"
+      - "C:/Users/PaulG/develop/flutter/bin/lld-link.com"
+      - "C:/Users/PaulG/develop/flutter/bin/lld-link.exe"
+      - "C:/Users/PaulG/develop/flutter/bin/lld-link"
+      - "C:/Gradle/gradle-8.14.3/bin/lld-link.com"
+      - "C:/Gradle/gradle-8.14.3/bin/lld-link.exe"
+      - "C:/Gradle/gradle-8.14.3/bin/lld-link"
+      - "C:/Projects/android/sdk/platform-tools/lld-link.com"
+      - "C:/Projects/android/sdk/platform-tools/lld-link.exe"
+      - "C:/Projects/android/sdk/platform-tools/lld-link"
+      - "C:/Program Files/OpenSCAD/lld-link.com"
+      - "C:/Program Files/OpenSCAD/lld-link.exe"
+      - "C:/Program Files/OpenSCAD/lld-link"
+      - "C:/Projects/flutter/bin/lld-link.com"
+      - "C:/Projects/flutter/bin/lld-link.exe"
+      - "C:/Projects/flutter/bin/lld-link"
+      - "C:/Users/PaulG/.dotnet/tools/lld-link.com"
+      - "C:/Users/PaulG/.dotnet/tools/lld-link.exe"
+      - "C:/Users/PaulG/.dotnet/tools/lld-link"
+    found: false
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\PaulG\\AppData\\Local\\npm-cache\\_npx\\df44183e4145658d\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\src\\napi\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\src\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\node_modules\\.bin"
+        - "C:\\Projects\\node_modules\\.bin"
+        - "C:\\node_modules\\.bin"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm\\v24.13.0\\node_modules\\npm\\node_modules\\@npmcli\\run-script\\lib\\node-gyp-bin"
+        - "C:\\Program Files\\PowerShell\\7"
+        - "c:\\Users\\PaulG\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\debugCommand"
+        - "c:\\Users\\PaulG\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\copilotCli"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Programs\\Microsoft VS Code"
+        - "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\javapath"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm"
+        - "C:\\Program Files\\nodejs"
+        - "C:\\Program Files\\Netbird"
+        - "C:\\Program Files\\GitHub CLI\\"
+        - "C:\\Program Files\\Docker\\Docker\\resources\\bin"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\PowerShell\\7\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\Program Files\\CMake\\bin"
+        - "C:\\Users\\PaulG\\.local\\bin"
+        - "C:\\Users\\PaulG\\.cargo\\bin"
+        - "C:\\Program Files\\MySQL\\MySQL Shell 8.0\\bin\\"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\npm"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm"
+        - "C:\\Program Files\\nodejs"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Pandoc\\"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "C:\\Users\\PaulG\\develop\\flutter\\bin"
+        - "C:\\Gradle\\gradle-8.14.3\\bin"
+        - "C:\\Projects\\android\\sdk\\platform-tools"
+        - "C:\\Program Files\\OpenSCAD\\"
+        - "C:\\Projects\\flutter\\bin"
+        - "C:\\Users\\PaulG\\.local\\bin\\"
+        - "C:\\Users\\PaulG\\.dotnet\\tools"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineRCCompiler.cmake:40 (find_program)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/Platform/Windows-MSVC.cmake:592 (enable_language)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/Platform/Windows-MSVC.cmake:565 (__windows_compiler_msvc_enable_rc)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/Platform/Windows-MSVC-C.cmake:5 (__windows_compiler_msvc)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeCInformation.cmake:48 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_RC_COMPILER"
+    description: "RC compiler"
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "rc"
+    candidate_directories:
+      - "C:/Users/PaulG/AppData/Local/npm-cache/_npx/df44183e4145658d/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/cpp/src/napi/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/cpp/src/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/cpp/node_modules/.bin/"
+      - "C:/Projects/mcp-cad/node_modules/.bin/"
+      - "C:/Projects/node_modules/.bin/"
+      - "C:/node_modules/.bin/"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/v24.13.0/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin/"
+      - "C:/Program Files/PowerShell/7/"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/"
+      - "C:/Users/PaulG/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/javapath/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Users/PaulG/AppData/Roaming/nvm/"
+      - "C:/Program Files/nodejs/"
+      - "C:/Program Files/Netbird/"
+      - "C:/Program Files/GitHub CLI/"
+      - "C:/Program Files/Docker/Docker/resources/bin/"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/Program Files/CMake/bin/"
+      - "C:/Users/PaulG/.local/bin/"
+      - "C:/Users/PaulG/.cargo/bin/"
+      - "C:/Program Files/MySQL/MySQL Shell 8.0/bin/"
+      - "C:/Users/PaulG/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/PaulG/AppData/Roaming/npm/"
+      - "C:/Users/PaulG/AppData/Local/Pandoc/"
+      - "C:/Users/PaulG/AppData/Local/Programs/Microsoft VS Code/bin/"
+      - "C:/Users/PaulG/develop/flutter/bin/"
+      - "C:/Gradle/gradle-8.14.3/bin/"
+      - "C:/Projects/android/sdk/platform-tools/"
+      - "C:/Program Files/OpenSCAD/"
+      - "C:/Projects/flutter/bin/"
+      - "C:/Users/PaulG/.dotnet/tools/"
+      - "C:/Program Files/bin/"
+      - "C:/Program Files/sbin/"
+      - "C:/Program Files/"
+      - "C:/Program Files (x86)/bin/"
+      - "C:/Program Files (x86)/sbin/"
+      - "C:/Program Files (x86)/"
+      - "C:/Program Files/CMake/bin/"
+      - "C:/Program Files/CMake/sbin/"
+      - "C:/Program Files/CMake/"
+      - "C:/Program Files/geometry_addon/bin/"
+      - "C:/Program Files/geometry_addon/sbin/"
+      - "C:/Program Files/geometry_addon/"
+    searched_directories:
+      - "C:/Users/PaulG/AppData/Local/npm-cache/_npx/df44183e4145658d/node_modules/.bin/rc.com"
+      - "C:/Users/PaulG/AppData/Local/npm-cache/_npx/df44183e4145658d/node_modules/.bin/rc.exe"
+    found: "C:/Users/PaulG/AppData/Local/npm-cache/_npx/df44183e4145658d/node_modules/.bin/rc"
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\PaulG\\AppData\\Local\\npm-cache\\_npx\\df44183e4145658d\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\src\\napi\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\src\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\cpp\\node_modules\\.bin"
+        - "C:\\Projects\\mcp-cad\\node_modules\\.bin"
+        - "C:\\Projects\\node_modules\\.bin"
+        - "C:\\node_modules\\.bin"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm\\v24.13.0\\node_modules\\npm\\node_modules\\@npmcli\\run-script\\lib\\node-gyp-bin"
+        - "C:\\Program Files\\PowerShell\\7"
+        - "c:\\Users\\PaulG\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\debugCommand"
+        - "c:\\Users\\PaulG\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\copilotCli"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Programs\\Microsoft VS Code"
+        - "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\javapath"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm"
+        - "C:\\Program Files\\nodejs"
+        - "C:\\Program Files\\Netbird"
+        - "C:\\Program Files\\GitHub CLI\\"
+        - "C:\\Program Files\\Docker\\Docker\\resources\\bin"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\PowerShell\\7\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\Program Files\\CMake\\bin"
+        - "C:\\Users\\PaulG\\.local\\bin"
+        - "C:\\Users\\PaulG\\.cargo\\bin"
+        - "C:\\Program Files\\MySQL\\MySQL Shell 8.0\\bin\\"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\npm"
+        - "C:\\Users\\PaulG\\AppData\\Roaming\\nvm"
+        - "C:\\Program Files\\nodejs"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Pandoc\\"
+        - "C:\\Users\\PaulG\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "C:\\Users\\PaulG\\develop\\flutter\\bin"
+        - "C:\\Gradle\\gradle-8.14.3\\bin"
+        - "C:\\Projects\\android\\sdk\\platform-tools"
+        - "C:\\Program Files\\OpenSCAD\\"
+        - "C:\\Projects\\flutter\\bin"
+        - "C:\\Users\\PaulG\\.local\\bin\\"
+        - "C:\\Users\\PaulG\\.dotnet\\tools"
+      CMAKE_INSTALL_PREFIX: "C:/Program Files/geometry_addon"
+      CMAKE_SYSTEM_PREFIX_PATH:
+        - "C:/Program Files"
+        - "C:/Program Files (x86)"
+        - "C:/Program Files/CMake"
+        - "C:/Program Files/geometry_addon"
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerABI.cmake:83 (try_compile)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:2 (project)"
+    checks:
+      - "Detecting C compiler ABI info"
+    directories:
+      source: "C:/Projects/mcp-cad/cpp/src/napi/build/CMakeFiles/CMakeScratch/TryCompile-qfgx1x"
+      binary: "C:/Projects/mcp-cad/cpp/src/napi/build/CMakeFiles/CMakeScratch/TryCompile-qfgx1x"
+    cmakeVariables:
+      CMAKE_CXX_STDLIB_MODULES_JSON: ""
+      CMAKE_C_FLAGS: "/DWIN32 /D_WINDOWS"
+      CMAKE_C_FLAGS_DEBUG: "/Ob0 /Od /RTC1"
+      CMAKE_EXE_LINKER_FLAGS: "/machine:x64"
+      CMAKE_MSVC_RUNTIME_LIBRARY: "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    buildResult:
+      variable: "CMAKE_C_ABI_COMPILED"
+      cached: true
+      stdout: |
+        Change Dir: 'C:/Projects/mcp-cad/cpp/src/napi/build/CMakeFiles/CMakeScratch/TryCompile-qfgx1x'
+        
+        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_b3c0b.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=18.0 /v:n
+        MSBuild version 18.5.4+cb4e32d21 for .NET Framework
+        Build started 14/05/2026 08:24:29.
+        
+        Project "C:\\Projects\\mcp-cad\\cpp\\src\\napi\\build\\CMakeFiles\\CMakeScratch\\TryCompile-qfgx1x\\cmTC_b3c0b.vcxproj" on node 1 (default targets).
+        PrepareForBuild:
+          Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
+          Creating directory "C:\\Projects\\mcp-cad\\cpp\\src\\napi\\build\\CMakeFiles\\CMakeScratch\\TryCompile-qfgx1x\\Debug\\".
+          Creating directory "cmTC_b3c0b.dir\\Debug\\cmTC_b3c0b.tlog\\".
+        InitializeBuildStatus:
+          Creating "cmTC_b3c0b.dir\\Debug\\cmTC_b3c0b.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
+          Touching "cmTC_b3c0b.dir\\Debug\\cmTC_b3c0b.tlog\\unsuccessfulbuild".
+        ClCompile:
+          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MTd /Fo"cmTC_b3c0b.dir\\Debug\\\\" /Fd"cmTC_b3c0b.dir\\Debug\\vc145.pdb" /external:W1 /TC /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.3\\Modules\\CMakeCCompilerABI.c"
+          Microsoft (R) C/C++ Optimizing Compiler Version 19.50.35730 for x64
+          Copyright (C) Microsoft Corporation.  All rights reserved.
+          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MTd /Fo"cmTC_b3c0b.dir\\Debug\\\\" /Fd"cmTC_b3c0b.dir\\Debug\\vc145.pdb" /external:W1 /TC /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.3\\Modules\\CMakeCCompilerABI.c"
+          CMakeCCompilerABI.c
+        Link:
+          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\link.exe /OUT:"C:\\Projects\\mcp-cad\\cpp\\src\\napi\\build\\CMakeFiles\\CMakeScratch\\TryCompile-qfgx1x\\Debug\\cmTC_b3c0b.exe" /INCREMENTAL /ILK:"cmTC_b3c0b.dir\\Debug\\cmTC_b3c0b.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"C:/Projects/mcp-cad/cpp/src/napi/build/CMakeFiles/CMakeScratch/TryCompile-qfgx1x/Debug/cmTC_b3c0b.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"C:/Projects/mcp-cad/cpp/src/napi/build/CMakeFiles/CMakeScratch/TryCompile-qfgx1x/Debug/cmTC_b3c0b.lib" /MACHINE:X64  /machine:x64 cmTC_b3c0b.dir\\Debug\\CMakeCCompilerABI.obj
+          cmTC_b3c0b.vcxproj -> C:\\Projects\\mcp-cad\\cpp\\src\\napi\\build\\CMakeFiles\\CMakeScratch\\TryCompile-qfgx1x\\Debug\\cmTC_b3c0b.exe
+        FinalizeBuildStatus:
+          Deleting file "cmTC_b3c0b.dir\\Debug\\cmTC_b3c0b.tlog\\unsuccessfulbuild".
+          Touching "cmTC_b3c0b.dir\\Debug\\cmTC_b3c0b.tlog\\cmTC_b3c0b.lastbuildstate".
+        Done Building Project "C:\\Projects\\mcp-cad\\cpp\\src\\napi\\build\\CMakeFiles\\CMakeScratch\\TryCompile-qfgx1x\\cmTC_b3c0b.vcxproj" (default targets).
+        
+        Build succeeded.
+            0 Warning(s)
+            0 Error(s)
+        
+        Time Elapsed 00:00:00.97
+        
+      exitCode: 0
+  -
+    kind: "message-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerABI.cmake:253 (message)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Parsed C implicit link information:
+        link line regex: [^( *|.*[/\\])(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)|link\\.exe|lld-link(\\.exe)?|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
+        linker tool regex: [^[ 	]*(->|"|[0-9]+>[ 	-]*Build:[ 	0-9]+ ms[ 	]*)?[ 	]*(([^"]*[/\\])?(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)|link\\.exe|lld-link(\\.exe)?))("|,| |$)]
+        linker tool for 'C': C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/HostX64/x64/link.exe
+        implicit libs: []
+        implicit objs: []
+        implicit dirs: []
+        implicit fwks: []
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/Internal/CMakeDetermineLinkerId.cmake:38 (message)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerABI.cmake:299 (cmake_determine_linker_id)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Running the C compiler's linker: "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/HostX64/x64/link.exe" "-v"
+      Microsoft (R) Incremental Linker Version 14.50.35730.0
+      Copyright (C) Microsoft Corporation.  All rights reserved.
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerABI.cmake:83 (try_compile)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:2 (project)"
+    checks:
+      - "Detecting CXX compiler ABI info"
+    directories:
+      source: "C:/Projects/mcp-cad/cpp/src/napi/build/CMakeFiles/CMakeScratch/TryCompile-y3691a"
+      binary: "C:/Projects/mcp-cad/cpp/src/napi/build/CMakeFiles/CMakeScratch/TryCompile-y3691a"
+    cmakeVariables:
+      CMAKE_CXX_FLAGS: "/DWIN32 /D_WINDOWS /EHsc"
+      CMAKE_CXX_FLAGS_DEBUG: "/Ob0 /Od /RTC1"
+      CMAKE_CXX_SCAN_FOR_MODULES: "OFF"
+      CMAKE_CXX_STDLIB_MODULES_JSON: ""
+      CMAKE_EXE_LINKER_FLAGS: "/machine:x64"
+      CMAKE_MSVC_RUNTIME_LIBRARY: "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    buildResult:
+      variable: "CMAKE_CXX_ABI_COMPILED"
+      cached: true
+      stdout: |
+        Change Dir: 'C:/Projects/mcp-cad/cpp/src/napi/build/CMakeFiles/CMakeScratch/TryCompile-y3691a'
+        
+        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_47c56.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=18.0 /v:n
+        MSBuild version 18.5.4+cb4e32d21 for .NET Framework
+        Build started 14/05/2026 08:24:30.
+        
+        Project "C:\\Projects\\mcp-cad\\cpp\\src\\napi\\build\\CMakeFiles\\CMakeScratch\\TryCompile-y3691a\\cmTC_47c56.vcxproj" on node 1 (default targets).
+        PrepareForBuild:
+          Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
+          Creating directory "C:\\Projects\\mcp-cad\\cpp\\src\\napi\\build\\CMakeFiles\\CMakeScratch\\TryCompile-y3691a\\Debug\\".
+          Creating directory "cmTC_47c56.dir\\Debug\\cmTC_47c56.tlog\\".
+        InitializeBuildStatus:
+          Creating "cmTC_47c56.dir\\Debug\\cmTC_47c56.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
+          Touching "cmTC_47c56.dir\\Debug\\cmTC_47c56.tlog\\unsuccessfulbuild".
+        ClCompile:
+          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MTd /Fo"cmTC_47c56.dir\\Debug\\\\" /Fd"cmTC_47c56.dir\\Debug\\vc145.pdb" /external:W1 /TP /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.3\\Modules\\CMakeCXXCompilerABI.cpp"
+          Microsoft (R) C/C++ Optimizing Compiler Version 19.50.35730 for x64
+          Copyright (C) Microsoft Corporation.  All rights reserved.
+          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MTd /Fo"cmTC_47c56.dir\\Debug\\\\" /Fd"cmTC_47c56.dir\\Debug\\vc145.pdb" /external:W1 /TP /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.3\\Modules\\CMakeCXXCompilerABI.cpp"
+          CMakeCXXCompilerABI.cpp
+        Link:
+          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\link.exe /OUT:"C:\\Projects\\mcp-cad\\cpp\\src\\napi\\build\\CMakeFiles\\CMakeScratch\\TryCompile-y3691a\\Debug\\cmTC_47c56.exe" /INCREMENTAL /ILK:"cmTC_47c56.dir\\Debug\\cmTC_47c56.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"C:/Projects/mcp-cad/cpp/src/napi/build/CMakeFiles/CMakeScratch/TryCompile-y3691a/Debug/cmTC_47c56.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"C:/Projects/mcp-cad/cpp/src/napi/build/CMakeFiles/CMakeScratch/TryCompile-y3691a/Debug/cmTC_47c56.lib" /MACHINE:X64  /machine:x64 cmTC_47c56.dir\\Debug\\CMakeCXXCompilerABI.obj
+          cmTC_47c56.vcxproj -> C:\\Projects\\mcp-cad\\cpp\\src\\napi\\build\\CMakeFiles\\CMakeScratch\\TryCompile-y3691a\\Debug\\cmTC_47c56.exe
+        FinalizeBuildStatus:
+          Deleting file "cmTC_47c56.dir\\Debug\\cmTC_47c56.tlog\\unsuccessfulbuild".
+          Touching "cmTC_47c56.dir\\Debug\\cmTC_47c56.tlog\\cmTC_47c56.lastbuildstate".
+        Done Building Project "C:\\Projects\\mcp-cad\\cpp\\src\\napi\\build\\CMakeFiles\\CMakeScratch\\TryCompile-y3691a\\cmTC_47c56.vcxproj" (default targets).
+        
+        Build succeeded.
+            0 Warning(s)
+            0 Error(s)
+        
+        Time Elapsed 00:00:01.00
+        
+      exitCode: 0
+  -
+    kind: "message-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerABI.cmake:253 (message)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Parsed CXX implicit link information:
+        link line regex: [^( *|.*[/\\])(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)|link\\.exe|lld-link(\\.exe)?|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
+        linker tool regex: [^[ 	]*(->|"|[0-9]+>[ 	-]*Build:[ 	0-9]+ ms[ 	]*)?[ 	]*(([^"]*[/\\])?(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)|link\\.exe|lld-link(\\.exe)?))("|,| |$)]
+        linker tool for 'CXX': C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/HostX64/x64/link.exe
+        implicit libs: []
+        implicit objs: []
+        implicit dirs: []
+        implicit fwks: []
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/Internal/CMakeDetermineLinkerId.cmake:38 (message)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerABI.cmake:299 (cmake_determine_linker_id)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Running the CXX compiler's linker: "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/HostX64/x64/link.exe" "-v"
+      Microsoft (R) Incremental Linker Version 14.50.35730.0
+      Copyright (C) Microsoft Corporation.  All rights reserved.
+...

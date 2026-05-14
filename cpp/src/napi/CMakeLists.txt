@@ -7,7 +7,6 @@ include_directories(${CMAKE_JS_INC})
 # Source files
 add_library(geometry_addon SHARED
   addon.cc
-  geometry_binding.cc
 )
 
 set_target_properties(geometry_addon PROPERTIES

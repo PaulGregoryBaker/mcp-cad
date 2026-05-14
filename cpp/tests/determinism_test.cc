@@ -112,3 +112,48 @@ TEST_CASE("Determinism: unfold on sheet_1panel.stp is reproducible",
     REQUIRE(run1.dxfContent == run3.dxfContent);
   }
 }
+
+struct NestRun {
+  double utilisationPct;
+  int sheetsRequired;
+  size_t placementCount;
+};
+
+static NestRun runNest(const std::string& fixturePath) {
+  auto svc = GeometryService::create();
+  SolidId solid = svc->loadStep(fixturePath);
+  BooleanCutResult cut = svc->booleanCut(solid, 0, 0, 1, 0, 0, 0);
+  
+  std::vector<UnfoldId> unfoldIds;
+  for (const ShellId& shell : cut.shellIds) {
+    UnfoldResult ur = svc->unfoldShell(shell, 0.33);
+    unfoldIds.push_back(ur.unfoldId);
+  }
+
+  NestResult nr = svc->nestShells(unfoldIds, 1220.0, 2440.0);
+  return { nr.utilisationPct, nr.sheetsRequired, nr.placements.size() };
+}
+
+TEST_CASE("Determinism: nesting on sheet_3panel.stp is reproducible",
+          "[determinism][nesting][non-functional]") {
+  std::string fixturePath = tryFixture("sheet_3panel.stp");
+
+  NestRun run1 = runNest(fixturePath);
+  NestRun run2 = runNest(fixturePath);
+  NestRun run3 = runNest(fixturePath);
+
+  SECTION("utilisationPct is identical across 3 runs") {
+    REQUIRE(run1.utilisationPct == Approx(run2.utilisationPct).margin(0.001));
+    REQUIRE(run1.utilisationPct == Approx(run3.utilisationPct).margin(0.001));
+  }
+
+  SECTION("sheetsRequired is identical across 3 runs") {
+    REQUIRE(run1.sheetsRequired == run2.sheetsRequired);
+    REQUIRE(run1.sheetsRequired == run3.sheetsRequired);
+  }
+
+  SECTION("placementCount is identical across 3 runs") {
+    REQUIRE(run1.placementCount == run2.placementCount);
+    REQUIRE(run1.placementCount == run3.placementCount);
+  }
+}

@@ -199,13 +199,16 @@ public:
 
   TopologyGraph getTopology(const SolidId& solidId) override {
     std::lock_guard<std::mutex> lock(mutex_);
-    auto it = solids_.find(solidId);
-    if (it == solids_.end()) {
+    TopoDS_Shape shape;
+    if (auto it = solids_.find(solidId); it != solids_.end()) {
+      shape = it->second.shape;
+    } else if (auto sit = shells_.find(solidId); sit != shells_.end()) {
+      shape = sit->second.shape;
+    } else {
       throw GeometryError("GE_SOLID_NOT_FOUND",
-                          "Solid not found: " + solidId, false, "");
+                          "Solid/Shell not found: " + solidId, false, "");
     }
 
-    const TopoDS_Shape& shape = it->second.shape;
     TopologyGraph graph;
     graph.solidId = solidId;
 

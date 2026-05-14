@@ -59,7 +59,7 @@ describe('MCP Phase B integration', () => {
     const joint = (await dispatchTool(
       'synthesize_joints',
       {
-        panel_ids: [decompose.panel_ids[0], decompose.panel_ids[1]],
+        panel_ids: [clean.solid_id[0], clean.solid_id],
         joint_type: 'tab_slot',
         clearance_mm: 0.15,
       },

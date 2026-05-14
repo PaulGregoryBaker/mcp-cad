@@ -15,6 +15,11 @@
 
 namespace mcp_cad {
 
+// Forward declarations
+static const char* surfaceTypeToString(SurfaceType t);
+static const char* curveTypeToString(CurveType t);
+static const char* manifoldIssueTypeToString(ManifoldIssue::Type t);
+
 // ─── Global geometry service instance ────────────────────────────────────────
 // Single-session: one service instance per Node.js process (Constitution VII).
 

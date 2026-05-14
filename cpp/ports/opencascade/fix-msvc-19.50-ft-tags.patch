@@ -6,7 +6,7 @@ diff --git a/src/StdPrs/StdPrs_BRepFont.cxx b/src/StdPrs/StdPrs_BRepFont.cxx
    {
      const FT_Vector* aPntList = &anOutline->points[aStartIndex];
 -    const char* aTags      = &anOutline->tags[aStartIndex];
-+    const char* aTags      = reinterpret_cast<const char*> (&anOutline->tags[aStartIndex]);
++    const auto* aTags      = &anOutline->tags[aStartIndex];
      const short anEndIndex = anOutline->contours[aContour];
      const short aPntsNb    = (anEndIndex - aStartIndex) + 1;
      aStartIndex = anEndIndex + 1;

@@ -96,6 +96,19 @@ export function toStructuredError(err: unknown): StructuredError {
     return err.structured;
   }
 
+  // Handle POJO StructuredError recursively passed
+  if (err && typeof err === 'object' && 'code' in err && 'message' in err) {
+    const errObj = err as Record<string, unknown>;
+    if (typeof errObj.code === 'string') {
+      return {
+        code: (errObj.code as ErrorCode) ?? ErrorCodes.INTERNAL_ERROR,
+        message: String(errObj.message),
+        recoverable: Boolean(errObj.recoverable),
+        suggestedTool: typeof errObj.suggestedTool === 'string' ? errObj.suggestedTool : undefined,
+      };
+    }
+  }
+
   if (err instanceof Error) {
     // Try to parse code from NAPI-thrown errors (JSON format in message)
     try {

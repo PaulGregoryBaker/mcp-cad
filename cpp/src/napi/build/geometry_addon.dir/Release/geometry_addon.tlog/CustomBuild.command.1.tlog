@@ -1,0 +1,10 @@
+^C:\PROJECTS\MCP-CAD\CPP\SRC\NAPI\CMAKELISTS.TXT
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Projects/mcp-cad/cpp/src/napi -BC:/Projects/mcp-cad/cpp/src/napi/build --check-stamp-file C:/Projects/mcp-cad/cpp/src/napi/build/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
