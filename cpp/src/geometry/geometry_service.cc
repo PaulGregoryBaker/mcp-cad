@@ -312,14 +312,31 @@ public:
 
     try {
       gp_Pnt origin(ox, oy, oz);
-      gp_Dir normal(nx, ny, nz);
+      
+      // Normalize and check that normal vector is non-zero
+      double normLength = std::sqrt(nx * nx + ny * ny + nz * nz);
+      if (normLength < 1e-10) {
+        throw GeometryError("GE_INVALID_PLANE",
+                            "Cut plane normal vector is zero or near-zero",
+                            false, "");
+      }
+      
+      gp_Dir normal(nx / normLength, ny / normLength, nz / normLength);
       gp_Pln plane(origin, normal);
 
-      // Build half-spaces for cut
+      // Build an infinite half-space as the cutting tool
+      // Create a face on the plane
       BRepBuilderAPI_MakeFace faceMaker(plane, -1e6, 1e6, -1e6, 1e6);
       TopoDS_Face cutFace = faceMaker.Face();
+      
+      // Create a reference point on the positive side of the plane
+      // (away from origin, in the direction of the normal)
+      gp_Pnt refPoint = origin.Translated(gp_Vec(normal) * 100.0);
+      
+      BRepPrimAPI_MakeHalfSpace halfSpace(cutFace, refPoint);
+      TopoDS_Solid halfSpaceSolid = halfSpace.Solid();
 
-      BRepAlgoAPI_Cut cutter(it->second.shape, cutFace);
+      BRepAlgoAPI_Cut cutter(it->second.shape, halfSpaceSolid);
       cutter.Build();
 
       if (!cutter.IsDone()) {

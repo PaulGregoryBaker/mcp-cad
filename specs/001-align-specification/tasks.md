@@ -318,51 +318,51 @@ description: "Actionable task list for Apply Architecture and Engineering Design
 
 ### Geometry Engine - Nesting & Snapshot (GE-12, GE-13, GE-14)
 
-- [ ] T085 [GE] Create cpp/src/geometry/nesting.hpp (libnest2d integration interface)
-- [ ] T086 [GE] Implement nest() in cpp/src/geometry/nesting.cc (polygon extraction from UnfoldIds; dispatch to libnest2d; return NestLayout)
-- [ ] T087 [GE] Test nesting on 3 standard sheet sizes; verify >80% material utilisation; add tests/nesting_test.cc
-- [ ] T088 [GE] Implement SVG preview generation in cpp/src/geometry/nesting.cc (visualize nest layout for debugging)
-- [ ] T091 [GE] Update cpp/tests/geometry_test.cc with GE-12, GE-13 (nesting) cases; GE-14 snapshot/rollback tests covered in Phase A (T089–T090)
+- [x] T085 [GE] Create cpp/src/geometry/nesting.hpp (libnest2d integration interface)
+- [x] T086 [GE] Implement nest() in cpp/src/geometry/nesting.cc (polygon extraction from UnfoldIds; dispatch to libnest2d; return NestLayout)
+- [x] T087 [GE] Test nesting on 3 standard sheet sizes; verify >80% material utilisation; add tests/nesting_test.cc
+- [x] T088 [GE] Implement SVG preview generation in cpp/src/geometry/nesting.cc (visualize nest layout for debugging)
+- [x] T091 [GE] Update cpp/tests/geometry_test.cc with GE-12, GE-13 (nesting) cases; GE-14 snapshot/rollback tests covered in Phase A (T089–T090)
 
 ### Manufacturing Domain - Production Export (MD-14, MD-15)
 
-- [ ] T093 [MD] Create ts/src/manufacturing/bom.ts (BOM generator: part count, material IDs, costs)
-- [ ] T094 [MD] Implement generateBOM() in bom.ts (extract from FeatureSet + material config; produce CSV)
-- [ ] T095 [MD] Create ts/src/manufacturing/assembly.ts (assembly instruction generator: join order, tooling setup)
-- [ ] T096 [MD] Implement generateAssembly() in assembly.ts (topological ordering of bends/joints; produce JSON with steps)
-- [ ] T097 [MD] Create ts/tests/bom.test.ts (Vitest: valid CSV output, material cost calculation)
-- [ ] T098 [MD] Create ts/tests/assembly.test.ts (Vitest: join order validation, JSON schema compliance)
+- [x] T093 [MD] Create ts/src/manufacturing/bom.ts (BOM generator: part count, material IDs, costs)
+- [x] T094 [MD] Implement generateBOM() in bom.ts (extract from FeatureSet + material config; produce CSV)
+- [x] T095 [MD] Create ts/src/manufacturing/assembly.ts (assembly instruction generator: join order, tooling setup)
+- [x] T096 [MD] Implement generateAssembly() in assembly.ts (topological ordering of bends/joints; produce JSON with steps)
+- [x] T097 [MD] Create ts/tests/bom.test.ts (Vitest: valid CSV output, material cost calculation)
+- [x] T098 [MD] Create ts/tests/assembly.test.ts (Vitest: join order validation, JSON schema compliance)
 
 ### MCP Tools - Export & Rollback (MCP-11, MCP-14, MCP-15, MCP-16)
 
-- [ ] T099 [MCP] Create ts/src/geometry/jobs.ts (ExportJob queue interface; job lifecycle manager)
-- [ ] T100 [MCP] Implement in-process Promise queue in jobs.ts (enqueue, status polling, result retrieval; design for BullMQ migration)
-- [ ] T101 [MCP] Implement simulate_nesting tool in ts/src/mcp/tools.ts (dispatch to GE-12; return NestLayout + utilisation %)
-- [ ] T102 [MCP] Implement export_production_pack tool in ts/src/mcp/tools.ts (enqueue async export job; return job_id + initial status)
-- [ ] T103 [MCP] Implement get_export_job_status tool in ts/src/mcp/tools.ts (poll job queue; return status, progress %)
-- [ ] T104 [MCP] Implement get_export_job_result tool in ts/src/mcp/tools.ts (retrieve completed job files; return ExportResult)
-- [ ] T105 [MCP] Implement rollback tool in ts/src/mcp/tools.ts (dispatch to GE-14; restore snapshot; return SolidId list)
-- [ ] T106 [MCP] Implement structured error propagation in ts/src/mcp/errors.ts (all tool errors return { code, message, recoverable, suggested_tool })
-- [ ] T107 [MCP] Create ts/tests/export.test.ts (Vitest: job enqueue, status polling, result retrieval; load test 20 concurrent jobs)
+- [x] T099 [MCP] Create ts/src/geometry/jobs.ts (ExportJob queue interface; job lifecycle manager)
+- [x] T100 [MCP] Implement in-process Promise queue in jobs.ts (enqueue, status polling, result retrieval; design for BullMQ migration)
+- [x] T101 [MCP] Implement simulate_nesting tool in ts/src/mcp/tools.ts (dispatch to GE-12; return NestLayout + utilisation %)
+- [x] T102 [MCP] Implement export_production_pack tool in ts/src/mcp/tools.ts (enqueue async export job; return job_id + initial status)
+- [x] T103 [MCP] Implement get_export_job_status tool in ts/src/mcp/tools.ts (poll job queue; return status, progress %)
+- [x] T104 [MCP] Implement get_export_job_result tool in ts/src/mcp/tools.ts (retrieve completed job files; return ExportResult)
+- [x] T105 [MCP] Implement rollback tool in ts/src/mcp/tools.ts (dispatch to GE-14; restore snapshot; return SolidId list)
+- [x] T106 [MCP] Implement structured error propagation in ts/src/mcp/errors.ts (all tool errors return { code, message, recoverable, suggested_tool })
+- [x] T107 [MCP] Create ts/tests/export.test.ts (Vitest: job enqueue, status polling, result retrieval; load test 20 concurrent jobs)
 
 ### Infrastructure & Deployment (INF-01, INF-02)
 
 - [ ] T108 [INF] Build Docker image (cpp/Dockerfile multi-stage); verify OCCT layer caches correctly (first: 90 min, incremental: 5 min)
-- [ ] T109 [INF] Create ts/config/schema.ts (JSON schema validator for config.yaml)
-- [ ] T110 [INF] Document config.yaml format in docs/ (materials, tooling, logistics, environmental structure)
-- [ ] T111 [INF] Create docker-compose.yml for local development (volume mount, port 8080)
+- [x] T109 [INF] Create ts/config/schema.ts (JSON schema validator for config.yaml)
+- [x] T110 [INF] Document config.yaml format in docs/ (materials, tooling, logistics, environmental structure)
+- [x] T111 [INF] Create docker-compose.yml for local development (volume mount, port 8080)
 
 ### Golden-Path Integration Test (INF-03) 🎯 MVP GATE
 
-- [ ] T112 [INF] Create ts/tests/e2e/integration_e2e.test.ts (Vitest E2E: complete STEP → DXF end-to-end flow; maps to SYS-JTBD-06)
-- [ ] T120 [INF] Create test fixture STEP file (3-panel sheet metal design with known decomposition path; canonical INF-03 fixture — tier-1 simple, never changed without review)
-- [ ] T113 [INF] [P] Implement SYS-JTBD-06 step 1: STEP ingestion (clean_geometry) → assert is_manifold=true, no structured errors
-- [ ] T114 [INF] [P] Implement SYS-JTBD-06 step 2: Decomposition (decompose_volume) → assert 3 child shells, rollback_token present
-- [ ] T115 [INF] [P] Implement SYS-JTBD-06 step 3: Joint synthesis (synthesize_joints) → assert tab-slot geometry, kerf_offset_mm within [0.1, 0.2]
-- [ ] T116 [INF] [P] Implement SYS-JTBD-06 step 4: Unfolding (apply_unfold per panel) → assert flat dimensions within ±0.5% of reference, k_factor_used recorded
-- [ ] T117 [INF] [P] Implement SYS-JTBD-06 step 5: Nesting (simulate_nesting) → assert utilisation_pct > 80, sheets_required integer
-- [ ] T118 [INF] [P] Implement SYS-JTBD-06 step 6: Export submission (export_production_pack) → assert job_id returned, initial status queued or running
-- [ ] T119 [INF] [P] Implement SYS-JTBD-06 step 7: Status polling + result retrieval (get_export_job_status / get_export_job_result) → assert status succeeded, file list includes dxf, bom.csv, assembly.json
+- [x] T112 [INF] Create ts/tests/e2e/integration_e2e.test.ts (Vitest E2E: complete STEP → DXF end-to-end flow; maps to SYS-JTBD-06)
+- [x] T120 [INF] Create test fixture STEP file (3-panel sheet metal design with known decomposition path; canonical INF-03 fixture — tier-1 simple, never changed without review)
+- [x] T113 [INF] [P] Implement SYS-JTBD-06 step 1: STEP ingestion (clean_geometry) → assert is_manifold=true, no structured errors
+- [x] T114 [INF] [P] Implement SYS-JTBD-06 step 2: Decomposition (decompose_volume) → assert 3 child shells, rollback_token present
+- [x] T115 [INF] [P] Implement SYS-JTBD-06 step 3: Joint synthesis (synthesize_joints) → assert tab-slot geometry, kerf_offset_mm within [0.1, 0.2]
+- [x] T116 [INF] [P] Implement SYS-JTBD-06 step 4: Unfolding (apply_unfold per panel) → assert flat dimensions within ±0.5% of reference, k_factor_used recorded
+- [x] T117 [INF] [P] Implement SYS-JTBD-06 step 5: Nesting (simulate_nesting) → assert utilisation_pct > 80, sheets_required integer
+- [x] T118 [INF] [P] Implement SYS-JTBD-06 step 6: Export submission (export_production_pack) → assert job_id returned, initial status queued or running
+- [x] T119 [INF] [P] Implement SYS-JTBD-06 step 7: Status polling + result retrieval (get_export_job_status / get_export_job_result) → assert status succeeded, file list includes dxf, bom.csv, assembly.json
 - [ ] T121 [INF] Run INF-03 test end-to-end; verify total execution time <30 sec; record to docs/test-reports/inf03_baseline.json
 - [ ] T122 [INF] Verify all unit tests pass with >85% code coverage (C++ gcov + Vitest reports); generate docs/test-reports/coverage_summary.md
 - [ ] T123 [INF] Run all GE/MD/ACL/MCP tests under AddressSanitizer (zero memory errors); save sanitizer output to docs/test-reports/sanitizer_phase_d.log
@@ -584,4 +584,6 @@ description: "Actionable task list for Apply Architecture and Engineering Design
 **Start with**: [T001–T006] (Phase 0 Research)
 
 ---
+
+
 
