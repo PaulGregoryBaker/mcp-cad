@@ -308,3 +308,7 @@ interface StructuredError {
 ```
 
 **Error codes**: See `Engineering-Design.md §3.4` for the full error code registry.
+
+### Tier 3 Testing Entities
+- **Braai STL Fixture**: Stored in ts/tests/e2e/fixtures.
+- **High Heat Intent**: Environmental context forcing rejection of adhesive joints.

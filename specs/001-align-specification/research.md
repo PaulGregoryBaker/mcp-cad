@@ -163,3 +163,8 @@ All Phase 0 unknowns are resolved:
 - ✅ In-process Promise queue designed and load-tested (20 concurrent jobs)
 
 **Ready to proceed to Phase 1.**
+
+## Unknown: STL Ingestion & Braai Test
+- **Decision**: Introduce STL parsing strictly as evaluating broken topologies in the GE Tier 3 tests, bound independently of standard STEP workflows.
+- **Rationale**: Mitigates risk by ensuring OCC healing doesn't leak into core logic.
+- **Alternatives**: Pre-convert STL; rejected as defeats testing purpose.

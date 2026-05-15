@@ -1,6 +1,6 @@
 # Implementation Plan: Apply Architecture and Engineering Designs to Specification
 
-**Branch**: `001-speckit-git-feature` | **Date**: 2026-05-13 | **Spec**: [specs/001-align-specification/spec.md](spec.md)
+**Branch**: `001-align-specification` | **Date**: 2026-05-13 | **Spec**: [specs/001-align-specification/spec.md](spec.md)
 
 **Input**: Feature specification from `/specs/001-align-specification/spec.md`
 
@@ -1107,3 +1107,7 @@ This implementation plan consolidates Architecture.md and Engineering-Design.md 
 4. Generate `quickstart.md` (Phase 1 developer setup)
 5. Run `/speckit.tasks` to produce `tasks.md` (Phase 2: actionable work items)
 
+
+## E2E Stress Testing
+- The Braai STL model is validated as a Tier-3 stress test.
+- Phase 4 targets enforcing the 'High Heat' environmental logic for testing joint rejection.
