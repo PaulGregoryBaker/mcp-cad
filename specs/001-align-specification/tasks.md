@@ -365,7 +365,7 @@ description: "Actionable task list for Apply Architecture and Engineering Design
 - [x] T119 [INF] [P] Implement SYS-JTBD-06 step 7: Status polling + result retrieval (get_export_job_status / get_export_job_result) → assert status succeeded, file list includes dxf, bom.csv, assembly.json
 - [x] T121 [INF] Run INF-03 test end-to-end; verify total execution time <30 sec; record to docs/test-reports/inf03_baseline.json
 - [x] T122 [INF] Verify all unit tests pass with >85% code coverage (C++ gcov + Vitest reports); generate docs/test-reports/coverage_summary.md
-- [ ] T123 [INF] Run all GE/MD/ACL/MCP tests under AddressSanitizer (zero memory errors); save sanitizer output to docs/test-reports/sanitizer_phase_d.log
+- [x] T123 [INF] Run all GE/MD/ACL/MCP tests under AddressSanitizer (zero memory errors); save sanitizer output to docs/test-reports/sanitizer_phase_d.log
 - [x] T124 [INF] Document MVP acceptance in docs/MVP_ACCEPTANCE.md (checklist of all gates)
 
 ### System Integration Tests — Cross-BC JTBD Flows (Phase D)
@@ -425,11 +425,11 @@ description: "Actionable task list for Apply Architecture and Engineering Design
 - [x] T128 Create docs/TROUBLESHOOTING.md (common issues, debugging cmake-js, OCCT memory issues)
 - [x] T129 [P] Update README.md with feature summary, build instructions, MVP acceptance criteria
 - [x] T130 [P] Create RELEASE_NOTES.md (Phase A–D completion, MVP gate status, post-MVP roadmap)
-- [ ] T131 Validate all documentation links (README, DEVELOPMENT, MVP_SCOPE, OCCT_STABILITY)
+- [x] T131 Validate all documentation links (README, DEVELOPMENT, MVP_SCOPE, OCCT_STABILITY)
 - [x] T163 [P] Create ts/tests/contracts/architecture-boundaries.contract.test.ts (Vitest: assert GE modules import no MD types; assert MD modules import no OCC types; validate bounded-context language allocation per Constitution Principle II; maps to ARCH-TEST-01)
-- [ ] T164 Validate specs/001-align-specification/checklists/requirements.md sign-off and record compliance evidence in docs/test-reports/governance_sign_off.md (maps to GOV-TEST-01; confirms FR-010 and Constitution Principle VII)
-- [ ] T165 [P] Verify docs/test-reports/ contains all required evidence: inf03_baseline.json, coverage_summary.md, sanitizer_phase_d.log, governance_sign_off.md; flag any missing items before release sign-off
-- [ ] T132 Commit final state to feature branch (pending post-MVP work)
+- [x] T164 Validate specs/001-align-specification/checklists/requirements.md sign-off and record compliance evidence in docs/test-reports/governance_sign_off.md (maps to GOV-TEST-01; confirms FR-010 and Constitution Principle VII)
+- [x] T165 [P] Verify docs/test-reports/ contains all required evidence: inf03_baseline.json, coverage_summary.md, sanitizer_phase_d.log, governance_sign_off.md; flag any missing items before release sign-off
+- [x] T132 Commit final state to feature branch (pending post-MVP work)
 
 ---
 
@@ -567,8 +567,8 @@ description: "Actionable task list for Apply Architecture and Engineering Design
 - [x] Error model compliance test passes for all tools (T160)
 - [x] Material utilization >80% on 3 standard sheets
 - [x] Async export job queue load test passes (20 concurrent jobs)
-- [ ] All code coverage >85% — evidence in docs/test-reports/coverage_summary.md
-- [ ] Zero memory errors under AddressSanitizer — evidence in docs/test-reports/sanitizer_phase_d.log
+- [x] All code coverage >85% — evidence in docs/test-reports/coverage_summary.md
+- [x] Zero memory errors under AddressSanitizer — evidence in docs/test-reports/sanitizer_phase_d.log
 - [x] Release evidence bundle generated (T161)
 
 ---
