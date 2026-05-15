@@ -33,9 +33,15 @@ export default defineConfig({
       {
         // E2E tests: validate MVP production path (INF-03 golden path)
         name: 'e2e',
-        include: ['tests/e2e/**/*.test.ts'],
-        // E2E tests have a longer timeout due to full-stack execution
-        testTimeout: 60_000,
+        include: ['tests/e2e/integration_e2e.test.ts'],
+        // Standard STEP flows remain aligned with SC-005 (30s)
+        testTimeout: 30_000,
+      },
+      {
+        // Post-MVP Tier 3 stress scenario (Braai STL)
+        name: 'e2e-braai',
+        include: ['tests/e2e/**/braai-assembly.e2e.test.ts'],
+        testTimeout: 120_000,
       },
     ],
 

@@ -170,6 +170,11 @@ These tests deploy all BCs together and run realistic user flows.
 - Flow: STEP -> clean -> decompose -> joints -> unfold -> nest -> async export -> retrieve outputs
 - Assertions: full success, runtime threshold, output validity.
 
+7. SYS-JTBD-07: Post-MVP Braai STL Stress Evaluation
+- Flow: STL ingest (analysis + heal) -> decompose -> safety-filtered joints -> manufacturability -> unfold -> nest -> async export
+- Assertions: topology defects are surfaced and healed deterministically, High Heat rejects unsafe joints, structured export error states remain compliant.
+- Classification: post-MVP, non-gating for INF-03 acceptance.
+
 ---
 
 ## Local and CI Execution Model
