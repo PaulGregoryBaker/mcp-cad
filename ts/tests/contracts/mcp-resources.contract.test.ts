@@ -166,3 +166,25 @@ describe('getAllResources: returns all required URIs', () => {
     }
   });
 });
+
+// ─── buildGeometryResources contract ─────────────────────────────────────────
+
+describe('buildGeometryResources: dynamic geometry resource', () => {
+  it('returns empty object when solidId is undefined', () => {
+    const resources = buildGeometryResources(undefined);
+    expect(Object.keys(resources)).toHaveLength(0);
+  });
+
+  it('returns geometry topology resource keyed by solidId when provided', () => {
+    const resources = buildGeometryResources('solid-abc123');
+    const keys = Object.keys(resources);
+
+    expect(keys).toHaveLength(1);
+    expect(keys[0]).toBe('geometry://part/solid-abc123/topology');
+
+    const res = resources[keys[0]] as Record<string, unknown>;
+    expect(res['solidId']).toBe('solid-abc123');
+    expect(typeof res['available']).toBe('boolean');
+    expect(res['sessionSummary']).toBeDefined();
+  });
+});

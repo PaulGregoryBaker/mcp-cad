@@ -188,3 +188,112 @@ describe('GeometryBinding: snapshot methods', () => {
     expect(mockAddon.clearSnapshots).toHaveBeenCalled();
   });
 });
+
+// ─── Additional wrapper method coverage ──────────────────────────────────────
+
+describe('GeometryBinding: remaining wrapper methods and error paths', () => {
+  it('healGeometry forwards to addon', () => {
+    const binding = new GeometryBinding(mockAddon);
+    const result = binding.healGeometry('solid-uuid');
+    expect(result).toBe('healed-uuid');
+    expect(mockAddon.healGeometry).toHaveBeenCalledWith('solid-uuid');
+  });
+
+  it('addRivetHole forwards all args to addon', () => {
+    const binding = new GeometryBinding(mockAddon);
+    const result = binding.addRivetHole('shell1', 'faceA', 1.25, 2.5, 4.0);
+    expect(result.modifiedShellId).toBe('shell1');
+    expect(mockAddon.addRivetHole).toHaveBeenCalledWith('shell1', 'faceA', 1.25, 2.5, 4.0);
+  });
+
+  it('exportDxf forwards to addon', () => {
+    const binding = new GeometryBinding(mockAddon);
+    const result = binding.exportDxf('unfold1');
+    expect(result.wireCount).toBe(4);
+    expect(mockAddon.exportDxf).toHaveBeenCalledWith('unfold1');
+  });
+
+  it('nestShells forwards to addon', () => {
+    const binding = new GeometryBinding(mockAddon);
+    const result = binding.nestShells(['u1', 'u2'], 1000, 500);
+    expect(result.nestId).toBe('nest1');
+    expect(mockAddon.nestShells).toHaveBeenCalledWith(['u1', 'u2'], 1000, 500);
+  });
+
+  it('healGeometry converts addon errors to structured errors', () => {
+    const failingAddon: GeometryAddon = {
+      ...mockAddon,
+      healGeometry: vi.fn(() => {
+        throw new Error('{"code":"GE_HEAL_FAILED","message":"heal failed"}');
+      }),
+    };
+    const binding = new GeometryBinding(failingAddon);
+    expect(() => binding.healGeometry('solid1')).toThrow(/GE_HEAL_FAILED|heal failed/);
+  });
+
+  it('addRivetHole converts addon errors to structured errors', () => {
+    const failingAddon: GeometryAddon = {
+      ...mockAddon,
+      addRivetHole: vi.fn(() => {
+        throw new Error('{"code":"GE_TAB_SLOT_FAILED","message":"rivet failed"}');
+      }),
+    };
+    const binding = new GeometryBinding(failingAddon);
+    expect(() => binding.addRivetHole('s', 'f', 0, 0, 4)).toThrow(/failed|GE_TAB_SLOT_FAILED/i);
+  });
+
+  it('unfoldShell converts addon errors to structured errors', () => {
+    const failingAddon: GeometryAddon = {
+      ...mockAddon,
+      unfoldShell: vi.fn(() => {
+        throw new Error('{"code":"GE_UNFOLD_FAILED","message":"unfold failed"}');
+      }),
+    };
+    const binding = new GeometryBinding(failingAddon);
+    expect(() => binding.unfoldShell('shell1', 0.33)).toThrow(/GE_UNFOLD_FAILED|unfold failed/);
+  });
+
+  it('exportDxf converts addon errors to structured errors', () => {
+    const failingAddon: GeometryAddon = {
+      ...mockAddon,
+      exportDxf: vi.fn(() => {
+        throw new Error('{"code":"GE_NEST_FAILED","message":"export failed"}');
+      }),
+    };
+    const binding = new GeometryBinding(failingAddon);
+    expect(() => binding.exportDxf('unfold1')).toThrow(/failed|GE_NEST_FAILED/i);
+  });
+
+  it('nestShells converts addon errors to structured errors', () => {
+    const failingAddon: GeometryAddon = {
+      ...mockAddon,
+      nestShells: vi.fn(() => {
+        throw new Error('{"code":"GE_NEST_FAILED","message":"nest failed"}');
+      }),
+    };
+    const binding = new GeometryBinding(failingAddon);
+    expect(() => binding.nestShells(['u1'], 100, 100)).toThrow(/GE_NEST_FAILED|nest failed/);
+  });
+
+  it('createSnapshot converts addon errors to structured errors', () => {
+    const failingAddon: GeometryAddon = {
+      ...mockAddon,
+      createSnapshot: vi.fn(() => {
+        throw new Error('{"code":"GE_RESTORE_FAILED","message":"snapshot failed"}');
+      }),
+    };
+    const binding = new GeometryBinding(failingAddon);
+    expect(() => binding.createSnapshot('x')).toThrow(/GE_RESTORE_FAILED|snapshot failed/);
+  });
+
+  it('restoreSnapshot converts addon errors to structured errors', () => {
+    const failingAddon: GeometryAddon = {
+      ...mockAddon,
+      restoreSnapshot: vi.fn(() => {
+        throw new Error('{"code":"GE_RESTORE_FAILED","message":"restore failed"}');
+      }),
+    };
+    const binding = new GeometryBinding(failingAddon);
+    expect(() => binding.restoreSnapshot('snap-1')).toThrow(/GE_RESTORE_FAILED|restore failed/);
+  });
+});

@@ -155,6 +155,18 @@ describe('computeBendAllowance: MD-02 bend compensation', () => {
     // BA = π/180 * 90 * (1 + 0) = 1.5708
     expect(ba).toBeCloseTo(1.5708, 3);
   });
+
+  it('throws RangeError for angle > 180', () => {
+    expect(() => computeBendAllowance(mat, 181, 1.0)).toThrow(RangeError);
+  });
+
+  it('throws RangeError for negative angle', () => {
+    expect(() => computeBendAllowance(mat, -1, 1.0)).toThrow(RangeError);
+  });
+
+  it('throws RangeError for negative radius', () => {
+    expect(() => computeBendAllowance(mat, 90, -0.1)).toThrow(RangeError);
+  });
 });
 
 // ─── MD-03: Tooling capability store ──────────────────────────────────────────

@@ -147,38 +147,31 @@ describe('MCP Server: tool dispatch error handling', () => {
 
 describe('MCP Server: tool dispatch success (Phase A stubs)', () => {
   it('dispatchTool("decompose_volume") returns panel_ids array', async () => {
-    // Phase A: stub should return empty array or valid structure
-    // Full implementation in Phase B
-    const result = await dispatchTool(
+    // We expect it to throw now that the C++ addon is real, because solid-uuid doesn't exist
+    const promise = dispatchTool(
       'decompose_volume',
       { solid_id: 'solid-uuid', strategy: 'Integrity' },
       testConfig,
     );
-    expect(result).not.toBeNull();
+    await expect(promise).rejects.toThrow(/not found/i);
   });
 
   it('dispatchTool("evaluate_manufacturability") returns score', async () => {
-    // Phase A stub returns score=1.0 (no violations yet)
-    // Full scoring in Phase C
-    const result = await dispatchTool(
+    const promise = dispatchTool(
       'evaluate_manufacturability',
       { panel_id: 'panel-uuid', material_id: 'mild_steel_1.5mm' },
       testConfig,
     );
-    const r = result as Record<string, unknown>;
-    expect(typeof r.score).toBe('number');
+    await expect(promise).rejects.toThrow(/not found/i);
   });
 
   it('dispatchTool("validate_bend_sequence") returns valid flag', async () => {
-    // Phase A stub: always valid
-    // Full validation in Phase C
-    const result = await dispatchTool(
+    const promise = dispatchTool(
       'validate_bend_sequence',
       { panel_id: 'panel-uuid' },
       testConfig,
     );
-    const r = result as Record<string, unknown>;
-    expect(typeof r.valid).toBe('boolean');
+    await expect(promise).rejects.toThrow(/not found/i);
   });
 });
 

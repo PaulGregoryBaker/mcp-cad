@@ -5,10 +5,10 @@
  * Task: T150
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { GeometryAddon } from '../../src/geometry/binding';
 import { GeometryBinding, kerfOffsetMm } from '../../src/geometry/binding';
-import { dispatchTool } from '../../src/mcp/tools';
+import { dispatchTool, setGeometryBindingMock } from '../../src/mcp/tools';
 import type { ManufacturingConfig } from '../../src/config/loader';
 
 // ─── Mock addon ───────────────────────────────────────────────────────────────
@@ -85,8 +85,13 @@ describe('apply_unfold: output schema contract', () => {
 
   beforeEach(() => {
     binding = new GeometryBinding(mockAddon);
+    setGeometryBindingMock(binding);
     // Register a shell in the session so apply_unfold doesn't throw SHELL_NOT_FOUND
     binding.booleanCut('solid-1', { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: 0 });
+  });
+
+  afterEach(() => {
+    setGeometryBindingMock(undefined);
   });
 
   it('result has required fields: unfold_id, flat_width_mm, flat_height_mm, k_factor_used, bend_count', async () => {

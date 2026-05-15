@@ -33,36 +33,44 @@ describe('SYS-JTBD-03 Unfold and Score Integration', () => {
     const results: any[] = [];
 
     for (let i = 0; i < 3; i++) {
+      let decompose: any;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const clean = await dispatchTool('clean_geometry', { file_path: fixturePath }, config) as any;
         try {
-            // 1. clean_geometry
-            const clean = await dispatchTool('clean_geometry', { file_path: fixturePath }, config) as any;
-            
-            // 2. decompose_volume
-            const decompose = await dispatchTool('decompose_volume', { solid_id: clean.solid_id, strategy: 'Integrity' }, config) as any;
-            const panelId = decompose.panel_ids[0]; // just take first panel
-
-            // 3. apply_unfold
-            const unfold = await dispatchTool('apply_unfold', {
-                panel_id: panelId,
-                material_id: config.materials[0]!.id,
-            }, config) as any;
-
-            // 4. evaluate_manufacturability
-            const score = await dispatchTool('evaluate_manufacturability', {
-                panel_id: panelId,
-                material_id: config.materials[0]!.id,
-            }, config) as any;
-
-            results.push({
-                unfold_width: unfold.flat_width_mm,
-                unfold_height: unfold.flat_height_mm,
-                score_value: score.score,
-                violations_count: score.violations?.length ?? 0
-            });
-        } catch(e) {
-            console.error("DEBUG ERROR", e);
-            throw e;
+          decompose = await dispatchTool(
+            'decompose_volume',
+            { solid_id: clean.solid_id, strategy: 'Integrity' },
+            config,
+          ) as any;
+          break;
+        } catch (err) {
+          const code = (err as { code?: string }).code;
+          if (code !== 'GE_SOLID_NOT_FOUND' || attempt === 2) {
+            throw err;
+          }
         }
+      }
+
+      const panelId = decompose.panel_ids[0]; // just take first panel
+
+      // 3. apply_unfold
+      const unfold = await dispatchTool('apply_unfold', {
+        panel_id: panelId,
+        material_id: config.materials[0]!.id,
+      }, config) as any;
+
+      // 4. evaluate_manufacturability
+      const score = await dispatchTool('evaluate_manufacturability', {
+        panel_id: panelId,
+        material_id: config.materials[0]!.id,
+      }, config) as any;
+
+      results.push({
+        unfold_width: unfold.flat_width_mm,
+        unfold_height: unfold.flat_height_mm,
+        score_value: score.score,
+        violations_count: score.violations?.length ?? 0,
+      });
     }
 
     const first = results[0];

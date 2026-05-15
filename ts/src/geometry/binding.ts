@@ -103,8 +103,14 @@ function getAddon(): GeometryAddon {
  * thrown errors to StructuredError (Constitution Principle VI).
  */
 export class GeometryBinding {
+  private _addon?: GeometryAddon;
+
+  constructor(mockAddon?: GeometryAddon) {
+    this._addon = mockAddon;
+  }
+
   private get addon(): GeometryAddon {
-    return getAddon();
+    return this._addon ?? getAddon();
   }
 
   loadStep(filePath: string): string {

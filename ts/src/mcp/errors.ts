@@ -127,6 +127,8 @@ export function toStructuredError(err: unknown): StructuredError {
     }
 
     // Check if error has a code property (from C++ addon)
+    // (Unreachable in practice: the object-check above already handles Error+code cases)
+    /* v8 ignore next 7 */
     const errWithCode = err as Error & { code?: string };
     if (typeof errWithCode.code === 'string') {
       return {

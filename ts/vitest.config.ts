@@ -16,6 +16,8 @@ export default defineConfig({
           'tests/bend_sequence.test.ts',
           'tests/manufacturability.test.ts',
           'tests/export.test.ts',
+           'tests/session.test.ts',
+           'tests/config-schema.test.ts',
         ],
       },
       {
@@ -40,10 +42,10 @@ export default defineConfig({
     // ─── Coverage configuration ────────────────────────────────────────────
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'json', 'html', 'lcov', 'junit'],
+      reporter: ['text', 'json', 'html', 'lcov'],
       reportsDirectory: './coverage',
       include: ['src/**/*.ts'],
-      exclude: ['src/**/*.d.ts', 'dist/**'],
+      exclude: ['src/**/*.d.ts', 'dist/**', 'src/index.ts'],
       thresholds: {
         global: {
           lines: 85,

@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MaterialStore, computeBendAllowance } from '../../src/manufacturing/material';
 import type { ManufacturingConfig } from '../../src/config/loader';
+import { loadConfig, ConfigValidationError } from '../../src/config/loader';
 
 // ─── MD-01: Material store ────────────────────────────────────────────────────
 
@@ -229,5 +230,44 @@ describe('MD Integration: environmental context', () => {
 
   it('highVibration flag accessible', () => {
     expect(config.environmental.highVibration).toBe(true);
+  });
+});
+
+// ─── ConfigValidationError ────────────────────────────────────────────────────
+
+describe('MD Integration: ConfigValidationError', () => {
+  it('loadConfig throws ConfigValidationError for invalid YAML', () => {
+    const { writeFileSync, unlinkSync } = require('fs');
+    const tmpPath = './test-invalid-config.yaml';
+    writeFileSync(tmpPath, 'materials: "not_an_array"\ntooling: {}\nlogistics: {}\nenvironmental: {}');
+    try {
+      expect(() => loadConfig(tmpPath)).toThrow(ConfigValidationError);
+    } finally {
+      unlinkSync(tmpPath);
+    }
+  });
+
+  it('ConfigValidationError has issues array and formatted message', () => {
+    const { writeFileSync, unlinkSync } = require('fs');
+    const tmpPath = './test-bad-config-2.yaml';
+    writeFileSync(tmpPath, 'materials: []\ntooling:\n  press_brake:\n    max_tonnage: 0\n    max_bend_length_mm: 100\n    v_die_widths_mm: [6]\n    punch_radii_mm: [0.5]\n  laser:\n    max_kerf_width_mm: 0.15\n    min_hole_diameter_mm: 1.5\nlogistics:\n  shipping_envelope:\n    max_length_mm: 2400\n    max_width_mm: 1200\n    max_height_mm: 800\n  max_weight_kg: 23\n  coating_envelope:\n    max_length_mm: 2000\n    max_width_mm: 1000\nenvironmental:\n  fire_rated: false\n  marine_grade: false\n  high_vibration: false\n');
+    try {
+      loadConfig(tmpPath);
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConfigValidationError);
+      const cve = err as ConfigValidationError;
+      expect(Array.isArray(cve.issues)).toBe(true);
+      expect(cve.message).toContain('Config validation failed');
+    } finally {
+      unlinkSync(tmpPath);
+    }
+  });
+
+  it('loadConfig loads the actual config.yaml successfully', () => {
+    const config = loadConfig('./config/config.yaml');
+    expect(config.materials.length).toBeGreaterThan(0);
+    expect(config.tooling.pressBrake.maxTonnage).toBeGreaterThan(0);
+    expect(config.logistics.coatingEnvelope.maxLengthMm).toBeGreaterThan(0);
+    expect(config.logistics.coatingEnvelope.maxWidthMm).toBeGreaterThan(0);
   });
 });

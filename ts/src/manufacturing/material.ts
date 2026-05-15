@@ -41,8 +41,7 @@ export function computeBendAllowance(
   if (radiusMm < 0) {
     throw new RangeError(`Bend radius must be non-negative; got ${radiusMm}`);
   }
-  const pi = Math.PI;
-  return (pi / 180) * angleDeg * (radiusMm + material.kFactor * material.thicknessMm);
+  return (Math.PI / 180.0) * angleDeg * (radiusMm + material.kFactor * material.thicknessMm);
 }
 
 /**
@@ -61,7 +60,7 @@ export class MaterialStore {
     if (mat === undefined) {
       throw new Error(`Material not found: ${id}`);
     }
-    return mat;
+    return JSON.parse(JSON.stringify(mat));
   }
 
   has(id: string): boolean {
@@ -69,6 +68,6 @@ export class MaterialStore {
   }
 
   all(): MaterialSpec[] {
-    return [...this.materials.values()];
+    return Array.from(this.materials.values()).map(m => JSON.parse(JSON.stringify(m)));
   }
 }

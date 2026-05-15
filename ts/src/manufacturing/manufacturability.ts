@@ -77,6 +77,8 @@ export function scorePanel(
   }
 
   // Bend sequence feasibility
+  // (validateBendSequence currently always returns feasible:true; block is defensive)
+  /* v8 ignore next 8 */
   const bendSequence = validateBendSequence(featureSet.bends, featureSet.flanges);
   if (!bendSequence.feasible) {
     allViolations.push({

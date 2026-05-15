@@ -4,7 +4,17 @@
  * Tasks: T063, T064, T065, T080, T081, T082, T083, T099, T101, T102, T103, T104, T105
  */
 
-import { geometryBinding } from '../geometry/binding';
+import { GeometryBinding, geometryBinding as defaultBinding } from '../geometry/binding';
+
+let overrideBinding: GeometryBinding | undefined;
+
+export function setGeometryBindingMock(mock: GeometryBinding | undefined) {
+  overrideBinding = mock;
+}
+
+function getGeometryBinding() {
+  return overrideBinding ?? defaultBinding;
+}
 import { session } from '../geometry/session';
 import { jobQueue } from '../geometry/jobs';
 import { toStructuredError, throwError, ErrorCodes } from './errors';
@@ -231,22 +241,22 @@ function handleCleanGeometry(args: Record<string, unknown>): unknown {
   const filePath = requireString(args, 'file_path');
 
   // Create snapshot before import
-  const rollbackToken = geometryBinding.createSnapshot('before clean_geometry');
+  const rollbackToken = getGeometryBinding().createSnapshot('before clean_geometry');
 
-  const solidId = geometryBinding.loadStep(filePath);
+  const solidId = getGeometryBinding().loadStep(filePath);
   session.registerSolid(solidId);
 
-  const manifoldResult = geometryBinding.checkManifold(solidId);
+  const manifoldResult = getGeometryBinding().checkManifold(solidId);
   let finalSolidId = solidId;
   let healed = false;
 
   if (!manifoldResult.isManifold) {
-    finalSolidId = geometryBinding.healGeometry(solidId);
+    finalSolidId = getGeometryBinding().healGeometry(solidId);
     session.registerSolid(finalSolidId);
     healed = true;
   }
 
-  const topology = geometryBinding.getTopology(finalSolidId);
+  const topology = getGeometryBinding().getTopology(finalSolidId);
 
   return {
     solid_id: finalSolidId,
@@ -267,7 +277,7 @@ function handleDecomposeVolume(args: Record<string, unknown>): unknown {
   const normal = { x: 0, y: 0, z: 1 };
   const origin = { x: 0, y: 0, z: 0 };
 
-  const result = geometryBinding.booleanCut(solidId, normal, origin);
+  const result = getGeometryBinding().booleanCut(solidId, normal, origin);
   for (const shellId of result.shellIds) {
     session.registerShell(shellId);
   }
@@ -303,7 +313,7 @@ function handleSynthesizeJoints(args: Record<string, unknown>, config: Manufactu
   }
 
   if (jointType === 'tab_slot') {
-    const result = geometryBinding.addTabSlot(panelIds[0]!, panelIds[1]!, clearanceMm);
+    const result = getGeometryBinding().addTabSlot(panelIds[0]!, panelIds[1]!, clearanceMm);
     return {
       modified_panel_ids: result.modifiedShellIds,
       joint_type_applied: jointType,
@@ -313,7 +323,7 @@ function handleSynthesizeJoints(args: Record<string, unknown>, config: Manufactu
   }
 
   if (jointType === 'rivet') {
-    const result = geometryBinding.addRivetHole(panelIds[0]!, 'auto', 0, 0, 4.0);
+    const result = getGeometryBinding().addRivetHole(panelIds[0]!, 'auto', 0, 0, 4.0);
     return {
       modified_panel_ids: [result.modifiedShellId],
       joint_type_applied: jointType,
@@ -323,7 +333,7 @@ function handleSynthesizeJoints(args: Record<string, unknown>, config: Manufactu
   }
 
   // weld and other types: snapshot + stub response
-  const token = geometryBinding.createSnapshot(`before ${jointType} synthesis`);
+  const token = getGeometryBinding().createSnapshot(`before ${jointType} synthesis`);
   return {
     modified_panel_ids: panelIds,
     joint_type_applied: jointType,
@@ -339,7 +349,7 @@ function handleGenerateReliefs(args: Record<string, unknown>): unknown {
     throwError(ErrorCodes.GE_RELIEF_FAILED, 'radius_mm must be a number when provided', false);
   }
 
-  const token = geometryBinding.createSnapshot(`before generate_reliefs on ${panelId}`);
+  const token = getGeometryBinding().createSnapshot(`before generate_reliefs on ${panelId}`);
 
   return {
     modified_panel_id: panelId,
@@ -363,7 +373,7 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
   const material = matStore.get(materialId);
   const kFactor = (args['k_factor'] as number | undefined) ?? material.kFactor;
 
-  const result = geometryBinding.unfoldShell(panelId, kFactor);
+  const result = getGeometryBinding().unfoldShell(panelId, kFactor);
   session.registerUnfold(result.unfoldId);
 
   return {
@@ -391,7 +401,7 @@ function handleEvaluateManufacturability(
   const material = matStore.get(materialId);
 
   // Extract features from geometry binding
-  const topology = geometryBinding.getTopology(panelId);
+  const topology = getGeometryBinding().getTopology(panelId);
   const featureSet: FeatureSet = {
     shellId: panelId,
     bends: topology.bends ?? [],
@@ -420,7 +430,7 @@ function handleEvaluateManufacturability(
 function handleValidateBendSequence(args: Record<string, unknown>): unknown {
   const panelId = requireString(args, 'panel_id');
 
-  const topology = geometryBinding.getTopology(panelId);
+  const topology = getGeometryBinding().getTopology(panelId);
   const bends = topology.bends ?? [];
   const flanges = topology.flanges ?? [];
 
@@ -451,7 +461,7 @@ function handleSimulateNesting(args: Record<string, unknown>): unknown {
     throwError(ErrorCodes.INTERNAL_ERROR, 'sheet_size is required', false);
   }
 
-  const result = geometryBinding.nestShells(
+  const result = getGeometryBinding().nestShells(
     unfoldIds,
     sheetSize.width_mm,
     sheetSize.height_mm,
@@ -521,7 +531,7 @@ function handleGetExportJobResult(args: Record<string, unknown>): unknown {
 function handleRollback(args: Record<string, unknown>): unknown {
   const rollbackToken = requireString(args, 'rollback_token');
 
-  const result = geometryBinding.restoreSnapshot(rollbackToken);
+  const result = getGeometryBinding().restoreSnapshot(rollbackToken);
 
   return {
     restored_solid_ids: result.restoredSolidIds,

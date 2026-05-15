@@ -123,6 +123,34 @@ describe('manufacturing rules', () => {
     expect(res.allowed).toBe(true);
   });
 
+  it('isJointTypeAllowed blocks adhesive in marine-grade context', () => {
+    const res = isJointTypeAllowed('adhesive', {
+      fireRated: false,
+      marineGrade: true,
+      highVibration: false,
+    });
+    expect(res.allowed).toBe(false);
+    expect(res.reason).toMatch(/marine/i);
+  });
+
+  it('isJointTypeAllowed blocks plastic_fastener in high-vibration context', () => {
+    const res = isJointTypeAllowed('plastic_fastener', {
+      fireRated: false,
+      marineGrade: false,
+      highVibration: true,
+    });
+    expect(res.allowed).toBe(false);
+    expect(res.reason).toMatch(/high-vibration/i);
+  });
+
+  it('validateFlange flags MAX_FLANGE_LENGTH when length exceeds press brake limit', () => {
+    // maxBendLengthMm in config is 2500; use a flange longer than that
+    const longFlange = flange({ lengthMm: 3000 });
+    const res = validateFlange(longFlange, config.materials[0], config.tooling);
+    expect(res.valid).toBe(false);
+    expect(res.violations.some((v) => v.ruleCode === 'MAX_FLANGE_LENGTH')).toBe(true);
+  });
+
   it('validateFeatureSet aggregates violations from bends/holes/flanges', () => {
     const fs: FeatureSet = {
       shellId: 'shell1',

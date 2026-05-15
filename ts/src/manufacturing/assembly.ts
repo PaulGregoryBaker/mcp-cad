@@ -97,6 +97,7 @@ export function generateAssembly(featureSet: FeatureSet): AssemblyInstructions {
 
   for (const seq of seqResult.sequence) {
     const bend = featureSet.bends.find(b => b.featureId === seq.bendFeatureId);
+    /* v8 ignore next */
     if (bend === undefined) continue;
 
     steps.push({

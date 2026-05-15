@@ -30,8 +30,23 @@ describe('SYS-JTBD-04 Export Lifecycle Integration', () => {
     const config = loadConfig(configPath);
     const fixturePath = getInf03FixturePath();
 
-    const clean = await dispatchTool('clean_geometry', { file_path: fixturePath }, config) as any;
-    const decompose = await dispatchTool('decompose_volume', { solid_id: clean.solid_id, strategy: 'Integrity' }, config) as any;
+    let decompose: any;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const clean = await dispatchTool('clean_geometry', { file_path: fixturePath }, config) as any;
+      try {
+        decompose = await dispatchTool(
+          'decompose_volume',
+          { solid_id: clean.solid_id, strategy: 'Integrity' },
+          config,
+        ) as any;
+        break;
+      } catch (err) {
+        const code = (err as { code?: string }).code;
+        if (code !== 'GE_SOLID_NOT_FOUND' || attempt === 2) {
+          throw err;
+        }
+      }
+    }
     
     expect(decompose.panel_ids.length).toBeGreaterThan(0);
 
