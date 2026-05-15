@@ -420,13 +420,13 @@ description: "Actionable task list for Apply Architecture and Engineering Design
 **Objective**: Finalize quality gates, update documentation.
 
 - [x] T125 Generate code coverage reports (C++ gcov, TypeScript Vitest); ensure >85% coverage
-- [ ] T126 Create docs/OCCT_VERSION.md (current version, upgrade path, known breaking changes)
-- [ ] T127 Create docs/PERFORMANCE.md (benchmark results: STEP import, decomposition, unfolding, nesting, export times)
-- [ ] T128 Create docs/TROUBLESHOOTING.md (common issues, debugging cmake-js, OCCT memory issues)
-- [ ] T129 [P] Update README.md with feature summary, build instructions, MVP acceptance criteria
-- [ ] T130 [P] Create RELEASE_NOTES.md (Phase A–D completion, MVP gate status, post-MVP roadmap)
+- [x] T126 Create docs/OCCT_VERSION.md (current version, upgrade path, known breaking changes)
+- [x] T127 Create docs/PERFORMANCE.md (benchmark results: STEP import, decomposition, unfolding, nesting, export times)
+- [x] T128 Create docs/TROUBLESHOOTING.md (common issues, debugging cmake-js, OCCT memory issues)
+- [x] T129 [P] Update README.md with feature summary, build instructions, MVP acceptance criteria
+- [x] T130 [P] Create RELEASE_NOTES.md (Phase A–D completion, MVP gate status, post-MVP roadmap)
 - [ ] T131 Validate all documentation links (README, DEVELOPMENT, MVP_SCOPE, OCCT_STABILITY)
-- [ ] T163 [P] Create ts/tests/contracts/architecture-boundaries.contract.test.ts (Vitest: assert GE modules import no MD types; assert MD modules import no OCC types; validate bounded-context language allocation per Constitution Principle II; maps to ARCH-TEST-01)
+- [x] T163 [P] Create ts/tests/contracts/architecture-boundaries.contract.test.ts (Vitest: assert GE modules import no MD types; assert MD modules import no OCC types; validate bounded-context language allocation per Constitution Principle II; maps to ARCH-TEST-01)
 - [ ] T164 Validate specs/001-align-specification/checklists/requirements.md sign-off and record compliance evidence in docs/test-reports/governance_sign_off.md (maps to GOV-TEST-01; confirms FR-010 and Constitution Principle VII)
 - [ ] T165 [P] Verify docs/test-reports/ contains all required evidence: inf03_baseline.json, coverage_summary.md, sanitizer_phase_d.log, governance_sign_off.md; flag any missing items before release sign-off
 - [ ] T132 Commit final state to feature branch (pending post-MVP work)
