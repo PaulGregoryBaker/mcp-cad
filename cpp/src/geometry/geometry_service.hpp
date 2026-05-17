@@ -119,6 +119,77 @@ public:
         suggestedTool(suggestedTool) {}
 };
 
+// ─── Shared geometric primitives ────────────────────────────────────────────
+
+struct CuttingPlane {
+  double normalX = 0.0, normalY = 0.0, normalZ = 1.0;  // unit normal
+  double originX = 0.0, originY = 0.0, originZ = 0.0;  // point on plane (mm)
+};
+
+// ─── Diagnostic result types ─────────────────────────────────────────────────
+
+struct ClashPair {
+  ShellId partIdA;
+  ShellId partIdB;
+  double  intersectionVolumeMm3 = 0.0;
+  struct BBox { double ox, oy, oz, dx, dy, dz; } clashBoundingBox{};
+  CuttingPlane suggestedCuttingPlane;
+};
+
+struct ClashReport {
+  bool                    intersects = false;
+  std::vector<ClashPair>  clashes;
+};
+
+struct GapReport {
+  bool        hasGap           = false;
+  double      minimumDistanceMm = 0.0;
+  std::string partAFaceId;
+  std::string partBFaceId;
+  struct Vec3 { double x, y, z; } extensionVector{};
+  struct BBox { double ox, oy, oz, dx, dy, dz; } gapBoundingBox{};
+};
+
+// ─── Mutation result types ────────────────────────────────────────────────────
+
+struct TrimBodyResult {
+  ShellId    trimmedShellId;
+  SnapshotId rollbackToken;
+};
+
+struct SplitBodyResult {
+  ShellId    positiveShellId;
+  ShellId    negativeShellId;
+  SnapshotId rollbackToken;
+};
+
+struct ExtendFaceResult {
+  ShellId    modifiedShellId;
+  double     extensionDistanceMm;
+  SnapshotId rollbackToken;
+};
+
+struct OffsetFaceResult {
+  ShellId    modifiedShellId;
+  SnapshotId rollbackToken;
+};
+
+struct AddFlangeResult {
+  ShellId     modifiedShellId;
+  std::string flangeFeatureId;
+  SnapshotId  rollbackToken;
+};
+
+struct RipEdgeResult {
+  ShellId    modifiedShellId;
+  SnapshotId rollbackToken;
+};
+
+struct MergeBodyResult {
+  ShellId    mergedShellId;
+  SnapshotId rollbackToken;
+};
+
 // ─── GeometryService interface ───────────────────────────────────────────────
 
 /**
@@ -155,6 +226,21 @@ public:
                                        double            originY,
                                        double            originZ) = 0;
 
+  // ── Clash and gap detection (non-mutating) ────────────────────────────────
+  virtual ClashReport computeIntersections(
+      const std::vector<ShellId>& partIds) = 0;
+
+  virtual GapReport computeGaps(
+      const ShellId& partAId,
+      const ShellId& partBId,
+      double         maxDistanceThresholdMm) = 0;
+
+  // ── Direct modeling mutations ─────────────────────────────────────────────
+  virtual TrimBodyResult trimBodyWithPlane(
+      const ShellId&      partId,
+      const CuttingPlane& plane,
+      bool                keepPositiveSide) = 0;
+
   // ── Joint synthesis ────────────────────────────────────────────────────────
   virtual TabSlotResult  addTabSlot(const ShellId& shellIdA,
                                      const ShellId& shellIdB,
@@ -184,6 +270,43 @@ public:
   // Returns a GLB (glTF 2.0 binary) byte buffer for the shell's tessellated mesh.
   // Coordinates are in metres (glTF convention). Flat per-triangle normals.
   virtual std::vector<uint8_t> exportGlb(const ShellId& shellId) = 0;
+
+  // ── Body topology ──────────────────────────────────────────────────────────
+  virtual SplitBodyResult splitBodyByPlane(
+      const ShellId&      partId,
+      const CuttingPlane& plane) = 0;
+
+  virtual MergeBodyResult mergeBodiesWithBend(
+      const ShellId&                  partAId,
+      const ShellId&                  partBId,
+      const std::vector<std::string>& targetEdges,
+      double                          bendRadiusMm) = 0;
+
+  // ── Extended direct modeling ───────────────────────────────────────────────
+  virtual ExtendFaceResult extendFaceToTarget(
+      const ShellId&      partId,
+      const std::string&  faceId,
+      const std::string&  targetType,
+      const std::string&  targetPartId,
+      const std::string&  targetFaceId,
+      const CuttingPlane& targetPlane) = 0;
+
+  virtual OffsetFaceResult offsetFace(
+      const ShellId&     partId,
+      const std::string& faceId,
+      double             distanceMm) = 0;
+
+  // ── Sheet metal detailing ──────────────────────────────────────────────────
+  virtual AddFlangeResult addFlange(
+      const ShellId&     partId,
+      const std::string& edgeId,
+      double             lengthMm,
+      double             angleDeg,
+      double             bendRadiusMm) = 0;
+
+  virtual RipEdgeResult ripEdge(
+      const ShellId&     partId,
+      const std::string& edgeId) = 0;
 
   // ── Snapshot / rollback ────────────────────────────────────────────────────
   virtual SnapshotId    createSnapshot(const std::string& label)            = 0;

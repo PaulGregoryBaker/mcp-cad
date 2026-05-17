@@ -67,10 +67,12 @@
 
 | API | Usage | Stability |
 |-----|-------|-----------|
-| `BRepAlgoAPI_Cut` | Volume decomposition | ⚠️ See OCCT_STABILITY.md §Brittle Operations |
+| `BRepAlgoAPI_Cut` | Volume decomposition; `trim_body_with_plane` keeps one half | ⚠️ See OCCT_STABILITY.md §Brittle Operations |
 | `BRepAlgoAPI_Section` | Cross-section extraction | ⚠️ Near-tangent face edge case |
+| `BRepAlgoAPI_Common` | `compute_intersections` — computes volumetric intersection between shell pairs | ⚠️ Can raise `Standard_Failure` on degenerate inputs |
+| `BRepPrimAPI_MakeHalfSpace` | `trim_body_with_plane` — builds infinite cutting tool from plane face | ✅ Stable |
 
-**Mitigation**: Wrap in `try { ... } catch (Standard_Failure& e)`. Return `GE_BOOLEAN_FAILURE`.
+**Mitigation**: Wrap in `try { ... } catch (Standard_Failure& e)`. Return `GE_BOOLEAN_FAILURE` / `GE_CLASH_DETECTION_FAILED` / `GE_TRIM_FAILED` as appropriate.
 
 ---
 
@@ -78,7 +80,7 @@
 
 | API | Usage | Stability |
 |-----|-------|-----------|
-| `BRepOffsetAPI_MakeOffset` | Kerf offset for tab-slot | ✅ Stable for convex shapes |
+| `BRepOffsetAPI_MakeOffset` | Kerf offset for tab-slot; also used for `offset_face` (post-INF-03) | ✅ Stable for convex shapes |
 | `BRepOffsetAPI_MakeFlatFace` | Sheet metal unfolding fallback | ⚠️ Post-MVP only (180° hems) |
 
 ---
@@ -103,6 +105,16 @@
 
 ---
 
+### TKGeomAlgo — Distance and metric computation
+
+| API | Usage | Stability |
+|-----|-------|-----------|
+| `BRep_DistShapeShape` | `compute_gaps` — minimum distance between two shells, including closest sub-shape pair | ✅ Stable |
+| `GProp_GProps` + `BRepGProp::VolumeProperties` | `compute_intersections` — volumetric mass of intersection body; `compute_gaps` — centroid for plane orientation | ✅ Stable |
+| `Bnd_Box` + `BRepBndLib::Add` | `compute_intersections` — axis-aligned bounding box of clash region | ✅ Stable |
+
+---
+
 ## APIs Explicitly NOT Used (Deferred Post-MVP)
 
 | API | Reason Deferred |
@@ -111,7 +123,8 @@
 | `BRepPrimAPI_MakeSphere/Cylinder` | No primitive creation needed |
 | `Geom_BSplineSurface` (authoring) | Read-only; no NURBS authoring |
 | `STEPControl_Writer` | STEP assembly export post-MVP |
-| `BRepAlgoAPI_Fuse` | No solid fusion for MVP |
+| `BRepAlgoAPI_Fuse` | `merge_bodies_with_bend` — post-INF-03 scope |
+| `BRepBuilderAPI_MakeWire` (for rip) | `rip_edge` — post-INF-03 scope |
 
 ---
 

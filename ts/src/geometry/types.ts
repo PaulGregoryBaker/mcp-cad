@@ -128,3 +128,74 @@ export interface RestoreResult {
   restoredSolidIds: string[];
   restoredShellIds: string[];
 }
+
+// ─── Gap-closure tool types ───────────────────────────────────────────────────
+
+export interface CuttingPlane {
+  normal: { x: number; y: number; z: number };
+  origin: { x: number; y: number; z: number };
+}
+
+interface BBox3 {
+  origin: { x: number; y: number; z: number };
+  dimensions: { x: number; y: number; z: number };
+}
+
+export interface ClashPair {
+  partIdA: string;
+  partIdB: string;
+  intersectionVolumeMm3: number;
+  clashBoundingBox: BBox3;
+  suggestedCuttingPlane: CuttingPlane;
+}
+
+export interface ClashReport {
+  intersects: boolean;
+  clashes: ClashPair[];
+}
+
+export interface GapReport {
+  hasGap: boolean;
+  minimumDistanceMm: number;
+  closestElements: { partAFaceId: string; partBFaceId: string };
+  extensionVector: { x: number; y: number; z: number };
+  gapBoundingBox: BBox3;
+}
+
+export interface TrimBodyResult {
+  trimmedShellId: string;
+  rollbackToken: string;
+}
+
+export interface SplitBodyResult {
+  positiveShellId: string;
+  negativeShellId: string;
+  rollbackToken: string;
+}
+
+export interface ExtendFaceResult {
+  modifiedShellId: string;
+  extensionDistanceMm: number;
+  rollbackToken: string;
+}
+
+export interface OffsetFaceResult {
+  modifiedShellId: string;
+  rollbackToken: string;
+}
+
+export interface AddFlangeResult {
+  modifiedShellId: string;
+  flangeFeatureId: string;
+  rollbackToken: string;
+}
+
+export interface RipEdgeResult {
+  modifiedShellId: string;
+  rollbackToken: string;
+}
+
+export interface MergeBodyResult {
+  mergedShellId: string;
+  rollbackToken: string;
+}

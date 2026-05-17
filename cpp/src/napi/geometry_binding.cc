@@ -410,6 +410,307 @@ Napi::Value ClearSnapshots(const Napi::CallbackInfo& info) {
   return info.Env().Undefined();
 }
 
+// ─── Body topology ───────────────────────────────────────────────────────────
+
+Napi::Value SplitBodyByPlane(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 2) {
+    Napi::TypeError::New(env, "splitBodyByPlane(partId, plane)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string partId    = info[0].As<Napi::String>().Utf8Value();
+  Napi::Object planeObj = info[1].As<Napi::Object>();
+
+  Napi::Object normalObj = planeObj.Get("normal").As<Napi::Object>();
+  Napi::Object originObj = planeObj.Get("origin").As<Napi::Object>();
+  CuttingPlane plane;
+  plane.normalX = normalObj.Get("x").As<Napi::Number>().DoubleValue();
+  plane.normalY = normalObj.Get("y").As<Napi::Number>().DoubleValue();
+  plane.normalZ = normalObj.Get("z").As<Napi::Number>().DoubleValue();
+  plane.originX = originObj.Get("x").As<Napi::Number>().DoubleValue();
+  plane.originY = originObj.Get("y").As<Napi::Number>().DoubleValue();
+  plane.originZ = originObj.Get("z").As<Napi::Number>().DoubleValue();
+
+  TRY_GEOMETRY(env, {
+    SplitBodyResult res = svc().splitBodyByPlane(partId, plane);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("positiveShellId", Napi::String::New(env, res.positiveShellId));
+    result.Set("negativeShellId", Napi::String::New(env, res.negativeShellId));
+    result.Set("rollbackToken",   Napi::String::New(env, res.rollbackToken));
+    return result;
+  })
+  return env.Undefined();
+}
+
+Napi::Value MergeBodiesWithBend(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 4) {
+    Napi::TypeError::New(env, "mergeBodiesWithBend(partAId, partBId, targetEdges[], bendRadiusMm)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string partAId       = info[0].As<Napi::String>().Utf8Value();
+  std::string partBId       = info[1].As<Napi::String>().Utf8Value();
+  Napi::Array edgesArr      = info[2].As<Napi::Array>();
+  double      bendRadiusMm  = info[3].As<Napi::Number>().DoubleValue();
+
+  std::vector<std::string> targetEdges;
+  targetEdges.reserve(edgesArr.Length());
+  for (uint32_t i = 0; i < edgesArr.Length(); ++i) {
+    targetEdges.push_back(edgesArr.Get(i).As<Napi::String>().Utf8Value());
+  }
+
+  TRY_GEOMETRY(env, {
+    MergeBodyResult res = svc().mergeBodiesWithBend(partAId, partBId, targetEdges, bendRadiusMm);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("mergedShellId", Napi::String::New(env, res.mergedShellId));
+    result.Set("rollbackToken", Napi::String::New(env, res.rollbackToken));
+    return result;
+  })
+  return env.Undefined();
+}
+
+// ─── Extended direct modeling ─────────────────────────────────────────────────
+
+Napi::Value ExtendFaceToTarget(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 6) {
+    Napi::TypeError::New(env,
+        "extendFaceToTarget(partId, faceId, targetType, targetPartId, targetFaceId, targetPlane)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string partId       = info[0].As<Napi::String>().Utf8Value();
+  std::string faceId       = info[1].As<Napi::String>().Utf8Value();
+  std::string targetType   = info[2].As<Napi::String>().Utf8Value();
+  std::string targetPartId = info[3].As<Napi::String>().Utf8Value();
+  std::string targetFaceId = info[4].As<Napi::String>().Utf8Value();
+  Napi::Object planeObj    = info[5].As<Napi::Object>();
+
+  CuttingPlane targetPlane;
+  if (!planeObj.IsNull() && !planeObj.IsUndefined()) {
+    Napi::Object nObj = planeObj.Get("normal").As<Napi::Object>();
+    Napi::Object oObj = planeObj.Get("origin").As<Napi::Object>();
+    targetPlane.normalX = nObj.Get("x").As<Napi::Number>().DoubleValue();
+    targetPlane.normalY = nObj.Get("y").As<Napi::Number>().DoubleValue();
+    targetPlane.normalZ = nObj.Get("z").As<Napi::Number>().DoubleValue();
+    targetPlane.originX = oObj.Get("x").As<Napi::Number>().DoubleValue();
+    targetPlane.originY = oObj.Get("y").As<Napi::Number>().DoubleValue();
+    targetPlane.originZ = oObj.Get("z").As<Napi::Number>().DoubleValue();
+  }
+
+  TRY_GEOMETRY(env, {
+    ExtendFaceResult res = svc().extendFaceToTarget(partId, faceId, targetType,
+                                                     targetPartId, targetFaceId, targetPlane);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("modifiedShellId",     Napi::String::New(env, res.modifiedShellId));
+    result.Set("extensionDistanceMm", Napi::Number::New(env, res.extensionDistanceMm));
+    result.Set("rollbackToken",       Napi::String::New(env, res.rollbackToken));
+    return result;
+  })
+  return env.Undefined();
+}
+
+Napi::Value OffsetFace(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 3) {
+    Napi::TypeError::New(env, "offsetFace(partId, faceId, distanceMm)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string partId     = info[0].As<Napi::String>().Utf8Value();
+  std::string faceId     = info[1].As<Napi::String>().Utf8Value();
+  double      distanceMm = info[2].As<Napi::Number>().DoubleValue();
+
+  TRY_GEOMETRY(env, {
+    OffsetFaceResult res = svc().offsetFace(partId, faceId, distanceMm);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("modifiedShellId", Napi::String::New(env, res.modifiedShellId));
+    result.Set("rollbackToken",   Napi::String::New(env, res.rollbackToken));
+    return result;
+  })
+  return env.Undefined();
+}
+
+// ─── Sheet metal detailing ────────────────────────────────────────────────────
+
+Napi::Value AddFlange(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 5) {
+    Napi::TypeError::New(env, "addFlange(partId, edgeId, lengthMm, angleDeg, bendRadiusMm)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string partId       = info[0].As<Napi::String>().Utf8Value();
+  std::string edgeId       = info[1].As<Napi::String>().Utf8Value();
+  double      lengthMm     = info[2].As<Napi::Number>().DoubleValue();
+  double      angleDeg     = info[3].As<Napi::Number>().DoubleValue();
+  double      bendRadiusMm = info[4].As<Napi::Number>().DoubleValue();
+
+  TRY_GEOMETRY(env, {
+    AddFlangeResult res = svc().addFlange(partId, edgeId, lengthMm, angleDeg, bendRadiusMm);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("modifiedShellId",  Napi::String::New(env, res.modifiedShellId));
+    result.Set("flangeFeatureId",  Napi::String::New(env, res.flangeFeatureId));
+    result.Set("rollbackToken",    Napi::String::New(env, res.rollbackToken));
+    return result;
+  })
+  return env.Undefined();
+}
+
+Napi::Value RipEdge(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 2) {
+    Napi::TypeError::New(env, "ripEdge(partId, edgeId)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string partId = info[0].As<Napi::String>().Utf8Value();
+  std::string edgeId = info[1].As<Napi::String>().Utf8Value();
+
+  TRY_GEOMETRY(env, {
+    RipEdgeResult res = svc().ripEdge(partId, edgeId);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("modifiedShellId", Napi::String::New(env, res.modifiedShellId));
+    result.Set("rollbackToken",   Napi::String::New(env, res.rollbackToken));
+    return result;
+  })
+  return env.Undefined();
+}
+
+// ─── Clash and gap detection ─────────────────────────────────────────────────
+
+Napi::Value ComputeIntersections(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsArray()) {
+    Napi::TypeError::New(env, "computeIntersections(partIds: string[])").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  Napi::Array arr = info[0].As<Napi::Array>();
+  std::vector<ShellId> partIds;
+  partIds.reserve(arr.Length());
+  for (uint32_t i = 0; i < arr.Length(); ++i) {
+    partIds.push_back(arr.Get(i).As<Napi::String>().Utf8Value());
+  }
+  TRY_GEOMETRY(env, {
+    ClashReport report = svc().computeIntersections(partIds);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("intersects", Napi::Boolean::New(env, report.intersects));
+    Napi::Array clashes = Napi::Array::New(env, report.clashes.size());
+    for (size_t i = 0; i < report.clashes.size(); ++i) {
+      const ClashPair& cp = report.clashes[i];
+      Napi::Object clash = Napi::Object::New(env);
+      clash.Set("partIdA", Napi::String::New(env, cp.partIdA));
+      clash.Set("partIdB", Napi::String::New(env, cp.partIdB));
+      clash.Set("intersectionVolumeMm3", Napi::Number::New(env, cp.intersectionVolumeMm3));
+
+      Napi::Object bbox = Napi::Object::New(env);
+      Napi::Object bboxOrigin = Napi::Object::New(env);
+      bboxOrigin.Set("x", Napi::Number::New(env, cp.clashBoundingBox.ox));
+      bboxOrigin.Set("y", Napi::Number::New(env, cp.clashBoundingBox.oy));
+      bboxOrigin.Set("z", Napi::Number::New(env, cp.clashBoundingBox.oz));
+      Napi::Object bboxDims = Napi::Object::New(env);
+      bboxDims.Set("x", Napi::Number::New(env, cp.clashBoundingBox.dx));
+      bboxDims.Set("y", Napi::Number::New(env, cp.clashBoundingBox.dy));
+      bboxDims.Set("z", Napi::Number::New(env, cp.clashBoundingBox.dz));
+      bbox.Set("origin", bboxOrigin);
+      bbox.Set("dimensions", bboxDims);
+      clash.Set("clashBoundingBox", bbox);
+
+      Napi::Object plane = Napi::Object::New(env);
+      Napi::Object planeNormal = Napi::Object::New(env);
+      planeNormal.Set("x", Napi::Number::New(env, cp.suggestedCuttingPlane.normalX));
+      planeNormal.Set("y", Napi::Number::New(env, cp.suggestedCuttingPlane.normalY));
+      planeNormal.Set("z", Napi::Number::New(env, cp.suggestedCuttingPlane.normalZ));
+      Napi::Object planeOrigin = Napi::Object::New(env);
+      planeOrigin.Set("x", Napi::Number::New(env, cp.suggestedCuttingPlane.originX));
+      planeOrigin.Set("y", Napi::Number::New(env, cp.suggestedCuttingPlane.originY));
+      planeOrigin.Set("z", Napi::Number::New(env, cp.suggestedCuttingPlane.originZ));
+      plane.Set("normal", planeNormal);
+      plane.Set("origin", planeOrigin);
+      clash.Set("suggestedCuttingPlane", plane);
+
+      clashes.Set(static_cast<uint32_t>(i), clash);
+    }
+    result.Set("clashes", clashes);
+    return result;
+  })
+  return env.Undefined();
+}
+
+Napi::Value ComputeGaps(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 3) {
+    Napi::TypeError::New(env, "computeGaps(partAId, partBId, maxDistanceMm)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string partAId = info[0].As<Napi::String>().Utf8Value();
+  std::string partBId = info[1].As<Napi::String>().Utf8Value();
+  double maxDist      = info[2].As<Napi::Number>().DoubleValue();
+  TRY_GEOMETRY(env, {
+    GapReport report = svc().computeGaps(partAId, partBId, maxDist);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("hasGap", Napi::Boolean::New(env, report.hasGap));
+    result.Set("minimumDistanceMm", Napi::Number::New(env, report.minimumDistanceMm));
+
+    Napi::Object closest = Napi::Object::New(env);
+    closest.Set("partAFaceId", Napi::String::New(env, report.partAFaceId));
+    closest.Set("partBFaceId", Napi::String::New(env, report.partBFaceId));
+    result.Set("closestElements", closest);
+
+    Napi::Object extVec = Napi::Object::New(env);
+    extVec.Set("x", Napi::Number::New(env, report.extensionVector.x));
+    extVec.Set("y", Napi::Number::New(env, report.extensionVector.y));
+    extVec.Set("z", Napi::Number::New(env, report.extensionVector.z));
+    result.Set("extensionVector", extVec);
+
+    Napi::Object bbox = Napi::Object::New(env);
+    Napi::Object bboxOrigin = Napi::Object::New(env);
+    bboxOrigin.Set("x", Napi::Number::New(env, report.gapBoundingBox.ox));
+    bboxOrigin.Set("y", Napi::Number::New(env, report.gapBoundingBox.oy));
+    bboxOrigin.Set("z", Napi::Number::New(env, report.gapBoundingBox.oz));
+    Napi::Object bboxDims = Napi::Object::New(env);
+    bboxDims.Set("x", Napi::Number::New(env, report.gapBoundingBox.dx));
+    bboxDims.Set("y", Napi::Number::New(env, report.gapBoundingBox.dy));
+    bboxDims.Set("z", Napi::Number::New(env, report.gapBoundingBox.dz));
+    bbox.Set("origin", bboxOrigin);
+    bbox.Set("dimensions", bboxDims);
+    result.Set("gapBoundingBox", bbox);
+
+    return result;
+  })
+  return env.Undefined();
+}
+
+Napi::Value TrimBodyWithPlane(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 3) {
+    Napi::TypeError::New(env, "trimBodyWithPlane(partId, plane, keepPositiveSide)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string partId      = info[0].As<Napi::String>().Utf8Value();
+  Napi::Object planeObj   = info[1].As<Napi::Object>();
+  bool keepPositiveSide   = info[2].As<Napi::Boolean>().Value();
+
+  Napi::Object normalObj = planeObj.Get("normal").As<Napi::Object>();
+  Napi::Object originObj = planeObj.Get("origin").As<Napi::Object>();
+
+  CuttingPlane plane;
+  plane.normalX = normalObj.Get("x").As<Napi::Number>().DoubleValue();
+  plane.normalY = normalObj.Get("y").As<Napi::Number>().DoubleValue();
+  plane.normalZ = normalObj.Get("z").As<Napi::Number>().DoubleValue();
+  plane.originX = originObj.Get("x").As<Napi::Number>().DoubleValue();
+  plane.originY = originObj.Get("y").As<Napi::Number>().DoubleValue();
+  plane.originZ = originObj.Get("z").As<Napi::Number>().DoubleValue();
+
+  TRY_GEOMETRY(env, {
+    TrimBodyResult res = svc().trimBodyWithPlane(partId, plane, keepPositiveSide);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("trimmedShellId", Napi::String::New(env, res.trimmedShellId));
+    result.Set("rollbackToken",  Napi::String::New(env, res.rollbackToken));
+    return result;
+  })
+  return env.Undefined();
+}
+
 // ─── Enum string helpers ──────────────────────────────────────────────────────
 
 static const char* surfaceTypeToString(SurfaceType t) {
@@ -459,9 +760,18 @@ void RegisterGeometryMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("exportDxf",       Napi::Function::New(env, ExportDxf));
   exports.Set("exportGlb",       Napi::Function::New(env, ExportGlb));
   exports.Set("nestShells",      Napi::Function::New(env, NestShells));
-  exports.Set("createSnapshot",  Napi::Function::New(env, CreateSnapshot));
-  exports.Set("restoreSnapshot", Napi::Function::New(env, RestoreSnapshot));
-  exports.Set("clearSnapshots",  Napi::Function::New(env, ClearSnapshots));
+  exports.Set("createSnapshot",        Napi::Function::New(env, CreateSnapshot));
+  exports.Set("restoreSnapshot",       Napi::Function::New(env, RestoreSnapshot));
+  exports.Set("clearSnapshots",        Napi::Function::New(env, ClearSnapshots));
+  exports.Set("computeIntersections",  Napi::Function::New(env, ComputeIntersections));
+  exports.Set("computeGaps",           Napi::Function::New(env, ComputeGaps));
+  exports.Set("trimBodyWithPlane",     Napi::Function::New(env, TrimBodyWithPlane));
+  exports.Set("splitBodyByPlane",      Napi::Function::New(env, SplitBodyByPlane));
+  exports.Set("mergeBodiesWithBend",   Napi::Function::New(env, MergeBodiesWithBend));
+  exports.Set("extendFaceToTarget",    Napi::Function::New(env, ExtendFaceToTarget));
+  exports.Set("offsetFace",            Napi::Function::New(env, OffsetFace));
+  exports.Set("addFlange",             Napi::Function::New(env, AddFlange));
+  exports.Set("ripEdge",               Napi::Function::New(env, RipEdge));
 }
 
 }  // namespace mcp_cad

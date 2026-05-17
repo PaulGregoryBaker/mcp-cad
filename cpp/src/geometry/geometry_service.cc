@@ -71,6 +71,15 @@
 #include <GProp_GProps.hxx>
 #include <BRepGProp.hxx>
 
+#include <BRepAlgoAPI_Common.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
+#include <BRep_DistShapeShape.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepFilletAPI_MakeFillet.hxx>
+#include <BRepBuilderAPI_Sewing.hxx>
+#include <BRepTools_ReShape.hxx>
+#include <BRepBuilderAPI_Copy.hxx>
+
 #include <gp_Pnt.hxx>
 #include <gp_Vec.hxx>
 #include <gp_Dir.hxx>
@@ -1108,6 +1117,845 @@ private:
       adj.dihedralAngleDeg = computeDihedralAngle(faceA, faceB, edge);
 
       graph.adjacency.push_back(adj);
+    }
+  }
+
+  // ── Split body by plane ──────────────────────────────────────────────────
+
+  SplitBodyResult splitBodyByPlane(const ShellId& partId,
+                                   const CuttingPlane& plane) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = shells_.find(partId);
+    if (it == shells_.end()) {
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell not found: " + partId, false, "");
+    }
+
+    SnapshotId token = createSnapshotLocked("before splitBodyByPlane on " + partId);
+
+    try {
+      gp_Pnt origin(plane.originX, plane.originY, plane.originZ);
+      double normLen = std::sqrt(plane.normalX * plane.normalX +
+                                  plane.normalY * plane.normalY +
+                                  plane.normalZ * plane.normalZ);
+      if (normLen < 1e-10) {
+        throw GeometryError("GE_SPLIT_FAILED", "Plane normal is zero", false, "");
+      }
+      gp_Dir normal(plane.normalX / normLen, plane.normalY / normLen, plane.normalZ / normLen);
+      gp_Pln gPlane(origin, normal);
+      BRepBuilderAPI_MakeFace faceMaker(gPlane, -1e6, 1e6, -1e6, 1e6);
+      TopoDS_Face planeFace = faceMaker.Face();
+      gp_Vec n(normal);
+
+      // Positive side = shape minus negative half-space
+      gp_Pnt negRefPt = origin.Translated(n * -100.0);
+      BRepPrimAPI_MakeHalfSpace negHS(planeFace, negRefPt);
+      BRepAlgoAPI_Cut cutPos(it->second.shape, negHS.Solid());
+      cutPos.Build();
+      if (!cutPos.IsDone() || cutPos.Shape().IsNull()) {
+        throw GeometryError("GE_SPLIT_FAILED", "Split positive side failed", true, "rollback");
+      }
+
+      // Negative side = shape minus positive half-space
+      gp_Pnt posRefPt = origin.Translated(n * 100.0);
+      BRepPrimAPI_MakeHalfSpace posHS(planeFace, posRefPt);
+      BRepAlgoAPI_Cut cutNeg(it->second.shape, posHS.Solid());
+      cutNeg.Build();
+      if (!cutNeg.IsDone() || cutNeg.Shape().IsNull()) {
+        throw GeometryError("GE_SPLIT_FAILED", "Split negative side failed", true, "rollback");
+      }
+
+      GProp_GProps props;
+      BRepGProp::VolumeProperties(cutPos.Shape(), props);
+      if (props.Mass() < 1e-6) {
+        throw GeometryError("GE_SPLIT_FAILED",
+                            "Positive side is empty — plane may not intersect the body",
+                            true, "rollback");
+      }
+      BRepGProp::VolumeProperties(cutNeg.Shape(), props);
+      if (props.Mass() < 1e-6) {
+        throw GeometryError("GE_SPLIT_FAILED",
+                            "Negative side is empty — plane may not intersect the body",
+                            true, "rollback");
+      }
+
+      ShellId posId = generateUUID();
+      ShellId negId = generateUUID();
+      shells_[posId] = ShellState{posId, it->second.parentSolidId, cutPos.Shape()};
+      shells_[negId] = ShellState{negId, it->second.parentSolidId, cutNeg.Shape()};
+
+      return SplitBodyResult{posId, negId, token};
+
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_SPLIT_FAILED",
+                          std::string("OCCT exception during split: ") + e.GetMessageString(),
+                          true, "rollback");
+    }
+  }
+
+  // ── Merge bodies with bend ───────────────────────────────────────────────
+
+  MergeBodyResult mergeBodiesWithBend(const ShellId& partAId,
+                                      const ShellId& partBId,
+                                      const std::vector<std::string>& targetEdges,
+                                      double bendRadiusMm) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto itA = shells_.find(partAId);
+    if (itA == shells_.end()) {
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell not found: " + partAId, false, "");
+    }
+    auto itB = shells_.find(partBId);
+    if (itB == shells_.end()) {
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell not found: " + partBId, false, "");
+    }
+    if (bendRadiusMm <= 0.0) {
+      throw GeometryError("GE_MERGE_FAILED", "bendRadiusMm must be positive", false, "");
+    }
+    if (targetEdges.empty()) {
+      throw GeometryError("GE_MERGE_FAILED", "targetEdges must not be empty", false, "");
+    }
+
+    SnapshotId token = createSnapshotLocked("before mergeBodiesWithBend on " +
+                                            partAId + "+" + partBId);
+
+    try {
+      BRepAlgoAPI_Fuse fuse(itA->second.shape, itB->second.shape);
+      fuse.Build();
+      if (!fuse.IsDone() || fuse.Shape().IsNull()) {
+        throw GeometryError("GE_MERGE_FAILED", "Boolean fuse failed", true, "rollback");
+      }
+      TopoDS_Shape fused = fuse.Shape();
+
+      // Attempt fillet on matching edges. Failure is non-fatal — fall back to unfilleted fuse.
+      bool wantAll = std::find(targetEdges.begin(), targetEdges.end(), "all") != targetEdges.end();
+      BRepFilletAPI_MakeFillet filletMaker(fused);
+      bool addedAny = false;
+      TopExp_Explorer edgeExp(fused, TopAbs_EDGE);
+      for (; edgeExp.More(); edgeExp.Next()) {
+        const TopoDS_Edge& e = TopoDS::Edge(edgeExp.Current());
+        if (wantAll ||
+            std::find(targetEdges.begin(), targetEdges.end(), shapeId(e)) != targetEdges.end()) {
+          filletMaker.Add(bendRadiusMm, e);
+          addedAny = true;
+        }
+      }
+
+      TopoDS_Shape result;
+      if (addedAny) {
+        filletMaker.Build();
+        if (filletMaker.IsDone() && !filletMaker.Shape().IsNull()) {
+          result = filletMaker.Shape();
+        } else {
+          result = fused;  // fillet failed gracefully — use unfilleted fuse
+        }
+      } else {
+        result = fused;
+      }
+
+      ShellId mergedId = generateUUID();
+      shells_[mergedId] = ShellState{mergedId, itA->second.parentSolidId, result};
+      return MergeBodyResult{mergedId, token};
+
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_MERGE_FAILED",
+                          std::string("OCCT exception during merge: ") + e.GetMessageString(),
+                          true, "rollback");
+    }
+  }
+
+  // ── Extend face to target ────────────────────────────────────────────────
+
+  ExtendFaceResult extendFaceToTarget(const ShellId&      partId,
+                                      const std::string&  faceId,
+                                      const std::string&  targetType,
+                                      const std::string&  targetPartId,
+                                      const std::string&  targetFaceId,
+                                      const CuttingPlane& targetPlane) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = shells_.find(partId);
+    if (it == shells_.end()) {
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell not found: " + partId, false, "");
+    }
+
+    SnapshotId token = createSnapshotLocked("before extendFaceToTarget on " + partId);
+
+    try {
+      // Locate the face
+      TopoDS_Face face;
+      bool found = false;
+      TopExp_Explorer fExp(it->second.shape, TopAbs_FACE);
+      for (; fExp.More(); fExp.Next()) {
+        if (shapeId(fExp.Current()) == faceId) {
+          face = TopoDS::Face(fExp.Current());
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        throw GeometryError("GE_EXTEND_FAILED", "Face not found: " + faceId, false, "");
+      }
+
+      // Compute face normal at centroid
+      Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
+      if (surf.IsNull()) {
+        throw GeometryError("GE_EXTEND_FAILED", "Face has null surface", false, "");
+      }
+      Standard_Real u1, u2, v1, v2;
+      BRepTools::UVBounds(face, u1, u2, v1, v2);
+      gp_Pnt faceCenter;
+      gp_Vec du, dv;
+      surf->D1((u1 + u2) * 0.5, (v1 + v2) * 0.5, faceCenter, du, dv);
+      gp_Vec faceNormal = du.Crossed(dv);
+      if (faceNormal.Magnitude() < 1e-10) {
+        throw GeometryError("GE_EXTEND_FAILED", "Cannot compute face normal", false, "");
+      }
+      faceNormal.Normalize();
+
+      // Compute extension distance
+      double extDist = 0.0;
+      if (targetType == "plane") {
+        gp_Vec tNorm(targetPlane.normalX, targetPlane.normalY, targetPlane.normalZ);
+        double tNormLen = tNorm.Magnitude();
+        if (tNormLen < 1e-10) {
+          throw GeometryError("GE_EXTEND_FAILED", "Target plane normal is zero", false, "");
+        }
+        tNorm /= tNormLen;
+        gp_Pnt tOrigin(targetPlane.originX, targetPlane.originY, targetPlane.originZ);
+        gp_Vec toPlane(faceCenter, tOrigin);
+        double denom = faceNormal.Dot(tNorm);
+        if (std::abs(denom) < 1e-10) {
+          throw GeometryError("GE_EXTEND_FAILED", "Face is parallel to target plane", false, "");
+        }
+        extDist = toPlane.Dot(tNorm) / denom;
+      } else if (targetType == "face_id" || targetType == "part_surface") {
+        auto tIt = shells_.find(targetPartId);
+        if (tIt == shells_.end()) {
+          throw GeometryError("GE_SHELL_NOT_FOUND",
+                              "Target part not found: " + targetPartId, false, "");
+        }
+        TopoDS_Shape targetShape = tIt->second.shape;
+        if (!targetFaceId.empty()) {
+          TopExp_Explorer tExp(tIt->second.shape, TopAbs_FACE);
+          for (; tExp.More(); tExp.Next()) {
+            if (shapeId(tExp.Current()) == targetFaceId) {
+              targetShape = tExp.Current();
+              break;
+            }
+          }
+        }
+        BRep_DistShapeShape dist(face, targetShape);
+        dist.Perform();
+        if (!dist.IsDone()) {
+          throw GeometryError("GE_EXTEND_FAILED", "Cannot compute distance to target", false, "");
+        }
+        extDist = dist.Value();
+      } else {
+        throw GeometryError("GE_EXTEND_FAILED",
+                            "Unknown targetType: " + targetType, false, "");
+      }
+
+      if (std::abs(extDist) < 1e-6) {
+        return ExtendFaceResult{partId, 0.0, token};
+      }
+
+      // Extrude face toward target and fuse with shell
+      gp_Vec extVec = faceNormal * extDist;
+      BRepPrimAPI_MakePrism prism(face, extVec);
+      prism.Build();
+      if (!prism.IsDone()) {
+        throw GeometryError("GE_EXTEND_FAILED", "Face extrusion failed", true, "rollback");
+      }
+
+      BRepAlgoAPI_Fuse fuse(it->second.shape, prism.Shape());
+      fuse.Build();
+      if (!fuse.IsDone() || fuse.Shape().IsNull()) {
+        throw GeometryError("GE_EXTEND_FAILED",
+                            "Failed to fuse extension with shell", true, "rollback");
+      }
+
+      it->second.shape = fuse.Shape();
+      return ExtendFaceResult{partId, std::abs(extDist), token};
+
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_EXTEND_FAILED",
+                          std::string("OCCT exception during extend: ") + e.GetMessageString(),
+                          true, "rollback");
+    }
+  }
+
+  // ── Offset face ──────────────────────────────────────────────────────────
+
+  OffsetFaceResult offsetFace(const ShellId&     partId,
+                               const std::string& faceId,
+                               double             distanceMm) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = shells_.find(partId);
+    if (it == shells_.end()) {
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell not found: " + partId, false, "");
+    }
+    if (std::abs(distanceMm) < 1e-10) {
+      throw GeometryError("GE_OFFSET_FAILED", "distanceMm must not be zero", false, "");
+    }
+
+    SnapshotId token = createSnapshotLocked("before offsetFace on " + partId);
+
+    try {
+      // Find the face
+      TopoDS_Face face;
+      bool found = false;
+      TopExp_Explorer fExp(it->second.shape, TopAbs_FACE);
+      for (; fExp.More(); fExp.Next()) {
+        if (shapeId(fExp.Current()) == faceId) {
+          face = TopoDS::Face(fExp.Current());
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        throw GeometryError("GE_OFFSET_FAILED", "Face not found: " + faceId, false, "");
+      }
+
+      // Compute face normal
+      Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
+      if (surf.IsNull()) {
+        throw GeometryError("GE_OFFSET_FAILED", "Face has null surface", false, "");
+      }
+      Standard_Real u1, u2, v1, v2;
+      BRepTools::UVBounds(face, u1, u2, v1, v2);
+      gp_Pnt ctr; gp_Vec du, dv;
+      surf->D1((u1 + u2) * 0.5, (v1 + v2) * 0.5, ctr, du, dv);
+      gp_Vec faceNormal = du.Crossed(dv);
+      if (faceNormal.Magnitude() < 1e-10) {
+        throw GeometryError("GE_OFFSET_FAILED", "Cannot compute face normal", false, "");
+      }
+      faceNormal.Normalize();
+
+      // Extrude face by distanceMm; fuse (positive) or cut (negative) with shell
+      gp_Vec offsetVec = faceNormal * distanceMm;
+      BRepPrimAPI_MakePrism prism(face, offsetVec);
+      prism.Build();
+      if (!prism.IsDone()) {
+        throw GeometryError("GE_OFFSET_FAILED", "Face prism failed", true, "rollback");
+      }
+
+      TopoDS_Shape result;
+      if (distanceMm > 0.0) {
+        BRepAlgoAPI_Fuse fuse(it->second.shape, prism.Shape());
+        fuse.Build();
+        if (!fuse.IsDone() || fuse.Shape().IsNull()) {
+          throw GeometryError("GE_OFFSET_FAILED",
+                              "Face offset fuse failed", true, "rollback");
+        }
+        result = fuse.Shape();
+      } else {
+        BRepAlgoAPI_Cut cut(it->second.shape, prism.Shape());
+        cut.Build();
+        if (!cut.IsDone() || cut.Shape().IsNull()) {
+          throw GeometryError("GE_OFFSET_FAILED",
+                              "Face offset cut failed", true, "rollback");
+        }
+        result = cut.Shape();
+      }
+
+      it->second.shape = result;
+      return OffsetFaceResult{partId, token};
+
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_OFFSET_FAILED",
+                          std::string("OCCT exception during offset: ") + e.GetMessageString(),
+                          true, "rollback");
+    }
+  }
+
+  // ── Add flange ───────────────────────────────────────────────────────────
+
+  AddFlangeResult addFlange(const ShellId&     partId,
+                             const std::string& edgeId,
+                             double             lengthMm,
+                             double             angleDeg,
+                             double             bendRadiusMm) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = shells_.find(partId);
+    if (it == shells_.end()) {
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell not found: " + partId, false, "");
+    }
+    if (lengthMm <= 0.0) {
+      throw GeometryError("GE_FLANGE_FAILED", "lengthMm must be positive", false, "");
+    }
+    if (angleDeg <= 0.0 || angleDeg > 180.0) {
+      throw GeometryError("GE_FLANGE_FAILED", "angleDeg must be in (0, 180]", false, "");
+    }
+    if (bendRadiusMm <= 0.0) {
+      throw GeometryError("GE_FLANGE_FAILED", "bendRadiusMm must be positive", false, "");
+    }
+
+    SnapshotId token = createSnapshotLocked("before addFlange on " + partId);
+
+    try {
+      // Find the edge
+      TopoDS_Edge edge;
+      bool found = false;
+      TopExp_Explorer eExp(it->second.shape, TopAbs_EDGE);
+      for (; eExp.More(); eExp.Next()) {
+        if (shapeId(eExp.Current()) == edgeId) {
+          edge = TopoDS::Edge(eExp.Current());
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        throw GeometryError("GE_FLANGE_FAILED", "Edge not found: " + edgeId, false, "");
+      }
+
+      // Verify it's a boundary (free) edge
+      TopTools_IndexedDataMapOfShapeListOfShape edgeToFaces;
+      TopExp::MapShapesAndAncestors(it->second.shape, TopAbs_EDGE, TopAbs_FACE, edgeToFaces);
+      if (!edgeToFaces.Contains(edge)) {
+        throw GeometryError("GE_EDGE_NOT_OPEN", "Edge not found in shell topology", false, "");
+      }
+      const TopTools_ListOfShape& adjFaces = edgeToFaces.FindFromKey(edge);
+      if (adjFaces.Extent() != 1) {
+        throw GeometryError("GE_EDGE_NOT_OPEN",
+                            "Edge is not a boundary edge; it has " +
+                                std::to_string(adjFaces.Extent()) + " adjacent faces",
+                            false, "");
+      }
+
+      // Get adjacent face normal
+      const TopoDS_Face& adjFace = TopoDS::Face(adjFaces.First());
+      Handle(Geom_Surface) surf = BRep_Tool::Surface(adjFace);
+      if (surf.IsNull()) {
+        throw GeometryError("GE_FLANGE_FAILED", "Adjacent face has null surface", false, "");
+      }
+      Standard_Real u1, u2, v1, v2;
+      BRepTools::UVBounds(adjFace, u1, u2, v1, v2);
+      gp_Pnt ctr; gp_Vec du, dv;
+      surf->D1((u1 + u2) * 0.5, (v1 + v2) * 0.5, ctr, du, dv);
+      gp_Vec faceNormal = du.Crossed(dv);
+      if (faceNormal.Magnitude() < 1e-10) {
+        throw GeometryError("GE_FLANGE_FAILED", "Cannot compute adjacent face normal", false, "");
+      }
+      faceNormal.Normalize();
+
+      // Get edge tangent at midpoint
+      Standard_Real f, l;
+      Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, f, l);
+      if (curve.IsNull()) {
+        throw GeometryError("GE_FLANGE_FAILED", "Edge has null curve", false, "");
+      }
+      gp_Pnt midPt; gp_Vec tangent;
+      curve->D1((f + l) * 0.5, midPt, tangent);
+      if (tangent.Magnitude() < 1e-10) {
+        throw GeometryError("GE_FLANGE_FAILED", "Cannot compute edge tangent", false, "");
+      }
+      tangent.Normalize();
+
+      // Outward direction perpendicular to face at the edge
+      gp_Vec outward = faceNormal.Crossed(tangent);
+      if (outward.Magnitude() < 1e-10) {
+        throw GeometryError("GE_FLANGE_FAILED",
+                            "Face normal is parallel to edge direction", false, "");
+      }
+      outward.Normalize();
+
+      // Flange direction: rotate face normal by (PI - angleDeg) around tangent axis
+      // At 90°: flange is perpendicular to face (standard flange)
+      double angleRad = angleDeg * M_PI / 180.0;
+      double cosA = std::cos(M_PI - angleRad);
+      double sinA = std::sin(M_PI - angleRad);
+      gp_Vec flangeDir = faceNormal * cosA + outward * (-sinA);
+
+      // Build a wire from the edge and extrude it
+      BRepBuilderAPI_MakeWire wireMaker;
+      wireMaker.Add(edge);
+      if (!wireMaker.IsDone()) {
+        throw GeometryError("GE_FLANGE_FAILED", "Cannot build wire from edge", false, "");
+      }
+
+      gp_Vec extVec = flangeDir * lengthMm;
+      BRepPrimAPI_MakePrism prism(wireMaker.Wire(), extVec);
+      prism.Build();
+      if (!prism.IsDone()) {
+        throw GeometryError("GE_FLANGE_FAILED", "Flange prism extrusion failed", true, "rollback");
+      }
+
+      // Sew the flange panel onto the shell
+      BRepBuilderAPI_Sewing sewing(1e-3);
+      sewing.Add(it->second.shape);
+      sewing.Add(prism.Shape());
+      sewing.Perform();
+      TopoDS_Shape sewedShape = sewing.SewedShape();
+      if (sewedShape.IsNull()) {
+        throw GeometryError("GE_FLANGE_FAILED",
+                            "Sewing flange to shell produced null shape", true, "rollback");
+      }
+
+      it->second.shape = sewedShape;
+      std::string flangeFeatureId = generateUUID();
+      return AddFlangeResult{partId, flangeFeatureId, token};
+
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_FLANGE_FAILED",
+                          std::string("OCCT exception during addFlange: ") + e.GetMessageString(),
+                          true, "rollback");
+    }
+  }
+
+  // ── Rip edge ─────────────────────────────────────────────────────────────
+
+  RipEdgeResult ripEdge(const ShellId&     partId,
+                         const std::string& edgeId) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = shells_.find(partId);
+    if (it == shells_.end()) {
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell not found: " + partId, false, "");
+    }
+
+    SnapshotId token = createSnapshotLocked("before ripEdge on " + partId);
+
+    try {
+      // Find the edge and confirm it is interior (shared by exactly 2 faces)
+      TopTools_IndexedDataMapOfShapeListOfShape edgeToFaces;
+      TopExp::MapShapesAndAncestors(it->second.shape, TopAbs_EDGE, TopAbs_FACE, edgeToFaces);
+
+      TopoDS_Edge edgeToRip;
+      TopoDS_Face faceA, faceB;
+      bool found = false;
+      for (int i = 1; i <= edgeToFaces.Size(); ++i) {
+        const TopoDS_Shape& key = edgeToFaces.FindKey(i);
+        if (key.ShapeType() != TopAbs_EDGE) continue;
+        if (shapeId(key) == edgeId) {
+          edgeToRip = TopoDS::Edge(key);
+          const TopTools_ListOfShape& faces = edgeToFaces.FindFromIndex(i);
+          if (faces.Extent() < 2) {
+            throw GeometryError("GE_EDGE_NOT_INTERIOR",
+                                "Edge is a boundary edge; only interior edges can be ripped",
+                                false, "");
+          }
+          faceA = TopoDS::Face(faces.First());
+          faceB = TopoDS::Face(faces.Last());
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        throw GeometryError("GE_RIP_FAILED", "Edge not found: " + edgeId, false, "");
+      }
+
+      // Strategy: replace the shared edge in faceA and faceB with separate edge copies
+      // that reference the same underlying geometry but have distinct TShape objects.
+      // This severs the topological link between the two faces at that edge.
+      TopLoc_Location edgeLoc;
+      Standard_Real firstParam, lastParam;
+      Handle(Geom_Curve) edgeCurve =
+          BRep_Tool::Curve(edgeToRip, edgeLoc, firstParam, lastParam);
+      if (edgeCurve.IsNull()) {
+        throw GeometryError("GE_RIP_FAILED", "Edge has no geometry", false, "");
+      }
+
+      BRep_Builder eb;
+      TopoDS_Edge newEdgeForA, newEdgeForB;
+      eb.MakeEdge(newEdgeForA, edgeCurve, edgeLoc, BRep_Tool::Tolerance(edgeToRip));
+      eb.Range(newEdgeForA, firstParam, lastParam);
+      eb.MakeEdge(newEdgeForB, edgeCurve, edgeLoc, BRep_Tool::Tolerance(edgeToRip));
+      eb.Range(newEdgeForB, firstParam, lastParam);
+      // Copy vertices
+      TopExp_Explorer vExp(edgeToRip, TopAbs_VERTEX);
+      for (int vi = 0; vExp.More(); vExp.Next(), ++vi) {
+        eb.Add(newEdgeForA, vExp.Current());
+        eb.Add(newEdgeForB, vExp.Current());
+      }
+
+      // Replace edge in each face separately
+      BRepTools_ReShape reshapeA;
+      reshapeA.Replace(edgeToRip.Oriented(TopAbs_FORWARD),
+                       newEdgeForA.Oriented(TopAbs_FORWARD));
+      reshapeA.Replace(edgeToRip.Oriented(TopAbs_REVERSED),
+                       newEdgeForA.Oriented(TopAbs_REVERSED));
+      TopoDS_Face newFaceA = TopoDS::Face(reshapeA.Apply(faceA));
+
+      BRepTools_ReShape reshapeB;
+      reshapeB.Replace(edgeToRip.Oriented(TopAbs_FORWARD),
+                       newEdgeForB.Oriented(TopAbs_FORWARD));
+      reshapeB.Replace(edgeToRip.Oriented(TopAbs_REVERSED),
+                       newEdgeForB.Oriented(TopAbs_REVERSED));
+      TopoDS_Face newFaceB = TopoDS::Face(reshapeB.Apply(faceB));
+
+      // Replace the two faces in the shell
+      BRepTools_ReShape reshapeShell;
+      reshapeShell.Replace(faceA, newFaceA);
+      reshapeShell.Replace(faceB, newFaceB);
+      TopoDS_Shape result = reshapeShell.Apply(it->second.shape);
+
+      if (result.IsNull()) {
+        throw GeometryError("GE_RIP_FAILED",
+                            "Rip produced null shape", true, "rollback");
+      }
+
+      it->second.shape = result;
+      return RipEdgeResult{partId, token};
+
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_RIP_FAILED",
+                          std::string("OCCT exception during ripEdge: ") + e.GetMessageString(),
+                          true, "rollback");
+    }
+  }
+
+  // ── Clash detection ──────────────────────────────────────────────────────
+
+  ClashReport computeIntersections(const std::vector<ShellId>& partIds) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    ClashReport report;
+    report.intersects = false;
+
+    // Resolve all shells to shapes first
+    std::vector<std::pair<ShellId, TopoDS_Shape>> parts;
+    parts.reserve(partIds.size());
+    for (const auto& id : partIds) {
+      auto it = shells_.find(id);
+      if (it == shells_.end()) {
+        throw GeometryError("GE_SHELL_NOT_FOUND", "Shell not found: " + id, false, "");
+      }
+      parts.emplace_back(id, it->second.shape);
+    }
+
+    try {
+      for (size_t i = 0; i < parts.size(); ++i) {
+        for (size_t j = i + 1; j < parts.size(); ++j) {
+          BRepAlgoAPI_Common common(parts[i].second, parts[j].second);
+          common.Build();
+
+          if (!common.IsDone()) {
+            throw GeometryError("GE_CLASH_DETECTION_FAILED",
+                                "Intersection computation failed between " +
+                                    parts[i].first + " and " + parts[j].first,
+                                false, "");
+          }
+
+          TopoDS_Shape intersection = common.Shape();
+          if (intersection.IsNull()) continue;
+
+          // Check if intersection has non-zero volume
+          GProp_GProps props;
+          BRepGProp::VolumeProperties(intersection, props);
+          double vol = props.Mass();
+          if (vol < 1e-9) continue;  // Touching faces, not a volumetric clash
+
+          report.intersects = true;
+
+          ClashPair clash;
+          clash.partIdA = parts[i].first;
+          clash.partIdB = parts[j].first;
+          clash.intersectionVolumeMm3 = vol;
+
+          // Compute bounding box of the intersection
+          Bnd_Box bbox;
+          BRepBndLib::Add(intersection, bbox);
+          double xmin, ymin, zmin, xmax, ymax, zmax;
+          bbox.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+          clash.clashBoundingBox = {xmin, ymin, zmin,
+                                    xmax - xmin, ymax - ymin, zmax - zmin};
+
+          // Suggest a cutting plane through the centre of the clash bbox
+          // with normal pointing from partA centroid to partB centroid
+          GProp_GProps propsA, propsB;
+          BRepGProp::VolumeProperties(parts[i].second, propsA);
+          BRepGProp::VolumeProperties(parts[j].second, propsB);
+          gp_Pnt cA = propsA.CentreOfMass();
+          gp_Pnt cB = propsB.CentreOfMass();
+          gp_Vec dir(cA, cB);
+          if (dir.Magnitude() < 1e-10) dir = gp_Vec(0, 0, 1);
+          dir.Normalize();
+          clash.suggestedCuttingPlane.normalX = dir.X();
+          clash.suggestedCuttingPlane.normalY = dir.Y();
+          clash.suggestedCuttingPlane.normalZ = dir.Z();
+          clash.suggestedCuttingPlane.originX = (xmin + xmax) * 0.5;
+          clash.suggestedCuttingPlane.originY = (ymin + ymax) * 0.5;
+          clash.suggestedCuttingPlane.originZ = (zmin + zmax) * 0.5;
+
+          report.clashes.push_back(std::move(clash));
+        }
+      }
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_CLASH_DETECTION_FAILED",
+                          std::string("OCCT exception during clash detection: ") +
+                              e.GetMessageString(),
+                          false, "");
+    }
+
+    return report;
+  }
+
+  // ── Gap detection ────────────────────────────────────────────────────────
+
+  GapReport computeGaps(const ShellId& partAId,
+                        const ShellId& partBId,
+                        double maxDistanceThresholdMm) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    auto itA = shells_.find(partAId);
+    if (itA == shells_.end()) {
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell not found: " + partAId, false, "");
+    }
+    auto itB = shells_.find(partBId);
+    if (itB == shells_.end()) {
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell not found: " + partBId, false, "");
+    }
+
+    try {
+      BRep_DistShapeShape distCalc(itA->second.shape, itB->second.shape);
+      distCalc.Perform();
+
+      if (!distCalc.IsDone()) {
+        throw GeometryError("GE_GAP_DETECTION_FAILED",
+                            "Distance computation failed between " + partAId +
+                                " and " + partBId,
+                            false, "");
+      }
+
+      GapReport report;
+      report.minimumDistanceMm = distCalc.Value();
+      report.hasGap = report.minimumDistanceMm > 1e-6 &&
+                      report.minimumDistanceMm <= maxDistanceThresholdMm;
+
+      if (distCalc.NbSolution() > 0) {
+        // Closest point pair — used to identify the faces involved
+        gp_Pnt pA = distCalc.PointOnShape1(1);
+        gp_Pnt pB = distCalc.PointOnShape2(1);
+
+        // Walk faces of each shell and find the one containing the closest point
+        auto findFaceId = [&](const TopoDS_Shape& shape, const gp_Pnt& pt) -> std::string {
+          double bestDist = 1e18;
+          std::string bestId;
+          TopExp_Explorer exp(shape, TopAbs_FACE);
+          for (; exp.More(); exp.Next()) {
+            const TopoDS_Face& f = TopoDS::Face(exp.Current());
+            Handle(Geom_Surface) surf = BRep_Tool::Surface(f);
+            if (surf.IsNull()) continue;
+            Standard_Real u1, u2, v1, v2;
+            BRepTools::UVBounds(f, u1, u2, v1, v2);
+            gp_Pnt mid;
+            surf->D0((u1 + u2) * 0.5, (v1 + v2) * 0.5, mid);
+            double d = mid.Distance(pt);
+            if (d < bestDist) {
+              bestDist = d;
+              bestId   = shapeId(f);
+            }
+          }
+          return bestId;
+        };
+
+        report.partAFaceId = findFaceId(itA->second.shape, pA);
+        report.partBFaceId = findFaceId(itB->second.shape, pB);
+
+        // Extension vector: from pA toward pB, magnitude = gap distance
+        gp_Vec ext(pA, pB);
+        if (ext.Magnitude() > 1e-10) ext.Normalize();
+        report.extensionVector = {ext.X(), ext.Y(), ext.Z()};
+
+        // Bounding box enclosing both closest points
+        double xmin = std::min(pA.X(), pB.X()) - 1.0;
+        double ymin = std::min(pA.Y(), pB.Y()) - 1.0;
+        double zmin = std::min(pA.Z(), pB.Z()) - 1.0;
+        double xmax = std::max(pA.X(), pB.X()) + 1.0;
+        double ymax = std::max(pA.Y(), pB.Y()) + 1.0;
+        double zmax = std::max(pA.Z(), pB.Z()) + 1.0;
+        report.gapBoundingBox = {xmin, ymin, zmin,
+                                 xmax - xmin, ymax - ymin, zmax - zmin};
+      }
+
+      return report;
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_GAP_DETECTION_FAILED",
+                          std::string("OCCT exception during gap detection: ") +
+                              e.GetMessageString(),
+                          false, "");
+    }
+  }
+
+  // ── Trim body with plane ─────────────────────────────────────────────────
+
+  TrimBodyResult trimBodyWithPlane(const ShellId&      partId,
+                                   const CuttingPlane& plane,
+                                   bool                keepPositiveSide) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    auto it = shells_.find(partId);
+    if (it == shells_.end()) {
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell not found: " + partId, false, "");
+    }
+
+    // Snapshot before mutation (Constitution Principle IV)
+    SnapshotId token = createSnapshotLocked("before trimBodyWithPlane on " + partId);
+
+    try {
+      gp_Pnt origin(plane.originX, plane.originY, plane.originZ);
+      double normLength = std::sqrt(plane.normalX * plane.normalX +
+                                    plane.normalY * plane.normalY +
+                                    plane.normalZ * plane.normalZ);
+      if (normLength < 1e-10) {
+        throw GeometryError("GE_TRIM_FAILED", "Cutting plane normal is zero", false, "");
+      }
+      gp_Dir normal(plane.normalX / normLength,
+                    plane.normalY / normLength,
+                    plane.normalZ / normLength);
+      gp_Pln gPlane(origin, normal);
+
+      // Build half-space on the side to keep
+      BRepBuilderAPI_MakeFace faceMaker(gPlane, -1e6, 1e6, -1e6, 1e6);
+      TopoDS_Face planeFace = faceMaker.Face();
+
+      // Reference point on the side the tool occupies (opposite to keep side)
+      gp_Vec n(normal);
+      gp_Pnt refPt = keepPositiveSide
+          ? origin.Translated(n * -100.0)   // tool on negative side → keep positive
+          : origin.Translated(n * 100.0);   // tool on positive side → keep negative
+
+      BRepPrimAPI_MakeHalfSpace halfSpace(planeFace, refPt);
+      TopoDS_Solid halfSpaceSolid = halfSpace.Solid();
+
+      BRepAlgoAPI_Cut cutter(it->second.shape, halfSpaceSolid);
+      cutter.Build();
+
+      if (!cutter.IsDone()) {
+        throw GeometryError("GE_TRIM_FAILED",
+                            "Plane trim failed for shell: " + partId, true, "rollback");
+      }
+
+      TopoDS_Shape result = cutter.Shape();
+      if (result.IsNull()) {
+        throw GeometryError("GE_TRIM_FAILED",
+                            "Plane trim produced empty result", true, "rollback");
+      }
+
+      // Replace the shell's shape in-place
+      it->second.shape = result;
+
+      return TrimBodyResult{partId, token};
+
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_TRIM_FAILED",
+                          std::string("OCCT exception during trim: ") + e.GetMessageString(),
+                          true, "rollback");
     }
   }
 

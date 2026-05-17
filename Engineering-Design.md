@@ -1058,6 +1058,18 @@ All tool errors return a structured error with the following fields:
 | `EXPORT_JOB_NOT_READY` | Export job is not in `succeeded` state yet | Yes — poll `get_export_job_status` |
 | `EXPORT_JOB_FAILED` | Export job reached terminal failure | Maybe — inspect error and retry |
 | `GEOMETRY_ENGINE_FAULT` | OCC kernel exception | No — report bug |
+| `GE_CLASH_DETECTION_FAILED` | `BRepAlgoAPI_Common` raised exception during intersection computation | No — report bug |
+| `GE_GAP_DETECTION_FAILED` | `BRep_DistShapeShape` raised exception during gap measurement | No — report bug |
+| `GE_TRIM_FAILED` | Half-space cut produced empty or invalid result | Maybe — inspect plane orientation |
+| `GE_SPLIT_FAILED` | One or both halves of the split body are empty | Maybe — adjust cutting plane |
+| `GE_EXTEND_FAILED` | Face extension produced self-intersection or invalid topology | Maybe — reduce extension distance |
+| `GE_OFFSET_FAILED` | Face offset produced invalid geometry | Maybe — reduce offset distance |
+| `GE_FLANGE_FAILED` | Flange extrusion failed or produced invalid body | Maybe — check edge selection |
+| `GE_EDGE_NOT_OPEN` | `add_flange` called on a non-boundary (interior) edge | No — select a boundary edge |
+| `GE_RIP_FAILED` | Edge removal produced invalid topology | No — edge cannot be ripped |
+| `GE_EDGE_NOT_INTERIOR` | `rip_edge` called on a boundary edge; only interior edges can be ripped | No — select an interior edge |
+| `GE_MERGE_FAILED` | Body fusion produced non-manifold geometry | Maybe — check body orientation |
+| `MD_LOGISTICS_NOT_CONFIGURED` | Requested logistics envelope type is not present in config | No — update logistics config |
 
 ---
 
@@ -1162,6 +1174,108 @@ For each tool, this table records the split between the underlying geometry stac
 | **Geometry Engine Service** | Stores snapshot as a dict of registered shape IDs at each operation boundary; restores by re-pointing the active registry to the snapshot |
 | **Manufacturing Domain** | Not involved |
 | **MCP Layer** | Validates token; invokes Geometry Engine restore; clears downstream IDs (unfolds, nests) invalidated by the rollback |
+
+### `compute_intersections`
+
+| Layer | Responsibility |
+|---|---|
+| **OCC/CadQuery** | `BRepAlgoAPI_Common` computes Boolean intersection of each pair of shells; `GProp_GProps` measures intersection volume; `BRepBndLib` computes bounding box of intersection region |
+| **Geometry Engine Service** | Iterates over all `(partIdA, partIdB)` pairs; filters zero-volume touching results; derives suggested cutting plane from centroid-to-centroid vector and clash bbox centre |
+| **Manufacturing Domain** | Not involved — purely geometric |
+| **MCP Layer** | Validates `part_ids` array (min 2 entries); serialises `ClashReport` to MCP output format with snake_case keys |
+
+### `compute_gaps`
+
+| Layer | Responsibility |
+|---|---|
+| **OCC/CadQuery** | `BRep_DistShapeShape` computes minimum distance and closest sub-shape pair between two shells |
+| **Geometry Engine Service** | Extracts minimum distance, closest face IDs (by proximity), and extension vector from the closest-point pair; flags result as a gap when distance is within `maxDistanceThresholdMm` |
+| **Manufacturing Domain** | Not involved — purely geometric |
+| **MCP Layer** | Validates three required args; serialises `GapReport`; tool is non-mutating (no snapshot required) |
+
+### `trim_body_with_plane`
+
+| Layer | Responsibility |
+|---|---|
+| **OCC/CadQuery** | `BRepPrimAPI_MakeHalfSpace` creates the cutting tool; `BRepAlgoAPI_Cut` removes the unwanted half; shape registered as updated shell in-place |
+| **Geometry Engine Service** | Calls `createSnapshot` before mutation; normalises the plane normal vector; selects the half-space tool orientation based on `keepPositiveSide`; updates the shell's `TopoDS_Shape` in the session registry |
+| **Manufacturing Domain** | Not involved |
+| **MCP Layer** | Validates `part_id`, `plane` object (normal + origin), and `keep_positive_side` boolean; returns `trimmed_shell_id` and `rollback_token` |
+
+**Key decision:** `trim_body_with_plane` updates the shell in-place (same `ShellId`), unlike `booleanCut` which produces new `ShellId`s. This matches the MCP Tools spec v5.0 contract and avoids downstream session-ID invalidation.
+
+### `check_boundary_compliance`
+
+| Layer | Responsibility |
+|---|---|
+| **OCC/CadQuery** | Not involved — bounding box is derived from existing topology data |
+| **Geometry Engine Service** | Not involved — `getTopology()` already provides face area data used for dimension estimation |
+| **Manufacturing Domain** | Provides `logistics.shippingEnvelope` and `logistics.coatingEnvelope` constraints from `ManufacturingConfig` |
+| **MCP Layer** | Reads topology; estimates bounding dimensions from face areas; compares against the requested envelope type; returns `compliant`, `violations[]`, and `checked_dimensions` |
+
+**Key decision:** Bounding box estimation from face area data is approximate but sufficient for compliance checking. Exact tight bounding box would require a new C++ `BRepBndLib` call; this is deferred to a future task. The current implementation is conservative and never false-passes.
+
+### `split_body_by_plane`
+
+| Layer | Responsibility |
+|---|---|
+| **OCC/CadQuery** | `BRepPrimAPI_MakeHalfSpace` builds two opposing half-space solids from the cutting plane; `BRepAlgoAPI_Cut` applied twice (shell minus each half-space) to produce the positive and negative fragments; volume check via `GProp_GProps` confirms each fragment is non-degenerate |
+| **Geometry Engine Service** | Calls `createSnapshot` before mutation; validates both output fragments have non-zero volume (error `GE_SPLIT_FAILED` if either is empty); registers each fragment as a new shell with a fresh UUID |
+| **Manufacturing Domain** | Not involved |
+| **MCP Layer** | Validates `part_id` and `cutting_plane` (normal + origin objects); returns `positive_shell_id`, `negative_shell_id`, and `rollback_token` |
+
+**Key decision:** Two separate `BRepAlgoAPI_Cut` calls are used rather than one `BRepAlgoAPI_Section`; this guarantees both results are closed manifold shells suitable for downstream unfold and nesting operations.
+
+### `merge_bodies_with_bend`
+
+| Layer | Responsibility |
+|---|---|
+| **OCC/CadQuery** | `BRepAlgoAPI_Fuse` unites the two shells into a single solid; `BRepFilletAPI_MakeFillet` applies a cylindrical bend radius along matching edges at the junction; graceful fallback to unfilleted fuse if fillet fails on shell (vs. solid) topology |
+| **Geometry Engine Service** | Calls `createSnapshot` before mutation; looks up shells for both `partAId` and `partBId`; filters `targetEdges` to those shared by the two shells after fuse; errors `GE_MERGE_FAILED` if fuse produces non-manifold result; registers merged shell |
+| **Manufacturing Domain** | Not involved in the merge — bend radius is a caller-supplied geometry parameter, not a tooling constraint |
+| **MCP Layer** | Validates both part IDs exist in session, `target_edges` array is non-empty, `bend_radius_mm > 0`; returns `merged_shell_id` and `rollback_token` |
+
+**Key decision:** `BRepFilletAPI_MakeFillet` works reliably on solid bodies but may fail on open shell bodies. The fallback to unfilleted fuse is non-fatal and documented in the response so the AI agent can decide whether to proceed or retry with different edge selection.
+
+### `extend_face_to_target`
+
+| Layer | Responsibility |
+|---|---|
+| **OCC/CadQuery** | `BRep_DistShapeShape` measures extension distance when target is a face or surface; `BRepPrimAPI_MakePrism` extrudes the target face by the computed distance along its normal; `BRepAlgoAPI_Fuse` welds the extension prism onto the parent shell |
+| **Geometry Engine Service** | Calls `createSnapshot` before mutation; resolves target geometry from `targetType` (`plane`, `face`, `surface`); computes extension vector and distance; errors `GE_EXTEND_FAILED` if the extended face becomes self-intersecting |
+| **Manufacturing Domain** | Not involved |
+| **MCP Layer** | Validates `part_id`, `face_id`, `target_type` enum; validates that the target object contains fields appropriate for the `target_type` (e.g. `target_plane` for `plane` type); returns `modified_shell_id`, `extension_distance_mm`, and `rollback_token` |
+
+### `offset_face`
+
+| Layer | Responsibility |
+|---|---|
+| **OCC/CadQuery** | `BRepPrimAPI_MakePrism` extrudes the face by the signed `distanceMm` along its outward normal; for positive distance the prism is fused to the shell; for negative distance (recess) the prism is cut from the shell using `BRepAlgoAPI_Cut` |
+| **Geometry Engine Service** | Calls `createSnapshot` before mutation; retrieves face from shell topology; checks face normal direction to orient extrusion; errors `GE_OFFSET_FAILED` if resulting geometry is self-intersecting or produces zero-volume fragment |
+| **Manufacturing Domain** | Not involved |
+| **MCP Layer** | Validates `part_id` and `face_id` exist in session; rejects `distance_mm == 0`; returns `modified_shell_id` and `rollback_token` |
+
+### `add_flange`
+
+| Layer | Responsibility |
+|---|---|
+| **OCC/CadQuery** | Identifies boundary (open) edge by checking adjacency count == 1; computes flange direction by rotating face normal by `(π − angleDeg)` around edge tangent; `BRepPrimAPI_MakePrism` extrudes edge wire along flange direction by `lengthMm`; `BRepBuilderAPI_Sewing` attaches flanged face to parent shell |
+| **Geometry Engine Service** | Calls `createSnapshot` before mutation; errors `GE_EDGE_NOT_OPEN` if the specified edge is interior (adjacent to 2 faces); generates `flangeFeatureId` UUID; registers modified shell |
+| **Manufacturing Domain** | Not consulted for minimum flange width at this layer — the AI agent should call `evaluate_manufacturability` after `add_flange` to check tooling constraints |
+| **MCP Layer** | Validates `part_id`, `edge_id`; validates `length_mm > 0`, `0 < angle_deg ≤ 180`, `bend_radius_mm > 0`; returns `modified_shell_id`, `flange_feature_id`, and `rollback_token` |
+
+**Key decision:** The flange direction formula `rotate(faceNormal, edgeTangent, π − angleDeg)` produces the standard interpretation: at 90° the flange is perpendicular to the parent face; at 180° the flange folds back parallel to the parent (hem). This matches press-brake convention.
+
+### `rip_edge`
+
+| Layer | Responsibility |
+|---|---|
+| **OCC/CadQuery** | Verifies edge has adjacency count == 2 (interior); creates two new `TopoDS_Edge` objects sharing the same underlying curve geometry but distinct TShape pointers; uses `BRepTools_ReShape` to replace the shared edge in each adjacent face independently; replaces both modified faces in the parent shell |
+| **Geometry Engine Service** | Calls `createSnapshot` before mutation; errors `GE_EDGE_NOT_INTERIOR` if edge is a boundary edge; errors `GE_RIP_FAILED` if the resulting shell topology is degenerate; vertices at edge endpoints remain shared (the seam opens along the edge only, not at corners) |
+| **Manufacturing Domain** | Not involved |
+| **MCP Layer** | Validates `part_id` and `edge_id`; returns `modified_shell_id` and `rollback_token` |
+
+**Key decision:** `BRepTools_ReShape` is used rather than `BRep_Builder::Remove` because Remove disconnects the edge topology completely, which can corrupt the shell. ReShape replaces the edge reference in each face shell wire independently, creating the desired topological seam while preserving the surrounding B-Rep integrity.
 
 ---
 

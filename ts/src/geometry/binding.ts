@@ -18,6 +18,16 @@ import type {
   DxfExportResult,
   NestResult,
   RestoreResult,
+  ClashReport,
+  GapReport,
+  TrimBodyResult,
+  SplitBodyResult,
+  ExtendFaceResult,
+  OffsetFaceResult,
+  AddFlangeResult,
+  RipEdgeResult,
+  MergeBodyResult,
+  CuttingPlane,
 } from './types';
 
 // ─── Addon interface ──────────────────────────────────────────────────────────
@@ -52,6 +62,22 @@ export interface GeometryAddon {
   createSnapshot(label: string): string;
   restoreSnapshot(snapshotId: string): RestoreResult;
   clearSnapshots(): void;
+  computeIntersections(partIds: string[]): ClashReport;
+  computeGaps(partAId: string, partBId: string, maxDistanceThresholdMm: number): GapReport;
+  trimBodyWithPlane(partId: string, plane: CuttingPlane, keepPositiveSide: boolean): TrimBodyResult;
+  splitBodyByPlane(partId: string, plane: CuttingPlane): SplitBodyResult;
+  mergeBodiesWithBend(partAId: string, partBId: string, targetEdges: string[], bendRadiusMm: number): MergeBodyResult;
+  extendFaceToTarget(
+    partId: string,
+    faceId: string,
+    targetType: string,
+    targetPartId: string,
+    targetFaceId: string,
+    targetPlane: CuttingPlane,
+  ): ExtendFaceResult;
+  offsetFace(partId: string, faceId: string, distanceMm: number): OffsetFaceResult;
+  addFlange(partId: string, edgeId: string, lengthMm: number, angleDeg: number, bendRadiusMm: number): AddFlangeResult;
+  ripEdge(partId: string, edgeId: string): RipEdgeResult;
 }
 
 export const kerfOffsetMm = {
@@ -252,6 +278,102 @@ export class GeometryBinding {
 
   clearSnapshots(): void {
     this.addon.clearSnapshots();
+  }
+
+  computeIntersections(partIds: string[]): ClashReport {
+    try {
+      return this.addon.computeIntersections(partIds);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  computeGaps(partAId: string, partBId: string, maxDistanceThresholdMm: number): GapReport {
+    try {
+      return this.addon.computeGaps(partAId, partBId, maxDistanceThresholdMm);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  trimBodyWithPlane(
+    partId: string,
+    plane: CuttingPlane,
+    keepPositiveSide: boolean,
+  ): TrimBodyResult {
+    try {
+      return this.addon.trimBodyWithPlane(partId, plane, keepPositiveSide);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  splitBodyByPlane(partId: string, plane: CuttingPlane): SplitBodyResult {
+    try {
+      return this.addon.splitBodyByPlane(partId, plane);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  mergeBodiesWithBend(
+    partAId: string,
+    partBId: string,
+    targetEdges: string[],
+    bendRadiusMm: number,
+  ): MergeBodyResult {
+    try {
+      return this.addon.mergeBodiesWithBend(partAId, partBId, targetEdges, bendRadiusMm);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  extendFaceToTarget(
+    partId: string,
+    faceId: string,
+    targetType: string,
+    targetPartId: string,
+    targetFaceId: string,
+    targetPlane: CuttingPlane,
+  ): ExtendFaceResult {
+    try {
+      return this.addon.extendFaceToTarget(
+        partId, faceId, targetType, targetPartId, targetFaceId, targetPlane,
+      );
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  offsetFace(partId: string, faceId: string, distanceMm: number): OffsetFaceResult {
+    try {
+      return this.addon.offsetFace(partId, faceId, distanceMm);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  addFlange(
+    partId: string,
+    edgeId: string,
+    lengthMm: number,
+    angleDeg: number,
+    bendRadiusMm: number,
+  ): AddFlangeResult {
+    try {
+      return this.addon.addFlange(partId, edgeId, lengthMm, angleDeg, bendRadiusMm);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  ripEdge(partId: string, edgeId: string): RipEdgeResult {
+    try {
+      return this.addon.ripEdge(partId, edgeId);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
   }
 }
 
