@@ -41,6 +41,10 @@
 #include <Bnd_Box.hxx>
 #include <BRepBndLib.hxx>
 
+#include <BRepMesh_IncrementalMesh.hxx>
+#include <Poly_Triangulation.hxx>
+#include <TopLoc_Location.hxx>
+
 #include <BRepOffsetAPI_MakeOffset.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
@@ -87,6 +91,8 @@
 #include <algorithm>
 #include <iomanip>
 #include <functional>
+#include <limits>
+#include <cstring>
 
 namespace mcp_cad {
 
@@ -296,6 +302,59 @@ public:
                           std::string("Healing exception: ") + e.GetMessageString(),
                           false, "");
     }
+  }
+
+  // ── Compound decomposition ───────────────────────────────────────────────
+
+  std::vector<ShellId> separateSolids(const SolidId& solidId) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = solids_.find(solidId);
+    if (it == solids_.end()) {
+      throw GeometryError("GE_SOLID_NOT_FOUND",
+                          "Solid not found: " + solidId, false, "");
+    }
+
+    const TopoDS_Shape& compound = it->second.shape;
+    std::vector<ShellId> shellIds;
+
+    // Iterate individual solids within the compound (typical for STEP assemblies).
+    TopExp_Explorer solidExp(compound, TopAbs_SOLID);
+    for (; solidExp.More(); solidExp.Next()) {
+      ShellId sid = generateUUID();
+      ShellState state;
+      state.id            = sid;
+      state.parentSolidId = solidId;
+      state.shape         = solidExp.Current();
+      shells_[sid]        = state;
+      shellIds.push_back(sid);
+    }
+
+    // Fallback: enumerate shells (e.g. open-shell compound without solids).
+    if (shellIds.empty()) {
+      TopExp_Explorer shellExp(compound, TopAbs_SHELL);
+      for (; shellExp.More(); shellExp.Next()) {
+        ShellId sid = generateUUID();
+        ShellState state;
+        state.id            = sid;
+        state.parentSolidId = solidId;
+        state.shape         = shellExp.Current();
+        shells_[sid]        = state;
+        shellIds.push_back(sid);
+      }
+    }
+
+    // Last resort: treat the whole shape as one shell.
+    if (shellIds.empty()) {
+      ShellId sid = generateUUID();
+      ShellState state;
+      state.id            = sid;
+      state.parentSolidId = solidId;
+      state.shape         = compound;
+      shells_[sid]        = state;
+      shellIds.push_back(sid);
+    }
+
+    return shellIds;
   }
 
   // ── Boolean cut (decomposition) ──────────────────────────────────────────
@@ -732,6 +791,183 @@ public:
     return NestResult{nestId, placements, utilisation, sheetsRequired, svg};
   }
 
+  // ── GLB mesh export ──────────────────────────────────────────────────────
+
+  std::vector<uint8_t> exportGlb(const ShellId& shellId) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    TopoDS_Shape shape;
+    {
+      auto shellIt = shells_.find(shellId);
+      auto solidIt = solids_.find(shellId);
+      if (shellIt != shells_.end()) {
+        shape = shellIt->second.shape;
+      } else if (solidIt != solids_.end()) {
+        shape = solidIt->second.shape;
+      } else {
+        throw GeometryError("GE_SHELL_NOT_FOUND",
+                            "Shell/solid not found: " + shellId, false, "");
+      }
+    }
+
+    // Tessellate: 0.5 mm chord deviation, 0.3 rad angular deviation, parallel
+    BRepMesh_IncrementalMesh mesher(shape, 0.5, Standard_False, 0.3, Standard_True);
+    mesher.Perform();
+
+    // Collect flat-shaded triangles (no shared vertices between triangles)
+    std::vector<float> positions;  // x,y,z per vertex (metres)
+    std::vector<float> normals;    // x,y,z per vertex (flat: same for all 3 verts of a tri)
+
+    float minX =  std::numeric_limits<float>::max();
+    float minY =  std::numeric_limits<float>::max();
+    float minZ =  std::numeric_limits<float>::max();
+    float maxX = -std::numeric_limits<float>::max();
+    float maxY = -std::numeric_limits<float>::max();
+    float maxZ = -std::numeric_limits<float>::max();
+
+    TopExp_Explorer faceExp(shape, TopAbs_FACE);
+    for (; faceExp.More(); faceExp.Next()) {
+      const TopoDS_Face& face = TopoDS::Face(faceExp.Current());
+      bool reversed = (face.Orientation() == TopAbs_REVERSED);
+
+      TopLoc_Location loc;
+      Handle(Poly_Triangulation) tri = BRep_Tool::Triangulation(face, loc);
+      if (tri.IsNull() || tri->NbTriangles() == 0) continue;
+
+      gp_Trsf trsf = locationToTrsf(loc);
+
+      for (int t = 1; t <= tri->NbTriangles(); ++t) {
+        int n1, n2, n3;
+        tri->Triangle(t).Get(n1, n2, n3);
+        if (reversed) std::swap(n2, n3);  // fix winding for reversed faces
+
+        gp_Pnt p1 = tri->Node(n1).Transformed(trsf);
+        gp_Pnt p2 = tri->Node(n2).Transformed(trsf);
+        gp_Pnt p3 = tri->Node(n3).Transformed(trsf);
+
+        // Flat normal from triangle edges
+        gp_Vec edge1(p1, p2);
+        gp_Vec edge2(p1, p3);
+        gp_Vec faceNormal = edge1.Crossed(edge2);
+        double mag = faceNormal.Magnitude();
+        if (mag > 1e-12) faceNormal /= mag;
+
+        // Emit 3 independent vertices (flat shading — no vertex sharing)
+        auto addVertex = [&](const gp_Pnt& p) {
+          // glTF uses metres; OCCT model uses mm
+          float x = static_cast<float>(p.X() * 0.001);
+          float y = static_cast<float>(p.Y() * 0.001);
+          float z = static_cast<float>(p.Z() * 0.001);
+          positions.push_back(x); positions.push_back(y); positions.push_back(z);
+          normals.push_back(static_cast<float>(faceNormal.X()));
+          normals.push_back(static_cast<float>(faceNormal.Y()));
+          normals.push_back(static_cast<float>(faceNormal.Z()));
+          minX = std::min(minX, x); maxX = std::max(maxX, x);
+          minY = std::min(minY, y); maxY = std::max(maxY, y);
+          minZ = std::min(minZ, z); maxZ = std::max(maxZ, z);
+        };
+
+        addVertex(p1); addVertex(p2); addVertex(p3);
+      }
+    }
+
+    if (positions.empty()) {
+      throw GeometryError("GE_MESH_EMPTY",
+                          "No triangles produced for shell: " + shellId,
+                          true, "clean_geometry");
+    }
+
+    int vertexCount = static_cast<int>(positions.size()) / 3;
+
+    // ── Build binary chunk ──────────────────────────────────────────────────
+    // Layout: [positions float32×3×N][normals float32×3×N], 4-byte padded
+
+    auto floatsToBytes = [](const std::vector<float>& v) -> std::vector<uint8_t> {
+      std::vector<uint8_t> b(v.size() * sizeof(float));
+      std::memcpy(b.data(), v.data(), b.size());
+      return b;
+    };
+    auto pad4 = [](std::vector<uint8_t>& v, uint8_t fill = 0) {
+      while (v.size() % 4) v.push_back(fill);
+    };
+
+    std::vector<uint8_t> posBytes = floatsToBytes(positions);
+    std::vector<uint8_t> norBytes = floatsToBytes(normals);
+    pad4(posBytes); pad4(norBytes);
+
+    size_t posOffset = 0;
+    size_t norOffset = posBytes.size();
+
+    std::vector<uint8_t> binChunk;
+    binChunk.insert(binChunk.end(), posBytes.begin(), posBytes.end());
+    binChunk.insert(binChunk.end(), norBytes.begin(), norBytes.end());
+    pad4(binChunk);
+
+    // ── Build JSON chunk ────────────────────────────────────────────────────
+
+    std::ostringstream json;
+    json << std::fixed << std::setprecision(8);
+    json << "{"
+         << "\"asset\":{\"version\":\"2.0\",\"generator\":\"mcp-cad\"},"
+         << "\"scene\":0,"
+         << "\"scenes\":[{\"nodes\":[0]}],"
+         << "\"nodes\":[{\"mesh\":0}],"
+         << "\"meshes\":[{\"primitives\":[{"
+         <<   "\"attributes\":{\"POSITION\":0,\"NORMAL\":1},"
+         <<   "\"mode\":4"
+         << "}]}],"
+         << "\"accessors\":["
+         <<   "{\"bufferView\":0,\"componentType\":5126,\"count\":" << vertexCount
+         <<    ",\"type\":\"VEC3\","
+         <<    "\"min\":[" << minX << "," << minY << "," << minZ << "],"
+         <<    "\"max\":[" << maxX << "," << maxY << "," << maxZ << "]},"
+         <<   "{\"bufferView\":1,\"componentType\":5126,\"count\":" << vertexCount
+         <<    ",\"type\":\"VEC3\"}"
+         << "],"
+         << "\"bufferViews\":["
+         <<   "{\"buffer\":0,\"byteOffset\":" << posOffset
+         <<    ",\"byteLength\":" << posBytes.size() << ",\"target\":34962},"
+         <<   "{\"buffer\":0,\"byteOffset\":" << norOffset
+         <<    ",\"byteLength\":" << norBytes.size() << ",\"target\":34962}"
+         << "],"
+         << "\"buffers\":[{\"byteLength\":" << binChunk.size() << "}]"
+         << "}";
+
+    std::string jsonStr = json.str();
+    std::vector<uint8_t> jsonBytes(jsonStr.begin(), jsonStr.end());
+    pad4(jsonBytes, 0x20);  // GLB spec: pad JSON chunk with spaces (0x20)
+
+    // ── Assemble GLB ────────────────────────────────────────────────────────
+
+    uint32_t totalLen = 12u
+                      + 8u + static_cast<uint32_t>(jsonBytes.size())
+                      + 8u + static_cast<uint32_t>(binChunk.size());
+
+    std::vector<uint8_t> glb;
+    glb.reserve(totalLen);
+
+    auto writeU32 = [&](uint32_t v) {
+      glb.push_back( v        & 0xFF);
+      glb.push_back((v >>  8) & 0xFF);
+      glb.push_back((v >> 16) & 0xFF);
+      glb.push_back((v >> 24) & 0xFF);
+    };
+
+    writeU32(0x46546C67u);  // magic 'glTF'
+    writeU32(2u);            // version
+    writeU32(totalLen);
+
+    writeU32(static_cast<uint32_t>(jsonBytes.size()));
+    writeU32(0x4E4F534Au);  // chunk type 'JSON'
+    glb.insert(glb.end(), jsonBytes.begin(), jsonBytes.end());
+
+    writeU32(static_cast<uint32_t>(binChunk.size()));
+    writeU32(0x004E4942u);  // chunk type 'BIN\0'
+    glb.insert(glb.end(), binChunk.begin(), binChunk.end());
+
+    return glb;
+  }
+
   // ── Snapshot / rollback ──────────────────────────────────────────────────
 
   SnapshotId createSnapshot(const std::string& label) override {
@@ -873,6 +1109,13 @@ private:
 
       graph.adjacency.push_back(adj);
     }
+  }
+
+  // Returns the composed gp_Trsf for a TopLoc_Location.
+  // Transformation() returns the total composed transformation for the chain.
+  static gp_Trsf locationToTrsf(const TopLoc_Location& loc) {
+    if (loc.IsIdentity()) return gp_Trsf();
+    return loc.Transformation();
   }
 
   static SurfaceType classifySurface(const TopoDS_Face& face) {

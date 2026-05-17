@@ -142,6 +142,11 @@ public:
   virtual SolidId        healGeometry(const SolidId& solidId)  = 0;
 
   // ── Decomposition ─────────────────────────────────────────────────────────
+  // Enumerates the individual solid bodies within a compound shape and
+  // registers each as a shell. For a STEP assembly this returns one shell
+  // per panel; for a single-body solid it returns one shell.
+  virtual std::vector<ShellId> separateSolids(const SolidId& solidId) = 0;
+
   virtual BooleanCutResult booleanCut(const SolidId&    solidId,
                                        double            normalX,
                                        double            normalY,
@@ -174,6 +179,11 @@ public:
   virtual NestResult nestShells(const std::vector<UnfoldId>& unfoldIds,
                                  double sheetWidthMm,
                                  double sheetHeightMm) = 0;
+
+  // ── Mesh export ────────────────────────────────────────────────────────────
+  // Returns a GLB (glTF 2.0 binary) byte buffer for the shell's tessellated mesh.
+  // Coordinates are in metres (glTF convention). Flat per-triangle normals.
+  virtual std::vector<uint8_t> exportGlb(const ShellId& shellId) = 0;
 
   // ── Snapshot / rollback ────────────────────────────────────────────────────
   virtual SnapshotId    createSnapshot(const std::string& label)            = 0;

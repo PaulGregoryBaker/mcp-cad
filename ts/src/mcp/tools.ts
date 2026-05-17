@@ -4,12 +4,12 @@
  * Tasks: T063, T064, T065, T080, T081, T082, T083, T099, T101, T102, T103, T104, T105
  */
 
-import { GeometryBinding, geometryBinding as defaultBinding } from '../geometry/binding';
+import { GeometryBinding, GeometryAddon, geometryBinding as defaultBinding } from '../geometry/binding';
 
 let overrideBinding: GeometryBinding | undefined;
 
-export function setGeometryBindingMock(mock: GeometryBinding | undefined) {
-  overrideBinding = mock;
+export function setGeometryBindingMock(mock: GeometryAddon | undefined) {
+  overrideBinding = mock !== undefined ? new GeometryBinding(mock) : undefined;
 }
 
 function getGeometryBinding() {
@@ -272,21 +272,23 @@ function handleDecomposeVolume(args: Record<string, unknown>): unknown {
   const solidId = requireString(args, 'solid_id');
   const strategy = requireString(args, 'strategy');
 
-  // Compute a decomposition plane based on strategy
-  // Logistics strategy: cut along longest axis; Simplicity: midpoint; Integrity: by feature
-  const normal = { x: 0, y: 0, z: 1 };
-  const origin = { x: 0, y: 0, z: 0 };
-
-  const result = getGeometryBinding().booleanCut(solidId, normal, origin);
-  for (const shellId of result.shellIds) {
+  // Enumerate the individual solid bodies in the STEP compound.
+  // This correctly handles multi-body assemblies (e.g. 20+ braai panels)
+  // without relying on a planar boolean cut.
+  const shellIds = getGeometryBinding().separateSolids(solidId);
+  for (const shellId of shellIds) {
     session.registerShell(shellId);
   }
 
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
-    panel_ids: result.shellIds,
-    panel_count: result.shellIds.length,
+    parts: shellIds.map((id) => ({
+      id,
+      mesh_url: `${meshBaseUrl}/mesh/${id}.glb`,
+    })),
+    panel_count: shellIds.length,
     strategy_applied: strategy,
-    rollback_token: result.rollbackToken,
+    rollback_token: '',
   };
 }
 

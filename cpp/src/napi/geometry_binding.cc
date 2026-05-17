@@ -204,6 +204,24 @@ Napi::Value BooleanCut(const Napi::CallbackInfo& info) {
   return env.Undefined();
 }
 
+Napi::Value SeparateSolids(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsString()) {
+    Napi::TypeError::New(env, "separateSolids(solidId: string)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string solidId = info[0].As<Napi::String>().Utf8Value();
+  TRY_GEOMETRY(env, {
+    std::vector<ShellId> ids = svc().separateSolids(solidId);
+    Napi::Array result = Napi::Array::New(env, ids.size());
+    for (size_t i = 0; i < ids.size(); ++i) {
+      result.Set(i, Napi::String::New(env, ids[i]));
+    }
+    return result;
+  })
+  return env.Undefined();
+}
+
 Napi::Value AddTabSlot(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   if (info.Length() < 3) {
@@ -290,6 +308,20 @@ Napi::Value ExportDxf(const Napi::CallbackInfo& info) {
     result.Set("bboxWidthMm",  Napi::Number::New(env, res.bboxWidthMm));
     result.Set("bboxHeightMm", Napi::Number::New(env, res.bboxHeightMm));
     return result;
+  })
+  return env.Undefined();
+}
+
+Napi::Value ExportGlb(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsString()) {
+    Napi::TypeError::New(env, "exportGlb(shellId: string)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string shellId = info[0].As<Napi::String>().Utf8Value();
+  TRY_GEOMETRY(env, {
+    std::vector<uint8_t> glbData = svc().exportGlb(shellId);
+    return Napi::Buffer<uint8_t>::Copy(env, glbData.data(), glbData.size());
   })
   return env.Undefined();
 }
@@ -419,11 +451,13 @@ void RegisterGeometryMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("getTopology",     Napi::Function::New(env, GetTopology));
   exports.Set("checkManifold",   Napi::Function::New(env, CheckManifold));
   exports.Set("healGeometry",    Napi::Function::New(env, HealGeometry));
+  exports.Set("separateSolids",  Napi::Function::New(env, SeparateSolids));
   exports.Set("booleanCut",      Napi::Function::New(env, BooleanCut));
   exports.Set("addTabSlot",      Napi::Function::New(env, AddTabSlot));
   exports.Set("addRivetHole",    Napi::Function::New(env, AddRivetHole));
   exports.Set("unfoldShell",     Napi::Function::New(env, UnfoldShell));
   exports.Set("exportDxf",       Napi::Function::New(env, ExportDxf));
+  exports.Set("exportGlb",       Napi::Function::New(env, ExportGlb));
   exports.Set("nestShells",      Napi::Function::New(env, NestShells));
   exports.Set("createSnapshot",  Napi::Function::New(env, CreateSnapshot));
   exports.Set("restoreSnapshot", Napi::Function::New(env, RestoreSnapshot));

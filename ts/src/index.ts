@@ -17,6 +17,7 @@ import {
 import { loadConfig } from './config/loader';
 import { getAllResources } from './mcp/resources';
 import { toStructuredError, ErrorCodes } from './mcp/errors';
+import { startMeshServer } from './mesh/server';
 
 // ─── Config loading ───────────────────────────────────────────────────────────
 
@@ -111,9 +112,11 @@ server.setRequestHandler(
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
+  const meshPort = Number(process.env['MESH_PORT'] ?? '3001');
+  startMeshServer(meshPort);
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  // Server is now listening on stdio
 }
 
 main().catch((err) => {

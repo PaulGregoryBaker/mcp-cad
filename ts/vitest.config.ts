@@ -43,6 +43,14 @@ export default defineConfig({
         include: ['tests/e2e/**/braai-assembly.e2e.test.ts'],
         testTimeout: 120_000,
       },
+      {
+        // Contract-gap regression: decompose_volume must return parts[].mesh_url.
+        // These tests are expected to FAIL until handleDecomposeVolume is updated.
+        // Run with: npx vitest run --project e2e-mesh-url-contract
+        name: 'e2e-mesh-url-contract',
+        include: ['tests/e2e/mesh-url-contract.e2e.test.ts'],
+        testTimeout: 30_000,
+      },
     ],
 
     // ─── Coverage configuration ────────────────────────────────────────────

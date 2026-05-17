@@ -27,6 +27,7 @@ export interface GeometryAddon {
   getTopology(solidId: string): TopologyGraph;
   checkManifold(solidId: string): ManifoldResult;
   healGeometry(solidId: string): string;
+  separateSolids(solidId: string): string[];
   booleanCut(
     solidId: string,
     normal: { x: number; y: number; z: number },
@@ -42,6 +43,7 @@ export interface GeometryAddon {
   ): RivetHoleResult;
   unfoldShell(shellId: string, kFactor: number): UnfoldResult;
   exportDxf(unfoldId: string): DxfExportResult;
+  exportGlb(shellId: string): Buffer;
   nestShells(
     unfoldIds: string[],
     sheetWidthMm: number,
@@ -147,6 +149,14 @@ export class GeometryBinding {
     }
   }
 
+  separateSolids(solidId: string): string[] {
+    try {
+      return this.addon.separateSolids(solidId);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
   booleanCut(
     solidId: string,
     normal: { x: number; y: number; z: number },
@@ -199,6 +209,14 @@ export class GeometryBinding {
   exportDxf(unfoldId: string): DxfExportResult {
     try {
       return this.addon.exportDxf(unfoldId);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  exportGlb(shellId: string): Buffer {
+    try {
+      return this.addon.exportGlb(shellId);
     } catch (err) {
       throw toStructuredError(err);
     }
