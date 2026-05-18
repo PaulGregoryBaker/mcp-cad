@@ -377,6 +377,43 @@ export function getToolDefinitions(): object[] {
         required: ['part_id', 'envelope_type'],
       },
     },
+    {
+      name: 'split_body_by_bends',
+      description:
+        'Decomposes a shell body into planar panels by splitting at every bend. Auto-detects mode: thin-solid (wall ≤ max_thickness_mm) cuts solid into panels preserving original wall thickness; surface/conceptual mode extrudes each panel face by default_thickness_mm. Returns separate panel_ids and protrusion_ids for flanges/tabs. Mutating — creates a rollback token.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_id: { type: 'string', description: 'Shell to decompose' },
+          angle_threshold_deg: {
+            type: 'number',
+            minimum: 0,
+            description:
+              'Minimum deviation from 180° dihedral to treat an edge as a bend. Default 1.0 degree.',
+          },
+          max_thickness_mm: {
+            type: 'number',
+            minimum: 0,
+            description:
+              'Wall thickness at or below which the solid is treated as a thin-solid (Mode 2: cutting planes). Above this threshold the solid is treated as a conceptual/surface model (Mode 1: extrusion). Default 5.0 mm.',
+          },
+          default_thickness_mm: {
+            type: 'number',
+            minimum: 0,
+            description:
+              'Panel thickness applied when extruding in surface/conceptual mode (Mode 1). Ignored in thin-solid mode. Default 1.0 mm.',
+          },
+          max_recursion_depth: {
+            type: 'integer',
+            minimum: 0,
+            maximum: 10,
+            description:
+              'Maximum recursion depth for nested decomposition. 0 = single pass. When > 0 the remainder solid after each pass is recursively decomposed, accumulating all panels and protrusions. Default 0.',
+          },
+        },
+        required: ['part_id'],
+      },
+    },
   ];
 }
 
@@ -455,6 +492,9 @@ export async function dispatchTool(
       case 'check_boundary_compliance':
         return handleCheckBoundaryCompliance(args, config);
 
+      case 'split_body_by_bends':
+        return handleSplitBodyByBends(args);
+
       default:
         throwError(ErrorCodes.INTERNAL_ERROR, `Unknown tool: ${toolName}`, false);
     }
@@ -500,6 +540,8 @@ function handleDecomposeVolume(args: Record<string, unknown>): unknown {
   const solidId = requireString(args, 'solid_id');
   const strategy = requireString(args, 'strategy');
 
+  const rollbackToken = getGeometryBinding().createSnapshot('before decompose_volume');
+
   // Enumerate the individual solid bodies in the STEP compound.
   // This correctly handles multi-body assemblies (e.g. 20+ braai panels)
   // without relying on a planar boolean cut.
@@ -514,9 +556,10 @@ function handleDecomposeVolume(args: Record<string, unknown>): unknown {
       id,
       mesh_url: `${meshBaseUrl}/mesh/${id}.glb`,
     })),
+    panel_ids: shellIds,
     panel_count: shellIds.length,
     strategy_applied: strategy,
-    rollback_token: '',
+    rollback_token: rollbackToken,
   };
 }
 
@@ -800,10 +843,13 @@ function handleSplitBodyByPlane(args: Record<string, unknown>): unknown {
 
   const result = getGeometryBinding().splitBodyByPlane(partId, plane);
 
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     positive_shell_id: result.positiveShellId,
     negative_shell_id: result.negativeShellId,
     rollback_token: result.rollbackToken,
+    positive_mesh_url: `${meshBaseUrl}/mesh/${result.positiveShellId}.glb`,
+    negative_mesh_url: `${meshBaseUrl}/mesh/${result.negativeShellId}.glb`,
   };
 }
 
@@ -818,9 +864,11 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
 
   const result = getGeometryBinding().mergeBodiesWithBend(partAId, partBId, targetEdges, bendRadius as number);
 
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     merged_shell_id: result.mergedShellId,
     rollback_token: result.rollbackToken,
+    mesh_url: `${meshBaseUrl}/mesh/${result.mergedShellId}.glb`,
   };
 }
 
@@ -982,9 +1030,11 @@ function handleTrimBodyWithPlane(args: Record<string, unknown>): unknown {
 
   const result = getGeometryBinding().trimBodyWithPlane(partId, plane, keepPositiveSide as boolean);
 
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     trimmed_shell_id: result.trimmedShellId,
     rollback_token: result.rollbackToken,
+    mesh_url: `${meshBaseUrl}/mesh/${result.trimmedShellId}.glb`,
   };
 }
 
@@ -1064,5 +1114,48 @@ function handleCheckBoundaryCompliance(
       max_width_mm: envelope.maxWidthMm,
       max_height_mm: envelope.maxHeightMm ?? null,
     },
+  };
+}
+
+function handleSplitBodyByBends(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  const threshold = typeof args['angle_threshold_deg'] === 'number'
+    ? args['angle_threshold_deg']
+    : 1.0;
+  const maxThicknessMm = typeof args['max_thickness_mm'] === 'number'
+    ? args['max_thickness_mm']
+    : 5.0;
+  const defaultThicknessMm = typeof args['default_thickness_mm'] === 'number'
+    ? args['default_thickness_mm']
+    : 1.0;
+  const maxRecursionDepth = typeof args['max_recursion_depth'] === 'number'
+    ? Math.min(10, Math.max(0, Math.round(args['max_recursion_depth'])))
+    : 0;
+
+  if (threshold < 0) {
+    throwError(ErrorCodes.GE_DECOMPOSE_BY_BENDS_FAILED, 'angle_threshold_deg must be non-negative', true);
+  }
+
+  const result = getGeometryBinding().splitBodyByBends(
+    partId, threshold, maxThicknessMm, defaultThicknessMm, maxRecursionDepth,
+  );
+
+  for (const shellId of result.panel_ids) {
+    session.registerShell(shellId);
+  }
+  for (const shellId of result.protrusion_ids) {
+    session.registerShell(shellId);
+  }
+
+  const allIds = [...result.panel_ids, ...result.protrusion_ids];
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    panel_ids: result.panel_ids,
+    panel_count: result.panel_ids.length,
+    protrusion_ids: result.protrusion_ids,
+    protrusion_count: result.protrusion_ids.length,
+    detected_mode: result.detected_mode,
+    rollback_token: result.rollbackToken,
+    mesh_urls: allIds.map(id => `${meshBaseUrl}/mesh/${id}.glb`),
   };
 }

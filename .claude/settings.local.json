@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(npx tsc *)",
-      "Bash(npm test *)"
+      "Bash(npm test *)",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Projects\\\\mcp-cad\\\\cpp\\\\tests\" -Force 2>$null | Select-Object Name, @{Name=\"Type\";Expression={if\\($_.PSIsContainer\\){\"Directory\"}else{\"File\"}}})"
     ]
   }
 }

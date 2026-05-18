@@ -73,7 +73,7 @@
 
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
-#include <BRep_DistShapeShape.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
@@ -98,6 +98,7 @@
 #include <chrono>
 #include <random>
 #include <algorithm>
+#include <set>
 #include <iomanip>
 #include <functional>
 #include <limits>
@@ -1194,6 +1195,741 @@ private:
     }
   }
 
+  // ── Split body by bends ──────────────────────────────────────────────────
+
+  // ── Helpers ─────────────────────────────────────────────────────────────
+
+  // Returns outward-pointing normal of a face at its UV centre.
+  static gp_Vec faceOutwardNormal(const TopoDS_Face& f) {
+    Handle(Geom_Surface) surf = BRep_Tool::Surface(f);
+    if (surf.IsNull()) return gp_Vec(0, 0, 1);
+    Standard_Real u1, u2, v1, v2;
+    BRepTools::UVBounds(f, u1, u2, v1, v2);
+    gp_Pnt p; gp_Vec du, dv;
+    surf->D1((u1 + u2) * 0.5, (v1 + v2) * 0.5, p, du, dv);
+    gp_Vec n = du.Crossed(dv);
+    if (n.Magnitude() > 1e-10) n.Normalize();
+    if (f.Orientation() == TopAbs_REVERSED) n.Reverse();
+    return n;
+  }
+
+  // Detect whether the solid should use Mode 2 (thin-solid cutting) or
+  // Mode 1 (surface/conceptual extrusion).
+  // Returns "thin_solid" or "surface".
+  static std::string detectObjectMode(const TopoDS_Shape& shape, double maxThicknessMm) {
+    GProp_GProps volProps;
+    BRepGProp::VolumeProperties(shape, volProps);
+    if (std::abs(volProps.Mass()) < 1e-6) return "surface";
+
+    TopTools_IndexedMapOfShape faceMap;
+    TopExp::MapShapes(shape, TopAbs_FACE, faceMap);
+
+    for (int i = 1; i <= faceMap.Extent(); ++i) {
+      const TopoDS_Face& fA = TopoDS::Face(faceMap(i));
+      gp_Vec nA = faceOutwardNormal(fA);
+      for (int j = i + 1; j <= faceMap.Extent(); ++j) {
+        const TopoDS_Face& fB = TopoDS::Face(faceMap(j));
+        gp_Vec nB = faceOutwardNormal(fB);
+        if (nA.Dot(nB) >= -0.95) continue;  // not anti-parallel
+        BRepExtrema_DistShapeShape dist(fA, fB);
+        if (dist.IsDone() && dist.Value() <= maxThicknessMm) return "thin_solid";
+      }
+    }
+    return "surface";
+  }
+
+  // BFS face group, returning one coplanar component per entry.
+  struct FaceGroup {
+    std::vector<int> faceIndices;  // 1-based into faceMap
+    gp_Vec  normal;
+    gp_Pnt  centroid;
+    double  area;
+    bool    isOuter;  // N · (centroid - solidCentroid) > 0
+  };
+
+  static std::vector<FaceGroup> buildFaceGroups(
+      const TopoDS_Shape& shape,
+      const TopTools_IndexedMapOfShape& faceMap,
+      double angleThresholdDeg,
+      const gp_Pnt& solidCentroid)
+  {
+    int nFaces = faceMap.Extent();
+    TopTools_IndexedDataMapOfShapeListOfShape edgeToFaces;
+    TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edgeToFaces);
+
+    std::vector<std::vector<int>> coplanar(nFaces + 1);
+    for (int i = 1; i <= edgeToFaces.Extent(); ++i) {
+      const TopTools_ListOfShape& fl = edgeToFaces(i);
+      if (fl.Extent() != 2) continue;
+      const TopoDS_Face& fA = TopoDS::Face(fl.First());
+      const TopoDS_Face& fB = TopoDS::Face(fl.Last());
+      double angle = computeDihedralAngle(fA, fB, TopoDS::Edge(edgeToFaces.FindKey(i)));
+      if (std::abs(angle - 180.0) <= angleThresholdDeg) {
+        int idxA = faceMap.FindIndex(fA);
+        int idxB = faceMap.FindIndex(fB);
+        if (idxA > 0 && idxB > 0) {
+          coplanar[idxA].push_back(idxB);
+          coplanar[idxB].push_back(idxA);
+        }
+      }
+    }
+
+    std::vector<bool> visited(nFaces + 1, false);
+    std::vector<FaceGroup> groups;
+
+    for (int start = 1; start <= nFaces; ++start) {
+      if (visited[start]) continue;
+      FaceGroup grp;
+      std::vector<int> queue = {start};
+      visited[start] = true;
+      while (!queue.empty()) {
+        int cur = queue.back(); queue.pop_back();
+        grp.faceIndices.push_back(cur);
+        for (int nbr : coplanar[cur]) {
+          if (!visited[nbr]) { visited[nbr] = true; queue.push_back(nbr); }
+        }
+      }
+
+      // Compute normal, area-weighted centroid
+      gp_XYZ wc(0, 0, 0);
+      double totalArea = 0.0;
+      for (int idx : grp.faceIndices) {
+        const TopoDS_Face& f = TopoDS::Face(faceMap(idx));
+        GProp_GProps fp;
+        BRepGProp::SurfaceProperties(f, fp);
+        double a = fp.Mass();
+        totalArea += a;
+        wc += fp.CentreOfMass().XYZ().Multiplied(a);
+      }
+      grp.area = totalArea;
+      grp.centroid = (totalArea > 1e-10)
+          ? gp_Pnt(wc.Multiplied(1.0 / totalArea))
+          : gp_Pnt(0, 0, 0);
+
+      grp.normal = faceOutwardNormal(TopoDS::Face(faceMap(grp.faceIndices[0])));
+
+      // Outer face: outward normal points away from solid centroid
+      gp_Vec toCenter(solidCentroid, grp.centroid);
+      grp.isOuter = (grp.normal.Dot(toCenter) > 0.0);
+
+      groups.push_back(std::move(grp));
+    }
+    return groups;
+  }
+
+  // ── Protrusion detection ─────────────────────────────────────────────────
+
+  // A connected region of non-primary faces qualifying as a thin localised
+  // feature (flange / tab) on a primary panel face.
+  struct ProtrusionCandidate {
+    std::vector<int> faceIndices;    // 1-based into faceMap
+    gp_Pnt           panelCentroid;  // centroid of the hosting primary group
+    gp_Vec           panelNormal;    // outward normal of the hosting primary group
+  };
+
+  // T017 — Detect protrusion candidates before any panel cutting.
+  // Applies three tests per connected non-primary-face region:
+  //   1. Extent   : attachment edge length < 50% of primary panel perimeter
+  //   2. Orientation: cap face normal · panel normal > 0.85
+  //   3. Thickness: min face-pair distance in the region ≤ maxThicknessMm
+  static std::vector<ProtrusionCandidate> detectProtrusions(
+      const TopoDS_Shape&              shape,
+      const TopTools_IndexedMapOfShape& faceMap,
+      const std::vector<FaceGroup>&    groups,
+      double                           maxThicknessMm)
+  {
+    int nFaces = faceMap.Extent();
+
+    // faceToGroup[i] = primary group index for face i, or -1 if non-primary
+    std::vector<int> faceToGroup(nFaces + 1, -1);
+    for (int g = 0; g < (int)groups.size(); ++g) {
+      if (!groups[g].isOuter) continue;
+      for (int idx : groups[g].faceIndices)
+        faceToGroup[idx] = g;
+    }
+
+    // Build edge-to-faces and face-to-adjacent-faces maps
+    TopTools_IndexedDataMapOfShapeListOfShape edgeToFaces;
+    TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edgeToFaces);
+
+    std::vector<std::vector<int>> faceAdj(nFaces + 1);
+    for (int e = 1; e <= edgeToFaces.Extent(); ++e) {
+      const TopTools_ListOfShape& fl = edgeToFaces(e);
+      if (fl.Extent() != 2) continue;
+      int idxA = faceMap.FindIndex(fl.First());
+      int idxB = faceMap.FindIndex(fl.Last());
+      if (idxA > 0 && idxB > 0) {
+        faceAdj[idxA].push_back(idxB);
+        faceAdj[idxB].push_back(idxA);
+      }
+    }
+
+    // Per-group: boundary perimeter and attachment edges to non-primary faces
+    struct AttachEdge { int nonPrimaryFaceIdx; double length; };
+    std::vector<double>                   groupPerimeter(groups.size(), 0.0);
+    std::vector<std::vector<AttachEdge>>  groupAttach(groups.size());
+
+    for (int e = 1; e <= edgeToFaces.Extent(); ++e) {
+      const TopTools_ListOfShape& fl = edgeToFaces(e);
+      if (fl.Extent() != 2) continue;
+      int idxA = faceMap.FindIndex(fl.First());
+      int idxB = faceMap.FindIndex(fl.Last());
+      if (idxA <= 0 || idxB <= 0) continue;
+      int gA = faceToGroup[idxA];
+      int gB = faceToGroup[idxB];
+      if (gA == gB) continue;  // interior to same group or both non-primary
+
+      GProp_GProps lp;
+      BRepGProp::LinearProperties(edgeToFaces.FindKey(e), lp);
+      double edgeLen = lp.Mass();
+
+      if (gA >= 0) {
+        groupPerimeter[gA] += edgeLen;
+        if (gB < 0) groupAttach[gA].push_back({idxB, edgeLen});
+      }
+      if (gB >= 0) {
+        groupPerimeter[gB] += edgeLen;
+        if (gA < 0) groupAttach[gB].push_back({idxA, edgeLen});
+      }
+    }
+
+    std::vector<ProtrusionCandidate> candidates;
+    std::vector<bool> claimed(nFaces + 1, false);
+
+    for (int g = 0; g < (int)groups.size(); ++g) {
+      if (!groups[g].isOuter || groupAttach[g].empty()) continue;
+
+      // Map: non-primary face index → total attachment edge length from group g
+      std::unordered_map<int, double> attachLen;
+      std::set<int> seeds;
+      for (const auto& ae : groupAttach[g]) {
+        attachLen[ae.nonPrimaryFaceIdx] += ae.length;
+        seeds.insert(ae.nonPrimaryFaceIdx);
+      }
+
+      // Flood-fill connected components through non-primary faces
+      std::vector<bool> visited(nFaces + 1, false);
+      for (int idx : groups[g].faceIndices) visited[idx] = true;  // block primary faces
+
+      for (int seed : seeds) {
+        if (visited[seed] || claimed[seed]) continue;
+
+        std::vector<int> component;
+        std::vector<int> queue = {seed};
+        visited[seed] = true;
+        while (!queue.empty()) {
+          int cur = queue.back(); queue.pop_back();
+          component.push_back(cur);
+          for (int nbr : faceAdj[cur]) {
+            if (!visited[nbr] && faceToGroup[nbr] < 0) {
+              visited[nbr] = true;
+              queue.push_back(nbr);
+            }
+          }
+        }
+
+        // Test 1: Extent — total attachment < 50% of primary panel perimeter
+        double totalAttach = 0.0;
+        for (int fi : component) {
+          auto it = attachLen.find(fi);
+          if (it != attachLen.end()) totalAttach += it->second;
+        }
+        if (groupPerimeter[g] > 1e-6 && totalAttach / groupPerimeter[g] >= 0.50) continue;
+
+        // Test 2: Orientation — cap face normal ∥ panel normal (dot > 0.85)
+        const gp_Vec& pNorm = groups[g].normal;
+        int    capIdx = -1;
+        double maxProj = -1e9;
+        for (int fi : component) {
+          const TopoDS_Face& f = TopoDS::Face(faceMap(fi));
+          GProp_GProps fp; BRepGProp::SurfaceProperties(f, fp);
+          gp_Vec toFace(groups[g].centroid, fp.CentreOfMass());
+          double proj = pNorm.Dot(toFace);
+          if (proj > maxProj) { maxProj = proj; capIdx = fi; }
+        }
+        if (capIdx < 0) continue;
+        gp_Vec capNorm = faceOutwardNormal(TopoDS::Face(faceMap(capIdx)));
+        if (std::abs(pNorm.Dot(capNorm)) <= 0.85) continue;
+
+        // Test 3: Thickness — protrusion dimension along panel normal ≤ maxThicknessMm.
+        // First try anti-parallel pairs within the component; if none exist (e.g. a
+        // one-sided tab whose "inner" face is the primary panel itself), fall back to
+        // measuring cap-face distance to any face in the primary panel group.
+        bool thinEnough = false;
+        const TopoDS_Face& capFace = TopoDS::Face(faceMap(capIdx));
+        gp_Vec capNormVec = faceOutwardNormal(capFace);
+        for (int i = 0; i < (int)component.size() && !thinEnough; ++i) {
+          const TopoDS_Face& fI = TopoDS::Face(faceMap(component[i]));
+          gp_Vec nI = faceOutwardNormal(fI);
+          for (int j = i + 1; j < (int)component.size(); ++j) {
+            const TopoDS_Face& fJ = TopoDS::Face(faceMap(component[j]));
+            if (nI.Dot(faceOutwardNormal(fJ)) >= -0.95) continue;
+            BRepExtrema_DistShapeShape d(fI, fJ);
+            if (d.IsDone() && d.Value() <= maxThicknessMm) { thinEnough = true; break; }
+          }
+        }
+        // Fallback: measure cap face to primary panel faces.
+        // For tab-style protrusions, the "inner" face is the primary panel itself
+        // (merged away by Boolean fuse). The cap and panel both point outward,
+        // so their normals are parallel (dot > 0.85), not anti-parallel.
+        if (!thinEnough) {
+          for (int fi : groups[g].faceIndices) {
+            const TopoDS_Face& panelF = TopoDS::Face(faceMap(fi));
+            gp_Vec pnNorm = faceOutwardNormal(panelF);
+            if (capNormVec.Dot(pnNorm) <= 0.85) continue; // must point same direction
+            BRepExtrema_DistShapeShape d(capFace, panelF);
+            if (d.IsDone() && d.Value() <= maxThicknessMm) { thinEnough = true; break; }
+          }
+        }
+        if (!thinEnough) continue;
+
+        ProtrusionCandidate pc;
+        pc.faceIndices   = component;
+        pc.panelCentroid = groups[g].centroid;
+        pc.panelNormal   = groups[g].normal;
+        candidates.push_back(std::move(pc));
+        for (int fi : component) claimed[fi] = true;
+      }
+    }
+    return candidates;
+  }
+
+  // T018 — Extract one protrusion from the solid by cutting at the primary
+  // panel's outer face plane. Updates remainder (solid minus protrusion).
+  static TopoDS_Shape extractProtrusion(
+      const TopoDS_Shape&        solid,
+      const ProtrusionCandidate& pc,
+      TopoDS_Shape&              remainder)
+  {
+    gp_Dir planeDir(pc.panelNormal.X(), pc.panelNormal.Y(), pc.panelNormal.Z());
+    gp_Pln outerPlane(pc.panelCentroid, planeDir);
+
+    BRepBuilderAPI_MakeFace planeFaceMaker(outerPlane, -2e5, 2e5, -2e5, 2e5);
+    if (!planeFaceMaker.IsDone())
+      throw GeometryError(GE_DECOMPOSE_PROTRUSION_EXTRACT_FAILED,
+                          "Could not build cutting plane for protrusion", true, "rollback");
+
+    // Reference point on the protrusion side (far out along panel normal)
+    gp_Pnt outerRef(
+        pc.panelCentroid.X() + pc.panelNormal.X() * 1e4,
+        pc.panelCentroid.Y() + pc.panelNormal.Y() * 1e4,
+        pc.panelCentroid.Z() + pc.panelNormal.Z() * 1e4);
+
+    BRepPrimAPI_MakeHalfSpace hs(planeFaceMaker.Face(), outerRef);
+    hs.Build();
+    if (!hs.IsDone())
+      throw GeometryError(GE_DECOMPOSE_PROTRUSION_EXTRACT_FAILED,
+                          "Could not build half-space for protrusion extraction", true, "rollback");
+
+    BRepAlgoAPI_Common extract(solid, hs.Solid());
+    extract.Build();
+    if (!extract.IsDone() || extract.Shape().IsNull())
+      throw GeometryError(GE_DECOMPOSE_PROTRUSION_EXTRACT_FAILED,
+                          "Protrusion intersection produced null result", true, "rollback");
+
+    GProp_GProps ep;
+    BRepGProp::VolumeProperties(extract.Shape(), ep);
+    if (std::abs(ep.Mass()) < 1e-6)
+      throw GeometryError(GE_DECOMPOSE_PROTRUSION_EXTRACT_FAILED,
+                          "Protrusion extraction has zero volume (degenerate)", true, "rollback");
+
+    BRepAlgoAPI_Cut cutRemainder(solid, hs.Solid());
+    cutRemainder.Build();
+    if (!cutRemainder.IsDone() || cutRemainder.Shape().IsNull())
+      throw GeometryError(GE_DECOMPOSE_PROTRUSION_EXTRACT_FAILED,
+                          "Could not trim remainder after protrusion extraction", true, "rollback");
+
+    remainder = cutRemainder.Shape();
+    return extract.Shape();
+  }
+
+  // Mode 1: BFS + extrusion (surface/conceptual model).
+  // Each coplanar face group is extruded by defaultThicknessMm along its outward normal.
+  void splitMode1BFS(const TopoDS_Shape& shape,
+                     const SolidId& parentId,
+                     double angleThresholdDeg,
+                     double defaultThicknessMm,
+                     std::vector<ShellId>& panelIds)
+  {
+    TopTools_IndexedMapOfShape faceMap;
+    TopExp::MapShapes(shape, TopAbs_FACE, faceMap);
+    if (faceMap.Extent() == 0) return;
+
+    // Dummy centroid for isOuter classification (not used in Mode 1 extrusion)
+    auto groups = buildFaceGroups(shape, faceMap, angleThresholdDeg, gp_Pnt(0,0,0));
+
+    for (const auto& grp : groups) {
+      // Collect boundary edges: edges adjacent to only one face in this group.
+      // Build a set of face indices for fast membership test.
+      std::set<int> groupSet(grp.faceIndices.begin(), grp.faceIndices.end());
+
+      // Gather all edges from the group faces and count how many group faces share each edge.
+      TopTools_IndexedDataMapOfShapeListOfShape edgeFaceMap;
+      for (int idx : grp.faceIndices) {
+        const TopoDS_Face& f = TopoDS::Face(faceMap(idx));
+        for (TopExp_Explorer edgeEx(f, TopAbs_EDGE); edgeEx.More(); edgeEx.Next()) {
+          const TopoDS_Shape& e = edgeEx.Current();
+          if (!edgeFaceMap.Contains(e)) {
+            edgeFaceMap.Add(e, TopTools_ListOfShape());
+          }
+          // Only add if not already in list for this face
+          TopTools_ListOfShape& lst = edgeFaceMap.ChangeFromKey(e);
+          bool found = false;
+          for (const TopoDS_Shape& s : lst) {
+            if (s.IsEqual(f)) { found = true; break; }
+          }
+          if (!found) lst.Append(f);
+        }
+      }
+
+      // Boundary edges are those touching exactly one group face
+      BRepBuilderAPI_MakeWire wireMaker;
+      bool hasEdge = false;
+      for (int i = 1; i <= edgeFaceMap.Extent(); ++i) {
+        if (edgeFaceMap(i).Size() == 1) {
+          const TopoDS_Edge& e = TopoDS::Edge(edgeFaceMap.FindKey(i));
+          wireMaker.Add(e);
+          hasEdge = true;
+        }
+      }
+
+      if (!hasEdge || !wireMaker.IsDone()) {
+        // Fallback: store as a zero-thickness shell (e.g. closed surface)
+        BRep_Builder builder;
+        TopoDS_Shell sh;
+        builder.MakeShell(sh);
+        for (int idx : grp.faceIndices)
+          builder.Add(sh, faceMap(idx));
+        ShellId sid = generateUUID();
+        shells_[sid] = ShellState{sid, parentId, sh};
+        panelIds.push_back(sid);
+        continue;
+      }
+
+      // Build a planar face from the boundary wire
+      BRepBuilderAPI_MakeFace faceMaker(wireMaker.Wire(), /*onlyPlane=*/true);
+      if (!faceMaker.IsDone()) {
+        throw GeometryError(GE_DECOMPOSE_EXTRUDE_FAILED,
+                            "Could not build planar face from boundary wire", true, "rollback");
+      }
+
+      // Extrude along the group's outward normal
+      gp_Vec extVec(grp.normal.X() * defaultThicknessMm,
+                    grp.normal.Y() * defaultThicknessMm,
+                    grp.normal.Z() * defaultThicknessMm);
+      BRepPrimAPI_MakePrism prism(faceMaker.Face(), extVec);
+      prism.Build();
+      if (!prism.IsDone() || prism.Shape().IsNull()) {
+        throw GeometryError(GE_DECOMPOSE_EXTRUDE_FAILED,
+                            "Extrusion failed for panel group", true, "rollback");
+      }
+
+      // Basic manifold check: shape must have a non-degenerate volume
+      GProp_GProps volProps;
+      BRepGProp::VolumeProperties(prism.Shape(), volProps);
+      if (std::abs(volProps.Mass()) < 1e-6) {
+        throw GeometryError(GE_DECOMPOSE_EXTRUDE_FAILED,
+                            "Extruded panel has zero volume (non-manifold result)", true, "rollback");
+      }
+
+      ShellId sid = generateUUID();
+      shells_[sid] = ShellState{sid, parentId, prism.Shape()};
+      panelIds.push_back(sid);
+    }
+  }
+
+  // Mode 2: Thin-solid cutting. For each outer/inner panel pair, use the
+  // inner face plane to slice a slab off the remainder solid.
+  // remainderOut (optional): receives the solid left after all panel cuts.
+  void splitMode2(const TopoDS_Shape& solid,
+                  const SolidId& parentId,
+                  double angleThresholdDeg,
+                  double maxThicknessMm,
+                  std::vector<ShellId>& panelIds,
+                  std::vector<ShellId>& /*protrusionIds*/,
+                  TopoDS_Shape* remainderOut = nullptr)
+  {
+    GProp_GProps solidProps;
+    BRepGProp::VolumeProperties(solid, solidProps);
+    gp_Pnt solidCentroid = solidProps.CentreOfMass();
+
+    TopTools_IndexedMapOfShape faceMap;
+    TopExp::MapShapes(solid, TopAbs_FACE, faceMap);
+    if (faceMap.Extent() == 0) {
+      throw GeometryError(GE_DECOMPOSE_CUT_FAILED, "Solid has no faces", true, "rollback");
+    }
+
+    auto groups = buildFaceGroups(solid, faceMap, angleThresholdDeg, solidCentroid);
+
+    // For each outer group, find its closest anti-parallel inner group
+    struct PanelCut {
+      gp_Pln  innerPlane;   // cutting plane (inner face plane)
+      gp_Pnt  outerRefPt;   // point clearly on the outer side of innerPlane
+      double  distFromCenter;
+    };
+
+    std::vector<PanelCut> cuts;
+    cuts.reserve(groups.size());
+
+    for (int i = 0; i < (int)groups.size(); ++i) {
+      if (!groups[i].isOuter) continue;
+
+      double bestDist = std::numeric_limits<double>::max();
+      int    bestJ    = -1;
+
+      for (int j = 0; j < (int)groups.size(); ++j) {
+        if (i == j || groups[j].isOuter) continue;
+        if (groups[i].normal.Dot(groups[j].normal) > -0.95) continue;
+
+        // Measure face-to-face distance
+        const TopoDS_Face& fOut = TopoDS::Face(faceMap(groups[i].faceIndices[0]));
+        const TopoDS_Face& fIn  = TopoDS::Face(faceMap(groups[j].faceIndices[0]));
+        BRepExtrema_DistShapeShape d(fOut, fIn);
+        if (!d.IsDone() || d.Value() > maxThicknessMm) continue;
+        if (d.Value() < bestDist) { bestDist = d.Value(); bestJ = j; }
+      }
+
+      if (bestJ < 0) continue;
+
+      // Inner face plane: use inner group's centroid and the outer normal's reverse
+      gp_Dir innerNormalDir(
+          -groups[i].normal.X(), -groups[i].normal.Y(), -groups[i].normal.Z());
+      gp_Pln innerPln(groups[bestJ].centroid, innerNormalDir);
+
+      // Outer reference point: clearly outside the solid on the outer face's side
+      gp_Pnt outerRef(
+          groups[i].centroid.X() + groups[i].normal.X() * (bestDist + 20.0),
+          groups[i].centroid.Y() + groups[i].normal.Y() * (bestDist + 20.0),
+          groups[i].centroid.Z() + groups[i].normal.Z() * (bestDist + 20.0));
+
+      double distFromCenter = groups[i].normal.Dot(gp_Vec(solidCentroid, groups[i].centroid));
+      cuts.push_back({innerPln, outerRef, distFromCenter});
+    }
+
+    // Process outermost panels first (minimises corner-ownership artefacts)
+    std::sort(cuts.begin(), cuts.end(), [](const PanelCut& a, const PanelCut& b) {
+      return a.distFromCenter > b.distFromCenter;
+    });
+
+    TopoDS_Shape remainder = solid;
+
+    for (const auto& cut : cuts) {
+      if (remainder.IsNull()) break;
+
+      // Half-space on the outer side of the inner plane
+      BRepBuilderAPI_MakeFace planeFaceMaker(cut.innerPlane, -2e5, 2e5, -2e5, 2e5);
+      if (!planeFaceMaker.IsDone()) continue;
+      TopoDS_Face planeFace = planeFaceMaker.Face();
+
+      BRepPrimAPI_MakeHalfSpace hs(planeFace, cut.outerRefPt);
+      hs.Build();
+      if (!hs.IsDone()) continue;
+
+      // Extract panel slab = remainder ∩ half-space
+      BRepAlgoAPI_Common extract(remainder, hs.Solid());
+      extract.Build();
+      if (!extract.IsDone() || extract.Shape().IsNull()) {
+        throw GeometryError(GE_DECOMPOSE_CUT_FAILED, "Panel extraction failed", true, "rollback");
+      }
+
+      GProp_GProps ep;
+      BRepGProp::VolumeProperties(extract.Shape(), ep);
+      if (std::abs(ep.Mass()) < 1e-6) continue;  // empty slab — skip
+
+      ShellId panelId = generateUUID();
+      shells_[panelId] = ShellState{panelId, parentId, extract.Shape()};
+      panelIds.push_back(panelId);
+
+      // Remainder = remainder minus the panel slab
+      BRepAlgoAPI_Cut cutRemainder(remainder, hs.Solid());
+      cutRemainder.Build();
+      if (!cutRemainder.IsDone() || cutRemainder.Shape().IsNull()) break;
+      remainder = cutRemainder.Shape();
+    }
+
+    if (remainderOut) *remainderOut = remainder;
+  }
+
+  // T022 — Recursive decomposition. Operates on an arbitrary solid shape
+  // (not a registered shell), with the mutex already held by the caller.
+  void recursiveDecompose(
+      const TopoDS_Shape&  shape,
+      const SolidId&       parentId,
+      double               angleThresholdDeg,
+      double               maxThicknessMm,
+      double               defaultThicknessMm,
+      int                  remainingDepth,
+      std::vector<ShellId>& panelIds,
+      std::vector<ShellId>& protrusionIds)
+  {
+    if (remainingDepth <= 0 || shape.IsNull()) return;
+
+    GProp_GProps rp;
+    BRepGProp::VolumeProperties(shape, rp);
+    if (std::abs(rp.Mass()) < 1.0) return;  // < 1 mm³ — nothing meaningful left
+
+    TopTools_IndexedMapOfShape faceMap;
+    TopExp::MapShapes(shape, TopAbs_FACE, faceMap);
+    if (faceMap.Extent() < 2) return;  // degenerate
+
+    std::string mode = detectObjectMode(shape, maxThicknessMm);
+
+    gp_Pnt solidCentroid(0, 0, 0);
+    if (mode == "thin_solid") {
+      GProp_GProps vp;
+      BRepGProp::VolumeProperties(shape, vp);
+      solidCentroid = vp.CentreOfMass();
+    }
+
+    auto faceGroups     = buildFaceGroups(shape, faceMap, angleThresholdDeg, solidCentroid);
+    auto protrCandidates = detectProtrusions(shape, faceMap, faceGroups, maxThicknessMm);
+
+    // Termination: no primary panel groups found in this component
+    bool hasPrimaryGroup = false;
+    for (const auto& g : faceGroups) { if (g.isOuter) { hasPrimaryGroup = true; break; } }
+    if (!hasPrimaryGroup) return;
+
+    TopoDS_Shape workShape = shape;
+    for (const auto& pc : protrCandidates) {
+      TopoDS_Shape newRemainder;
+      try {
+        TopoDS_Shape ps = extractProtrusion(workShape, pc, newRemainder);
+        ShellId pid = generateUUID();
+        shells_[pid] = ShellState{pid, parentId, ps};
+        protrusionIds.push_back(pid);
+        workShape = std::move(newRemainder);
+      } catch (const GeometryError&) {}
+    }
+
+    TopoDS_Shape childRemainder;
+    if (mode == "thin_solid") {
+      splitMode2(workShape, parentId, angleThresholdDeg, maxThicknessMm,
+                 panelIds, protrusionIds, &childRemainder);
+    } else {
+      splitMode1BFS(workShape, parentId, angleThresholdDeg, defaultThicknessMm, panelIds);
+      return;  // surface mode has no structured remainder
+    }
+
+    if (childRemainder.IsNull()) return;
+
+    // Recurse on each connected solid component of the remainder
+    bool hadSolid = false;
+    for (TopExp_Explorer ex(childRemainder, TopAbs_SOLID); ex.More(); ex.Next()) {
+      recursiveDecompose(ex.Current(), parentId, angleThresholdDeg, maxThicknessMm,
+                         defaultThicknessMm, remainingDepth - 1, panelIds, protrusionIds);
+      hadSolid = true;
+    }
+    if (!hadSolid) {
+      // Remainder is a single solid (not a compound)
+      recursiveDecompose(childRemainder, parentId, angleThresholdDeg, maxThicknessMm,
+                         defaultThicknessMm, remainingDepth - 1, panelIds, protrusionIds);
+    }
+  }
+
+  // ── Main entry point ─────────────────────────────────────────────────────
+
+  DecomposedByBendsResult splitBodyByBends(const ShellId& partId,
+                                            double angleThresholdDeg,
+                                            double maxThicknessMm    = 5.0,
+                                            double defaultThicknessMm = 1.0,
+                                            int    maxRecursionDepth  = 0) override {
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    TopoDS_Shape inputShape;
+    SolidId      inputParentId;
+    {
+      auto shellIt = shells_.find(partId);
+      auto solidIt = solids_.find(partId);
+      if (shellIt != shells_.end()) {
+        inputShape    = shellIt->second.shape;
+        inputParentId = shellIt->second.parentSolidId;
+      } else if (solidIt != solids_.end()) {
+        inputShape    = solidIt->second.shape;
+        inputParentId = partId;
+      } else {
+        throw GeometryError("GE_SHELL_NOT_FOUND", "Shell not found: " + partId, false, "");
+      }
+    }
+    if (angleThresholdDeg < 0.0) {
+      throw GeometryError("GE_DECOMPOSE_BY_BENDS_FAILED",
+                          "angle_threshold_deg must be non-negative", true, "");
+    }
+
+    SnapshotId token = createSnapshotLocked("before splitBodyByBends on " + partId);
+
+    try {
+      // Copy shape: protrusion extraction adds shells to shells_, which can
+      // rehash the map and invalidate iterators. Copying avoids a dangling ref.
+      TopoDS_Shape shape    = inputShape;
+      SolidId      parentId = inputParentId;
+
+      std::string mode = detectObjectMode(shape, maxThicknessMm);
+
+      // Build face groups now (needed for protrusion detection).
+      // For surface mode isOuter classification is irrelevant; pass dummy centroid.
+      gp_Pnt solidCentroid(0, 0, 0);
+      if (mode == "thin_solid") {
+        GProp_GProps vp;
+        BRepGProp::VolumeProperties(shape, vp);
+        solidCentroid = vp.CentreOfMass();
+      }
+      TopTools_IndexedMapOfShape faceMapPre;
+      TopExp::MapShapes(shape, TopAbs_FACE, faceMapPre);
+      auto faceGroupsPre = buildFaceGroups(shape, faceMapPre, angleThresholdDeg, solidCentroid);
+
+      // T019 — Detect and extract protrusions before panel cutting.
+      std::vector<ShellId> panelIds;
+      std::vector<ShellId> protrusionIds;
+
+      auto protrCandidates = detectProtrusions(shape, faceMapPre, faceGroupsPre, maxThicknessMm);
+      TopoDS_Shape workShape = shape;
+      for (const auto& pc : protrCandidates) {
+        TopoDS_Shape newRemainder;
+        try {
+          TopoDS_Shape protrusionSolid = extractProtrusion(workShape, pc, newRemainder);
+          ShellId pid = generateUUID();
+          shells_[pid] = ShellState{pid, parentId, protrusionSolid};
+          protrusionIds.push_back(pid);
+          workShape = std::move(newRemainder);
+        } catch (const GeometryError&) {
+          // Non-fatal: skip this protrusion if extraction fails
+        }
+      }
+
+      TopoDS_Shape firstPassRemainder;
+      if (mode == "thin_solid") {
+        splitMode2(workShape, parentId, angleThresholdDeg, maxThicknessMm,
+                   panelIds, protrusionIds, &firstPassRemainder);
+      } else {
+        splitMode1BFS(workShape, parentId, angleThresholdDeg, defaultThicknessMm, panelIds);
+      }
+
+      // T022 — Recursive decomposition into remainder solid(s)
+      if (maxRecursionDepth > 0 && !firstPassRemainder.IsNull()) {
+        bool hadSolid = false;
+        for (TopExp_Explorer ex(firstPassRemainder, TopAbs_SOLID); ex.More(); ex.Next()) {
+          recursiveDecompose(ex.Current(), parentId, angleThresholdDeg, maxThicknessMm,
+                             defaultThicknessMm, maxRecursionDepth - 1, panelIds, protrusionIds);
+          hadSolid = true;
+        }
+        if (!hadSolid) {
+          recursiveDecompose(firstPassRemainder, parentId, angleThresholdDeg, maxThicknessMm,
+                             defaultThicknessMm, maxRecursionDepth - 1, panelIds, protrusionIds);
+        }
+      }
+
+      return DecomposedByBendsResult{
+          std::move(panelIds), std::move(protrusionIds), token, mode};
+
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_DECOMPOSE_BY_BENDS_FAILED",
+                          std::string("OCCT exception: ") + e.GetMessageString(),
+                          true, "");
+    }
+  }
+
   // ── Merge bodies with bend ───────────────────────────────────────────────
 
   MergeBodyResult mergeBodiesWithBend(const ShellId& partAId,
@@ -1346,7 +2082,7 @@ private:
             }
           }
         }
-        BRep_DistShapeShape dist(face, targetShape);
+        BRepExtrema_DistShapeShape dist(face, targetShape);
         dist.Perform();
         if (!dist.IsDone()) {
           throw GeometryError("GE_EXTEND_FAILED", "Cannot compute distance to target", false, "");
@@ -1818,7 +2554,7 @@ private:
     }
 
     try {
-      BRep_DistShapeShape distCalc(itA->second.shape, itB->second.shape);
+      BRepExtrema_DistShapeShape distCalc(itA->second.shape, itB->second.shape);
       distCalc.Perform();
 
       if (!distCalc.IsDone()) {

@@ -26,9 +26,12 @@ export default defineConfig({
         include: ['tests/contracts/**/*.contract.test.ts'],
       },
       {
-        // Integration tests: validate multi-component orchestration flows
+        // Integration tests: validate multi-component orchestration flows.
+        // pool:'forks' gives each file its own child process so the C++ addon's
+        // global g_service singleton is not shared between test files.
         name: 'integration',
         include: ['tests/integration/**/*.integration.test.ts'],
+        pool: 'forks',
       },
       {
         // E2E tests: validate MVP production path (INF-03 golden path)

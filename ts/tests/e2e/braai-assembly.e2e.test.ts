@@ -163,6 +163,53 @@ describe('SYS-JTBD-07 Braai STL (Post-MVP)', () => {
       restoredShellIds: ['panel-a', 'panel-b'],
     }),
     clearSnapshots: () => undefined,
+    separateSolids: (_solidId: string) => ['panel-a', 'panel-b'],
+    exportGlb: (_shellId: string) => Buffer.from('glTF'),
+    computeIntersections: (_partIds: string[]) => ({ intersects: false, clashes: [] }),
+    computeGaps: (_partAId: string, _partBId: string, _maxDistanceThresholdMm: number) => ({
+      hasGap: false,
+      minimumDistanceMm: 0,
+      closestElements: { partAFaceId: 'f-1', partBFaceId: 'f-2' },
+      extensionVector: { x: 0, y: 0, z: 0 },
+      gapBoundingBox: { origin: { x: 0, y: 0, z: 0 }, dimensions: { x: 0, y: 0, z: 0 } },
+    }),
+    trimBodyWithPlane: (_partId: string, _plane: unknown, _keepPositiveSide: boolean) => ({
+      trimmedShellId: 'trimmed-shell',
+      rollbackToken: 'rb-trim',
+    }),
+    splitBodyByPlane: (_partId: string, _plane: unknown) => ({
+      positiveShellId: 'pos-shell',
+      negativeShellId: 'neg-shell',
+      rollbackToken: 'rb-split',
+    }),
+    mergeBodiesWithBend: (_partAId: string, _partBId: string, _targetEdges: string[], _bendRadiusMm: number) => ({
+      mergedShellId: 'merged-shell',
+      rollbackToken: 'rb-merge',
+    }),
+    extendFaceToTarget: (_partId: string, _faceId: string, _targetType: string, _targetPartId: string, _targetFaceId: string, _targetPlane: unknown) => ({
+      modifiedShellId: 'extended-shell',
+      extensionDistanceMm: 0,
+      rollbackToken: 'rb-extend',
+    }),
+    offsetFace: (_partId: string, _faceId: string, _distanceMm: number) => ({
+      modifiedShellId: 'offset-shell',
+      rollbackToken: 'rb-offset',
+    }),
+    addFlange: (_partId: string, _edgeId: string, _lengthMm: number, _angleDeg: number, _bendRadiusMm: number) => ({
+      modifiedShellId: 'flanged-shell',
+      flangeFeatureId: 'flange-1',
+      rollbackToken: 'rb-flange',
+    }),
+    ripEdge: (_partId: string, _edgeId: string) => ({
+      modifiedShellId: 'ripped-shell',
+      rollbackToken: 'rb-rip',
+    }),
+    splitBodyByBends: (_partId: string, _angleThresholdDeg: number) => ({
+      panel_ids: ['panel-a', 'panel-b'],
+      protrusion_ids: [],
+      rollbackToken: 'rb-bends',
+      detected_mode: 'thin_solid',
+    }),
   };
 
   beforeEach(() => {

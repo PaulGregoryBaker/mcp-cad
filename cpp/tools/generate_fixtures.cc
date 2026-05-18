@@ -21,6 +21,8 @@
  */
 
 #include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
 #include <gp_Pnt.hxx>
 #include <TopoDS_Shape.hxx>
 #include <STEPControl_Writer.hxx>
@@ -104,6 +106,52 @@ static bool genSheet3Panel(const fs::path& outDir) {
   return writeStp(block, (outDir / "sheet_3panel.stp").string());
 }
 
+/**
+ * hollow_cube.stp — 200×200×200 mm hollow cube with 1 mm walls.
+ * Used by split_body_by_bends integration tests to verify thin-solid mode
+ * detection and 6-panel decomposition.
+ */
+static bool genHollowCube(const fs::path& outDir) {
+  TopoDS_Shape outer = BRepPrimAPI_MakeBox(200.0, 200.0, 200.0).Shape();
+  TopoDS_Shape inner = BRepPrimAPI_MakeBox(gp_Pnt(1.0, 1.0, 1.0), 198.0, 198.0, 198.0).Shape();
+  BRepAlgoAPI_Cut cutter(outer, inner);
+  if (!cutter.IsDone()) {
+    std::cerr << "Hollow cube cut failed\n";
+    return false;
+  }
+  return writeStp(cutter.Shape(), (outDir / "hollow_cube.stp").string());
+}
+
+/**
+ * cube_with_flanges.stp — hollow cube with 4 thin flange tabs on the ±X and ±Y faces.
+ * Each flange is 1 mm thick, 20 mm wide, 10 mm tall.
+ * Used by split_body_by_bends integration tests to verify protrusion detection.
+ */
+static bool genCubeWithFlanges(const fs::path& outDir) {
+  // Hollow cube base
+  TopoDS_Shape outer = BRepPrimAPI_MakeBox(200.0, 200.0, 200.0).Shape();
+  TopoDS_Shape inner = BRepPrimAPI_MakeBox(gp_Pnt(1.0, 1.0, 1.0), 198.0, 198.0, 198.0).Shape();
+  BRepAlgoAPI_Cut hollower(outer, inner);
+  if (!hollower.IsDone()) {
+    std::cerr << "Hollow cube cut failed in genCubeWithFlanges\n";
+    return false;
+  }
+  TopoDS_Shape base = hollower.Shape();
+
+  // 4 flanges: 1 mm thick in the face-normal direction, 20×10 mm footprint
+  TopoDS_Shape fPosX = BRepPrimAPI_MakeBox(gp_Pnt(200.0,  90.0, 95.0),  1.0, 20.0, 10.0).Shape();
+  TopoDS_Shape fNegX = BRepPrimAPI_MakeBox(gp_Pnt(-1.0,   90.0, 95.0),  1.0, 20.0, 10.0).Shape();
+  TopoDS_Shape fPosY = BRepPrimAPI_MakeBox(gp_Pnt( 90.0, 200.0, 95.0), 20.0,  1.0, 10.0).Shape();
+  TopoDS_Shape fNegY = BRepPrimAPI_MakeBox(gp_Pnt( 90.0,  -1.0, 95.0), 20.0,  1.0, 10.0).Shape();
+
+  BRepAlgoAPI_Fuse f1(base,          fPosX); if (!f1.IsDone()) { std::cerr << "Fuse +X failed\n"; return false; }
+  BRepAlgoAPI_Fuse f2(f1.Shape(),    fNegX); if (!f2.IsDone()) { std::cerr << "Fuse -X failed\n"; return false; }
+  BRepAlgoAPI_Fuse f3(f2.Shape(),    fPosY); if (!f3.IsDone()) { std::cerr << "Fuse +Y failed\n"; return false; }
+  BRepAlgoAPI_Fuse f4(f3.Shape(),    fNegY); if (!f4.IsDone()) { std::cerr << "Fuse -Y failed\n"; return false; }
+
+  return writeStp(f4.Shape(), (outDir / "cube_with_flanges.stp").string());
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 int main(int argc, char* argv[]) {
@@ -130,6 +178,8 @@ int main(int argc, char* argv[]) {
   ok &= genSimpleBox(outDir);
   ok &= genSheet1Panel(outDir);
   ok &= genSheet3Panel(outDir);
+  ok &= genHollowCube(outDir);
+  ok &= genCubeWithFlanges(outDir);
 
   if (ok) {
     std::cout << "All fixtures generated successfully.\n";

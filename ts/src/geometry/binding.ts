@@ -78,6 +78,13 @@ export interface GeometryAddon {
   offsetFace(partId: string, faceId: string, distanceMm: number): OffsetFaceResult;
   addFlange(partId: string, edgeId: string, lengthMm: number, angleDeg: number, bendRadiusMm: number): AddFlangeResult;
   ripEdge(partId: string, edgeId: string): RipEdgeResult;
+  splitBodyByBends(
+    partId: string,
+    angleThresholdDeg: number,
+    maxThicknessMm?: number,
+    defaultThicknessMm?: number,
+    maxRecursionDepth?: number,
+  ): { panel_ids: string[]; protrusion_ids: string[]; rollbackToken: string; detected_mode: string };
 }
 
 export const kerfOffsetMm = {
@@ -371,6 +378,22 @@ export class GeometryBinding {
   ripEdge(partId: string, edgeId: string): RipEdgeResult {
     try {
       return this.addon.ripEdge(partId, edgeId);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  splitBodyByBends(
+    partId: string,
+    angleThresholdDeg: number,
+    maxThicknessMm?: number,
+    defaultThicknessMm?: number,
+    maxRecursionDepth?: number,
+  ): { panel_ids: string[]; protrusion_ids: string[]; rollbackToken: string; detected_mode: string } {
+    try {
+      return this.addon.splitBodyByBends(
+        partId, angleThresholdDeg, maxThicknessMm, defaultThicknessMm, maxRecursionDepth,
+      );
     } catch (err) {
       throw toStructuredError(err);
     }

@@ -1,5 +1,5 @@
 /**
- * CONTRACT GAP: decompose_volume must return parts[].mesh_url
+ * CONTRACT: decompose_volume returns parts[].mesh_url
  *
  * The Form·AI·tion Flutter client needs each decomposed panel to carry a
  * loadable GLB URL so the Three.js viewport can stream geometry via
@@ -7,23 +7,13 @@
  *
  *   {
  *     parts: [{ id: string, mesh_url: string }, ...],
- *     panel_count: number,
- *     strategy_applied: string,
- *     rollback_token: string,
- *   }
- *
- * Current implementation (src/mcp/tools.ts — handleDecomposeVolume) returns:
- *
- *   {
  *     panel_ids: string[],
  *     panel_count: number,
  *     strategy_applied: string,
  *     rollback_token: string,
  *   }
  *
- * These tests document the gap.  They are expected to FAIL against the
- * current implementation and will pass once handleDecomposeVolume exposes a
- * /mesh/:shellId.glb HTTP endpoint and populates parts[] accordingly.
+ * handleDecomposeVolume (src/mcp/tools.ts) returns both parts[] and panel_ids.
  *
  * To run only these tests:
  *   npx vitest run --project e2e-mesh-url-contract
@@ -113,6 +103,52 @@ const mockAddon: GeometryAddon = {
     restoredShellIds: ['shell-0', 'shell-1'],
   }),
   clearSnapshots: () => undefined,
+  separateSolids: (_solidId: string) => ['shell-0', 'shell-1'],
+  computeIntersections: (_partIds: string[]) => ({ intersects: false, clashes: [] }),
+  computeGaps: (_partAId: string, _partBId: string, _maxDistanceThresholdMm: number) => ({
+    hasGap: false,
+    minimumDistanceMm: 0,
+    closestElements: { partAFaceId: 'f-0', partBFaceId: 'f-1' },
+    extensionVector: { x: 0, y: 0, z: 0 },
+    gapBoundingBox: { origin: { x: 0, y: 0, z: 0 }, dimensions: { x: 0, y: 0, z: 0 } },
+  }),
+  trimBodyWithPlane: (_partId: string, _plane: unknown, _keepPositiveSide: boolean) => ({
+    trimmedShellId: 'trimmed-shell',
+    rollbackToken: 'rb-trim',
+  }),
+  splitBodyByPlane: (_partId: string, _plane: unknown) => ({
+    positiveShellId: 'pos-shell',
+    negativeShellId: 'neg-shell',
+    rollbackToken: 'rb-split',
+  }),
+  mergeBodiesWithBend: (_partAId: string, _partBId: string, _targetEdges: string[], _bendRadiusMm: number) => ({
+    mergedShellId: 'merged-shell',
+    rollbackToken: 'rb-merge',
+  }),
+  extendFaceToTarget: (_partId: string, _faceId: string, _targetType: string, _targetPartId: string, _targetFaceId: string, _targetPlane: unknown) => ({
+    modifiedShellId: 'extended-shell',
+    extensionDistanceMm: 0,
+    rollbackToken: 'rb-extend',
+  }),
+  offsetFace: (_partId: string, _faceId: string, _distanceMm: number) => ({
+    modifiedShellId: 'offset-shell',
+    rollbackToken: 'rb-offset',
+  }),
+  addFlange: (_partId: string, _edgeId: string, _lengthMm: number, _angleDeg: number, _bendRadiusMm: number) => ({
+    modifiedShellId: 'flanged-shell',
+    flangeFeatureId: 'flange-0',
+    rollbackToken: 'rb-flange',
+  }),
+  ripEdge: (_partId: string, _edgeId: string) => ({
+    modifiedShellId: 'ripped-shell',
+    rollbackToken: 'rb-rip',
+  }),
+  splitBodyByBends: (_partId: string, _angleThresholdDeg: number) => ({
+    panel_ids: ['shell-0', 'shell-1'],
+    protrusion_ids: [],
+    rollbackToken: 'rb-bends',
+    detected_mode: 'thin_solid',
+  }),
 };
 
 describe('CONTRACT GAP: decompose_volume must return parts[].mesh_url', () => {
@@ -128,10 +164,7 @@ describe('CONTRACT GAP: decompose_volume must return parts[].mesh_url', () => {
   });
 
   it(
-    // This test FAILS against the current implementation.
-    // decompose_volume returns { panel_ids: string[] } but must return
-    // { parts: [{ id, mesh_url }] } so Form·AI·tion can load GLB geometry.
-    'decompose_volume result contains parts[] with a non-empty mesh_url per panel [EXPECTED FAILURE]',
+    'decompose_volume result contains parts[] with a non-empty mesh_url per panel',
     async () => {
       setGeometryBindingMock(mockAddon);
 
@@ -153,12 +186,10 @@ describe('CONTRACT GAP: decompose_volume must return parts[].mesh_url', () => {
       )) as Record<string, unknown>;
 
       // ── Required shape assertions ─────────────────────────────────────────
-      // The following FAIL today because the tool returns panel_ids instead.
-      // Fix: expose GET /mesh/:shellId.glb and populate parts[] in the response.
 
       expect(
         decompose,
-        'decompose_volume response must include a parts array (currently returns panel_ids)',
+        'decompose_volume response must include a parts array',
       ).toHaveProperty('parts');
 
       const parts = decompose['parts'] as Array<Record<string, unknown>>;
@@ -190,7 +221,7 @@ describe('CONTRACT GAP: decompose_volume must return parts[].mesh_url', () => {
     },
   );
 
-  it('panel_count matches the number of parts returned [EXPECTED FAILURE]', async () => {
+  it('panel_count matches the number of parts returned', async () => {
     setGeometryBindingMock(mockAddon);
 
     const clean = (await dispatchTool(

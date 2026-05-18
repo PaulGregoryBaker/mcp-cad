@@ -190,6 +190,20 @@ struct MergeBodyResult {
   SnapshotId rollbackToken;
 };
 
+struct DecomposedByBendsResult {
+  std::vector<ShellId> panelIds;       // flat solid panels
+  std::vector<ShellId> protrusionIds;  // flanges / tabs extracted before splitting
+  SnapshotId           rollbackToken;
+  std::string          detectedMode;   // "surface" | "thin_solid"
+};
+
+// ─── Error code constants (Feature 003-split-by-bends-enhanced) ─────────────
+
+constexpr const char* GE_DECOMPOSE_THICKNESS_MISMATCH     = "GE_DECOMPOSE_THICKNESS_MISMATCH";
+constexpr const char* GE_DECOMPOSE_EXTRUDE_FAILED         = "GE_DECOMPOSE_EXTRUDE_FAILED";
+constexpr const char* GE_DECOMPOSE_CUT_FAILED             = "GE_DECOMPOSE_CUT_FAILED";
+constexpr const char* GE_DECOMPOSE_PROTRUSION_EXTRACT_FAILED = "GE_DECOMPOSE_PROTRUSION_EXTRACT_FAILED";
+
 // ─── GeometryService interface ───────────────────────────────────────────────
 
 /**
@@ -307,6 +321,17 @@ public:
   virtual RipEdgeResult ripEdge(
       const ShellId&     partId,
       const std::string& edgeId) = 0;
+
+  // Decomposes a shell into planar panels by splitting at every bend edge.
+  // Mode is auto-detected: thin-solid (wall ≤ maxThicknessMm) uses cutting planes
+  // to preserve original wall thickness; surface/thick models extrude each face
+  // group by defaultThicknessMm. Protrusions are returned separately.
+  virtual DecomposedByBendsResult splitBodyByBends(
+      const ShellId& partId,
+      double         angleThresholdDeg,
+      double         maxThicknessMm    = 5.0,
+      double         defaultThicknessMm = 1.0,
+      int            maxRecursionDepth  = 0) = 0;
 
   // ── Snapshot / rollback ────────────────────────────────────────────────────
   virtual SnapshotId    createSnapshot(const std::string& label)            = 0;

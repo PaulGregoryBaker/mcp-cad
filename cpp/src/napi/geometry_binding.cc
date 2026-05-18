@@ -711,6 +711,49 @@ Napi::Value TrimBodyWithPlane(const Napi::CallbackInfo& info) {
   return env.Undefined();
 }
 
+Napi::Value SplitBodyByBends(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsString()) {
+    Napi::TypeError::New(env, "splitBodyByBends(partId, angleThresholdDeg?, maxThicknessMm?, defaultThicknessMm?, maxRecursionDepth?)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string partId            = info[0].As<Napi::String>().Utf8Value();
+  double      angleThreshold    = 1.0;
+  double      maxThicknessMm    = 5.0;
+  double      defaultThicknessMm = 1.0;
+  int         maxRecursionDepth  = 0;
+  if (info.Length() >= 2 && info[1].IsNumber())
+    angleThreshold = info[1].As<Napi::Number>().DoubleValue();
+  if (info.Length() >= 3 && info[2].IsNumber())
+    maxThicknessMm = info[2].As<Napi::Number>().DoubleValue();
+  if (info.Length() >= 4 && info[3].IsNumber())
+    defaultThicknessMm = info[3].As<Napi::Number>().DoubleValue();
+  if (info.Length() >= 5 && info[4].IsNumber())
+    maxRecursionDepth = static_cast<int>(info[4].As<Napi::Number>().Int32Value());
+
+  TRY_GEOMETRY(env, {
+    DecomposedByBendsResult res = svc().splitBodyByBends(
+        partId, angleThreshold, maxThicknessMm, defaultThicknessMm, maxRecursionDepth);
+    Napi::Object result = Napi::Object::New(env);
+
+    Napi::Array panelArr = Napi::Array::New(env, res.panelIds.size());
+    for (size_t i = 0; i < res.panelIds.size(); ++i)
+      panelArr.Set(static_cast<uint32_t>(i), Napi::String::New(env, res.panelIds[i]));
+
+    Napi::Array protrusionArr = Napi::Array::New(env, res.protrusionIds.size());
+    for (size_t i = 0; i < res.protrusionIds.size(); ++i)
+      protrusionArr.Set(static_cast<uint32_t>(i), Napi::String::New(env, res.protrusionIds[i]));
+
+    result.Set("panel_ids",      panelArr);
+    result.Set("protrusion_ids", protrusionArr);
+    result.Set("detected_mode",  Napi::String::New(env, res.detectedMode));
+    result.Set("rollbackToken",  Napi::String::New(env, res.rollbackToken));
+    return result;
+  })
+  return env.Undefined();
+}
+
 // ─── Enum string helpers ──────────────────────────────────────────────────────
 
 static const char* surfaceTypeToString(SurfaceType t) {
@@ -772,6 +815,7 @@ void RegisterGeometryMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("offsetFace",            Napi::Function::New(env, OffsetFace));
   exports.Set("addFlange",             Napi::Function::New(env, AddFlange));
   exports.Set("ripEdge",               Napi::Function::New(env, RipEdge));
+  exports.Set("splitBodyByBends",      Napi::Function::New(env, SplitBodyByBends));
 }
 
 }  // namespace mcp_cad
