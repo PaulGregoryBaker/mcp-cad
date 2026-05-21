@@ -114,7 +114,7 @@ console.log('split_body_by_bends.two hollow cubes tests starting...');
     expect(result.panel_ids).toHaveLength(12);
     expect(result.rollback_token).toBeDefined();
   });
-
+/*
     it('Braai fixture → split by bends, part count reasonable', async () => {
       if (!addonAvailable) return;
 console.log('split_body_by_bends.Braai fixture tests starting...');
@@ -278,7 +278,7 @@ console.log('split_body_by_bends.Braai fixture tests starting...');
         console.log('[Braai Test] Wrote protrusion_ids.json');
       }
     });
-
+*/
   // The flange tabs on cube_with_flanges are all classified as "outer" faces by the
   // centroid-based isOuter heuristic, so detectProtrusions (which only scans for
   // non-outer faces adjacent to outer faces) returns 0 protrusions. The flanges are

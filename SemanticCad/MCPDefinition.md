@@ -2,6 +2,16 @@
 
 # Part 4 — MCP Definition
 
+> **Scope note.** This document lists the long-term tool surface. For MVP, the canonical
+> low-level transaction layer is [TransactionBCMCP.md](TransactionBCMCP.md); the
+> `*_modification` tools here (§10) are higher-level workflows that compose those and
+> are **deferred**. `infer_semantics` (§7.2), `run_analysis` for thermal/structural/etc.
+> (§11), and semantic merge/split (§12) are concept-only.
+>
+> The MVP tool set is reconciled in [MVP.md §3.1](MVP.md). Manufacturability — the only
+> analysis domain in this project — keeps its existing `evaluate_manufacturability`
+> surface and is not re-expressed as `run_analysis`.
+
 ---
 
 # 1. Introduction

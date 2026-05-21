@@ -1,0 +1,229 @@
+# Tasks: Explicit Transaction Primitive
+
+**Input**: Design documents from `specs/004-transaction-primitive/`
+
+**Prerequisites**: spec.md ✓, plan.md ✓
+
+**Organization**: Four phases matching the agreed implementation order. Each phase is
+independently buildable and testable before the next begins.
+
+## Format: `[ID] [P?] [Story?] Description`
+
+- **[P]**: Can run in parallel (different files, no dependency on incomplete tasks in same phase)
+- **[Story]**: US1–US3 from spec.md
+
+---
+
+## Phase 1: TS-Side Transaction Registry + Lifecycle Tools
+
+**Goal**: A caller can `begin_transaction`, run two existing mutating ops, and either
+`commit_transaction` or `rollback_transaction` — using only TS-side wrapping of the
+existing per-op snapshot mechanism. No C++ changes yet.
+
+**Independent Test**: New integration test opens a transaction, decomposes a volume,
+synthesises joints, then rolls back. Assert the session contains only the original solid
+(verifies SC-001).
+
+### Dependency
+
+- [ ] T001 Add `ulid` dependency to `package.json`: `npm install --save ulid@^2.3.0`. Verify lockfile updates. Used to generate `transaction://<ulid>` ids.
+
+### TS Layer — Registry
+
+- [ ] T002 [P] [US1] Add 4 new error codes to `ts/src/mcp/errors.ts`: `TRANSACTION_NOT_FOUND`, `TRANSACTION_NOT_ACTIVE`, `TRANSACTION_ALREADY_ACTIVE`, `TRANSACTION_MISMATCH`. Match the existing `ErrorCodes` constant shape.
+
+- [ ] T003 [US1] Create `ts/src/mcp/transactions.ts` with the `TransactionRegistry` class. Fields: `private transactions: Map<string, Transaction>`, `private activeId: string | undefined`. Methods: `begin(label, product?) → {id, snapshotId}` (calls `ulid()`, registers row, sets `activeId`, throws `TRANSACTION_ALREADY_ACTIVE` if one is active); `commit(id)` (validates id matches `activeId`, marks state, clears `activeId`); `rollback(id)` (validates, deletes row, clears `activeId`); `getActive(): Transaction | undefined`; `get(id)`; `appendHistory(id, records)`; `getHistory(id)`. The `Transaction` type carries `{id, label, snapshotId, shapeHistory: ShapeHistoryRecord[], state: 'active' | 'committed' | 'rolled_back', startedAt: number}`. SnapshotId is captured at `begin` time by calling the C++ snapshot via session.
+
+- [ ] T004 [US1] Update `ts/src/geometry/session.ts` to own a `TransactionRegistry` instance. Add accessor `getTransactionRegistry(): TransactionRegistry`. Initialise alongside the existing geometry session.
+
+### TS Layer — Tool Definitions
+
+- [ ] T005 [US1] Add `begin_transaction` tool definition to `getToolDefinitions()` in `ts/src/mcp/tools.ts`: `inputSchema` requires `label: string`, optional `product: string`. Output: `{transaction_id, base_geometry_revision, status: 'active'}`.
+
+- [ ] T006 [US1] Add `commit_transaction` tool definition to `getToolDefinitions()`. `inputSchema` requires `transaction_id: string`. Output: `{transaction_id, status: 'committed'}`.
+
+- [ ] T007 [US1] Add `rollback_transaction` tool definition to `getToolDefinitions()`. Same input shape. Output: `{transaction_id, status: 'rolled_back'}`.
+
+### TS Layer — Tool Handlers
+
+- [ ] T008 [US1] Add `handleBeginTransaction(args)` in `ts/src/mcp/tools.ts`: extracts `label` and optional `product`; calls `getGeometryBinding().createSnapshot(label)` to capture the pre-state; calls `session.getTransactionRegistry().begin(label, product, snapshotId)`; returns `{transaction_id, base_geometry_revision: 0 /* MVP placeholder */, status: 'active'}`. Maps `TRANSACTION_ALREADY_ACTIVE` from the registry into a structured error with `recoverable: true` and the active id in the payload.
+
+- [ ] T009 [US1] Add `handleCommitTransaction(args)` in `ts/src/mcp/tools.ts`: extracts `transaction_id`; calls `registry.commit(id)`; calls `getGeometryBinding().clearSnapshot(snapshotId)` to drop the pre-snapshot; returns `{transaction_id, status: 'committed'}`. Map `TRANSACTION_NOT_FOUND` and `TRANSACTION_NOT_ACTIVE`.
+
+- [ ] T010 [US1] Add `handleRollbackTransaction(args)` in `ts/src/mcp/tools.ts`: extracts `transaction_id`; calls `getGeometryBinding().restoreSnapshot(snapshotId)`; calls `registry.rollback(id)` (which discards history); returns `{transaction_id, status: 'rolled_back'}`.
+
+- [ ] T011 [US1] Wire the three new handlers into `dispatchTool()` switch in `ts/src/mcp/tools.ts`.
+
+### Integration Test
+
+- [ ] T012 [US1] Create `ts/tests/integration/transaction_primitive.integration.test.ts`. Cases: (a) begin → decompose → synthesise → rollback ⇒ only original solid remains in session; (b) begin → decompose → commit ⇒ panels persist, second rollback attempt errors with `TRANSACTION_NOT_FOUND`; (c) begin → begin again ⇒ second begin errors with `TRANSACTION_ALREADY_ACTIVE` and payload contains first transaction id; (d) commit non-existent id ⇒ `TRANSACTION_NOT_FOUND`. Uses the existing geometry mock pattern from `cube_box_workflow.functional.test.ts`.
+
+**Checkpoint**: All four cases in T012 pass. Existing integration tests still pass unchanged. No C++ changes yet. SC-001 and SC-004 are met for the no-C++-change subset.
+
+---
+
+## Phase 2: Existing Mutating Tools Accept `transaction_id`
+
+**Goal**: Each existing mutating tool accepts an optional `transaction_id`. When passed
+(or when one is active), the tool joins the transaction instead of creating its own
+snapshot.
+
+**Independent Test**: Pre-existing integration tests pass without modification (verifies
+SC-002). New test confirms mutating tools auto-join an active transaction.
+
+### TS Layer — Tool Definition Updates
+
+- [ ] T013 [P] [US2] Update `ts/src/mcp/tools.ts`: add optional `transaction_id: { type: 'string' }` to the `inputSchema.properties` of every mutating tool listed in the spec assumptions (`decompose_volume`, `synthesize_joints`, `generate_reliefs`, `apply_unfold`, `trim_body_with_plane`, `split_body_by_plane`, `merge_bodies_with_bend`, `extend_face_to_target`, `offset_face`, `add_flange`, `rip_edge`, `split_body_by_bends`). Do NOT add it to `required`.
+
+### TS Layer — Dispatch Logic
+
+- [ ] T014 [US2] Add a `resolveTransactionContext(args)` helper in `ts/src/mcp/tools.ts` that returns either `{mode: 'join', transactionId}` (when args contains a `transaction_id` matching the active txn, or when no `transaction_id` is provided but a txn is active) or `{mode: 'implicit'}` (when no txn is active and no `transaction_id` is provided). Throw `TRANSACTION_MISMATCH` when args specifies a `transaction_id` that doesn't equal the active txn id.
+
+- [ ] T015 [US2] Update every mutating tool handler in `ts/src/mcp/tools.ts` to call `resolveTransactionContext(args)` at entry. When `mode === 'join'`, suppress the per-op snapshot creation that the existing handlers do, and instead append shape-history records (empty for Phase 2 — populated in Phase 3) to the active transaction via `registry.appendHistory(id, [])`. When `mode === 'implicit'`, behave exactly as today. In both cases, the returned `rollback_token` equals the active transaction id (join) or the per-op snapshot id (implicit).
+
+- [ ] T016 [P] [US2] Update `ts/src/geometry/binding.ts` to expose a `createSnapshot(label)` and `clearSnapshot(snapshotId)` passthrough to the C++ snapshot registry, if not already present. Used by `handleBeginTransaction` and `handleCommitTransaction`.
+
+### Integration Tests
+
+- [ ] T017 [US2] Extend `ts/tests/integration/transaction_primitive.integration.test.ts` with: (a) `begin → split_body_by_bends without transaction_id → commit` ⇒ verifies auto-join; (b) `begin → split_body_by_bends with wrong transaction_id` ⇒ `TRANSACTION_MISMATCH`; (c) confirm response `rollback_token === transaction_id` in the auto-join case.
+
+- [ ] T018 [P] [US2] Run the full existing `ts/tests/integration/` suite. Any test that breaks indicates a backward-compat regression — fix the dispatch logic, not the test.
+
+**Checkpoint**: T013–T017 pass. The full existing integration suite passes without any source-code changes to the tests themselves (SC-002 met). The `INF-03` golden-path test runs within 5% of its pre-change timing (SC-005 met).
+
+---
+
+## Phase 3: C++ Shape-History Capture in `split_body_by_bends`
+
+**Goal**: `split_body_by_bends` populates a `shape_history` field on its result. The
+field round-trips through N-API into the TS-side TransactionRegistry. Verifies US3 for
+one operation; proves the plumbing.
+
+**Independent Test**: Open a transaction, call `split_body_by_bends` on the hollow-cube
+fixture, call `get_transaction_history` ⇒ returns ≥ 6 records (SC-003).
+
+### C++ Layer — History Helper
+
+- [ ] T019 [P] [US3] Create `cpp/src/geometry/shape_history.hpp` with the `ShapeHistoryRecord` struct (`std::string verdict`, `originalId`, `newId`, `operationLabel`) and the `captureHistory` helper signature. Verdict is one of the string literals `"modified"`, `"generated"`, `"deleted"`.
+
+- [ ] T020 [US3] Create `cpp/src/geometry/shape_history.cc` implementing `captureHistory(BRepBuilderAPI_MakeShape& algo, std::function<std::string(const TopoDS_Shape&)> resolveId, const std::string& operationLabel)`. For each face in the input shape: iterate `algo.Modified(face)` and emit one `modified` record per output face; iterate `algo.Generated(face)` and emit `generated`; check `algo.IsDeleted(face)` and emit `deleted` if true. Use `TopExp_Explorer` to enumerate faces. Skip records whose `resolveId` returns an empty string (unresolved shapes are a known degenerate case worth tolerating in Phase 0).
+
+- [ ] T021 [US3] Update `cpp/CMakeLists.txt` (and any sub-lists) to include `shape_history.cc` in the geometry library target.
+
+### C++ Layer — Wire Into `splitBodyByBends`
+
+- [ ] T022 [US3] Update `DecomposedByBendsResult` in `cpp/src/geometry/geometry_service.hpp`: add `std::vector<ShapeHistoryRecord> shapeHistory`.
+
+- [ ] T023 [US3] Update `splitBodyByBends` in `cpp/src/geometry/geometry_service.cc`: for the Mode 2 cutting path, after each `BRepAlgoAPI_Cut` / `BRepAlgoAPI_Common` call, invoke `captureHistory(algo, idResolver, "split_body_by_bends")` and append to `result.shapeHistory`. For the Mode 1 extrusion path, do the same for `BRepPrimAPI_MakePrism`. The `idResolver` is a lambda that looks up the face ID via the existing face indexing (`shellFaceIndex_` / equivalent).
+
+### C++ NAPI Layer
+
+- [ ] T024 [US3] Update `SplitBodyByBends` NAPI in `cpp/src/napi/geometry_binding.cc`: after deserialising the existing fields, build a JS array `shape_history` by iterating `result.shapeHistory` and constructing one JS object per record (`{verdict, original_id, new_id, operation_label}`). Add to the returned JS object.
+
+### TS Layer
+
+- [ ] T025 [P] [US3] Update `splitBodyByBends` return type in `ts/src/geometry/binding.ts` to include `shape_history?: Array<{verdict: 'modified' | 'generated' | 'deleted', original_id: string, new_id: string, operation_label: string}>`.
+
+- [ ] T026 [US3] Update `handleSplitBodyByBends` in `ts/src/mcp/tools.ts`: after the geometry call returns, if a transaction is active (per `resolveTransactionContext`), call `registry.appendHistory(transactionId, result.shape_history ?? [])`. Pass `shape_history` through into the MCP response so callers see what changed.
+
+- [ ] T027 [US3] Add `get_transaction_history` tool definition and handler to `ts/src/mcp/tools.ts`: inputSchema requires `transaction_id: string`; handler calls `registry.getHistory(transactionId)` (returns `TRANSACTION_NOT_FOUND` if the transaction was rolled back or never existed). Output: `{transaction_id, records: ShapeHistoryRecord[]}`.
+
+### Tests
+
+- [ ] T028 [US3] Add a C++ unit test in `cpp/tests/geometry_test.cc`: load the hollow-cube fixture, call `splitBodyByBends`, assert `result.shapeHistory.size() >= 6` and that every record has `operationLabel == "split_body_by_bends"`.
+
+- [ ] T029 [US3] Extend `ts/tests/integration/transaction_primitive.integration.test.ts` with: (a) `begin → split_body_by_bends → get_transaction_history` ⇒ ≥ 6 records, all `operation_label === 'split_body_by_bends'`; (b) `begin → split_body_by_bends → commit → get_transaction_history` ⇒ records still returned (commit retains); (c) `begin → split_body_by_bends → rollback → get_transaction_history` ⇒ `TRANSACTION_NOT_FOUND`.
+
+**Checkpoint**: T028 and T029 pass. SC-003 met. `split_body_by_bends` is the proof-of-concept op for shape-history; remaining ops are Phase 4.
+
+---
+
+## Phase 4: Extend Shape-History Capture to Remaining Mutating Ops
+
+**Goal**: Every mutating op populates `shape_history`. Mostly mechanical — the helper
+exists, the plumbing is proven; this is repetition.
+
+**Independent Test**: Per-op integration tests confirm each op contributes records to
+the active transaction's history.
+
+### C++ Layer — Per-Op Capture
+
+For each of the following tools, perform the same three-step change as in T022–T024:
+add `shapeHistory` field to the result struct (if not already present), invoke
+`captureHistory` in the C++ implementation, and surface through NAPI.
+
+- [ ] T030 [P] `decompose_volume` — captures history from each boolean cut.
+- [ ] T031 [P] `synthesize_joints` — captures from tab/slot extrusions and cuts.
+- [ ] T032 [P] `generate_reliefs` — captures from the corner-relief cuts.
+- [ ] T033 [P] `apply_unfold` — captures from the unfold transform.
+- [ ] T034 [P] `trim_body_with_plane` — captures from the half-space cut.
+- [ ] T035 [P] `split_body_by_plane` — same.
+- [ ] T036 [P] `merge_bodies_with_bend` — captures from the fuse.
+- [ ] T037 [P] `extend_face_to_target` — captures from the face extension.
+- [ ] T038 [P] `offset_face` — captures from the offset.
+- [ ] T039 [P] `add_flange` — captures from the prism + fuse.
+- [ ] T040 [P] `rip_edge` — captures from the edge ripping.
+
+### TS Layer
+
+- [ ] T041 Update `ts/src/geometry/binding.ts` return types for each tool above to add `shape_history?`.
+
+- [ ] T042 Update each corresponding `handle*` function in `ts/src/mcp/tools.ts` to append shape history to the active transaction when one is active (same pattern as T026).
+
+### Tests
+
+- [ ] T043 Add one integration test per op (or one combined parameterised test) verifying that running the op inside a transaction populates non-empty `shape_history` for ops that produce topology changes. Some ops may legitimately produce zero records (no-op cases) — document those exceptions.
+
+**Checkpoint**: Every mutating tool contributes shape-history records when called inside a transaction. The Semantic Mapping Layer in Phase 1 of the Semantic CAD MCP plan (a future feature spec, likely `005-semantic-mapping-layer`) has everything it needs to remap face-group bindings on commit.
+
+---
+
+## Dependencies & Execution Order
+
+```
+Phase 1 (TS registry + lifecycle tools) — no C++ dependency
+  T001                        [dependency install, first]
+  T002 [P], T003              [TS, parallel-ish]
+  T004 → T005 [P] → T006 [P] → T007 [P]
+  T008 → T009 → T010 → T011   [TS handlers, sequential same file]
+  T012                        [tests, last]
+
+Phase 2 (transaction_id on existing tools) — after Phase 1
+  T013 [P], T016 [P]          [parallel — different files]
+  T014 → T015                  [sequential — same file]
+  T017                        [tests]
+  T018 [P]                    [runs the suite — parallel with test authoring]
+
+Phase 3 (shape-history for split_body_by_bends) — after Phase 2
+  T019 [P]                    [header]
+  T020 → T021                  [impl + build wiring]
+  T022 → T023                  [service hpp + cc, sequential]
+  T024                        [NAPI]
+  T025 [P]                    [TS binding type]
+  T026 → T027                  [TS handler + new tool]
+  T028 [P], T029 [P]          [tests, parallel]
+
+Phase 4 (remaining ops) — after Phase 3
+  T030–T040                   [all [P] — each is a different mutating op file region]
+  T041                        [TS binding types, after C++ NAPI changes for each op land]
+  T042                        [TS handlers, after T041]
+  T043                        [tests]
+```
+
+---
+
+## Out of Scope (do NOT do in this feature)
+
+The following are deliberately deferred to a later feature spec — most likely
+`005-semantic-mapping-layer`. Implementing any of them in this feature breaks the Phase 0
+boundary in [SemanticCad/MVP.md](../../SemanticCad/MVP.md).
+
+- Semantic entity declaration (`declare_semantic_entity`)
+- Semantic bindings (`bind_semantic_entity`)
+- The Mapping Layer remap-on-commit pass
+- Dolt persistence (transactions remain in memory)
+- `resolve_geometry`, `semantic_lineage` tools
+- Reading `shape_history` for any purpose other than `get_transaction_history` and tests
+- Multi-session or nested transactions
+- Migrating existing tests to use the transaction primitive (they keep working
+  unchanged — that's the point of Phase 2)

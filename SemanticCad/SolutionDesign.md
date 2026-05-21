@@ -2,6 +2,12 @@
 
 # Part 1 — Solution Description
 
+> **Scope note.** This document describes the long-term vision. For what actually ships first,
+> see [MVP.md](MVP.md). Anything in this document not referenced from MVP.md is concept-only.
+> The single MVP acceptance scenario is in
+> [WorkedExample-LeftBaseAirflow.md](WorkedExample-LeftBaseAirflow.md);
+> persistence is in [Persistence-Dolt.md](Persistence-Dolt.md).
+
 ---
 
 # 1. Introduction

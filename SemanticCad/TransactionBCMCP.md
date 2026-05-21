@@ -1,5 +1,19 @@
 # Geometry Transaction MCP Tool Specification
 
+> **Scope note.** This document is the **canonical low-level transaction layer** for the
+> Semantic CAD MCP. For MVP, only the subset listed in [MVP.md §3.1](MVP.md) ships:
+> `begin_transaction`, `commit_transaction`, `rollback_transaction`,
+> `capture_shape_history` (internal), `remap_semantic_bindings` (internal),
+> `resolve_semantic_geometry` (renamed `resolve_geometry`).
+>
+> Primitive creation (§2), boolean ops (§3), feature mods (§4), and healing (§6) are
+> **already covered by the existing tool surface** in
+> [ts/src/mcp/tools.ts](../ts/src/mcp/tools.ts) (`clean_geometry`,
+> `decompose_volume`, `split_body_by_bends`, etc.); they do not need to be re-implemented,
+> only wrapped so they accept a `transaction_id` and emit OCCT shape history. Persistence
+> is in [Persistence-Dolt.md](Persistence-Dolt.md); the worked acceptance scenario is in
+> [WorkedExample-LeftBaseAirflow.md](WorkedExample-LeftBaseAirflow.md).
+
 ## OCCT-Aligned Transactional Geometry Operations
 
 This section should become:

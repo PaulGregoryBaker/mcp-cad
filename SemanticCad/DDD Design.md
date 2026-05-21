@@ -2,6 +2,15 @@
 
 # Part 2 — Simplified Domain Model and Architectural Responsibilities
 
+> **Scope note.** Five systems are described here. For MVP, only **Semantic Core**,
+> **Geometry Core**, and **Semantic Mapping Layer** are implemented. The
+> **Inference Engine** (§8) and **Transaction & Analysis Engine** analysis duties (§9.4)
+> are concept-only. See [MVP.md](MVP.md) §2.2 for the full deferred list.
+>
+> The semantic-entity vocabulary in §5.3 and the relationship list in §5.6 are
+> **narrowed** for MVP — see [MVP.md §6.2](MVP.md). Confidence/evidence scoring (§5.4)
+> is deferred until inference exists.
+
 ---
 
 # 1. Introduction

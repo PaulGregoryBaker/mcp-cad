@@ -2,6 +2,13 @@
 
 # Part 3 — Interface Boundaries and Canonical Models
 
+> **Scope note.** Interface contracts in this document are the long-term shape. For MVP, only
+> the interfaces consumed by tools in [MVP.md §3.1](MVP.md) are implemented. The Inference
+> Engine interfaces (§8) are concept-only. The Event Interfaces (§11) are deferred —
+> MCP has no native push channel; MVP exposes state via the polled `semantic_lineage` /
+> `resolve_geometry` tools described in [MVP.md](MVP.md). Persistence (§12) is realised
+> via Dolt — see [Persistence-Dolt.md](Persistence-Dolt.md).
+
 ---
 
 # 1. Introduction

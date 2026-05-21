@@ -39,7 +39,8 @@ Material inventory, tooling specifications, logistics constraints, and environme
 |---|---|
 | Geometry stack | Local OCC/CadQuery only (D1-A) |
 | Nesting library | libnest2d with native C++ implementation and thin integration layer (D2-A) |
-| State persistence | In-memory, session-scoped only (D3-A) |
+| State persistence (geometry) | In-memory + file-backed BREP, session-scoped (D3-A) |
+| State persistence (semantic) | In-memory + Dolt-persisted, session-spanning (D3-B, Semantic CAD Phase 1 only) — see [amendments/v1.2-semantic-persistence.md](amendments/v1.2-semantic-persistence.md) |
 | Auth model | No auth — local deployment only (D4-A) |
 | MCP transport | stdio (Claude Desktop compatible) (D5-A) |
 
@@ -71,4 +72,12 @@ This constitution supersedes all other practices, guidelines, and conventions in
 
 All implementation decisions must be verified against Principles I-IX before a story is marked complete. Complexity that cannot be justified against the MVP scope must be deferred. Use `Engineering-Design.md` as the authoritative reference for interface contracts, tool schemas, and the work breakdown structure.
 
-**Version**: 1.1 | **Ratified**: 2026-05-13 | **Last Amended**: 2026-05-13
+**Version**: 1.2 | **Ratified**: 2026-05-13 | **Last Amended**: 2026-05-21
+
+## Amendment History
+
+| Version | Date       | Summary                                                                                   |
+|---------|------------|-------------------------------------------------------------------------------------------|
+| 1.0     | 2026-05-13 | Initial ratification.                                                                     |
+| 1.1     | 2026-05-13 | (See git history.)                                                                        |
+| 1.2     | 2026-05-21 | Added `D3-B` (Dolt-persisted semantic graph) for Semantic CAD Phase 1. `D3-A` remains in force for geometry. See [amendments/v1.2-semantic-persistence.md](amendments/v1.2-semantic-persistence.md). |
