@@ -25,6 +25,7 @@ describe('SYS-JTBD-03 Unfold and Score Integration', () => {
   });
 
   it('runs unfold + evaluate deterministically across 3 iterations', async () => {
+
     const configPath = path.resolve(__dirname, '../../config/config.yaml');
     const config = loadConfig(configPath);
     const fixturePath = getInf03FixturePath();
@@ -33,37 +34,87 @@ describe('SYS-JTBD-03 Unfold and Score Integration', () => {
     const results: any[] = [];
 
     for (let i = 0; i < 3; i++) {
+      let clean: any;
       let decompose: any;
+      let panelId: any;
+      let unfold: any;
+      let score: any;
+      // 1. Clean geometry
+      try {
+        clean = await dispatchTool('clean_geometry', { file_path: fixturePath }, config) as any;
+        // eslint-disable-next-line no-console
+        console.log(`[UnfoldScoreTest] Iter ${i} clean_geometry result:`, clean);
+        if (!clean || !clean.solid_id) throw new Error('clean_geometry did not return a solid_id');
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error(`[UnfoldScoreTest] Iter ${i} clean_geometry failed:`, err);
+        throw err;
+      }
+
+      // 2. Decompose volume
       for (let attempt = 0; attempt < 3; attempt++) {
-        const clean = await dispatchTool('clean_geometry', { file_path: fixturePath }, config) as any;
         try {
           decompose = await dispatchTool(
             'decompose_volume',
             { solid_id: clean.solid_id, strategy: 'Integrity' },
             config,
           ) as any;
+          // eslint-disable-next-line no-console
+          console.log(`[UnfoldScoreTest] Iter ${i} decompose_volume result:`, decompose);
+          if (!decompose || !decompose.panel_ids || decompose.panel_ids.length === 0) {
+            throw new Error('decompose_volume did not return panel_ids');
+          }
           break;
         } catch (err) {
           const code = (err as { code?: string }).code;
+          // eslint-disable-next-line no-console
+          console.error(`[UnfoldScoreTest] Iter ${i} decompose_volume failed (attempt ${attempt}):`, err);
           if (code !== 'GE_SOLID_NOT_FOUND' || attempt === 2) {
             throw err;
           }
         }
       }
 
-      const panelId = decompose.panel_ids[0]; // just take first panel
+      panelId = decompose.panel_ids[0];
+      if (!panelId) {
+        // eslint-disable-next-line no-console
+        console.error(`[UnfoldScoreTest] Iter ${i} no panelId found after decompose_volume`);
+        throw new Error('No panelId found after decompose_volume');
+      }
 
       // 3. apply_unfold
-      const unfold = await dispatchTool('apply_unfold', {
-        panel_id: panelId,
-        material_id: config.materials[0]!.id,
-      }, config) as any;
+      try {
+        unfold = await dispatchTool('apply_unfold', {
+          panel_id: panelId,
+          material_id: config.materials[0]!.id,
+        }, config) as any;
+        // eslint-disable-next-line no-console
+        console.log(`[UnfoldScoreTest] Iter ${i} apply_unfold result:`, unfold);
+        if (!unfold || unfold.flat_width_mm === undefined || unfold.flat_height_mm === undefined) {
+          throw new Error('apply_unfold did not return flat pattern dimensions');
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error(`[UnfoldScoreTest] Iter ${i} apply_unfold failed:`, err);
+        throw err;
+      }
 
       // 4. evaluate_manufacturability
-      const score = await dispatchTool('evaluate_manufacturability', {
-        panel_id: panelId,
-        material_id: config.materials[0]!.id,
-      }, config) as any;
+      try {
+        score = await dispatchTool('evaluate_manufacturability', {
+          panel_id: panelId,
+          material_id: config.materials[0]!.id,
+        }, config) as any;
+        // eslint-disable-next-line no-console
+        console.log(`[UnfoldScoreTest] Iter ${i} evaluate_manufacturability result:`, score);
+        if (!score || score.score === undefined) {
+          throw new Error('evaluate_manufacturability did not return a score');
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error(`[UnfoldScoreTest] Iter ${i} evaluate_manufacturability failed:`, err);
+        throw err;
+      }
 
       results.push({
         unfold_width: unfold.flat_width_mm,

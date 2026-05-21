@@ -122,6 +122,7 @@ describe('MD Integration: bend allowance formula', () => {
 
 describe('MD Integration: tooling capability access', () => {
   let config: ManufacturingConfig;
+  console.log('MD Integration: tooling capability access tests starting...');
 
   beforeEach(() => {
     config = {
@@ -163,6 +164,7 @@ describe('MD Integration: tooling capability access', () => {
 
 describe('MD Integration: logistics constraints', () => {
   let config: ManufacturingConfig;
+  console.log('MD Integration: logistics constraints tests starting...');
 
   beforeEach(() => {
     config = {
@@ -208,6 +210,7 @@ describe('MD Integration: logistics constraints', () => {
 
 describe('MD Integration: environmental context', () => {
   let config: ManufacturingConfig;
+  console.log('MD Integration: environmental context tests starting...');
 
   beforeEach(() => {
     config = {
@@ -236,6 +239,7 @@ describe('MD Integration: environmental context', () => {
 // ─── ConfigValidationError ────────────────────────────────────────────────────
 
 describe('MD Integration: ConfigValidationError', () => {
+  console.log('MD Integration: ConfigValidationError tests starting...');
   it('loadConfig throws ConfigValidationError for invalid YAML', () => {
     const { writeFileSync, unlinkSync } = require('fs');
     const tmpPath = './test-invalid-config.yaml';

@@ -35,6 +35,7 @@
 
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Section.hxx>
+#include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeHalfSpace.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 
@@ -1325,6 +1326,11 @@ private:
     std::vector<int> faceIndices;    // 1-based into faceMap
     gp_Pnt           panelCentroid;  // centroid of the hosting primary group
     gp_Vec           panelNormal;    // outward normal of the hosting primary group
+    // For plate-style protrusions, the back-face plane bounds the slab on the
+    // other side; extractProtrusion uses both planes to isolate the slab.
+    bool             hasBackPlane = false;
+    gp_Pnt           backCentroid;
+    gp_Vec           backNormal;     // points away from the protrusion body
   };
 
   // T017 — Detect protrusion candidates before any panel cutting.
@@ -1395,9 +1401,19 @@ private:
 
     std::vector<ProtrusionCandidate> candidates;
     std::vector<bool> claimed(nFaces + 1, false);
+    std::vector<bool> claimedPanelGroup(groups.size(), false);
+
+    // Precompute face centroids once for use in distance-bounded BFS
+    std::vector<gp_Pnt> faceCentroid(nFaces + 1);
+    for (int i = 1; i <= nFaces; ++i) {
+      GProp_GProps fp;
+      BRepGProp::SurfaceProperties(TopoDS::Face(faceMap(i)), fp);
+      faceCentroid[i] = fp.CentreOfMass();
+    }
 
     for (int g = 0; g < (int)groups.size(); ++g) {
       if (!groups[g].isOuter || groupAttach[g].empty()) continue;
+      if (claimedPanelGroup[g]) continue;
 
       // Map: non-primary face index → total attachment edge length from group g
       std::unordered_map<int, double> attachLen;
@@ -1414,6 +1430,11 @@ private:
       for (int seed : seeds) {
         if (visited[seed] || claimed[seed]) continue;
 
+        // BFS bounded by panel-plane distance: only expand into non-outer faces
+        // within maxThicknessMm of the outer group's plane (in either direction).
+        // This prevents the flood fill from spreading across the entire connected
+        // void region and isolates each protrusion's faces.
+        const gp_Vec& pNorm = groups[g].normal;
         std::vector<int> component;
         std::vector<int> queue = {seed};
         visited[seed] = true;
@@ -1421,7 +1442,10 @@ private:
           int cur = queue.back(); queue.pop_back();
           component.push_back(cur);
           for (int nbr : faceAdj[cur]) {
-            if (!visited[nbr] && faceToGroup[nbr] < 0) {
+            if (!visited[nbr] && faceToGroup[nbr] < 0 && !claimed[nbr]) {
+              gp_Vec toNbr(groups[g].centroid, faceCentroid[nbr]);
+              double dist = std::abs(pNorm.Dot(toNbr));
+              if (dist > maxThicknessMm + 1.0) continue;
               visited[nbr] = true;
               queue.push_back(nbr);
             }
@@ -1434,28 +1458,30 @@ private:
           auto it = attachLen.find(fi);
           if (it != attachLen.end()) totalAttach += it->second;
         }
-        if (groupPerimeter[g] > 1e-6 && totalAttach / groupPerimeter[g] >= 0.50) continue;
+        double extentRatio = groupPerimeter[g] > 1e-6 ? totalAttach / groupPerimeter[g] : 0.0;
+        if (extentRatio >= 0.50) continue;
 
         // Test 2: Orientation — cap face normal ∥ panel normal (dot > 0.85)
-        const gp_Vec& pNorm = groups[g].normal;
         int    capIdx = -1;
         double maxProj = -1e9;
         for (int fi : component) {
-          const TopoDS_Face& f = TopoDS::Face(faceMap(fi));
-          GProp_GProps fp; BRepGProp::SurfaceProperties(f, fp);
-          gp_Vec toFace(groups[g].centroid, fp.CentreOfMass());
+          gp_Vec toFace(groups[g].centroid, faceCentroid[fi]);
           double proj = pNorm.Dot(toFace);
           if (proj > maxProj) { maxProj = proj; capIdx = fi; }
         }
         if (capIdx < 0) continue;
         gp_Vec capNorm = faceOutwardNormal(TopoDS::Face(faceMap(capIdx)));
-        if (std::abs(pNorm.Dot(capNorm)) <= 0.85) continue;
 
         // Test 3: Thickness — protrusion dimension along panel normal ≤ maxThicknessMm.
-        // First try anti-parallel pairs within the component; if none exist (e.g. a
-        // one-sided tab whose "inner" face is the primary panel itself), fall back to
-        // measuring cap-face distance to any face in the primary panel group.
+        // Strategy:
+        //   (a) Anti-parallel pairs within the component (tab between two opposite faces)
+        //   (b) Cap face vs primary panel faces — parallel (tab) or anti-parallel (plate)
+        //   (c) Cap face vs any other outer group's faces — plate-style where the
+        //       opposite wide face is in a different group than the entered edge face
+        // For (b) and (c), record the matched panel group so the extraction step uses
+        // the correct panel orientation (along the plate's thickness, not the edge).
         bool thinEnough = false;
+        int matchedPanelGroup = g;
         const TopoDS_Face& capFace = TopoDS::Face(faceMap(capIdx));
         gp_Vec capNormVec = faceOutwardNormal(capFace);
         for (int i = 0; i < (int)component.size() && !thinEnough; ++i) {
@@ -1468,27 +1494,64 @@ private:
             if (d.IsDone() && d.Value() <= maxThicknessMm) { thinEnough = true; break; }
           }
         }
-        // Fallback: measure cap face to primary panel faces.
-        // For tab-style protrusions, the "inner" face is the primary panel itself
-        // (merged away by Boolean fuse). The cap and panel both point outward,
-        // so their normals are parallel (dot > 0.85), not anti-parallel.
         if (!thinEnough) {
           for (int fi : groups[g].faceIndices) {
             const TopoDS_Face& panelF = TopoDS::Face(faceMap(fi));
             gp_Vec pnNorm = faceOutwardNormal(panelF);
-            if (capNormVec.Dot(pnNorm) <= 0.85) continue; // must point same direction
+            if (std::abs(capNormVec.Dot(pnNorm)) <= 0.85) continue;
             BRepExtrema_DistShapeShape d(capFace, panelF);
             if (d.IsDone() && d.Value() <= maxThicknessMm) { thinEnough = true; break; }
+          }
+        }
+        if (!thinEnough) {
+          for (int gi = 0; gi < (int)groups.size() && !thinEnough; ++gi) {
+            if (!groups[gi].isOuter || gi == g || claimedPanelGroup[gi]) continue;
+            for (int fi : groups[gi].faceIndices) {
+              const TopoDS_Face& panelF = TopoDS::Face(faceMap(fi));
+              gp_Vec pnNorm = faceOutwardNormal(panelF);
+              if (std::abs(capNormVec.Dot(pnNorm)) <= 0.85) continue;
+              BRepExtrema_DistShapeShape d(capFace, panelF);
+              if (d.IsDone() && d.Value() <= maxThicknessMm) {
+                thinEnough = true;
+                matchedPanelGroup = gi;
+                break;
+              }
+            }
           }
         }
         if (!thinEnough) continue;
 
         ProtrusionCandidate pc;
         pc.faceIndices   = component;
-        pc.panelCentroid = groups[g].centroid;
-        pc.panelNormal   = groups[g].normal;
+        pc.panelCentroid = groups[matchedPanelGroup].centroid;
+        pc.panelNormal   = groups[matchedPanelGroup].normal;
+        // For plate-style protrusions (when the cap face is anti-parallel to the
+        // panel face), we need a back plane to bound the slab thickness.
+        // Otherwise the half-space cut takes the entire half-solid.
+        if (capNormVec.Dot(pc.panelNormal) < -0.85) {
+          pc.hasBackPlane = true;
+          pc.backCentroid = faceCentroid[capIdx];
+          pc.backNormal   = capNormVec;
+        }
         candidates.push_back(std::move(pc));
         for (int fi : component) claimed[fi] = true;
+        claimedPanelGroup[matchedPanelGroup] = true;
+        if (matchedPanelGroup != g) claimedPanelGroup[g] = true;
+        // Claim all faces parallel/anti-parallel to the cap face and within
+        // maxThicknessMm of it. For a triangulated mesh, each plate face is split
+        // into multiple coplanar triangles; without this, each triangle would
+        // produce a duplicate protrusion candidate.
+        for (int fi = 1; fi <= nFaces; ++fi) {
+          if (claimed[fi]) continue;
+          const TopoDS_Face& f = TopoDS::Face(faceMap(fi));
+          gp_Vec fn = faceOutwardNormal(f);
+          if (std::abs(capNormVec.Dot(fn)) <= 0.85) continue;
+          BRepExtrema_DistShapeShape d(capFace, f);
+          if (d.IsDone() && d.Value() <= maxThicknessMm) {
+            claimed[fi] = true;
+            if (faceToGroup[fi] >= 0) claimedPanelGroup[faceToGroup[fi]] = true;
+          }
+        }
       }
     }
     return candidates;
@@ -1496,32 +1559,95 @@ private:
 
   // T018 — Extract one protrusion from the solid by cutting at the primary
   // panel's outer face plane. Updates remainder (solid minus protrusion).
+  // planeHalfSize: symmetric UV half-extent for the cutting planeFace.
+  //   Must be large enough to span the entire solid cross-section at the cut plane.
+  //   Computed once from the original solid's diagonal (vertex-iterated) so it is
+  //   geometrically correct without ballooning to the ±200 km values that
+  //   BRepBndLib::Add can report for STEP-imported planar faces.
   static TopoDS_Shape extractProtrusion(
       const TopoDS_Shape&        solid,
       const ProtrusionCandidate& pc,
-      TopoDS_Shape&              remainder)
+      TopoDS_Shape&              remainder,
+      double                     planeHalfSize)
   {
     gp_Dir planeDir(pc.panelNormal.X(), pc.panelNormal.Y(), pc.panelNormal.Z());
     gp_Pln outerPlane(pc.panelCentroid, planeDir);
 
-    BRepBuilderAPI_MakeFace planeFaceMaker(outerPlane, -2e5, 2e5, -2e5, 2e5);
+    BRepBuilderAPI_MakeFace planeFaceMaker(
+        outerPlane,
+        -planeHalfSize, planeHalfSize,
+        -planeHalfSize, planeHalfSize);
     if (!planeFaceMaker.IsDone())
       throw GeometryError(GE_DECOMPOSE_PROTRUSION_EXTRACT_FAILED,
                           "Could not build cutting plane for protrusion", true, "rollback");
 
-    // Reference point on the protrusion side (far out along panel normal)
+    // Reference point on the protrusion side.
+    //   - Tab-style: panel is on the solid bulk side, normal points toward the tab
+    //     body. Reference goes in +panelNormal direction.
+    //   - Plate-style (hasBackPlane): panel is the outer wide face, normal points
+    //     AWAY from the slab body. Reference goes in -panelNormal direction.
+    double refSign = pc.hasBackPlane ? -1.0 : 1.0;
     gp_Pnt outerRef(
-        pc.panelCentroid.X() + pc.panelNormal.X() * 1e4,
-        pc.panelCentroid.Y() + pc.panelNormal.Y() * 1e4,
-        pc.panelCentroid.Z() + pc.panelNormal.Z() * 1e4);
+        pc.panelCentroid.X() + refSign * pc.panelNormal.X() * 1e4,
+        pc.panelCentroid.Y() + refSign * pc.panelNormal.Y() * 1e4,
+        pc.panelCentroid.Z() + refSign * pc.panelNormal.Z() * 1e4);
 
-    BRepPrimAPI_MakeHalfSpace hs(planeFaceMaker.Face(), outerRef);
-    hs.Build();
-    if (!hs.IsDone())
-      throw GeometryError(GE_DECOMPOSE_PROTRUSION_EXTRACT_FAILED,
-                          "Could not build half-space for protrusion extraction", true, "rollback");
+    TopoDS_Shape cutter;
+    if (pc.hasBackPlane) {
+      // Plate-style: build a bounded slab box between the back plane and the
+      // panel plane. Half-space intersection produces a fragile cutter that
+      // can corrupt the solid; a real bounded box is robust.
+      gp_Vec slabAxis = pc.panelNormal;  // points away from slab body
+      // Slab thickness along the panel normal: distance between the two planes
+      gp_Vec backToPanel(pc.backCentroid, pc.panelCentroid);
+      double slabThickness = std::abs(slabAxis.Dot(backToPanel)) + 0.1; // small over-extend
+      // Slab origin: walk from back centroid in -slabAxis to be just past it.
+      // backNormal points AWAY from slab body, so slab body is on -backNormal side.
+      gp_Pnt slabCorner = pc.backCentroid;
+      // Build axes perpendicular to slab axis (any two orthogonal directions).
+      gp_Vec perpA;
+      if (std::abs(slabAxis.X()) < 0.9) perpA = gp_Vec(1, 0, 0);
+      else                              perpA = gp_Vec(0, 1, 0);
+      perpA = perpA.Crossed(slabAxis);
+      if (perpA.Magnitude() < 1e-6) perpA = gp_Vec(0, 0, 1);
+      perpA.Normalize();
+      gp_Vec perpB = slabAxis.Crossed(perpA);
+      perpB.Normalize();
+      // Move corner so the box brackets the slab and extends past the solid in
+      // the perpendicular directions.
+      gp_Pnt origin(
+          slabCorner.X() - perpA.X() * planeHalfSize - perpB.X() * planeHalfSize - pc.backNormal.X() * 0.05,
+          slabCorner.Y() - perpA.Y() * planeHalfSize - perpB.Y() * planeHalfSize - pc.backNormal.Y() * 0.05,
+          slabCorner.Z() - perpA.Z() * planeHalfSize - perpB.Z() * planeHalfSize - pc.backNormal.Z() * 0.05);
+      gp_Dir xAxis(perpA.X(), perpA.Y(), perpA.Z());
+      // Box Z-axis points into the slab body: -backNormal direction.
+      // (Equivalent to +panelNormal when back & panel are anti-parallel, but
+      // we anchor on the back plane so we use backNormal directly.)
+      gp_Dir zAxis(-pc.backNormal.X(), -pc.backNormal.Y(), -pc.backNormal.Z());
+      gp_Ax2 ax(origin, zAxis, xAxis);
+      BRepPrimAPI_MakeBox boxMaker(ax,
+          2.0 * planeHalfSize, 2.0 * planeHalfSize, slabThickness);
+      try {
+        boxMaker.Build();
+        if (!boxMaker.IsDone())
+          throw GeometryError(GE_DECOMPOSE_PROTRUSION_EXTRACT_FAILED,
+                              "Could not build plate slab box", true, "rollback");
+        cutter = boxMaker.Solid();
+      } catch (const Standard_Failure&) {
+        throw GeometryError(GE_DECOMPOSE_PROTRUSION_EXTRACT_FAILED,
+                            "Plate slab box construction threw", true, "rollback");
+      }
+    } else {
+      // Tab-style: use the original half-space cutter.
+      BRepPrimAPI_MakeHalfSpace hs(planeFaceMaker.Face(), outerRef);
+      hs.Build();
+      if (!hs.IsDone())
+        throw GeometryError(GE_DECOMPOSE_PROTRUSION_EXTRACT_FAILED,
+                            "Could not build half-space for protrusion extraction", true, "rollback");
+      cutter = hs.Solid();
+    }
 
-    BRepAlgoAPI_Common extract(solid, hs.Solid());
+    BRepAlgoAPI_Common extract(solid, cutter);
     extract.Build();
     if (!extract.IsDone() || extract.Shape().IsNull())
       throw GeometryError(GE_DECOMPOSE_PROTRUSION_EXTRACT_FAILED,
@@ -1533,7 +1659,7 @@ private:
       throw GeometryError(GE_DECOMPOSE_PROTRUSION_EXTRACT_FAILED,
                           "Protrusion extraction has zero volume (degenerate)", true, "rollback");
 
-    BRepAlgoAPI_Cut cutRemainder(solid, hs.Solid());
+    BRepAlgoAPI_Cut cutRemainder(solid, cutter);
     cutRemainder.Build();
     if (!cutRemainder.IsDone() || cutRemainder.Shape().IsNull())
       throw GeometryError(GE_DECOMPOSE_PROTRUSION_EXTRACT_FAILED,
@@ -1640,8 +1766,15 @@ private:
 
   // Mode 2: Thin-solid cutting. For each outer/inner panel pair, use the
   // inner face plane to slice a slab off the remainder solid.
+  // planeHalfSize: symmetric UV half-extent for every cutting planeFace.
+  //   Large enough to span the entire solid so each cut fully consumes all
+  //   material on one side (keeping panel count correct and remainder small).
+  //   Cap-face rectangle corners from OCCT Boolean ops will lie outside the
+  //   original solid's true bounding box; the caller's computeBboxes filters
+  //   those out when reporting panel extents.
   // remainderOut (optional): receives the solid left after all panel cuts.
   void splitMode2(const TopoDS_Shape& solid,
+                  double              planeHalfSize,
                   const SolidId& parentId,
                   double angleThresholdDeg,
                   double maxThicknessMm,
@@ -1716,8 +1849,13 @@ private:
     for (const auto& cut : cuts) {
       if (remainder.IsNull()) break;
 
-      // Half-space on the outer side of the inner plane
-      BRepBuilderAPI_MakeFace planeFaceMaker(cut.innerPlane, -2e5, 2e5, -2e5, 2e5);
+      // Half-space on the outer side of the inner plane.
+      // Use the precomputed planeHalfSize (diagonal of the original solid × 1.1 + 10 mm)
+      // so the planeFace always spans the full solid cross-section at this plane.
+      BRepBuilderAPI_MakeFace planeFaceMaker(
+          cut.innerPlane,
+          -planeHalfSize, planeHalfSize,
+          -planeHalfSize, planeHalfSize);
       if (!planeFaceMaker.IsDone()) continue;
       TopoDS_Face planeFace = planeFaceMaker.Face();
 
@@ -1789,11 +1927,30 @@ private:
     for (const auto& g : faceGroups) { if (g.isOuter) { hasPrimaryGroup = true; break; } }
     if (!hasPrimaryGroup) return;
 
+    // Compute planeHalfSize from this component's vertex bounds (vertex iteration,
+    // not BRepBndLib::Add which can report ±200 km for STEP-imported planar faces).
+    double localHalfSize = 1000.0;
+    {
+      double lxMin = 1e30, lxMax = -1e30;
+      double lyMin = 1e30, lyMax = -1e30;
+      double lzMin = 1e30, lzMax = -1e30;
+      for (TopExp_Explorer ex(shape, TopAbs_VERTEX); ex.More(); ex.Next()) {
+        gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(ex.Current()));
+        lxMin = std::min(lxMin, p.X()); lxMax = std::max(lxMax, p.X());
+        lyMin = std::min(lyMin, p.Y()); lyMax = std::max(lyMax, p.Y());
+        lzMin = std::min(lzMin, p.Z()); lzMax = std::max(lzMax, p.Z());
+      }
+      double d2 = (lxMax-lxMin)*(lxMax-lxMin)
+                + (lyMax-lyMin)*(lyMax-lyMin)
+                + (lzMax-lzMin)*(lzMax-lzMin);
+      if (d2 > 0) localHalfSize = std::sqrt(d2) * 1.1 + 10.0;
+    }
+
     TopoDS_Shape workShape = shape;
     for (const auto& pc : protrCandidates) {
       TopoDS_Shape newRemainder;
       try {
-        TopoDS_Shape ps = extractProtrusion(workShape, pc, newRemainder);
+        TopoDS_Shape ps = extractProtrusion(workShape, pc, newRemainder, localHalfSize);
         ShellId pid = generateUUID();
         shells_[pid] = ShellState{pid, parentId, ps};
         protrusionIds.push_back(pid);
@@ -1803,7 +1960,7 @@ private:
 
     TopoDS_Shape childRemainder;
     if (mode == "thin_solid") {
-      splitMode2(workShape, parentId, angleThresholdDeg, maxThicknessMm,
+      splitMode2(workShape, localHalfSize, parentId, angleThresholdDeg, maxThicknessMm,
                  panelIds, protrusionIds, &childRemainder);
     } else {
       splitMode1BFS(workShape, parentId, angleThresholdDeg, defaultThicknessMm, panelIds);
@@ -1820,7 +1977,6 @@ private:
       hadSolid = true;
     }
     if (!hadSolid) {
-      // Remainder is a single solid (not a compound)
       recursiveDecompose(childRemainder, parentId, angleThresholdDeg, maxThicknessMm,
                          defaultThicknessMm, remainingDepth - 1, panelIds, protrusionIds);
     }
@@ -1877,6 +2033,27 @@ private:
       TopExp::MapShapes(shape, TopAbs_FACE, faceMapPre);
       auto faceGroupsPre = buildFaceGroups(shape, faceMapPre, angleThresholdDeg, solidCentroid);
 
+      // Compute the original solid's tight bounding box via vertex iteration.
+      // BRepBndLib::Add is NOT used here: for STEP-imported shapes it samples the
+      // underlying surface's full UV domain and can report ±200 km for a planar face
+      // whose untrimmed surface extends far beyond the actual wire boundary.
+      double bxMin = 1e30, bxMax = -1e30;
+      double byMin = 1e30, byMax = -1e30;
+      double bzMin = 1e30, bzMax = -1e30;
+      for (TopExp_Explorer ex(shape, TopAbs_VERTEX); ex.More(); ex.Next()) {
+        gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(ex.Current()));
+        bxMin = std::min(bxMin, p.X()); bxMax = std::max(bxMax, p.X());
+        byMin = std::min(byMin, p.Y()); byMax = std::max(byMax, p.Y());
+        bzMin = std::min(bzMin, p.Z()); bzMax = std::max(bzMax, p.Z());
+      }
+      double diagSq = (bxMax-bxMin)*(bxMax-bxMin)
+                    + (byMax-byMin)*(byMax-byMin)
+                    + (bzMax-bzMin)*(bzMax-bzMin);
+      // planeHalfSize: large enough to span the entire solid at any cut plane.
+      // The resulting cap-face rectangle corners end up outside the original bbox;
+      // computeBboxes filters them out using bxMin/bxMax etc. + 1 mm tolerance.
+      double planeHalfSize = (diagSq > 0 ? std::sqrt(diagSq) : 1000.0) * 1.1 + 10.0;
+
       // T019 — Detect and extract protrusions before panel cutting.
       std::vector<ShellId> panelIds;
       std::vector<ShellId> protrusionIds;
@@ -1886,7 +2063,7 @@ private:
       for (const auto& pc : protrCandidates) {
         TopoDS_Shape newRemainder;
         try {
-          TopoDS_Shape protrusionSolid = extractProtrusion(workShape, pc, newRemainder);
+          TopoDS_Shape protrusionSolid = extractProtrusion(workShape, pc, newRemainder, planeHalfSize);
           ShellId pid = generateUUID();
           shells_[pid] = ShellState{pid, parentId, protrusionSolid};
           protrusionIds.push_back(pid);
@@ -1898,7 +2075,7 @@ private:
 
       TopoDS_Shape firstPassRemainder;
       if (mode == "thin_solid") {
-        splitMode2(workShape, parentId, angleThresholdDeg, maxThicknessMm,
+        splitMode2(workShape, planeHalfSize, parentId, angleThresholdDeg, maxThicknessMm,
                    panelIds, protrusionIds, &firstPassRemainder);
       } else {
         splitMode1BFS(workShape, parentId, angleThresholdDeg, defaultThicknessMm, panelIds);
@@ -1918,8 +2095,51 @@ private:
         }
       }
 
+      // Compute AABB for each panel/protrusion by iterating vertices and filtering
+      // out cap-face rectangle corners.  Boolean ops with a large planeFace leave
+      // those rectangle corners as real OCCT vertices, but they always lie outside
+      // the original solid's bounding box (bxMin..bxMax etc.).  Skipping any vertex
+      // more than 1 mm outside that box gives geometrically correct panel extents
+      // without any extra Boolean operations.
+      auto computeBboxes = [&](const std::vector<ShellId>& ids) {
+        std::vector<BBox3D> bboxes;
+        bboxes.reserve(ids.size());
+        constexpr double kTol = 1.0;  // mm — tolerance for on-boundary vertices
+        for (const auto& id : ids) {
+          auto it = shells_.find(id);
+          if (it != shells_.end()) {
+            Bnd_Box b;
+            for (TopExp_Explorer ex(it->second.shape, TopAbs_VERTEX);
+                 ex.More(); ex.Next()) {
+              gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(ex.Current()));
+              // Discard planeFace rectangle corners: they always lie outside the
+              // original solid's bounding box by more than kTol.
+              if (p.X() < bxMin - kTol || p.X() > bxMax + kTol) continue;
+              if (p.Y() < byMin - kTol || p.Y() > byMax + kTol) continue;
+              if (p.Z() < bzMin - kTol || p.Z() > bzMax + kTol) continue;
+              b.Add(p);
+            }
+            if (!b.IsVoid()) {
+              double xMin, yMin, zMin, xMax, yMax, zMax;
+              b.Get(xMin, yMin, zMin, xMax, yMax, zMax);
+              bboxes.push_back({xMin, yMin, zMin, xMax, yMax, zMax});
+            } else {
+              bboxes.push_back({0, 0, 0, 0, 0, 0});
+            }
+          } else {
+            bboxes.push_back({0, 0, 0, 0, 0, 0});
+          }
+        }
+        return bboxes;
+      };
+
+      auto panelBboxes      = computeBboxes(panelIds);
+      auto protrusionBboxes = computeBboxes(protrusionIds);
+
       return DecomposedByBendsResult{
-          std::move(panelIds), std::move(protrusionIds), token, mode};
+          std::move(panelIds), std::move(panelBboxes),
+          std::move(protrusionIds), std::move(protrusionBboxes),
+          token, mode};
 
     } catch (const GeometryError&) {
       throw;
@@ -1963,29 +2183,32 @@ private:
       }
       TopoDS_Shape fused = fuse.Shape();
 
-      // Attempt fillet on matching edges. Failure is non-fatal — fall back to unfilleted fuse.
+      // Attempt fillet on matching edges. Any OCCT failure is non-fatal — fall back to
+      // unfilleted fuse. The exception can be thrown from the constructor, Add(), or Build()
+      // depending on OCCT version and shape topology (e.g. ChFi3d_Builder:only 2 faces when
+      // the fused result is a shell rather than a solid).
       bool wantAll = std::find(targetEdges.begin(), targetEdges.end(), "all") != targetEdges.end();
-      BRepFilletAPI_MakeFillet filletMaker(fused);
-      bool addedAny = false;
-      TopExp_Explorer edgeExp(fused, TopAbs_EDGE);
-      for (; edgeExp.More(); edgeExp.Next()) {
-        const TopoDS_Edge& e = TopoDS::Edge(edgeExp.Current());
-        if (wantAll ||
-            std::find(targetEdges.begin(), targetEdges.end(), shapeId(e)) != targetEdges.end()) {
-          filletMaker.Add(bendRadiusMm, e);
-          addedAny = true;
+      TopoDS_Shape result = fused;  // default: unfilleted
+      try {
+        BRepFilletAPI_MakeFillet filletMaker(fused);
+        bool addedAny = false;
+        TopExp_Explorer edgeExp(fused, TopAbs_EDGE);
+        for (; edgeExp.More(); edgeExp.Next()) {
+          const TopoDS_Edge& e = TopoDS::Edge(edgeExp.Current());
+          if (wantAll ||
+              std::find(targetEdges.begin(), targetEdges.end(), shapeId(e)) != targetEdges.end()) {
+            filletMaker.Add(bendRadiusMm, e);
+            addedAny = true;
+          }
         }
-      }
-
-      TopoDS_Shape result;
-      if (addedAny) {
-        filletMaker.Build();
-        if (filletMaker.IsDone() && !filletMaker.Shape().IsNull()) {
-          result = filletMaker.Shape();
-        } else {
-          result = fused;  // fillet failed gracefully — use unfilleted fuse
+        if (addedAny) {
+          filletMaker.Build();
+          if (filletMaker.IsDone() && !filletMaker.Shape().IsNull()) {
+            result = filletMaker.Shape();
+          }
         }
-      } else {
+      } catch (const Standard_Failure&) {
+        // Fillet not supported for this topology — proceed with unfilleted fuse.
         result = fused;
       }
 

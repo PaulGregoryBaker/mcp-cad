@@ -1129,7 +1129,7 @@ function handleSplitBodyByBends(args: Record<string, unknown>): unknown {
     ? args['default_thickness_mm']
     : 1.0;
   const maxRecursionDepth = typeof args['max_recursion_depth'] === 'number'
-    ? Math.min(10, Math.max(0, Math.round(args['max_recursion_depth'])))
+    ? Math.max(0, Math.round(args['max_recursion_depth']))
     : 0;
 
   if (threshold < 0) {
@@ -1152,8 +1152,10 @@ function handleSplitBodyByBends(args: Record<string, unknown>): unknown {
   return {
     panel_ids: result.panel_ids,
     panel_count: result.panel_ids.length,
+    panel_bboxes: result.panel_bboxes,
     protrusion_ids: result.protrusion_ids,
     protrusion_count: result.protrusion_ids.length,
+    protrusion_bboxes: result.protrusion_bboxes,
     detected_mode: result.detected_mode,
     rollback_token: result.rollbackToken,
     mesh_urls: allIds.map(id => `${meshBaseUrl}/mesh/${id}.glb`),

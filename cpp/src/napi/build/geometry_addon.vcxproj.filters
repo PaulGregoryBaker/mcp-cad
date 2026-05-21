@@ -4,9 +4,6 @@
     <ClCompile Include="C:\Projects\mcp-cad\cpp\src\napi\addon.cc">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="C:\Projects\mcp-cad\cpp\src\napi\geometry_binding.cc">
-      <Filter>Source Files</Filter>
-    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="C:\Projects\mcp-cad\cpp\src\napi\CMakeLists.txt" />

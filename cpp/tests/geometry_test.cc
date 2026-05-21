@@ -1,9 +1,3 @@
-/**
- * Geometry Engine Unit Tests — GE-01, GE-02, GE-03, GE-14 (snapshot/rollback)
- *
- * Task: T026
- */
-
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
@@ -408,3 +402,23 @@ TEST_CASE("GE-13: nestShells is deterministic across repeated calls", "[ge-13][n
   REQUIRE(r1.placements[0].x == Approx(r2.placements[0].x).margin(0.01));
   REQUIRE(r1.placements[0].y == Approx(r2.placements[0].y).margin(0.01));
 }
+// ─── GE-XX: Split by Bends on testcube.step ───────────────────────────────
+
+TEST_CASE("GE-XX: splitBodyByBends on testcube.step produces panels", "[ge-xx][bends][step]" ) {
+  auto svc = GeometryService::create();
+  SolidId solidId = svc->loadStep(fixture("testcube.step"));
+
+  SECTION("splitBodyByBends with recursion returns expected panel count or triggers crash") {
+    // Set maxRecursionDepth high to exercise recursion and expose crash/loop
+    auto result = svc->splitBodyByBends(solidId, 30.0, 5.0, 1.0, 50);
+    // For a cube, expect 12 panels (one per face pair), no protrusions
+    REQUIRE(result.panelIds.size() == 12);
+    REQUIRE(result.protrusionIds.empty());
+  }
+}
+/**
+ * Geometry Engine Unit Tests — GE-01, GE-02, GE-03, GE-14 (snapshot/rollback)
+ *
+ * Task: T026
+ */
+

@@ -84,7 +84,14 @@ export interface GeometryAddon {
     maxThicknessMm?: number,
     defaultThicknessMm?: number,
     maxRecursionDepth?: number,
-  ): { panel_ids: string[]; protrusion_ids: string[]; rollbackToken: string; detected_mode: string };
+  ): {
+    panel_ids: string[];
+    panel_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>;
+    protrusion_ids: string[];
+    protrusion_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>;
+    rollbackToken: string;
+    detected_mode: string;
+  };
 }
 
 export const kerfOffsetMm = {
@@ -389,7 +396,7 @@ export class GeometryBinding {
     maxThicknessMm?: number,
     defaultThicknessMm?: number,
     maxRecursionDepth?: number,
-  ): { panel_ids: string[]; protrusion_ids: string[]; rollbackToken: string; detected_mode: string } {
+  ): { panel_ids: string[]; panel_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>; protrusion_ids: string[]; protrusion_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>; rollbackToken: string; detected_mode: string } {
     try {
       return this.addon.splitBodyByBends(
         partId, angleThresholdDeg, maxThicknessMm, defaultThicknessMm, maxRecursionDepth,

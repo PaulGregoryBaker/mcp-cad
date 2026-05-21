@@ -190,11 +190,18 @@ struct MergeBodyResult {
   SnapshotId rollbackToken;
 };
 
+struct BBox3D {
+  double xMin, yMin, zMin;
+  double xMax, yMax, zMax;
+};
+
 struct DecomposedByBendsResult {
-  std::vector<ShellId> panelIds;       // flat solid panels
-  std::vector<ShellId> protrusionIds;  // flanges / tabs extracted before splitting
+  std::vector<ShellId> panelIds;        // flat solid panels
+  std::vector<BBox3D>  panelBboxes;     // AABB for each panel (parallel to panelIds)
+  std::vector<ShellId> protrusionIds;   // flanges / tabs extracted before splitting
+  std::vector<BBox3D>  protrusionBboxes; // AABB for each protrusion (parallel to protrusionIds)
   SnapshotId           rollbackToken;
-  std::string          detectedMode;   // "surface" | "thin_solid"
+  std::string          detectedMode;    // "surface" | "thin_solid"
 };
 
 // ─── Error code constants (Feature 003-split-by-bends-enhanced) ─────────────

@@ -27,6 +27,8 @@ const cfg: ManufacturingConfig = {
 };
 
 describe('synthesize_joints contract', () => {
+  console.log('synthesize_joints contract tests starting...');
+
   it('rejects unsafe joints in fire-rated context with structured error', async () => {
     const fireCfg: ManufacturingConfig = {
       ...cfg,
@@ -51,4 +53,5 @@ describe('synthesize_joints contract', () => {
       ),
     ).rejects.toMatchObject({ code: 'GE_TAB_SLOT_FAILED' });
   });
+  console.log('synthesize_joints contract tests completed...');
 });

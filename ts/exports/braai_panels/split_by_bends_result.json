@@ -1,0 +1,356 @@
+{
+  "panel_ids": [
+    "646915bc-83bd-4d8a-af17-c0f96eaf8d30",
+    "17c7f819-84c8-4f74-a130-b0b27c064b47",
+    "e0b28fd4-ee76-4a90-a09c-8a300d9c3d7d",
+    "62a249fe-235b-4337-99e2-b92b8c6ba398",
+    "78dfa046-d526-4597-9055-7acb64635c96",
+    "16aecdd9-833a-4e08-88f8-5be4c47ffdd6",
+    "99e7201f-b9db-4e74-bad7-dcbf94ba6883",
+    "c2d12d3e-15ee-40b9-b958-1bdabcca0082",
+    "b52baf56-3e38-4e06-ad47-52be503fab05",
+    "7c19a3e8-8a82-4dc0-ae92-1a01c9a0d67e",
+    "e310be38-c665-4833-873d-088d3325b67d",
+    "1465c546-ce7c-4c49-bd19-89668b363f96",
+    "d2f37055-4a2e-4c1a-b5b4-21c6fa32e5d0",
+    "6602c492-2081-477d-bdb8-1abc8c85ac71",
+    "064df49e-7285-423d-8f45-a8b966e18e2c",
+    "00dbedbe-57dd-4dbd-bef2-89b22c3334de",
+    "aed4719c-051c-42df-a92d-ad7b98702ba8",
+    "372742d9-4fe5-446f-bb94-e7c003a7955b",
+    "b5091145-c1ed-4b5c-b2a9-0f4df95dda52",
+    "09d6a983-c297-425d-8903-af39a654e1ff",
+    "a8ae4598-43be-45a8-9339-f5c1e5c3ac1a",
+    "6796776c-dd97-4d61-b752-83ee0c490c9f",
+    "51c83d60-fbd1-4399-9626-beeb8fdcf161",
+    "3fddd5cb-2722-4318-922d-475d342f6e1f",
+    "e73b85ec-5fe8-4fbf-b051-ad80303d9894",
+    "8a88d1f4-0fb7-4783-a40e-96ed780d4964",
+    "fd63959d-b70c-44d0-a336-f6bc81d176cf",
+    "4179a58a-51b7-408b-9f34-51ca28e44b3e",
+    "f8cbee3c-59f5-40be-87a0-71aaaba27087",
+    "901962cd-c281-421e-8a8b-a740cdbcbcdd"
+  ],
+  "panel_count": 30,
+  "panel_bboxes": [
+    {
+      "x_min": -14,
+      "y_min": -2,
+      "z_min": -2,
+      "x_max": 314,
+      "y_max": 600,
+      "z_max": 502
+    },
+    {
+      "x_min": -14,
+      "y_min": -2,
+      "z_min": -2,
+      "x_max": 314,
+      "y_max": 600,
+      "z_max": 502
+    },
+    {
+      "x_min": -14,
+      "y_min": -2,
+      "z_min": -2,
+      "x_max": 314,
+      "y_max": 600,
+      "z_max": 502
+    },
+    {
+      "x_min": -12,
+      "y_min": 121.43364182624046,
+      "z_min": -2,
+      "x_max": 312,
+      "y_max": 600,
+      "z_max": 210.95104980468
+    },
+    {
+      "x_min": -14,
+      "y_min": -2,
+      "z_min": -2,
+      "x_max": 314,
+      "y_max": 600,
+      "z_max": 502
+    },
+    {
+      "x_min": -12,
+      "y_min": 120.58011053944222,
+      "z_min": -2,
+      "x_max": 312,
+      "y_max": 600,
+      "z_max": 210.95104980468
+    },
+    {
+      "x_min": -12,
+      "y_min": 117.45399599419248,
+      "z_min": -2,
+      "x_max": 312,
+      "y_max": 600,
+      "z_max": 210.95104980468
+    },
+    {
+      "x_min": -12,
+      "y_min": 117.45399599419248,
+      "z_min": -2,
+      "x_max": 312,
+      "y_max": 600,
+      "z_max": 210.95104980468
+    },
+    {
+      "x_min": -12,
+      "y_min": 114.32788144894272,
+      "z_min": -2,
+      "x_max": 312,
+      "y_max": 600,
+      "z_max": 210.95104980468
+    },
+    {
+      "x_min": -12,
+      "y_min": 114.32788144894272,
+      "z_min": -2,
+      "x_max": 312,
+      "y_max": 600,
+      "z_max": 210.95104980468
+    },
+    {
+      "x_min": -12,
+      "y_min": 111.20176690369297,
+      "z_min": -2,
+      "x_max": 312,
+      "y_max": 600,
+      "z_max": 210.95104980468
+    },
+    {
+      "x_min": -12,
+      "y_min": 111.20176690369297,
+      "z_min": -2,
+      "x_max": 312,
+      "y_max": 600,
+      "z_max": 210.95104980468
+    },
+    {
+      "x_min": -12,
+      "y_min": 108.07565235844322,
+      "z_min": -2,
+      "x_max": 312,
+      "y_max": 600,
+      "z_max": 210.95104980468
+    },
+    {
+      "x_min": -12,
+      "y_min": 108.07565235844322,
+      "z_min": -2,
+      "x_max": 312,
+      "y_max": 600,
+      "z_max": 210.95104980468
+    },
+    {
+      "x_min": -73.11508311016053,
+      "y_min": -24.43123438228554,
+      "z_min": -2,
+      "x_max": 373.1150831101606,
+      "y_max": 653.1000337938123,
+      "z_max": 502
+    },
+    {
+      "x_min": -73.11508311016053,
+      "y_min": -24.43123438228554,
+      "z_min": 15.978060435119517,
+      "x_max": 373.1150831101606,
+      "y_max": 653.1000337938123,
+      "z_max": 250.96331285165317
+    },
+    {
+      "x_min": -12,
+      "y_min": 104.94953781319347,
+      "z_min": -2,
+      "x_max": 312,
+      "y_max": 600,
+      "z_max": 210.95104980468
+    },
+    {
+      "x_min": -12,
+      "y_min": 104.94953781319347,
+      "z_min": -2,
+      "x_max": 312,
+      "y_max": 600,
+      "z_max": 210.95104980468
+    },
+    {
+      "x_min": -12,
+      "y_min": -2,
+      "z_min": -2,
+      "x_max": 312,
+      "y_max": 246.81771290077012,
+      "z_max": 253.89561572369314
+    },
+    {
+      "x_min": -85.08561410413778,
+      "y_min": -126.76173692997507,
+      "z_min": -227.325369352882,
+      "x_max": 385.08561410413824,
+      "y_max": 660.3,
+      "z_max": 500
+    },
+    {
+      "x_min": -12,
+      "y_min": -2,
+      "z_min": -2,
+      "x_max": 312,
+      "y_max": 250.09563487267025,
+      "z_max": 252.092851407784
+    },
+    {
+      "x_min": -14,
+      "y_min": -2,
+      "z_min": 0,
+      "x_max": 314,
+      "y_max": 594,
+      "z_max": 502
+    },
+    {
+      "x_min": 137.3744668236809,
+      "y_min": -2,
+      "z_min": 142.4894012705267,
+      "x_max": 312,
+      "y_max": 107.60466913468869,
+      "z_max": 252.09408468665646
+    },
+    {
+      "x_min": -14,
+      "y_min": -2,
+      "z_min": -2,
+      "x_max": 314,
+      "y_max": 600,
+      "z_max": 502
+    },
+    {
+      "x_min": -12,
+      "y_min": -2,
+      "z_min": 140.01722163349322,
+      "x_max": 312,
+      "y_max": 110.07686725174635,
+      "z_max": 252.0955970082805
+    },
+    {
+      "x_min": -7,
+      "y_min": -2,
+      "z_min": 0,
+      "x_max": 312,
+      "y_max": 598,
+      "z_max": 252.09559700828822
+    },
+    {
+      "x_min": -12,
+      "y_min": -2,
+      "z_min": 22.922508239746,
+      "x_max": 297,
+      "y_max": 598,
+      "z_max": 252.09559700828567
+    },
+    {
+      "x_min": -12,
+      "y_min": -2,
+      "z_min": -2,
+      "x_max": 312,
+      "y_max": 250.0957196235375,
+      "z_max": 252.1003722624087
+    },
+    {
+      "x_min": -14,
+      "y_min": -2,
+      "z_min": 0,
+      "x_max": 314,
+      "y_max": 600,
+      "z_max": 502
+    },
+    {
+      "x_min": -12,
+      "y_min": -2,
+      "z_min": 0.000002111119329129,
+      "x_max": 297,
+      "y_max": 598,
+      "z_max": 252.099679069162
+    }
+  ],
+  "protrusion_ids": [
+    "5c802ca3-7097-4e33-861a-0d65b1235647",
+    "24a1c200-b3f3-42ee-a92c-3ee9711dad4c",
+    "de59d3ab-0126-404a-98f2-b8e0bcbb350f",
+    "414a00f0-f9fd-44c7-83a9-2537d5c0a9f6"
+  ],
+  "protrusion_count": 4,
+  "protrusion_bboxes": [
+    {
+      "x_min": -12,
+      "y_min": 594,
+      "z_min": 0,
+      "x_max": 312,
+      "y_max": 600,
+      "z_max": 210
+    },
+    {
+      "x_min": 21.85695615541688,
+      "y_min": 198,
+      "z_min": -2,
+      "x_max": 276.5289685630709,
+      "y_max": 594.0000000000001,
+      "z_max": 16.499320809938197
+    },
+    {
+      "x_min": -74.30000000000001,
+      "y_min": -62.30000000000001,
+      "z_min": 500,
+      "x_max": 374.3,
+      "y_max": 660.3,
+      "z_max": 502
+    },
+    {
+      "x_min": -12,
+      "y_min": 123.41822410424828,
+      "z_min": 16.49932080993819,
+      "x_max": 312,
+      "y_max": 594.0000000000001,
+      "z_max": 210
+    }
+  ],
+  "detected_mode": "thin_solid",
+  "rollback_token": "bada3db4-af50-4704-a6d5-5cc67f59f63a",
+  "mesh_urls": [
+    "http://localhost:3001/mesh/646915bc-83bd-4d8a-af17-c0f96eaf8d30.glb",
+    "http://localhost:3001/mesh/17c7f819-84c8-4f74-a130-b0b27c064b47.glb",
+    "http://localhost:3001/mesh/e0b28fd4-ee76-4a90-a09c-8a300d9c3d7d.glb",
+    "http://localhost:3001/mesh/62a249fe-235b-4337-99e2-b92b8c6ba398.glb",
+    "http://localhost:3001/mesh/78dfa046-d526-4597-9055-7acb64635c96.glb",
+    "http://localhost:3001/mesh/16aecdd9-833a-4e08-88f8-5be4c47ffdd6.glb",
+    "http://localhost:3001/mesh/99e7201f-b9db-4e74-bad7-dcbf94ba6883.glb",
+    "http://localhost:3001/mesh/c2d12d3e-15ee-40b9-b958-1bdabcca0082.glb",
+    "http://localhost:3001/mesh/b52baf56-3e38-4e06-ad47-52be503fab05.glb",
+    "http://localhost:3001/mesh/7c19a3e8-8a82-4dc0-ae92-1a01c9a0d67e.glb",
+    "http://localhost:3001/mesh/e310be38-c665-4833-873d-088d3325b67d.glb",
+    "http://localhost:3001/mesh/1465c546-ce7c-4c49-bd19-89668b363f96.glb",
+    "http://localhost:3001/mesh/d2f37055-4a2e-4c1a-b5b4-21c6fa32e5d0.glb",
+    "http://localhost:3001/mesh/6602c492-2081-477d-bdb8-1abc8c85ac71.glb",
+    "http://localhost:3001/mesh/064df49e-7285-423d-8f45-a8b966e18e2c.glb",
+    "http://localhost:3001/mesh/00dbedbe-57dd-4dbd-bef2-89b22c3334de.glb",
+    "http://localhost:3001/mesh/aed4719c-051c-42df-a92d-ad7b98702ba8.glb",
+    "http://localhost:3001/mesh/372742d9-4fe5-446f-bb94-e7c003a7955b.glb",
+    "http://localhost:3001/mesh/b5091145-c1ed-4b5c-b2a9-0f4df95dda52.glb",
+    "http://localhost:3001/mesh/09d6a983-c297-425d-8903-af39a654e1ff.glb",
+    "http://localhost:3001/mesh/a8ae4598-43be-45a8-9339-f5c1e5c3ac1a.glb",
+    "http://localhost:3001/mesh/6796776c-dd97-4d61-b752-83ee0c490c9f.glb",
+    "http://localhost:3001/mesh/51c83d60-fbd1-4399-9626-beeb8fdcf161.glb",
+    "http://localhost:3001/mesh/3fddd5cb-2722-4318-922d-475d342f6e1f.glb",
+    "http://localhost:3001/mesh/e73b85ec-5fe8-4fbf-b051-ad80303d9894.glb",
+    "http://localhost:3001/mesh/8a88d1f4-0fb7-4783-a40e-96ed780d4964.glb",
+    "http://localhost:3001/mesh/fd63959d-b70c-44d0-a336-f6bc81d176cf.glb",
+    "http://localhost:3001/mesh/4179a58a-51b7-408b-9f34-51ca28e44b3e.glb",
+    "http://localhost:3001/mesh/f8cbee3c-59f5-40be-87a0-71aaaba27087.glb",
+    "http://localhost:3001/mesh/901962cd-c281-421e-8a8b-a740cdbcbcdd.glb",
+    "http://localhost:3001/mesh/5c802ca3-7097-4e33-861a-0d65b1235647.glb",
+    "http://localhost:3001/mesh/24a1c200-b3f3-42ee-a92c-3ee9711dad4c.glb",
+    "http://localhost:3001/mesh/de59d3ab-0126-404a-98f2-b8e0bcbb350f.glb",
+    "http://localhost:3001/mesh/414a00f0-f9fd-44c7-83a9-2537d5c0a9f6.glb"
+  ]
+}

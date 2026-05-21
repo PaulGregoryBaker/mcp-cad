@@ -35,6 +35,7 @@ function findFixture(filename: string): string | undefined {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('split_body_by_bends integration', () => {
+  console.log('split_body_by_bends integration tests starting...');
   let addonAvailable = false;
   const configPath = path.resolve(__dirname, '../../config/config.yaml');
 
@@ -48,7 +49,8 @@ describe('split_body_by_bends integration', () => {
 
   it('hollow cube → thin_solid mode, 6 panels, 0 protrusions', async () => {
     if (!addonAvailable) return;
-
+console.log('split_body_by_bends.hollow cube tests starting...');
+  
     const fixturePath = findFixture('hollow_cube.stp');
     if (!fixturePath) {
       console.warn('hollow_cube.stp not found — run generate_fixtures first');
@@ -72,6 +74,210 @@ describe('split_body_by_bends integration', () => {
     expect(result.panel_ids).toHaveLength(6);
     expect(result.rollback_token).toBeDefined();
   });
+
+  
+  it('two hollow cubes → thin_solid mode, 12 panels, 4 protrusions', async () => {
+    if (!addonAvailable) return;
+console.log('split_body_by_bends.two hollow cubes tests starting...');
+
+    const fixturePath = findFixture('testcube.step');
+    if (!fixturePath) {
+      console.warn('testcube.step not found — run generate_fixtures first');
+      return;
+    }
+
+    const config = loadConfig(configPath);
+
+    const clean = await dispatchTool('clean_geometry', { file_path: fixturePath }, config) as any;
+    expect(clean.solid_id).toBeDefined();
+
+    let result: any;
+    try {
+      result = await dispatchTool('split_body_by_bends', {
+        part_id: clean.solid_id,
+        angle_threshold_deg: 45,
+        max_thickness_mm: 2.0,
+        max_recursion_depth: 2,
+      }, config);
+      // Debug output
+      // eslint-disable-next-line no-console
+      console.log('split_body_by_bends result:', JSON.stringify(result, null, 2));
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('split_body_by_bends error:', err);
+      throw err;
+    }
+
+    expect(result.detected_mode).toBe('thin_solid');
+    expect(result.panel_count).toBe(12);
+    expect(result.protrusion_count).toBe(4);
+    expect(result.panel_ids).toHaveLength(12);
+    expect(result.rollback_token).toBeDefined();
+  });
+
+    it('Braai fixture → split by bends, part count reasonable', async () => {
+      if (!addonAvailable) return;
+console.log('split_body_by_bends.Braai fixture tests starting...');
+
+      // Try both possible locations for the Braai fixture
+      const fixturePath = findFixture('braai.step');
+      if (!fixturePath) {
+        console.warn('braai.step not found — ensure the Braai fixture is available');
+        return;
+      }
+
+      const config = loadConfig(configPath);
+
+      let clean: any;
+      let result: any;
+      try {
+        clean = await dispatchTool('clean_geometry', { file_path: fixturePath }, config);
+        expect(clean.solid_id).toBeDefined();
+
+        result = await dispatchTool('split_body_by_bends', {
+          part_id: clean.solid_id,
+          angle_threshold_deg: 45,
+          max_thickness_mm: 5.0,
+          max_recursion_depth: 0,
+        }, config);
+      } catch (err: any) {
+        let msg = 'split_body_by_bends failed: ';
+        if (err && typeof err === 'object') {
+          if ('message' in err) msg += err.message;
+          else msg += JSON.stringify(err);
+        } else {
+          msg += String(err);
+        }
+        throw new Error(msg);
+      }
+
+      expect(result).toBeDefined();
+      expect(Array.isArray(result.panel_ids)).toBe(true);
+      expect(result.panel_ids.length).toBeGreaterThan(0);
+      expect(result.panel_ids.length).toBeLessThanOrEqual(100);
+
+      // Bounding box check using panel_bboxes returned from the C++ layer.
+      if (result.panel_bboxes && Array.isArray(result.panel_bboxes) && result.panel_bboxes.length > 0) {
+        // Compute the union bbox of all panels as a proxy for the original solid's extent.
+        let unionBbox = { ...result.panel_bboxes[0] };
+        for (const b of result.panel_bboxes) {
+          unionBbox.x_min = Math.min(unionBbox.x_min, b.x_min);
+          unionBbox.y_min = Math.min(unionBbox.y_min, b.y_min);
+          unionBbox.z_min = Math.min(unionBbox.z_min, b.z_min);
+          unionBbox.x_max = Math.max(unionBbox.x_max, b.x_max);
+          unionBbox.y_max = Math.max(unionBbox.y_max, b.y_max);
+          unionBbox.z_max = Math.max(unionBbox.z_max, b.z_max);
+        }
+        const unionDiag = Math.sqrt(
+          Math.pow(unionBbox.x_max - unionBbox.x_min, 2) +
+          Math.pow(unionBbox.y_max - unionBbox.y_min, 2) +
+          Math.pow(unionBbox.z_max - unionBbox.z_min, 2)
+        );
+        // eslint-disable-next-line no-console
+        console.log('[Braai Test] Panel union bbox:', unionBbox, `diagonal=${unionDiag.toFixed(1)} mm`);
+
+        for (let i = 0; i < result.panel_bboxes.length; ++i) {
+          const b = result.panel_bboxes[i];
+          const dx = b.x_max - b.x_min;
+          const dy = b.y_max - b.y_min;
+          const dz = b.z_max - b.z_min;
+          const diag = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          // eslint-disable-next-line no-console
+          console.log(`[Braai Test] Panel ${i + 1} bbox: x=[${b.x_min.toFixed(1)}, ${b.x_max.toFixed(1)}] y=[${b.y_min.toFixed(1)}, ${b.y_max.toFixed(1)}] z=[${b.z_min.toFixed(1)}, ${b.z_max.toFixed(1)}] diag=${diag.toFixed(1)} mm`);
+          const outsideUnion =
+            b.x_min < unionBbox.x_min - 1 || b.x_max > unionBbox.x_max + 1 ||
+            b.y_min < unionBbox.y_min - 1 || b.y_max > unionBbox.y_max + 1 ||
+            b.z_min < unionBbox.z_min - 1 || b.z_max > unionBbox.z_max + 1;
+          if (outsideUnion) {
+            // eslint-disable-next-line no-console
+            console.warn(`[Braai Test] Panel ${i + 1} extends OUTSIDE the union bbox — likely a bad cut!`);
+          }
+          // A panel whose diagonal is more than 5× the union diagonal is almost certainly wrong
+          if (diag > unionDiag * 5) {
+            // eslint-disable-next-line no-console
+            console.warn(`[Braai Test] Panel ${i + 1} diagonal (${diag.toFixed(1)} mm) is suspiciously large vs union (${unionDiag.toFixed(1)} mm)`);
+          }
+        }
+
+        if (result.protrusion_bboxes && Array.isArray(result.protrusion_bboxes)) {
+          for (let i = 0; i < result.protrusion_bboxes.length; ++i) {
+            const b = result.protrusion_bboxes[i];
+            const dx = b.x_max - b.x_min;
+            const dy = b.y_max - b.y_min;
+            const dz = b.z_max - b.z_min;
+            const diag = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            // eslint-disable-next-line no-console
+            console.log(`[Braai Test] Protrusion ${i + 1} bbox: x=[${b.x_min.toFixed(1)}, ${b.x_max.toFixed(1)}] y=[${b.y_min.toFixed(1)}, ${b.y_max.toFixed(1)}] z=[${b.z_min.toFixed(1)}, ${b.z_max.toFixed(1)}] diag=${diag.toFixed(1)} mm`);
+          }
+        }
+      } else {
+        // eslint-disable-next-line no-console
+        console.warn('[Braai Test] panel_bboxes not returned — rebuild the C++ addon to get bbox diagnostics');
+      }
+
+      // Debug: confirm test is running
+      // eslint-disable-next-line no-console
+      console.log('[Braai Test] Running export logic...');
+
+      // Debug: log result structure
+      // eslint-disable-next-line no-console
+      console.log('[Braai Test] split_by_bends result:', JSON.stringify(result, null, 2));
+
+      // Export all panels and protrusions to JSON for inspection
+      const outDir = path.resolve(__dirname, '../../exports/braai_panels');
+      // Debug: log output directory
+      // eslint-disable-next-line no-console
+      console.log('[Braai Test] Output directory:', outDir);
+      if (!fs.existsSync(outDir)) {
+        fs.mkdirSync(outDir, { recursive: true });
+        // eslint-disable-next-line no-console
+        console.log('[Braai Test] Created output directory');
+      }
+
+      // Write the main result object
+      fs.writeFileSync(path.join(outDir, 'split_by_bends_result.json'), JSON.stringify(result, null, 2));
+      // eslint-disable-next-line no-console
+      console.log('[Braai Test] Wrote split_by_bends_result.json');
+
+      // Write each panel geometry to a separate file (if available)
+      if (result.panel_geometries && Array.isArray(result.panel_geometries)) {
+        result.panel_geometries.forEach((geom: any, idx: number) => {
+          fs.writeFileSync(
+            path.join(outDir, `panel_${idx + 1}.json`),
+            JSON.stringify(geom, null, 2)
+          );
+          // eslint-disable-next-line no-console
+          console.log(`[Braai Test] Wrote panel_${idx + 1}.json`);
+        });
+      } else if (result.panel_ids && Array.isArray(result.panel_ids)) {
+        // If only IDs are available, write them as a list
+        fs.writeFileSync(
+          path.join(outDir, 'panel_ids.json'),
+          JSON.stringify(result.panel_ids, null, 2)
+        );
+        // eslint-disable-next-line no-console
+        console.log('[Braai Test] Wrote panel_ids.json');
+      }
+
+      // Optionally export protrusions if present
+      if (result.protrusion_geometries && Array.isArray(result.protrusion_geometries)) {
+        result.protrusion_geometries.forEach((geom: any, idx: number) => {
+          fs.writeFileSync(
+            path.join(outDir, `protrusion_${idx + 1}.json`),
+            JSON.stringify(geom, null, 2)
+          );
+          // eslint-disable-next-line no-console
+          console.log(`[Braai Test] Wrote protrusion_${idx + 1}.json`);
+        });
+      } else if (result.protrusion_ids && Array.isArray(result.protrusion_ids)) {
+        fs.writeFileSync(
+          path.join(outDir, 'protrusion_ids.json'),
+          JSON.stringify(result.protrusion_ids, null, 2)
+        );
+        // eslint-disable-next-line no-console
+        console.log('[Braai Test] Wrote protrusion_ids.json');
+      }
+    });
 
   // The flange tabs on cube_with_flanges are all classified as "outer" faces by the
   // centroid-based isOuter heuristic, so detectProtrusions (which only scans for
@@ -104,4 +310,5 @@ describe('split_body_by_bends integration', () => {
     expect(result.panel_ids).toHaveLength(6);
     expect(result.rollback_token).toBeDefined();
   });
+  
 });

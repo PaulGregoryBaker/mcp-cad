@@ -745,10 +745,27 @@ Napi::Value SplitBodyByBends(const Napi::CallbackInfo& info) {
     for (size_t i = 0; i < res.protrusionIds.size(); ++i)
       protrusionArr.Set(static_cast<uint32_t>(i), Napi::String::New(env, res.protrusionIds[i]));
 
-    result.Set("panel_ids",      panelArr);
-    result.Set("protrusion_ids", protrusionArr);
-    result.Set("detected_mode",  Napi::String::New(env, res.detectedMode));
-    result.Set("rollbackToken",  Napi::String::New(env, res.rollbackToken));
+    auto serializeBboxes = [&](const std::vector<BBox3D>& bboxes) {
+      Napi::Array arr = Napi::Array::New(env, bboxes.size());
+      for (size_t i = 0; i < bboxes.size(); ++i) {
+        Napi::Object b = Napi::Object::New(env);
+        b.Set("x_min", Napi::Number::New(env, bboxes[i].xMin));
+        b.Set("y_min", Napi::Number::New(env, bboxes[i].yMin));
+        b.Set("z_min", Napi::Number::New(env, bboxes[i].zMin));
+        b.Set("x_max", Napi::Number::New(env, bboxes[i].xMax));
+        b.Set("y_max", Napi::Number::New(env, bboxes[i].yMax));
+        b.Set("z_max", Napi::Number::New(env, bboxes[i].zMax));
+        arr.Set(static_cast<uint32_t>(i), b);
+      }
+      return arr;
+    };
+
+    result.Set("panel_ids",           panelArr);
+    result.Set("panel_bboxes",        serializeBboxes(res.panelBboxes));
+    result.Set("protrusion_ids",      protrusionArr);
+    result.Set("protrusion_bboxes",   serializeBboxes(res.protrusionBboxes));
+    result.Set("detected_mode",       Napi::String::New(env, res.detectedMode));
+    result.Set("rollbackToken",       Napi::String::New(env, res.rollbackToken));
     return result;
   })
   return env.Undefined();

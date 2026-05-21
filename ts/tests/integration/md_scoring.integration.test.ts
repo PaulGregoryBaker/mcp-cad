@@ -91,6 +91,7 @@ function makePassingFeatureSet(): FeatureSet {
 // ─── MD-JTBD-02: Violations detected ─────────────────────────────────────────
 
 describe('MD Scoring Integration: MD-JTBD-02 violations', () => {
+  console.log('MD Scoring Integration: MD-JTBD-02 violations tests starting...');
   it('score < 0.5 for heavily violating feature set', () => {
     const report = scorePanel(makeViolatingFeatureSet(), material, tooling);
     expect(report.score).toBeLessThan(0.5);
@@ -121,6 +122,7 @@ describe('MD Scoring Integration: MD-JTBD-02 violations', () => {
 // ─── MD-JTBD-05: Passing feature set ─────────────────────────────────────────
 
 describe('MD Scoring Integration: MD-JTBD-05 passing feature set', () => {
+  console.log('MD Scoring Integration: MD-JTBD-05 passing feature set tests starting...');
   it('score > 0.9 for fully valid feature set', () => {
     const report = scorePanel(makePassingFeatureSet(), material, tooling);
     expect(report.score).toBeGreaterThan(0.9);
