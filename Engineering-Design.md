@@ -26,11 +26,11 @@ These decisions must be resolved before detailed implementation begins. Each one
 |---|---|---|---|
 | D1 | **Geometry stack** | A) Local **OCCT (official)** only  B) Cloud API (Onshape/Fusion) primary  C) Local with cloud fallback | Determines Geometry Engine interface — local calls vs HTTP client. **OCCT selected for license terms**. Stability mitigations required (see below). |
 | D2 | **Nesting library** | A) libnest2d (C++, local)  B) SVGnest (JS, local)  C) Cloud nesting API | Determines whether nesting is inside Geometry Engine context or a fourth context |
-| D3 | **State persistence** | A) In-memory, session-scoped only  B) Persisted to local SQLite  C) Persisted to remote store | Determines rollback model and version history complexity |
+| D3 | **State persistence** | A) In-memory, session-scoped only  B) Persisted to local SQLite  C) Persisted to remote store  **D3-B (resolved, Semantic CAD Phase 1):** Geometry stays D3-A (in-memory + BREP); semantic graph persisted to Dolt (MySQL-compatible) — see [constitution amendment v1.2](`.specify/memory/amendments/v1.2-semantic-persistence.md`) | Determines rollback model and version history complexity |
 | D4 | **Auth model** | A) No auth (local only)  B) API key  C) OAuth2 | Determines MCP transport security layer |
 | D5 | **MCP transport** | A) stdio (local Claude Desktop)  B) HTTP/SSE (server mode)  C) Both | Determines deployment topology and session model |
 
-**Recommended defaults for MVP:** D1-A, D2-A (libnest2d via native C++ or Rust FFI), D3-A, D4-A, D5-A. Revisit D5 for cloud/Kubernetes deployment.
+**Resolved decisions for MVP:** D1-A, D2-A (libnest2d via native C++ or Rust FFI), D3-A (geometry) + D3-B (semantic graph, Dolt), D4-A, D5-A. Revisit D5 for cloud/Kubernetes deployment.
 
 #### D1-A Mitigation: OCCT (Official) Stability Strategy
 
@@ -175,28 +175,28 @@ With these mitigations, OCCT stability risk is **reduced to acceptable** for MVP
 │  BOUNDED CONTEXT: MCP Protocol Layer                                 │
 │  Owns: Tool dispatch, resource serving, session state, history       │
 │  Language: Tool, Resource, Session, Snapshot, RollbackToken          │
-└──────┬──────────────────────────────────┬───────────────────────────┘
-       │ GeometryPort (internal Python)    │ ManufacturingPort (internal Python)
-┌──────▼──────────────────┐   ┌───────────▼───────────────────────────┐
-│  BOUNDED CONTEXT:        │   │  BOUNDED CONTEXT:                      │
-│  Geometry Engine         │   │  Manufacturing Domain                  │
-│                          │   │                                        │
-│  Owns:                   │   │  Owns:                                 │
-│  - B-Rep solids/shells   │   │  - Material specifications             │
-│  - Topology graph        │   │  - Tooling capabilities                │
-│  - Boolean operations    │   │  - Bend/feature rules                  │
-│  - Unfolding math        │   │  - Safety constraints                  │
-│  - Nesting layout        │   │  - Manufacturability scoring           │
-│                          │   │                                        │
-│  Language:               │   │  Language:                             │
-│  Face, Edge, Vertex,     │   │  Feature, Bend, Flange, Relief,        │
-│  Shell, Manifold, BRep,  │   │  Gauge, K-Factor, Kerf, Tonnage,       │
-│  Topology, Solid         │   │  FireRating, JointType, Clearance      │
-└──────────────────────────┘   └────────────────────────────────────────┘
-           │                                    │
-           └──── Anti-Corruption Layer ─────────┘
-                 (Feature Extractor)
-                 Translates B-Rep topology → Manufacturing Features
+└──────┬──────────────────┬──────────────────┬──────────────────────┘
+       │ GeometryPort     │ ManufacturingPort │ SemanticPort
+┌──────▼──────────────┐  ┌▼──────────────────┐  ┌▼────────────────────────┐
+│  BOUNDED CONTEXT:   │  │  BOUNDED CONTEXT:  │  │  BOUNDED CONTEXT:        │
+│  Geometry Engine    │  │  Manufacturing     │  │  Semantic Mapping Layer  │
+│                     │  │  Domain            │  │  (Semantic CAD Phase 1)  │
+│  Owns:              │  │  Owns:             │  │  Owns:                   │
+│  - B-Rep solids     │  │  - Material specs  │  │  - SemanticEntity graph  │
+│  - Topology graph   │  │  - Tooling caps    │  │  - Bindings (face→name)  │
+│  - Boolean ops      │  │  - Bend/feat rules │  │  - Topology revisions    │
+│  - Unfolding math   │  │  - Safety rules    │  │  - Remap on commit       │
+│  - Nesting layout   │  │  - Mfg scoring     │  │  - Lineage / time-travel │
+│                     │  │                    │  │                          │
+│  Language:          │  │  Language:         │  │  Language:               │
+│  Face, Edge, Shell, │  │  Feature, Bend,    │  │  SemanticId, Binding,    │
+│  Manifold, BRep,    │  │  K-Factor, Kerf,   │  │  EntityType, Revision,   │
+│  Topology, Solid    │  │  JointType         │  │  ShapeHistory, Lineage   │
+└─────────────────────┘  └────────────────────┘  └──────────────────────────┘
+           │                      │
+           └── Anti-Corruption ───┘
+               Layer (Feature Extractor)
+               Translates B-Rep topology → Manufacturing Features
 ```
 
 ### 2.2 Geometry Engine Context
