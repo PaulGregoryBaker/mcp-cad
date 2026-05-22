@@ -89,6 +89,7 @@
 
 // ─── Project includes ────────────────────────────────────────────────────────
 #include "geometry_service.hpp"
+#include "shape_history.hpp"
 
 // ─── Standard library ────────────────────────────────────────────────────────
 #include <unordered_map>
@@ -409,6 +410,7 @@ public:
       BRepPrimAPI_MakeHalfSpace halfSpace(cutFace, refPoint);
       TopoDS_Solid halfSpaceSolid = halfSpace.Solid();
 
+      TopoDS_Shape inputForHistory = it->second.shape;
       BRepAlgoAPI_Cut cutter(it->second.shape, halfSpaceSolid);
       cutter.Build();
 
@@ -442,7 +444,9 @@ public:
                             "Boolean cut produced no shells", true, "rollback");
       }
 
-      return BooleanCutResult{shellIds, token};
+      auto history = captureHistory(cutter, inputForHistory,
+          [](const TopoDS_Shape& s) { return shapeId(s); }, "booleanCut");
+      return BooleanCutResult{shellIds, token, std::move(history)};
 
     } catch (const GeometryError&) {
       throw;  // re-throw structured errors as-is
@@ -490,11 +494,7 @@ public:
       // (full geometric manipulation deferred to Phase B implementation)
       // This stub validates the interface and kerf clamping.
 
-      return TabSlotResult{
-          {shellIdA, shellIdB},
-          kerf,
-          token
-      };
+      return TabSlotResult{{shellIdA, shellIdB}, kerf, token, {}};
 
     } catch (const Standard_Failure& e) {
       throw GeometryError("GE_TAB_SLOT_FAILED",
@@ -520,7 +520,7 @@ public:
 
     try {
       std::string holeId = generateUUID();
-      return RivetHoleResult{shellId, holeId, token};
+      return RivetHoleResult{shellId, holeId, token, {}};
 
     } catch (const Standard_Failure& e) {
       throw GeometryError("GE_RIVET_HOLE_FAILED",
@@ -559,7 +559,7 @@ public:
       UnfoldState state{id, shellId, flatW, flatH, kFactor, 1, ""};
       unfolds_[id] = state;
 
-      return UnfoldResult{id, flatW, flatH, kFactor, 1, token};
+      return UnfoldResult{id, flatW, flatH, kFactor, 1, token, {}};
 
     } catch (const Standard_Failure& e) {
       throw GeometryError("GE_UNFOLD_FAILED",
@@ -1148,6 +1148,8 @@ private:
       TopoDS_Face planeFace = faceMaker.Face();
       gp_Vec n(normal);
 
+      TopoDS_Shape inputForHistory = it->second.shape;
+
       // Positive side = shape minus negative half-space
       gp_Pnt negRefPt = origin.Translated(n * -100.0);
       BRepPrimAPI_MakeHalfSpace negHS(planeFace, negRefPt);
@@ -1185,7 +1187,12 @@ private:
       shells_[posId] = ShellState{posId, it->second.parentSolidId, cutPos.Shape()};
       shells_[negId] = ShellState{negId, it->second.parentSolidId, cutNeg.Shape()};
 
-      return SplitBodyResult{posId, negId, token};
+      auto histPos = captureHistory(cutPos, inputForHistory,
+          [](const TopoDS_Shape& s) { return shapeId(s); }, "splitBodyByPlane");
+      auto histNeg = captureHistory(cutNeg, inputForHistory,
+          [](const TopoDS_Shape& s) { return shapeId(s); }, "splitBodyByPlane");
+      histPos.insert(histPos.end(), histNeg.begin(), histNeg.end());
+      return SplitBodyResult{posId, negId, token, std::move(histPos)};
 
     } catch (const GeometryError&) {
       throw;
@@ -1675,7 +1682,8 @@ private:
                      const SolidId& parentId,
                      double angleThresholdDeg,
                      double defaultThicknessMm,
-                     std::vector<ShellId>& panelIds)
+                     std::vector<ShellId>& panelIds,
+                     std::vector<ShapeHistoryRecord>* historyOut = nullptr)
   {
     TopTools_IndexedMapOfShape faceMap;
     TopExp::MapShapes(shape, TopAbs_FACE, faceMap);
@@ -1758,6 +1766,13 @@ private:
                             "Extruded panel has zero volume (non-manifold result)", true, "rollback");
       }
 
+      if (historyOut) {
+        auto records = captureHistory(prism, faceMaker.Face(),
+                                      [](const TopoDS_Shape& s){ return shapeId(s); },
+                                      "split_body_by_bends");
+        historyOut->insert(historyOut->end(), records.begin(), records.end());
+      }
+
       ShellId sid = generateUUID();
       shells_[sid] = ShellState{sid, parentId, prism.Shape()};
       panelIds.push_back(sid);
@@ -1780,7 +1795,8 @@ private:
                   double maxThicknessMm,
                   std::vector<ShellId>& panelIds,
                   std::vector<ShellId>& /*protrusionIds*/,
-                  TopoDS_Shape* remainderOut = nullptr)
+                  TopoDS_Shape* remainderOut = nullptr,
+                  std::vector<ShapeHistoryRecord>* historyOut = nullptr)
   {
     GProp_GProps solidProps;
     BRepGProp::VolumeProperties(solid, solidProps);
@@ -1874,6 +1890,13 @@ private:
       BRepGProp::VolumeProperties(extract.Shape(), ep);
       if (std::abs(ep.Mass()) < 1e-6) continue;  // empty slab — skip
 
+      if (historyOut) {
+        auto records = captureHistory(extract, remainder,
+                                      [](const TopoDS_Shape& s){ return shapeId(s); },
+                                      "split_body_by_bends");
+        historyOut->insert(historyOut->end(), records.begin(), records.end());
+      }
+
       ShellId panelId = generateUUID();
       shells_[panelId] = ShellState{panelId, parentId, extract.Shape()};
       panelIds.push_back(panelId);
@@ -1881,6 +1904,12 @@ private:
       // Remainder = remainder minus the panel slab
       BRepAlgoAPI_Cut cutRemainder(remainder, hs.Solid());
       cutRemainder.Build();
+      if (historyOut && cutRemainder.IsDone()) {
+        auto records = captureHistory(cutRemainder, remainder,
+                                      [](const TopoDS_Shape& s){ return shapeId(s); },
+                                      "split_body_by_bends");
+        historyOut->insert(historyOut->end(), records.begin(), records.end());
+      }
       if (!cutRemainder.IsDone() || cutRemainder.Shape().IsNull()) break;
       remainder = cutRemainder.Shape();
     }
@@ -2073,12 +2102,14 @@ private:
         }
       }
 
+      std::vector<ShapeHistoryRecord> shapeHistory;
       TopoDS_Shape firstPassRemainder;
       if (mode == "thin_solid") {
         splitMode2(workShape, planeHalfSize, parentId, angleThresholdDeg, maxThicknessMm,
-                   panelIds, protrusionIds, &firstPassRemainder);
+                   panelIds, protrusionIds, &firstPassRemainder, &shapeHistory);
       } else {
-        splitMode1BFS(workShape, parentId, angleThresholdDeg, defaultThicknessMm, panelIds);
+        splitMode1BFS(workShape, parentId, angleThresholdDeg, defaultThicknessMm, panelIds,
+                      &shapeHistory);
       }
 
       // T022 — Recursive decomposition into remainder solid(s)
@@ -2139,7 +2170,7 @@ private:
       return DecomposedByBendsResult{
           std::move(panelIds), std::move(panelBboxes),
           std::move(protrusionIds), std::move(protrusionBboxes),
-          token, mode};
+          token, mode, std::move(shapeHistory)};
 
     } catch (const GeometryError&) {
       throw;
@@ -2176,7 +2207,9 @@ private:
                                             partAId + "+" + partBId);
 
     try {
-      BRepAlgoAPI_Fuse fuse(itA->second.shape, itB->second.shape);
+      TopoDS_Shape inputA = itA->second.shape;
+      TopoDS_Shape inputB = itB->second.shape;
+      BRepAlgoAPI_Fuse fuse(inputA, inputB);
       fuse.Build();
       if (!fuse.IsDone() || fuse.Shape().IsNull()) {
         throw GeometryError("GE_MERGE_FAILED", "Boolean fuse failed", true, "rollback");
@@ -2214,7 +2247,12 @@ private:
 
       ShellId mergedId = generateUUID();
       shells_[mergedId] = ShellState{mergedId, itA->second.parentSolidId, result};
-      return MergeBodyResult{mergedId, token};
+      auto histA = captureHistory(fuse, inputA,
+          [](const TopoDS_Shape& s) { return shapeId(s); }, "mergeBodiesWithBend");
+      auto histB = captureHistory(fuse, inputB,
+          [](const TopoDS_Shape& s) { return shapeId(s); }, "mergeBodiesWithBend");
+      histA.insert(histA.end(), histB.begin(), histB.end());
+      return MergeBodyResult{mergedId, token, std::move(histA)};
 
     } catch (const GeometryError&) {
       throw;
@@ -2317,7 +2355,7 @@ private:
       }
 
       if (std::abs(extDist) < 1e-6) {
-        return ExtendFaceResult{partId, 0.0, token};
+        return ExtendFaceResult{partId, 0.0, token, {}};
       }
 
       // Extrude face toward target and fuse with shell
@@ -2328,6 +2366,7 @@ private:
         throw GeometryError("GE_EXTEND_FAILED", "Face extrusion failed", true, "rollback");
       }
 
+      TopoDS_Shape inputForHistory = it->second.shape;
       BRepAlgoAPI_Fuse fuse(it->second.shape, prism.Shape());
       fuse.Build();
       if (!fuse.IsDone() || fuse.Shape().IsNull()) {
@@ -2336,7 +2375,9 @@ private:
       }
 
       it->second.shape = fuse.Shape();
-      return ExtendFaceResult{partId, std::abs(extDist), token};
+      auto history = captureHistory(fuse, inputForHistory,
+          [](const TopoDS_Shape& s) { return shapeId(s); }, "extendFaceToTarget");
+      return ExtendFaceResult{partId, std::abs(extDist), token, std::move(history)};
 
     } catch (const GeometryError&) {
       throw;
@@ -2402,7 +2443,9 @@ private:
         throw GeometryError("GE_OFFSET_FAILED", "Face prism failed", true, "rollback");
       }
 
+      TopoDS_Shape inputForHistory = it->second.shape;
       TopoDS_Shape result;
+      std::vector<ShapeHistoryRecord> history;
       if (distanceMm > 0.0) {
         BRepAlgoAPI_Fuse fuse(it->second.shape, prism.Shape());
         fuse.Build();
@@ -2411,6 +2454,8 @@ private:
                               "Face offset fuse failed", true, "rollback");
         }
         result = fuse.Shape();
+        history = captureHistory(fuse, inputForHistory,
+            [](const TopoDS_Shape& s) { return shapeId(s); }, "offsetFace");
       } else {
         BRepAlgoAPI_Cut cut(it->second.shape, prism.Shape());
         cut.Build();
@@ -2419,10 +2464,12 @@ private:
                               "Face offset cut failed", true, "rollback");
         }
         result = cut.Shape();
+        history = captureHistory(cut, inputForHistory,
+            [](const TopoDS_Shape& s) { return shapeId(s); }, "offsetFace");
       }
 
       it->second.shape = result;
-      return OffsetFaceResult{partId, token};
+      return OffsetFaceResult{partId, token, std::move(history)};
 
     } catch (const GeometryError&) {
       throw;
@@ -2558,7 +2605,7 @@ private:
 
       it->second.shape = sewedShape;
       std::string flangeFeatureId = generateUUID();
-      return AddFlangeResult{partId, flangeFeatureId, token};
+      return AddFlangeResult{partId, flangeFeatureId, token, {}};
 
     } catch (const GeometryError&) {
       throw;
@@ -2661,7 +2708,10 @@ private:
       }
 
       it->second.shape = result;
-      return RipEdgeResult{partId, token};
+      std::vector<ShapeHistoryRecord> history;
+      history.push_back({"modified", shapeId(faceA), shapeId(newFaceA), "ripEdge"});
+      history.push_back({"modified", shapeId(faceB), shapeId(newFaceB), "ripEdge"});
+      return RipEdgeResult{partId, token, std::move(history)};
 
     } catch (const GeometryError&) {
       throw;
@@ -2890,6 +2940,7 @@ private:
       BRepPrimAPI_MakeHalfSpace halfSpace(planeFace, refPt);
       TopoDS_Solid halfSpaceSolid = halfSpace.Solid();
 
+      TopoDS_Shape inputForHistory = it->second.shape;
       BRepAlgoAPI_Cut cutter(it->second.shape, halfSpaceSolid);
       cutter.Build();
 
@@ -2907,7 +2958,9 @@ private:
       // Replace the shell's shape in-place
       it->second.shape = result;
 
-      return TrimBodyResult{partId, token};
+      auto history = captureHistory(cutter, inputForHistory,
+          [](const TopoDS_Shape& s) { return shapeId(s); }, "trimBodyWithPlane");
+      return TrimBodyResult{partId, token, std::move(history)};
 
     } catch (const GeometryError&) {
       throw;

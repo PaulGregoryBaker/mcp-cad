@@ -416,6 +416,28 @@ TEST_CASE("GE-XX: splitBodyByBends on testcube.step produces panels", "[ge-xx][b
     REQUIRE(result.protrusionIds.empty());
   }
 }
+
+// ─── T028: splitBodyByBends shape history capture ─────────────────────────────
+
+TEST_CASE("T028: splitBodyByBends populates shapeHistory", "[t028][bends][shape-history][step]") {
+  auto svc = GeometryService::create();
+  const auto path = fixture("testcube.step");
+  SolidId solidId = svc->loadStep(path);
+
+  SECTION("shapeHistory is non-empty after split") {
+    auto result = svc->splitBodyByBends(solidId, 30.0, 5.0, 1.0, 0);
+    REQUIRE(result.shapeHistory.size() >= 6);
+    for (const auto& rec : result.shapeHistory) {
+      CHECK(rec.operationLabel == "split_body_by_bends");
+      CHECK_FALSE(rec.originalId.empty());
+      // deleted records have empty newId; others must have a non-empty newId
+      if (rec.verdict != "deleted") {
+        CHECK_FALSE(rec.newId.empty());
+      }
+    }
+  }
+}
+
 /**
  * Geometry Engine Unit Tests — GE-01, GE-02, GE-03, GE-14 (snapshot/rollback)
  *

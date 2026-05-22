@@ -76,21 +76,31 @@ export interface ManifoldResult {
   issues: ManifoldIssue[];
 }
 
+export interface ShapeHistoryRecord {
+  verdict: 'modified' | 'generated' | 'deleted';
+  original_id: string;
+  new_id: string;
+  operation_label: string;
+}
+
 export interface BooleanCutResult {
   shellIds: string[];
   rollbackToken: string;
+  shape_history?: ShapeHistoryRecord[];
 }
 
 export interface TabSlotResult {
   modifiedShellIds: string[];
   kerfOffsetApplied: number;
   rollbackToken: string;
+  shape_history?: ShapeHistoryRecord[];
 }
 
 export interface RivetHoleResult {
   modifiedShellId: string;
   holeFeatureId: string;
   rollbackToken: string;
+  shape_history?: ShapeHistoryRecord[];
 }
 
 export interface UnfoldResult {
@@ -100,6 +110,7 @@ export interface UnfoldResult {
   kFactorUsed: number;
   bendCount: number;
   rollbackToken: string;
+  shape_history?: ShapeHistoryRecord[];
 }
 
 export interface DxfExportResult {
@@ -165,37 +176,44 @@ export interface GapReport {
 export interface TrimBodyResult {
   trimmedShellId: string;
   rollbackToken: string;
+  shape_history?: ShapeHistoryRecord[];
 }
 
 export interface SplitBodyResult {
   positiveShellId: string;
   negativeShellId: string;
   rollbackToken: string;
+  shape_history?: ShapeHistoryRecord[];
 }
 
 export interface ExtendFaceResult {
   modifiedShellId: string;
   extensionDistanceMm: number;
   rollbackToken: string;
+  shape_history?: ShapeHistoryRecord[];
 }
 
 export interface OffsetFaceResult {
   modifiedShellId: string;
   rollbackToken: string;
+  shape_history?: ShapeHistoryRecord[];
 }
 
 export interface AddFlangeResult {
   modifiedShellId: string;
   flangeFeatureId: string;
   rollbackToken: string;
+  shape_history?: ShapeHistoryRecord[];
 }
 
 export interface RipEdgeResult {
   modifiedShellId: string;
   rollbackToken: string;
+  shape_history?: ShapeHistoryRecord[];
 }
 
 export interface MergeBodyResult {
   mergedShellId: string;
   rollbackToken: string;
+  shape_history?: ShapeHistoryRecord[];
 }
