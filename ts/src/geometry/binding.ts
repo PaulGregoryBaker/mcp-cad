@@ -61,6 +61,7 @@ export interface GeometryAddon {
   ): NestResult;
   createSnapshot(label: string): string;
   restoreSnapshot(snapshotId: string): RestoreResult;
+  clearSnapshot(snapshotId: string): void;
   clearSnapshots(): void;
   computeIntersections(partIds: string[]): ClashReport;
   computeGaps(partAId: string, partBId: string, maxDistanceThresholdMm: number): GapReport;
@@ -288,6 +289,10 @@ export class GeometryBinding {
     } catch (err) {
       throw toStructuredError(err);
     }
+  }
+
+  clearSnapshot(snapshotId: string): void {
+    this.addon.clearSnapshot(snapshotId);
   }
 
   clearSnapshots(): void {

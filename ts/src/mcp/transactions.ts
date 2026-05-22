@@ -17,6 +17,13 @@ export type SnapshotId = string;
 
 export type TransactionState = 'active' | 'committed' | 'rolled_back';
 
+export interface ShapeHistoryRecord {
+  verdict: 'modified' | 'generated' | 'deleted';
+  original_id: string;
+  new_id: string;
+  operation_label: string;
+}
+
 export interface Transaction {
   id: TransactionId;
   label: string;
@@ -25,6 +32,7 @@ export interface Transaction {
   startedAt: number;
   state: TransactionState;
   endedAt?: number;
+  shapeHistory: ShapeHistoryRecord[];
 }
 
 export class TransactionRegistry {
@@ -51,6 +59,7 @@ export class TransactionRegistry {
       snapshotId,
       startedAt: Date.now(),
       state: 'active',
+      shapeHistory: [],
     };
     this.transactions.set(id, txn);
     this.activeId = id;
@@ -79,6 +88,32 @@ export class TransactionRegistry {
 
   get(id: TransactionId): Transaction | undefined {
     return this.transactions.get(id);
+  }
+
+  appendHistory(id: TransactionId, records: ShapeHistoryRecord[]): void {
+    const txn = this.transactions.get(id);
+    if (!txn) {
+      throwError(
+        ErrorCodes.TRANSACTION_NOT_FOUND,
+        `Transaction ${id} does not exist in this session.`,
+        true,
+        'begin_transaction',
+      );
+    }
+    txn.shapeHistory.push(...records);
+  }
+
+  getHistory(id: TransactionId): ShapeHistoryRecord[] {
+    const txn = this.transactions.get(id);
+    if (!txn) {
+      throwError(
+        ErrorCodes.TRANSACTION_NOT_FOUND,
+        `Transaction ${id} does not exist in this session.`,
+        true,
+        'begin_transaction',
+      );
+    }
+    return txn.shapeHistory;
   }
 
   reset(): void {

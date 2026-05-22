@@ -50,6 +50,7 @@ export function getToolDefinitions(): object[] {
           solid_id: { type: 'string' },
           strategy: { type: 'string', enum: ['Integrity', 'Simplicity', 'Logistics'] },
           max_panels: { type: 'number', minimum: 1, maximum: 10 },
+          transaction_id: { type: 'string' },
         },
         required: ['solid_id', 'strategy'],
       },
@@ -66,6 +67,7 @@ export function getToolDefinitions(): object[] {
             enum: ['tab_slot', 'rivet', 'weld', 'adhesive', 'plastic_fastener'],
           },
           clearance_mm: { type: 'number', minimum: 0.1, maximum: 0.2 },
+          transaction_id: { type: 'string' },
         },
         required: ['panel_ids', 'joint_type'],
       },
@@ -79,6 +81,7 @@ export function getToolDefinitions(): object[] {
           panel_id: { type: 'string' },
           relief_type: { type: 'string', enum: ['dogbone', 'circular'] },
           radius_mm: { type: 'number', minimum: 0.5 },
+          transaction_id: { type: 'string' },
         },
         required: ['panel_id', 'relief_type'],
       },
@@ -92,6 +95,7 @@ export function getToolDefinitions(): object[] {
           panel_id: { type: 'string' },
           material_id: { type: 'string' },
           k_factor: { type: 'number', minimum: 0, maximum: 1 },
+          transaction_id: { type: 'string' },
         },
         required: ['panel_id', 'material_id'],
       },
@@ -294,6 +298,7 @@ export function getToolDefinitions(): object[] {
             type: 'boolean',
             description: 'If true, keep the half on the positive side of the plane normal',
           },
+          transaction_id: { type: 'string' },
         },
         required: ['part_id', 'plane', 'keep_positive_side'],
       },
@@ -328,6 +333,7 @@ export function getToolDefinitions(): object[] {
             maxItems: 2,
             description: 'Labels for the positive and negative shells',
           },
+          transaction_id: { type: 'string' },
         },
         required: ['part_id', 'cutting_plane', 'output_names'],
       },
@@ -347,6 +353,7 @@ export function getToolDefinitions(): object[] {
             description: 'Edge IDs to fillet, or ["all"] to fillet the entire seam',
           },
           bend_radius: { type: 'number', exclusiveMinimum: 0, description: 'Fillet radius in mm' },
+          transaction_id: { type: 'string' },
         },
         required: ['part_a_id', 'part_b_id', 'target_edges', 'bend_radius'],
       },
@@ -364,6 +371,7 @@ export function getToolDefinitions(): object[] {
             type: 'object',
             description: 'Target geometry: plane fields for plane target; part_id/face_id for face targets',
           },
+          transaction_id: { type: 'string' },
         },
         required: ['part_id', 'face_id', 'target_type', 'target'],
       },
@@ -377,6 +385,7 @@ export function getToolDefinitions(): object[] {
           part_id: { type: 'string' },
           face_id: { type: 'string' },
           distance: { type: 'number', description: 'mm; positive = add material, negative = remove' },
+          transaction_id: { type: 'string' },
         },
         required: ['part_id', 'face_id', 'distance'],
       },
@@ -392,6 +401,7 @@ export function getToolDefinitions(): object[] {
           length: { type: 'number', exclusiveMinimum: 0, description: 'Flange length in mm' },
           angle: { type: 'number', exclusiveMinimum: 0, maximum: 180, description: 'Degrees relative to face normal' },
           bend_radius: { type: 'number', exclusiveMinimum: 0, description: 'Internal bend radius in mm' },
+          transaction_id: { type: 'string' },
         },
         required: ['part_id', 'edge_id', 'length', 'angle', 'bend_radius'],
       },
@@ -404,6 +414,7 @@ export function getToolDefinitions(): object[] {
         properties: {
           part_id: { type: 'string' },
           edge_id: { type: 'string', description: 'Interior corner edge ID to rip' },
+          transaction_id: { type: 'string' },
         },
         required: ['part_id', 'edge_id'],
       },
@@ -457,6 +468,7 @@ export function getToolDefinitions(): object[] {
             description:
               'Maximum recursion depth for nested decomposition. 0 = single pass. When > 0 the remainder solid after each pass is recursively decomposed, accumulating all panels and protrusions. Default 0.',
           },
+          transaction_id: { type: 'string' },
         },
         required: ['part_id'],
       },
@@ -596,7 +608,14 @@ function handleDecomposeVolume(args: Record<string, unknown>): unknown {
   const solidId = requireString(args, 'solid_id');
   const strategy = requireString(args, 'strategy');
 
-  const rollbackToken = getGeometryBinding().createSnapshot('before decompose_volume');
+  const ctx = resolveTransactionContext(args);
+  let rollbackToken: string;
+  if (ctx.mode === 'implicit') {
+    rollbackToken = getGeometryBinding().createSnapshot('before decompose_volume');
+  } else {
+    transactionRegistry.appendHistory(ctx.transactionId, []);
+    rollbackToken = ctx.transactionId;
+  }
 
   // Enumerate the individual solid bodies in the STEP compound.
   // This correctly handles multi-body assemblies (e.g. 20+ braai panels)
@@ -641,13 +660,18 @@ function handleSynthesizeJoints(args: Record<string, unknown>, config: Manufactu
     );
   }
 
+  const ctx = resolveTransactionContext(args);
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, []);
+  }
+
   if (jointType === 'tab_slot') {
     const result = getGeometryBinding().addTabSlot(panelIds[0]!, panelIds[1]!, clearanceMm);
     return {
       modified_panel_ids: result.modifiedShellIds,
       joint_type_applied: jointType,
       kerf_offset_mm: result.kerfOffsetApplied,
-      rollback_token: result.rollbackToken,
+      rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
     };
   }
 
@@ -657,12 +681,14 @@ function handleSynthesizeJoints(args: Record<string, unknown>, config: Manufactu
       modified_panel_ids: [result.modifiedShellId],
       joint_type_applied: jointType,
       kerf_offset_mm: clearanceMm,
-      rollback_token: result.rollbackToken,
+      rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
     };
   }
 
   // weld and other types: snapshot + stub response
-  const token = getGeometryBinding().createSnapshot(`before ${jointType} synthesis`);
+  const token = ctx.mode === 'implicit'
+    ? getGeometryBinding().createSnapshot(`before ${jointType} synthesis`)
+    : ctx.transactionId;
   return {
     modified_panel_ids: panelIds,
     joint_type_applied: jointType,
@@ -678,12 +704,19 @@ function handleGenerateReliefs(args: Record<string, unknown>): unknown {
     throwError(ErrorCodes.GE_RELIEF_FAILED, 'radius_mm must be a number when provided', false);
   }
 
-  const token = getGeometryBinding().createSnapshot(`before generate_reliefs on ${panelId}`);
+  const ctx = resolveTransactionContext(args);
+  let rollbackToken: string;
+  if (ctx.mode === 'implicit') {
+    rollbackToken = getGeometryBinding().createSnapshot(`before generate_reliefs on ${panelId}`);
+  } else {
+    transactionRegistry.appendHistory(ctx.transactionId, []);
+    rollbackToken = ctx.transactionId;
+  }
 
   return {
     modified_panel_id: panelId,
     relief_count: 4,  // placeholder; Phase C will use actual detection
-    rollback_token: token,
+    rollback_token: rollbackToken,
   };
 }
 
@@ -702,8 +735,13 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
   const material = matStore.get(materialId);
   const kFactor = (args['k_factor'] as number | undefined) ?? material.kFactor;
 
+  const ctx = resolveTransactionContext(args);
   const result = getGeometryBinding().unfoldShell(panelId, kFactor);
   session.registerUnfold(result.unfoldId);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, []);
+  }
 
   return {
     unfold_id: result.unfoldId,
@@ -711,7 +749,7 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
     flat_height_mm: result.flatHeightMm,
     k_factor_used: result.kFactorUsed,
     bend_count: result.bendCount,
-    rollback_token: result.rollbackToken,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
   };
 }
 
@@ -954,6 +992,33 @@ function requireStringArray(args: Record<string, unknown>, key: string): string[
   return val as string[];
 }
 
+type TransactionContext = { mode: 'join'; transactionId: string } | { mode: 'implicit' };
+
+function resolveTransactionContext(args: Record<string, unknown>): TransactionContext {
+  const specifiedId = typeof args['transaction_id'] === 'string' ? args['transaction_id'] : undefined;
+  const active = transactionRegistry.getActive();
+
+  if (specifiedId !== undefined) {
+    if (!active || active.id !== specifiedId) {
+      throwError(
+        ErrorCodes.TRANSACTION_MISMATCH,
+        active
+          ? `Specified transaction_id ${specifiedId} does not match the active transaction ${active.id}.`
+          : `No active transaction; cannot join transaction ${specifiedId}.`,
+        true,
+        'begin_transaction',
+      );
+    }
+    return { mode: 'join', transactionId: specifiedId };
+  }
+
+  if (active) {
+    return { mode: 'join', transactionId: active.id };
+  }
+
+  return { mode: 'implicit' };
+}
+
 // ─── Body topology tool handlers ──────────────────────────────────────────────
 
 function handleSplitBodyByPlane(args: Record<string, unknown>): unknown {
@@ -964,13 +1029,18 @@ function handleSplitBodyByPlane(args: Record<string, unknown>): unknown {
   }
   const plane = planeArg as { normal: { x: number; y: number; z: number }; origin: { x: number; y: number; z: number } };
 
+  const ctx = resolveTransactionContext(args);
   const result = getGeometryBinding().splitBodyByPlane(partId, plane);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, []);
+  }
 
   const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     positive_shell_id: result.positiveShellId,
     negative_shell_id: result.negativeShellId,
-    rollback_token: result.rollbackToken,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
     positive_mesh_url: `${meshBaseUrl}/mesh/${result.positiveShellId}.glb`,
     negative_mesh_url: `${meshBaseUrl}/mesh/${result.negativeShellId}.glb`,
   };
@@ -985,12 +1055,17 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
     throwError(ErrorCodes.GE_MERGE_FAILED, 'bend_radius must be a positive number', false);
   }
 
+  const ctx = resolveTransactionContext(args);
   const result = getGeometryBinding().mergeBodiesWithBend(partAId, partBId, targetEdges, bendRadius as number);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, []);
+  }
 
   const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     merged_shell_id: result.mergedShellId,
-    rollback_token: result.rollbackToken,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
     mesh_url: `${meshBaseUrl}/mesh/${result.mergedShellId}.glb`,
   };
 }
@@ -1013,14 +1088,19 @@ function handleExtendFaceToTarget(args: Record<string, unknown>): unknown {
   const originObj = (target['origin'] ?? { x: 0, y: 0, z: 0 }) as { x: number; y: number; z: number };
   const targetPlane = { normal: normalObj, origin: originObj };
 
+  const ctx = resolveTransactionContext(args);
   const result = getGeometryBinding().extendFaceToTarget(
     partId, faceId, targetType, targetPartId, targetFaceId, targetPlane,
   );
 
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, []);
+  }
+
   return {
     modified_shell_id: result.modifiedShellId,
     extension_distance_mm: result.extensionDistanceMm,
-    rollback_token: result.rollbackToken,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
   };
 }
 
@@ -1032,11 +1112,16 @@ function handleOffsetFace(args: Record<string, unknown>): unknown {
     throwError(ErrorCodes.GE_OFFSET_FAILED, 'distance must be a non-zero number', false);
   }
 
+  const ctx = resolveTransactionContext(args);
   const result = getGeometryBinding().offsetFace(partId, faceId, distance as number);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, []);
+  }
 
   return {
     modified_shell_id: result.modifiedShellId,
-    rollback_token: result.rollbackToken,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
   };
 }
 
@@ -1057,14 +1142,19 @@ function handleAddFlange(args: Record<string, unknown>): unknown {
     throwError(ErrorCodes.GE_FLANGE_FAILED, 'bend_radius must be a positive number', false);
   }
 
+  const ctx = resolveTransactionContext(args);
   const result = getGeometryBinding().addFlange(
     partId, edgeId, length as number, angle as number, bendRadius as number,
   );
 
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, []);
+  }
+
   return {
     modified_shell_id: result.modifiedShellId,
     flange_feature_id: result.flangeFeatureId,
-    rollback_token: result.rollbackToken,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
   };
 }
 
@@ -1072,11 +1162,16 @@ function handleRipEdge(args: Record<string, unknown>): unknown {
   const partId = requireString(args, 'part_id');
   const edgeId = requireString(args, 'edge_id');
 
+  const ctx = resolveTransactionContext(args);
   const result = getGeometryBinding().ripEdge(partId, edgeId);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, []);
+  }
 
   return {
     modified_shell_id: result.modifiedShellId,
-    rollback_token: result.rollbackToken,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
   };
 }
 
@@ -1151,12 +1246,17 @@ function handleTrimBodyWithPlane(args: Record<string, unknown>): unknown {
   }
   const plane = planeArg as { normal: { x: number; y: number; z: number }; origin: { x: number; y: number; z: number } };
 
+  const ctx = resolveTransactionContext(args);
   const result = getGeometryBinding().trimBodyWithPlane(partId, plane, keepPositiveSide as boolean);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, []);
+  }
 
   const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     trimmed_shell_id: result.trimmedShellId,
-    rollback_token: result.rollbackToken,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
     mesh_url: `${meshBaseUrl}/mesh/${result.trimmedShellId}.glb`,
   };
 }
@@ -1259,6 +1359,7 @@ function handleSplitBodyByBends(args: Record<string, unknown>): unknown {
     throwError(ErrorCodes.GE_DECOMPOSE_BY_BENDS_FAILED, 'angle_threshold_deg must be non-negative', true);
   }
 
+  const ctx = resolveTransactionContext(args);
   const result = getGeometryBinding().splitBodyByBends(
     partId, threshold, maxThicknessMm, defaultThicknessMm, maxRecursionDepth,
   );
@@ -1268,6 +1369,10 @@ function handleSplitBodyByBends(args: Record<string, unknown>): unknown {
   }
   for (const shellId of result.protrusion_ids) {
     session.registerShell(shellId);
+  }
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, []);
   }
 
   const allIds = [...result.panel_ids, ...result.protrusion_ids];
@@ -1280,7 +1385,7 @@ function handleSplitBodyByBends(args: Record<string, unknown>): unknown {
     protrusion_count: result.protrusion_ids.length,
     protrusion_bboxes: result.protrusion_bboxes,
     detected_mode: result.detected_mode,
-    rollback_token: result.rollbackToken,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
     mesh_urls: allIds.map(id => `${meshBaseUrl}/mesh/${id}.glb`),
   };
 }

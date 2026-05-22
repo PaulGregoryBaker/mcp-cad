@@ -6,7 +6,10 @@
  * mechanism. No C++ changes; the mocked addon returns deterministic snapshot
  * ids per the existing pattern from cube_box_workflow.functional.test.ts.
  *
- * Tasks: T012.
+ * Phase 2 covers transaction_id acceptance by mutating tools, auto-join
+ * behaviour, and TRANSACTION_MISMATCH when a wrong id is supplied.
+ *
+ * Tasks: T012, T017.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -261,5 +264,114 @@ describe('Transaction primitive (Feature 004 Phase 1)', () => {
     );
 
     expect(mock.restoreSnapshot).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Phase 2: transaction_id acceptance by mutating tools ─────────────────────
+
+describe('Transaction primitive Phase 2 — mutating tools accept transaction_id', () => {
+  let mock: ReturnType<typeof buildMockAddon>;
+
+  beforeEach(() => {
+    mock = buildMockAddon();
+    setGeometryBindingMock(mock);
+    transactionRegistry.reset();
+  });
+
+  afterEach(() => {
+    setGeometryBindingMock(undefined);
+    transactionRegistry.reset();
+    vi.restoreAllMocks();
+  });
+
+  // ── Case (a): auto-join — no transaction_id passed, active txn present ───────
+
+  it('begin → split_body_by_bends without transaction_id auto-joins the active transaction', async () => {
+    const begin = (await dispatchTool('begin_transaction', {
+      label: 'auto-join test',
+    }, config)) as { transaction_id: string; rollback_token: string };
+
+    // snap-1 created by begin_transaction; snap-2 will come from C++ splitBodyByBends
+    expect(begin.rollback_token).toBe('snap-1');
+
+    const result = (await dispatchTool('split_body_by_bends', {
+      part_id: 'cube-solid',
+    }, config)) as { rollback_token: string; panel_ids: string[] };
+
+    // When auto-joining, rollback_token is the transaction_id, not the per-op snap
+    expect(result.rollback_token).toBe(begin.transaction_id);
+    expect(result.panel_ids).toEqual(['p1']);
+
+    // The transaction is still active
+    expect(transactionRegistry.getActive()?.id).toBe(begin.transaction_id);
+  });
+
+  // ── Case (b): explicit transaction_id — wrong id → TRANSACTION_MISMATCH ──────
+
+  it('begin → split_body_by_bends with wrong transaction_id returns TRANSACTION_MISMATCH', async () => {
+    await dispatchTool('begin_transaction', { label: 'mismatch test' }, config);
+
+    await expectStructuredError(
+      dispatchTool('split_body_by_bends', {
+        part_id: 'cube-solid',
+        transaction_id: 'transaction://wrong-id-entirely',
+      }, config),
+      'TRANSACTION_MISMATCH',
+    );
+  });
+
+  // ── Case (c): explicit matching transaction_id → rollback_token is txn id ────
+
+  it('begin → split_body_by_bends with matching transaction_id returns transaction_id as rollback_token', async () => {
+    const begin = (await dispatchTool('begin_transaction', {
+      label: 'explicit-id test',
+    }, config)) as { transaction_id: string };
+
+    const result = (await dispatchTool('split_body_by_bends', {
+      part_id: 'cube-solid',
+      transaction_id: begin.transaction_id,
+    }, config)) as { rollback_token: string };
+
+    expect(result.rollback_token).toBe(begin.transaction_id);
+  });
+
+  // ── Backward-compat: no active txn → implicit mode (original behaviour) ──────
+
+  it('split_body_by_bends without any active transaction returns per-op rollback_token', async () => {
+    const result = (await dispatchTool('split_body_by_bends', {
+      part_id: 'cube-solid',
+    }, config)) as { rollback_token: string };
+
+    // No active transaction; C++ op returns its own snap token
+    expect(result.rollback_token).toMatch(/^snap-/);
+    expect(transactionRegistry.getActive()).toBeUndefined();
+  });
+
+  // ── Backward-compat: decompose_volume without active txn creates its own snap ─
+
+  it('decompose_volume without any active transaction creates its own snapshot', async () => {
+    await dispatchTool('decompose_volume', {
+      solid_id: 'cube-solid',
+      strategy: 'Integrity',
+    }, config);
+
+    // In implicit mode, createSnapshot is called for decompose_volume
+    expect(mock.createSnapshot).toHaveBeenCalled();
+  });
+
+  // ── No snapshot created for decompose_volume when joining a transaction ───────
+
+  it('decompose_volume inside a transaction skips per-op snapshot creation', async () => {
+    await dispatchTool('begin_transaction', { label: 'no-snap test' }, config);
+    const snapCallsBefore = (mock.createSnapshot as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    await dispatchTool('decompose_volume', {
+      solid_id: 'cube-solid',
+      strategy: 'Integrity',
+    }, config);
+
+    // No additional createSnapshot call during the joined decompose_volume
+    const snapCallsAfter = (mock.createSnapshot as ReturnType<typeof vi.fn>).mock.calls.length;
+    expect(snapCallsAfter).toBe(snapCallsBefore);
   });
 });

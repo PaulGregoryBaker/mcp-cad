@@ -73,23 +73,23 @@ SC-002). New test confirms mutating tools auto-join an active transaction.
 
 ### TS Layer — Tool Definition Updates
 
-- [ ] T013 [P] [US2] Update `ts/src/mcp/tools.ts`: add optional `transaction_id: { type: 'string' }` to the `inputSchema.properties` of every mutating tool listed in the spec assumptions (`decompose_volume`, `synthesize_joints`, `generate_reliefs`, `apply_unfold`, `trim_body_with_plane`, `split_body_by_plane`, `merge_bodies_with_bend`, `extend_face_to_target`, `offset_face`, `add_flange`, `rip_edge`, `split_body_by_bends`). Do NOT add it to `required`.
+- [X] T013 [P] [US2] Update `ts/src/mcp/tools.ts`: add optional `transaction_id: { type: 'string' }` to the `inputSchema.properties` of every mutating tool listed in the spec assumptions (`decompose_volume`, `synthesize_joints`, `generate_reliefs`, `apply_unfold`, `trim_body_with_plane`, `split_body_by_plane`, `merge_bodies_with_bend`, `extend_face_to_target`, `offset_face`, `add_flange`, `rip_edge`, `split_body_by_bends`). Do NOT add it to `required`.
 
 ### TS Layer — Dispatch Logic
 
-- [ ] T014 [US2] Add a `resolveTransactionContext(args)` helper in `ts/src/mcp/tools.ts` that returns either `{mode: 'join', transactionId}` (when args contains a `transaction_id` matching the active txn, or when no `transaction_id` is provided but a txn is active) or `{mode: 'implicit'}` (when no txn is active and no `transaction_id` is provided). Throw `TRANSACTION_MISMATCH` when args specifies a `transaction_id` that doesn't equal the active txn id.
+- [X] T014 [US2] Add a `resolveTransactionContext(args)` helper in `ts/src/mcp/tools.ts` that returns either `{mode: 'join', transactionId}` (when args contains a `transaction_id` matching the active txn, or when no `transaction_id` is provided but a txn is active) or `{mode: 'implicit'}` (when no txn is active and no `transaction_id` is provided). Throw `TRANSACTION_MISMATCH` when args specifies a `transaction_id` that doesn't equal the active txn id.
 
-- [ ] T015 [US2] Update every mutating tool handler in `ts/src/mcp/tools.ts` to call `resolveTransactionContext(args)` at entry. When `mode === 'join'`, suppress the per-op snapshot creation that the existing handlers do, and instead append shape-history records (empty for Phase 2 — populated in Phase 3) to the active transaction via `registry.appendHistory(id, [])`. When `mode === 'implicit'`, behave exactly as today. In both cases, the returned `rollback_token` equals the active transaction id (join) or the per-op snapshot id (implicit).
+- [X] T015 [US2] Update every mutating tool handler in `ts/src/mcp/tools.ts` to call `resolveTransactionContext(args)` at entry. When `mode === 'join'`, suppress the per-op snapshot creation that the existing handlers do, and instead append shape-history records (empty for Phase 2 — populated in Phase 3) to the active transaction via `registry.appendHistory(id, [])`. When `mode === 'implicit'`, behave exactly as today. In both cases, the returned `rollback_token` equals the active transaction id (join) or the per-op snapshot id (implicit).
 
-- [ ] T016 [P] [US2] Update `ts/src/geometry/binding.ts` to expose a `createSnapshot(label)` and `clearSnapshot(snapshotId)` passthrough to the C++ snapshot registry, if not already present. Used by `handleBeginTransaction` and `handleCommitTransaction`.
+- [X] T016 [P] [US2] Update `ts/src/geometry/binding.ts` to expose a `createSnapshot(label)` and `clearSnapshot(snapshotId)` passthrough to the C++ snapshot registry, if not already present. Used by `handleBeginTransaction` and `handleCommitTransaction`. **Note**: `createSnapshot` was already present; `clearSnapshot(snapshotId)` added to both `GeometryAddon` interface and `GeometryBinding` class.
 
 ### Integration Tests
 
-- [ ] T017 [US2] Extend `ts/tests/integration/transaction_primitive.integration.test.ts` with: (a) `begin → split_body_by_bends without transaction_id → commit` ⇒ verifies auto-join; (b) `begin → split_body_by_bends with wrong transaction_id` ⇒ `TRANSACTION_MISMATCH`; (c) confirm response `rollback_token === transaction_id` in the auto-join case.
+- [X] T017 [US2] Extend `ts/tests/integration/transaction_primitive.integration.test.ts` with: (a) `begin → split_body_by_bends without transaction_id → commit` ⇒ verifies auto-join; (b) `begin → split_body_by_bends with wrong transaction_id` ⇒ `TRANSACTION_MISMATCH`; (c) confirm response `rollback_token === transaction_id` in the auto-join case. **Note**: 6 new tests added in a second `describe` block (Phase 2 suite). Also tests backward-compat for implicit mode (no active txn) and snapshot suppression for decompose_volume.
 
-- [ ] T018 [P] [US2] Run the full existing `ts/tests/integration/` suite. Any test that breaks indicates a backward-compat regression — fix the dispatch logic, not the test.
+- [X] T018 [P] [US2] Run the full existing `ts/tests/integration/` suite. Any test that breaks indicates a backward-compat regression — fix the dispatch logic, not the test. **Result**: 294/294 pass (288 existing + 6 new). No regressions.
 
-**Checkpoint**: T013–T017 pass. The full existing integration suite passes without any source-code changes to the tests themselves (SC-002 met). The `INF-03` golden-path test runs within 5% of its pre-change timing (SC-005 met).
+**Checkpoint** ✓: T013–T018 pass. 294/294 tests green (6 new Phase 2 tests). No source-code changes to existing tests (SC-002 met). `appendHistory` and `getHistory` added to TransactionRegistry; `ShapeHistoryRecord` type defined. `clearSnapshot(snapshotId)` added to binding. `resolveTransactionContext` helper governs all 12 mutating tools.
 
 ---
 
