@@ -26,39 +26,39 @@ synthesises joints, then rolls back. Assert the session contains only the origin
 
 ### Dependency
 
-- [ ] T001 Add `ulid` dependency to `package.json`: `npm install --save ulid@^2.3.0`. Verify lockfile updates. Used to generate `transaction://<ulid>` ids.
+- [X] T001 Reuse existing `uuid@^9.0.0` dependency in `ts/package.json` for `transaction://<uuid>` ids; no new dependency required. (Deviation from original plan which proposed `ulid@^2.3.0` — `uuid` is already present and the existing `SnapshotId` in [cpp/src/geometry/snapshot.hpp](../../cpp/src/geometry/snapshot.hpp) is already UUID v4. Lexicographic sortability of ULIDs is not required for MVP lineage queries.)
 
 ### TS Layer — Registry
 
-- [ ] T002 [P] [US1] Add 4 new error codes to `ts/src/mcp/errors.ts`: `TRANSACTION_NOT_FOUND`, `TRANSACTION_NOT_ACTIVE`, `TRANSACTION_ALREADY_ACTIVE`, `TRANSACTION_MISMATCH`. Match the existing `ErrorCodes` constant shape.
+- [X] T002 [P] [US1] Added 4 new error codes to `ts/src/mcp/errors.ts`: `TRANSACTION_NOT_FOUND`, `TRANSACTION_NOT_ACTIVE`, `TRANSACTION_ALREADY_ACTIVE`, `TRANSACTION_MISMATCH`.
 
-- [ ] T003 [US1] Create `ts/src/mcp/transactions.ts` with the `TransactionRegistry` class. Fields: `private transactions: Map<string, Transaction>`, `private activeId: string | undefined`. Methods: `begin(label, product?) → {id, snapshotId}` (calls `ulid()`, registers row, sets `activeId`, throws `TRANSACTION_ALREADY_ACTIVE` if one is active); `commit(id)` (validates id matches `activeId`, marks state, clears `activeId`); `rollback(id)` (validates, deletes row, clears `activeId`); `getActive(): Transaction | undefined`; `get(id)`; `appendHistory(id, records)`; `getHistory(id)`. The `Transaction` type carries `{id, label, snapshotId, shapeHistory: ShapeHistoryRecord[], state: 'active' | 'committed' | 'rolled_back', startedAt: number}`. SnapshotId is captured at `begin` time by calling the C++ snapshot via session.
+- [X] T003 [US1] Created `ts/src/mcp/transactions.ts` with the `TransactionRegistry` class. Uses `node:crypto.randomUUID()` for `transaction://<uuid>` ids (matches existing `SnapshotId` UUID v4 convention). `appendHistory` / `getHistory` deferred to Phase 3 (T026/T027) when `get_transaction_history` ships — `shape_history` isn't captured in Phase 1 anyway.
 
-- [ ] T004 [US1] Update `ts/src/geometry/session.ts` to own a `TransactionRegistry` instance. Add accessor `getTransactionRegistry(): TransactionRegistry`. Initialise alongside the existing geometry session.
+- [X] T004 [US1] **Deviation**: kept the `transactionRegistry` singleton in `ts/src/mcp/transactions.ts` rather than `ts/src/geometry/session.ts`. Reason: putting the singleton in `session.ts` would create a `geometry → mcp` import, violating Constitution Principle II (bounded context separation — MCP may import from Geometry, but not the reverse). Tests reset the registry explicitly via `transactionRegistry.reset()`.
 
 ### TS Layer — Tool Definitions
 
-- [ ] T005 [US1] Add `begin_transaction` tool definition to `getToolDefinitions()` in `ts/src/mcp/tools.ts`: `inputSchema` requires `label: string`, optional `product: string`. Output: `{transaction_id, base_geometry_revision, status: 'active'}`.
+- [X] T005 [US1] Added `begin_transaction` tool definition to `getToolDefinitions()` in `ts/src/mcp/tools.ts`. `base_geometry_revision` deferred to Phase 1 of 005 (no concept of geometry revision exists in 004 — would be a TODO field of value 0). Output: `{transaction_id, status: 'active', label, product, rollback_token}`.
 
-- [ ] T006 [US1] Add `commit_transaction` tool definition to `getToolDefinitions()`. `inputSchema` requires `transaction_id: string`. Output: `{transaction_id, status: 'committed'}`.
+- [X] T006 [US1] Added `commit_transaction` tool definition. Output: `{transaction_id, status: 'committed', label}`.
 
-- [ ] T007 [US1] Add `rollback_transaction` tool definition to `getToolDefinitions()`. Same input shape. Output: `{transaction_id, status: 'rolled_back'}`.
+- [X] T007 [US1] Added `rollback_transaction` tool definition. Output: `{transaction_id, status: 'rolled_back', label, restored_solid_ids, restored_shell_ids}`.
 
 ### TS Layer — Tool Handlers
 
-- [ ] T008 [US1] Add `handleBeginTransaction(args)` in `ts/src/mcp/tools.ts`: extracts `label` and optional `product`; calls `getGeometryBinding().createSnapshot(label)` to capture the pre-state; calls `session.getTransactionRegistry().begin(label, product, snapshotId)`; returns `{transaction_id, base_geometry_revision: 0 /* MVP placeholder */, status: 'active'}`. Maps `TRANSACTION_ALREADY_ACTIVE` from the registry into a structured error with `recoverable: true` and the active id in the payload.
+- [X] T008 [US1] Added `handleBeginTransaction(args)` in `ts/src/mcp/tools.ts`. Calls `getGeometryBinding().createSnapshot(label)` and `transactionRegistry.begin(...)`. `TRANSACTION_ALREADY_ACTIVE` errors include the active id and `suggested_tool: 'commit_transaction'`.
 
-- [ ] T009 [US1] Add `handleCommitTransaction(args)` in `ts/src/mcp/tools.ts`: extracts `transaction_id`; calls `registry.commit(id)`; calls `getGeometryBinding().clearSnapshot(snapshotId)` to drop the pre-snapshot; returns `{transaction_id, status: 'committed'}`. Map `TRANSACTION_NOT_FOUND` and `TRANSACTION_NOT_ACTIVE`.
+- [X] T009 [US1] Added `handleCommitTransaction(args)`. **Deviation**: uses `clearSnapshots()` (clears all) rather than the proposed `clearSnapshot(snapshotId)` — the per-id primitive doesn't exist yet on the C++ side, and Phase 1 of 004 explicitly defers C++ changes. In MVP single-active-transaction this clears at most one outer snapshot. Phase 2 (T016) is where the per-id primitive lands if needed.
 
-- [ ] T010 [US1] Add `handleRollbackTransaction(args)` in `ts/src/mcp/tools.ts`: extracts `transaction_id`; calls `getGeometryBinding().restoreSnapshot(snapshotId)`; calls `registry.rollback(id)` (which discards history); returns `{transaction_id, status: 'rolled_back'}`.
+- [X] T010 [US1] Added `handleRollbackTransaction(args)`. Looks up the transaction first to resolve the snapshot id, then calls `restoreSnapshot` and `registry.rollback`. Returns `restored_solid_ids` / `restored_shell_ids` from the C++ restore result.
 
-- [ ] T011 [US1] Wire the three new handlers into `dispatchTool()` switch in `ts/src/mcp/tools.ts`.
+- [X] T011 [US1] Wired the three new cases into `dispatchTool()` switch immediately after `case 'rollback'`.
 
 ### Integration Test
 
-- [ ] T012 [US1] Create `ts/tests/integration/transaction_primitive.integration.test.ts`. Cases: (a) begin → decompose → synthesise → rollback ⇒ only original solid remains in session; (b) begin → decompose → commit ⇒ panels persist, second rollback attempt errors with `TRANSACTION_NOT_FOUND`; (c) begin → begin again ⇒ second begin errors with `TRANSACTION_ALREADY_ACTIVE` and payload contains first transaction id; (d) commit non-existent id ⇒ `TRANSACTION_NOT_FOUND`. Uses the existing geometry mock pattern from `cube_box_workflow.functional.test.ts`.
+- [X] T012 [US1] Created `ts/tests/integration/transaction_primitive.integration.test.ts` with 5 tests covering all four planned cases (rollback case (d) was split into two — `commit_transaction` and `rollback_transaction` on unknown ids). All 5 pass. Note: case (b) was adjusted — a rollback after commit errors with `TRANSACTION_NOT_ACTIVE` (the transaction exists but is committed), not `TRANSACTION_NOT_FOUND`. This matches the registry's design and is the more precise error.
 
-**Checkpoint**: All four cases in T012 pass. Existing integration tests still pass unchanged. No C++ changes yet. SC-001 and SC-004 are met for the no-C++-change subset.
+**Checkpoint** ✓: All 5 tests in T012 pass. Full `npm test` suite passes (288/288 — 283 existing + 5 new). No C++ changes. SC-001, SC-002, SC-004, SC-005 met.
 
 ---
 

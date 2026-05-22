@@ -18,6 +18,7 @@ function getGeometryBinding() {
 import { session } from '../geometry/session';
 import { jobQueue } from '../geometry/jobs';
 import { toStructuredError, throwError, ErrorCodes } from './errors';
+import { transactionRegistry } from './transactions';
 import type { ManufacturingConfig } from '../config/loader';
 import { MaterialStore } from '../manufacturing/material';
 import { isJointTypeAllowed } from '../manufacturing/rules';
@@ -177,6 +178,52 @@ export function getToolDefinitions(): object[] {
         type: 'object',
         properties: { rollback_token: { type: 'string' } },
         required: ['rollback_token'],
+      },
+    },
+    {
+      name: 'begin_transaction',
+      description:
+        'Open an explicit transaction. Subsequent mutating tools execute against working state; commit to persist or roll back to revert all operations atomically. Returns transaction_id (also usable as rollback_token).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          label: { type: 'string', description: 'Human-readable label for the transaction' },
+          product: {
+            type: 'string',
+            description: 'Optional product slug (informational only in MVP)',
+          },
+        },
+        required: ['label'],
+      },
+    },
+    {
+      name: 'commit_transaction',
+      description:
+        'Commit an active transaction. Discards the pre-transaction snapshot; changes become permanent.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          transaction_id: {
+            type: 'string',
+            description: 'Transaction id returned by begin_transaction',
+          },
+        },
+        required: ['transaction_id'],
+      },
+    },
+    {
+      name: 'rollback_transaction',
+      description:
+        'Roll back an active transaction. Restores geometry to its pre-transaction state and clears the active transaction.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          transaction_id: {
+            type: 'string',
+            description: 'Transaction id returned by begin_transaction',
+          },
+        },
+        required: ['transaction_id'],
       },
     },
     {
@@ -461,6 +508,15 @@ export async function dispatchTool(
 
       case 'rollback':
         return handleRollback(args);
+
+      case 'begin_transaction':
+        return handleBeginTransaction(args);
+
+      case 'commit_transaction':
+        return handleCommitTransaction(args);
+
+      case 'rollback_transaction':
+        return handleRollbackTransaction(args);
 
       case 'split_body_by_plane':
         return handleSplitBodyByPlane(args);
@@ -810,6 +866,73 @@ function handleRollback(args: Record<string, unknown>): unknown {
     restored_solid_ids: result.restoredSolidIds,
     restored_shell_ids: result.restoredShellIds,
     snapshot_label: rollbackToken,
+  };
+}
+
+// ─── Transaction primitive handlers (Feature 004) ─────────────────────────────
+
+function handleBeginTransaction(args: Record<string, unknown>): unknown {
+  const label = requireString(args, 'label');
+  const product = typeof args.product === 'string' ? args.product : undefined;
+
+  // Capture the pre-transaction geometry state. The snapshot id doubles as the
+  // rollback token: rolling back the transaction restores this snapshot.
+  const snapshotId = getGeometryBinding().createSnapshot(label);
+  const txn = transactionRegistry.begin(label, snapshotId, product);
+
+  return {
+    transaction_id: txn.id,
+    status: txn.state,
+    label: txn.label,
+    product: txn.product,
+    rollback_token: txn.snapshotId,
+  };
+}
+
+function handleCommitTransaction(args: Record<string, unknown>): unknown {
+  const transactionId = requireString(args, 'transaction_id');
+
+  const txn = transactionRegistry.commit(transactionId);
+
+  // Drop the pre-transaction snapshot — committed changes are permanent.
+  // Note: this clears all snapshots in the registry (no per-id clear primitive
+  // exists yet). In MVP single-session there is at most one outer snapshot.
+  // Phase 2 (T016) adds a per-id clearSnapshot primitive.
+  getGeometryBinding().clearSnapshots();
+
+  return {
+    transaction_id: txn.id,
+    status: txn.state,
+    label: txn.label,
+  };
+}
+
+function handleRollbackTransaction(args: Record<string, unknown>): unknown {
+  const transactionId = requireString(args, 'transaction_id');
+
+  // Look up the transaction first so we know which snapshot to restore. The
+  // registry.rollback() call below also validates that the transaction exists
+  // and is active; we do the lookup separately so we can resolve the snapshot
+  // before mutating any state.
+  const existing = transactionRegistry.get(transactionId);
+  if (!existing) {
+    throwError(
+      ErrorCodes.TRANSACTION_NOT_FOUND,
+      `Transaction ${transactionId} does not exist in this session.`,
+      true,
+      'begin_transaction',
+    );
+  }
+
+  const result = getGeometryBinding().restoreSnapshot(existing.snapshotId);
+  const txn = transactionRegistry.rollback(transactionId);
+
+  return {
+    transaction_id: txn.id,
+    status: txn.state,
+    label: txn.label,
+    restored_solid_ids: result.restoredSolidIds,
+    restored_shell_ids: result.restoredShellIds,
   };
 }
 
