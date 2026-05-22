@@ -97,7 +97,7 @@ function buildMockAddon(): GeometryAddon {
       extensionVector: { x: 0, y: 0, z: 0 },
       gapBoundingBox: { origin: { x: 0, y: 0, z: 0 }, size: { x: 0, y: 0, z: 0 } },
     })),
-    trimBodyWithPlane: vi.fn((id: string) => ({ modifiedShellId: id, rollbackToken: snap() })),
+    trimBodyWithPlane: vi.fn((id: string) => ({ trimmedShellId: id, rollbackToken: snap() })),
     addRelief: vi.fn((id: string) => ({ modifiedShellId: id, rollbackToken: snap() })),
     checkBoundaryCompliance: vi.fn(() => ({ envelopeId: 'std', compliant: true, violations: [] })),
     splitBodyByBends: vi.fn(() => ({
@@ -481,5 +481,195 @@ describe('Transaction primitive Phase 3 — shape history capture', () => {
       }, config),
       'TRANSACTION_NOT_FOUND',
     );
+  });
+});
+
+// ─── Phase 4: shape_history surfaced for all 11 mutating ops ─────────────────
+
+describe('Transaction primitive (Feature 004 Phase 4) — shape_history for all ops', () => {
+  let mock: ReturnType<typeof buildMockAddon>;
+
+  const histRec = (label: string) => ({
+    verdict: 'modified' as const,
+    original_id: `${label}-orig`,
+    new_id: `${label}-new`,
+    operation_label: label,
+  });
+
+  function buildPhase4Addon(): GeometryAddon {
+    let snapCount = 0;
+    const snap = () => `snap-${++snapCount}`;
+
+    return {
+      ...buildMockAddon(),
+      // Override each op to return shape_history
+      splitBodyByPlane: vi.fn(() => ({
+        positiveShellId: 'pos', negativeShellId: 'neg', rollbackToken: snap(),
+        shape_history: [histRec('splitBodyByPlane')],
+      })),
+      mergeBodiesWithBend: vi.fn(() => ({
+        mergedShellId: 'merged', rollbackToken: snap(),
+        shape_history: [histRec('mergeBodiesWithBend')],
+      })),
+      extendFaceToTarget: vi.fn((id: string) => ({
+        modifiedShellId: id, extensionDistanceMm: 5.0, rollbackToken: snap(),
+        shape_history: [histRec('extendFaceToTarget')],
+      })),
+      offsetFace: vi.fn((id: string) => ({
+        modifiedShellId: id, rollbackToken: snap(),
+        shape_history: [histRec('offsetFace')],
+      })),
+      addFlange: vi.fn((id: string) => ({
+        modifiedShellId: id, flangeFeatureId: 'flange-1', rollbackToken: snap(),
+        shape_history: [],  // sewing has no history API
+      })),
+      ripEdge: vi.fn((id: string) => ({
+        modifiedShellId: id, rollbackToken: snap(),
+        shape_history: [histRec('ripEdge'), histRec('ripEdge')],
+      })),
+      trimBodyWithPlane: vi.fn((id: string) => ({
+        trimmedShellId: id, rollbackToken: snap(),
+        shape_history: [histRec('trimBodyWithPlane')],
+      })),
+      addTabSlot: vi.fn((a: string, b: string) => ({
+        modifiedShellIds: [a, b], kerfOffsetApplied: 0.15, rollbackToken: snap(),
+        shape_history: [],  // stub — no real geometry
+      })),
+      addRivetHole: vi.fn((id: string, faceId: string) => ({
+        modifiedShellId: id, holeFeatureId: `hole-${faceId}`, rollbackToken: snap(),
+        shape_history: [],  // stub
+      })),
+      unfoldShell: vi.fn(() => ({
+        unfoldId: 'unfold-1', flatWidthMm: 200, flatHeightMm: 200,
+        kFactorUsed: 0.42, bendCount: 1, rollbackToken: snap(),
+        shape_history: [],  // stub
+      })),
+    } as unknown as GeometryAddon;
+  }
+
+  beforeEach(() => {
+    mock = buildPhase4Addon();
+    setGeometryBindingMock(mock);
+    transactionRegistry.reset();
+  });
+
+  afterEach(() => {
+    setGeometryBindingMock(undefined);
+    transactionRegistry.reset();
+    vi.restoreAllMocks();
+  });
+
+  it('split_body_by_plane appends shape_history to transaction', async () => {
+    const begin = (await dispatchTool('begin_transaction', { label: 'p4', product: 'x' }, config)) as { transaction_id: string };
+    const res = (await dispatchTool('split_body_by_plane', {
+      transaction_id: begin.transaction_id,
+      part_id: 'cube-solid',
+      cutting_plane: { normal: { x: 0, y: 0, z: 1 }, origin: { x: 0, y: 0, z: 0 } },
+    }, config)) as { shape_history: unknown[] };
+    expect(res.shape_history).toHaveLength(1);
+    expect(res.shape_history[0]).toMatchObject({ operation_label: 'splitBodyByPlane' });
+    const hist = (await dispatchTool('get_transaction_history', { transaction_id: begin.transaction_id }, config)) as { records: unknown[] };
+    expect(hist.records).toHaveLength(1);
+  });
+
+  it('merge_bodies_with_bend appends shape_history to transaction', async () => {
+    const begin = (await dispatchTool('begin_transaction', { label: 'p4', product: 'x' }, config)) as { transaction_id: string };
+    const res = (await dispatchTool('merge_bodies_with_bend', {
+      transaction_id: begin.transaction_id,
+      part_a_id: 'a', part_b_id: 'b', target_edges: ['e1'], bend_radius: 1.0,
+    }, config)) as { shape_history: unknown[] };
+    expect(res.shape_history).toHaveLength(1);
+    const hist = (await dispatchTool('get_transaction_history', { transaction_id: begin.transaction_id }, config)) as { records: unknown[] };
+    expect(hist.records).toHaveLength(1);
+  });
+
+  it('extend_face_to_target appends shape_history to transaction', async () => {
+    const begin = (await dispatchTool('begin_transaction', { label: 'p4', product: 'x' }, config)) as { transaction_id: string };
+    const res = (await dispatchTool('extend_face_to_target', {
+      transaction_id: begin.transaction_id,
+      part_id: 'shell-1', face_id: 'f1', target_type: 'plane',
+      target: { normal: { x: 0, y: 0, z: 1 }, origin: { x: 0, y: 0, z: 100 } },
+    }, config)) as { shape_history: unknown[] };
+    expect(res.shape_history).toHaveLength(1);
+    const hist = (await dispatchTool('get_transaction_history', { transaction_id: begin.transaction_id }, config)) as { records: unknown[] };
+    expect(hist.records).toHaveLength(1);
+  });
+
+  it('offset_face appends shape_history to transaction', async () => {
+    const begin = (await dispatchTool('begin_transaction', { label: 'p4', product: 'x' }, config)) as { transaction_id: string };
+    const res = (await dispatchTool('offset_face', {
+      transaction_id: begin.transaction_id,
+      part_id: 'shell-1', face_id: 'f1', distance: 2.0,
+    }, config)) as { shape_history: unknown[] };
+    expect(res.shape_history).toHaveLength(1);
+    const hist = (await dispatchTool('get_transaction_history', { transaction_id: begin.transaction_id }, config)) as { records: unknown[] };
+    expect(hist.records).toHaveLength(1);
+  });
+
+  it('add_flange returns empty shape_history (sewing stub)', async () => {
+    const begin = (await dispatchTool('begin_transaction', { label: 'p4', product: 'x' }, config)) as { transaction_id: string };
+    const res = (await dispatchTool('add_flange', {
+      transaction_id: begin.transaction_id,
+      part_id: 'shell-1', edge_id: 'e1', length: 20, angle: 90, bend_radius: 1.0,
+    }, config)) as { shape_history: unknown[] };
+    expect(res.shape_history).toHaveLength(0);
+    const hist = (await dispatchTool('get_transaction_history', { transaction_id: begin.transaction_id }, config)) as { records: unknown[] };
+    expect(hist.records).toHaveLength(0);
+  });
+
+  it('rip_edge appends 2 shape_history records to transaction', async () => {
+    const begin = (await dispatchTool('begin_transaction', { label: 'p4', product: 'x' }, config)) as { transaction_id: string };
+    const res = (await dispatchTool('rip_edge', {
+      transaction_id: begin.transaction_id,
+      part_id: 'shell-1', edge_id: 'e1',
+    }, config)) as { shape_history: unknown[] };
+    expect(res.shape_history).toHaveLength(2);
+    const hist = (await dispatchTool('get_transaction_history', { transaction_id: begin.transaction_id }, config)) as { records: unknown[] };
+    expect(hist.records).toHaveLength(2);
+  });
+
+  it('trim_body_with_plane appends shape_history to transaction', async () => {
+    const begin = (await dispatchTool('begin_transaction', { label: 'p4', product: 'x' }, config)) as { transaction_id: string };
+    const res = (await dispatchTool('trim_body_with_plane', {
+      transaction_id: begin.transaction_id,
+      part_id: 'shell-1', keep_positive_side: true,
+      plane: { normal: { x: 0, y: 0, z: 1 }, origin: { x: 0, y: 0, z: 0 } },
+    }, config)) as { shape_history: unknown[] };
+    expect(res.shape_history).toHaveLength(1);
+    const hist = (await dispatchTool('get_transaction_history', { transaction_id: begin.transaction_id }, config)) as { records: unknown[] };
+    expect(hist.records).toHaveLength(1);
+  });
+
+  it('synthesize_joints (tab_slot) returns empty shape_history (stub)', async () => {
+    const begin = (await dispatchTool('begin_transaction', { label: 'p4', product: 'x' }, config)) as { transaction_id: string };
+    const res = (await dispatchTool('synthesize_joints', {
+      transaction_id: begin.transaction_id,
+      panel_ids: ['a', 'b'], joint_type: 'tab_slot',
+    }, config)) as { shape_history: unknown[] };
+    expect(res.shape_history).toHaveLength(0);
+  });
+
+  it('apply_unfold returns empty shape_history (stub)', async () => {
+    const begin = (await dispatchTool('begin_transaction', { label: 'p4', product: 'x' }, config)) as { transaction_id: string };
+    const res = (await dispatchTool('apply_unfold', {
+      transaction_id: begin.transaction_id,
+      panel_id: 'shell-1', material_id: 'mild_steel_1.5mm',
+    }, config)) as { shape_history: unknown[] };
+    expect(res.shape_history).toHaveLength(0);
+  });
+
+  it('multiple ops accumulate shape_history in transaction', async () => {
+    const begin = (await dispatchTool('begin_transaction', { label: 'p4', product: 'x' }, config)) as { transaction_id: string };
+    await dispatchTool('offset_face', {
+      transaction_id: begin.transaction_id,
+      part_id: 'shell-1', face_id: 'f1', distance: 2.0,
+    }, config);
+    await dispatchTool('rip_edge', {
+      transaction_id: begin.transaction_id,
+      part_id: 'shell-1', edge_id: 'e1',
+    }, config);
+    const hist = (await dispatchTool('get_transaction_history', { transaction_id: begin.transaction_id }, config)) as { records: unknown[] };
+    // offset_face → 1 record; rip_edge → 2 records
+    expect(hist.records).toHaveLength(3);
   });
 });

@@ -199,6 +199,16 @@ Napi::Value BooleanCut(const Napi::CallbackInfo& info) {
     }
     result.Set("shellIds", shells);
     result.Set("rollbackToken", Napi::String::New(env, res.rollbackToken));
+    Napi::Array histArr = Napi::Array::New(env, res.shapeHistory.size());
+    for (size_t i = 0; i < res.shapeHistory.size(); ++i) {
+      Napi::Object rec = Napi::Object::New(env);
+      rec.Set("verdict",         Napi::String::New(env, res.shapeHistory[i].verdict));
+      rec.Set("original_id",     Napi::String::New(env, res.shapeHistory[i].originalId));
+      rec.Set("new_id",          Napi::String::New(env, res.shapeHistory[i].newId));
+      rec.Set("operation_label", Napi::String::New(env, res.shapeHistory[i].operationLabel));
+      histArr.Set(static_cast<uint32_t>(i), rec);
+    }
+    result.Set("shape_history", histArr);
     return result;
   })
   return env.Undefined();
@@ -242,6 +252,16 @@ Napi::Value AddTabSlot(const Napi::CallbackInfo& info) {
     result.Set("modifiedShellIds", shells);
     result.Set("kerfOffsetApplied", Napi::Number::New(env, res.kerfOffsetApplied));
     result.Set("rollbackToken", Napi::String::New(env, res.rollbackToken));
+    Napi::Array histArr = Napi::Array::New(env, res.shapeHistory.size());
+    for (size_t i = 0; i < res.shapeHistory.size(); ++i) {
+      Napi::Object rec = Napi::Object::New(env);
+      rec.Set("verdict",         Napi::String::New(env, res.shapeHistory[i].verdict));
+      rec.Set("original_id",     Napi::String::New(env, res.shapeHistory[i].originalId));
+      rec.Set("new_id",          Napi::String::New(env, res.shapeHistory[i].newId));
+      rec.Set("operation_label", Napi::String::New(env, res.shapeHistory[i].operationLabel));
+      histArr.Set(static_cast<uint32_t>(i), rec);
+    }
+    result.Set("shape_history", histArr);
     return result;
   })
   return env.Undefined();
@@ -265,6 +285,16 @@ Napi::Value AddRivetHole(const Napi::CallbackInfo& info) {
     result.Set("modifiedShellId",  Napi::String::New(env, res.modifiedShellId));
     result.Set("holeFeatureId",    Napi::String::New(env, res.holeFeatureId));
     result.Set("rollbackToken",    Napi::String::New(env, res.rollbackToken));
+    Napi::Array histArr = Napi::Array::New(env, res.shapeHistory.size());
+    for (size_t i = 0; i < res.shapeHistory.size(); ++i) {
+      Napi::Object rec = Napi::Object::New(env);
+      rec.Set("verdict",         Napi::String::New(env, res.shapeHistory[i].verdict));
+      rec.Set("original_id",     Napi::String::New(env, res.shapeHistory[i].originalId));
+      rec.Set("new_id",          Napi::String::New(env, res.shapeHistory[i].newId));
+      rec.Set("operation_label", Napi::String::New(env, res.shapeHistory[i].operationLabel));
+      histArr.Set(static_cast<uint32_t>(i), rec);
+    }
+    result.Set("shape_history", histArr);
     return result;
   })
   return env.Undefined();
@@ -288,6 +318,16 @@ Napi::Value UnfoldShell(const Napi::CallbackInfo& info) {
     result.Set("kFactorUsed",  Napi::Number::New(env, res.kFactorUsed));
     result.Set("bendCount",    Napi::Number::New(env, res.bendCount));
     result.Set("rollbackToken", Napi::String::New(env, res.rollbackToken));
+    Napi::Array histArr = Napi::Array::New(env, res.shapeHistory.size());
+    for (size_t i = 0; i < res.shapeHistory.size(); ++i) {
+      Napi::Object rec = Napi::Object::New(env);
+      rec.Set("verdict",         Napi::String::New(env, res.shapeHistory[i].verdict));
+      rec.Set("original_id",     Napi::String::New(env, res.shapeHistory[i].originalId));
+      rec.Set("new_id",          Napi::String::New(env, res.shapeHistory[i].newId));
+      rec.Set("operation_label", Napi::String::New(env, res.shapeHistory[i].operationLabel));
+      histArr.Set(static_cast<uint32_t>(i), rec);
+    }
+    result.Set("shape_history", histArr);
     return result;
   })
   return env.Undefined();
@@ -437,6 +477,16 @@ Napi::Value SplitBodyByPlane(const Napi::CallbackInfo& info) {
     result.Set("positiveShellId", Napi::String::New(env, res.positiveShellId));
     result.Set("negativeShellId", Napi::String::New(env, res.negativeShellId));
     result.Set("rollbackToken",   Napi::String::New(env, res.rollbackToken));
+    Napi::Array histArr = Napi::Array::New(env, res.shapeHistory.size());
+    for (size_t i = 0; i < res.shapeHistory.size(); ++i) {
+      Napi::Object rec = Napi::Object::New(env);
+      rec.Set("verdict",         Napi::String::New(env, res.shapeHistory[i].verdict));
+      rec.Set("original_id",     Napi::String::New(env, res.shapeHistory[i].originalId));
+      rec.Set("new_id",          Napi::String::New(env, res.shapeHistory[i].newId));
+      rec.Set("operation_label", Napi::String::New(env, res.shapeHistory[i].operationLabel));
+      histArr.Set(static_cast<uint32_t>(i), rec);
+    }
+    result.Set("shape_history", histArr);
     return result;
   })
   return env.Undefined();
@@ -465,6 +515,16 @@ Napi::Value MergeBodiesWithBend(const Napi::CallbackInfo& info) {
     Napi::Object result = Napi::Object::New(env);
     result.Set("mergedShellId", Napi::String::New(env, res.mergedShellId));
     result.Set("rollbackToken", Napi::String::New(env, res.rollbackToken));
+    Napi::Array histArr = Napi::Array::New(env, res.shapeHistory.size());
+    for (size_t i = 0; i < res.shapeHistory.size(); ++i) {
+      Napi::Object rec = Napi::Object::New(env);
+      rec.Set("verdict",         Napi::String::New(env, res.shapeHistory[i].verdict));
+      rec.Set("original_id",     Napi::String::New(env, res.shapeHistory[i].originalId));
+      rec.Set("new_id",          Napi::String::New(env, res.shapeHistory[i].newId));
+      rec.Set("operation_label", Napi::String::New(env, res.shapeHistory[i].operationLabel));
+      histArr.Set(static_cast<uint32_t>(i), rec);
+    }
+    result.Set("shape_history", histArr);
     return result;
   })
   return env.Undefined();
@@ -506,6 +566,16 @@ Napi::Value ExtendFaceToTarget(const Napi::CallbackInfo& info) {
     result.Set("modifiedShellId",     Napi::String::New(env, res.modifiedShellId));
     result.Set("extensionDistanceMm", Napi::Number::New(env, res.extensionDistanceMm));
     result.Set("rollbackToken",       Napi::String::New(env, res.rollbackToken));
+    Napi::Array histArr = Napi::Array::New(env, res.shapeHistory.size());
+    for (size_t i = 0; i < res.shapeHistory.size(); ++i) {
+      Napi::Object rec = Napi::Object::New(env);
+      rec.Set("verdict",         Napi::String::New(env, res.shapeHistory[i].verdict));
+      rec.Set("original_id",     Napi::String::New(env, res.shapeHistory[i].originalId));
+      rec.Set("new_id",          Napi::String::New(env, res.shapeHistory[i].newId));
+      rec.Set("operation_label", Napi::String::New(env, res.shapeHistory[i].operationLabel));
+      histArr.Set(static_cast<uint32_t>(i), rec);
+    }
+    result.Set("shape_history", histArr);
     return result;
   })
   return env.Undefined();
@@ -526,6 +596,16 @@ Napi::Value OffsetFace(const Napi::CallbackInfo& info) {
     Napi::Object result = Napi::Object::New(env);
     result.Set("modifiedShellId", Napi::String::New(env, res.modifiedShellId));
     result.Set("rollbackToken",   Napi::String::New(env, res.rollbackToken));
+    Napi::Array histArr = Napi::Array::New(env, res.shapeHistory.size());
+    for (size_t i = 0; i < res.shapeHistory.size(); ++i) {
+      Napi::Object rec = Napi::Object::New(env);
+      rec.Set("verdict",         Napi::String::New(env, res.shapeHistory[i].verdict));
+      rec.Set("original_id",     Napi::String::New(env, res.shapeHistory[i].originalId));
+      rec.Set("new_id",          Napi::String::New(env, res.shapeHistory[i].newId));
+      rec.Set("operation_label", Napi::String::New(env, res.shapeHistory[i].operationLabel));
+      histArr.Set(static_cast<uint32_t>(i), rec);
+    }
+    result.Set("shape_history", histArr);
     return result;
   })
   return env.Undefined();
@@ -552,6 +632,16 @@ Napi::Value AddFlange(const Napi::CallbackInfo& info) {
     result.Set("modifiedShellId",  Napi::String::New(env, res.modifiedShellId));
     result.Set("flangeFeatureId",  Napi::String::New(env, res.flangeFeatureId));
     result.Set("rollbackToken",    Napi::String::New(env, res.rollbackToken));
+    Napi::Array histArr = Napi::Array::New(env, res.shapeHistory.size());
+    for (size_t i = 0; i < res.shapeHistory.size(); ++i) {
+      Napi::Object rec = Napi::Object::New(env);
+      rec.Set("verdict",         Napi::String::New(env, res.shapeHistory[i].verdict));
+      rec.Set("original_id",     Napi::String::New(env, res.shapeHistory[i].originalId));
+      rec.Set("new_id",          Napi::String::New(env, res.shapeHistory[i].newId));
+      rec.Set("operation_label", Napi::String::New(env, res.shapeHistory[i].operationLabel));
+      histArr.Set(static_cast<uint32_t>(i), rec);
+    }
+    result.Set("shape_history", histArr);
     return result;
   })
   return env.Undefined();
@@ -571,6 +661,16 @@ Napi::Value RipEdge(const Napi::CallbackInfo& info) {
     Napi::Object result = Napi::Object::New(env);
     result.Set("modifiedShellId", Napi::String::New(env, res.modifiedShellId));
     result.Set("rollbackToken",   Napi::String::New(env, res.rollbackToken));
+    Napi::Array histArr = Napi::Array::New(env, res.shapeHistory.size());
+    for (size_t i = 0; i < res.shapeHistory.size(); ++i) {
+      Napi::Object rec = Napi::Object::New(env);
+      rec.Set("verdict",         Napi::String::New(env, res.shapeHistory[i].verdict));
+      rec.Set("original_id",     Napi::String::New(env, res.shapeHistory[i].originalId));
+      rec.Set("new_id",          Napi::String::New(env, res.shapeHistory[i].newId));
+      rec.Set("operation_label", Napi::String::New(env, res.shapeHistory[i].operationLabel));
+      histArr.Set(static_cast<uint32_t>(i), rec);
+    }
+    result.Set("shape_history", histArr);
     return result;
   })
   return env.Undefined();
@@ -706,6 +806,16 @@ Napi::Value TrimBodyWithPlane(const Napi::CallbackInfo& info) {
     Napi::Object result = Napi::Object::New(env);
     result.Set("trimmedShellId", Napi::String::New(env, res.trimmedShellId));
     result.Set("rollbackToken",  Napi::String::New(env, res.rollbackToken));
+    Napi::Array histArr = Napi::Array::New(env, res.shapeHistory.size());
+    for (size_t i = 0; i < res.shapeHistory.size(); ++i) {
+      Napi::Object rec = Napi::Object::New(env);
+      rec.Set("verdict",         Napi::String::New(env, res.shapeHistory[i].verdict));
+      rec.Set("original_id",     Napi::String::New(env, res.shapeHistory[i].originalId));
+      rec.Set("new_id",          Napi::String::New(env, res.shapeHistory[i].newId));
+      rec.Set("operation_label", Napi::String::New(env, res.shapeHistory[i].operationLabel));
+      histArr.Set(static_cast<uint32_t>(i), rec);
+    }
+    result.Set("shape_history", histArr);
     return result;
   })
   return env.Undefined();

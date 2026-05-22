@@ -45,29 +45,33 @@ struct ManifoldResult {
 };
 
 struct BooleanCutResult {
-  std::vector<ShellId> shellIds;
-  SnapshotId           rollbackToken;
+  std::vector<ShellId>            shellIds;
+  SnapshotId                      rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
 };
 
 struct TabSlotResult {
-  std::vector<ShellId> modifiedShellIds;
-  double               kerfOffsetApplied;  // mm; always in [0.1, 0.2]
-  SnapshotId           rollbackToken;
+  std::vector<ShellId>            modifiedShellIds;
+  double                          kerfOffsetApplied;  // mm; always in [0.1, 0.2]
+  SnapshotId                      rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
 };
 
 struct RivetHoleResult {
-  ShellId    modifiedShellId;
-  std::string holeFeatureId;
-  SnapshotId rollbackToken;
+  ShellId                         modifiedShellId;
+  std::string                     holeFeatureId;
+  SnapshotId                      rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
 };
 
 struct UnfoldResult {
-  UnfoldId   unfoldId;
-  double     flatWidthMm;
-  double     flatHeightMm;
-  double     kFactorUsed;
-  int        bendCount;
-  SnapshotId rollbackToken;
+  UnfoldId                        unfoldId;
+  double                          flatWidthMm;
+  double                          flatHeightMm;
+  double                          kFactorUsed;
+  int                             bendCount;
+  SnapshotId                      rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
 };
 
 struct DxfExportResult {
@@ -154,41 +158,48 @@ struct GapReport {
 // ─── Mutation result types ────────────────────────────────────────────────────
 
 struct TrimBodyResult {
-  ShellId    trimmedShellId;
-  SnapshotId rollbackToken;
+  ShellId                         trimmedShellId;
+  SnapshotId                      rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
 };
 
 struct SplitBodyResult {
-  ShellId    positiveShellId;
-  ShellId    negativeShellId;
-  SnapshotId rollbackToken;
+  ShellId                         positiveShellId;
+  ShellId                         negativeShellId;
+  SnapshotId                      rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
 };
 
 struct ExtendFaceResult {
-  ShellId    modifiedShellId;
-  double     extensionDistanceMm;
-  SnapshotId rollbackToken;
+  ShellId                         modifiedShellId;
+  double                          extensionDistanceMm;
+  SnapshotId                      rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
 };
 
 struct OffsetFaceResult {
-  ShellId    modifiedShellId;
-  SnapshotId rollbackToken;
+  ShellId                         modifiedShellId;
+  SnapshotId                      rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
 };
 
 struct AddFlangeResult {
-  ShellId     modifiedShellId;
-  std::string flangeFeatureId;
-  SnapshotId  rollbackToken;
+  ShellId                         modifiedShellId;
+  std::string                     flangeFeatureId;
+  SnapshotId                      rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
 };
 
 struct RipEdgeResult {
-  ShellId    modifiedShellId;
-  SnapshotId rollbackToken;
+  ShellId                         modifiedShellId;
+  SnapshotId                      rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
 };
 
 struct MergeBodyResult {
-  ShellId    mergedShellId;
-  SnapshotId rollbackToken;
+  ShellId                         mergedShellId;
+  SnapshotId                      rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
 };
 
 struct BBox3D {

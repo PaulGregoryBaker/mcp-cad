@@ -679,28 +679,37 @@ function handleSynthesizeJoints(args: Record<string, unknown>, config: Manufactu
   }
 
   const ctx = resolveTransactionContext(args);
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, []);
-  }
 
   if (jointType === 'tab_slot') {
     const result = getGeometryBinding().addTabSlot(panelIds[0]!, panelIds[1]!, clearanceMm);
+    if (ctx.mode === 'join') {
+      transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+    }
     return {
       modified_panel_ids: result.modifiedShellIds,
       joint_type_applied: jointType,
       kerf_offset_mm: result.kerfOffsetApplied,
       rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
+      shape_history: result.shape_history ?? [],
     };
   }
 
   if (jointType === 'rivet') {
     const result = getGeometryBinding().addRivetHole(panelIds[0]!, 'auto', 0, 0, 4.0);
+    if (ctx.mode === 'join') {
+      transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+    }
     return {
       modified_panel_ids: [result.modifiedShellId],
       joint_type_applied: jointType,
       kerf_offset_mm: clearanceMm,
       rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
+      shape_history: result.shape_history ?? [],
     };
+  }
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, []);
   }
 
   // weld and other types: snapshot + stub response
@@ -758,7 +767,7 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
   session.registerUnfold(result.unfoldId);
 
   if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, []);
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
   return {
@@ -768,6 +777,7 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
     k_factor_used: result.kFactorUsed,
     bend_count: result.bendCount,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
+    shape_history: result.shape_history ?? [],
   };
 }
 
@@ -1080,7 +1090,7 @@ function handleSplitBodyByPlane(args: Record<string, unknown>): unknown {
   const result = getGeometryBinding().splitBodyByPlane(partId, plane);
 
   if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, []);
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
   const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
@@ -1090,6 +1100,7 @@ function handleSplitBodyByPlane(args: Record<string, unknown>): unknown {
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
     positive_mesh_url: `${meshBaseUrl}/mesh/${result.positiveShellId}.glb`,
     negative_mesh_url: `${meshBaseUrl}/mesh/${result.negativeShellId}.glb`,
+    shape_history: result.shape_history ?? [],
   };
 }
 
@@ -1106,7 +1117,7 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
   const result = getGeometryBinding().mergeBodiesWithBend(partAId, partBId, targetEdges, bendRadius as number);
 
   if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, []);
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
   const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
@@ -1114,6 +1125,7 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
     merged_shell_id: result.mergedShellId,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
     mesh_url: `${meshBaseUrl}/mesh/${result.mergedShellId}.glb`,
+    shape_history: result.shape_history ?? [],
   };
 }
 
@@ -1141,13 +1153,14 @@ function handleExtendFaceToTarget(args: Record<string, unknown>): unknown {
   );
 
   if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, []);
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
   return {
     modified_shell_id: result.modifiedShellId,
     extension_distance_mm: result.extensionDistanceMm,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
+    shape_history: result.shape_history ?? [],
   };
 }
 
@@ -1163,12 +1176,13 @@ function handleOffsetFace(args: Record<string, unknown>): unknown {
   const result = getGeometryBinding().offsetFace(partId, faceId, distance as number);
 
   if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, []);
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
   return {
     modified_shell_id: result.modifiedShellId,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
+    shape_history: result.shape_history ?? [],
   };
 }
 
@@ -1195,13 +1209,14 @@ function handleAddFlange(args: Record<string, unknown>): unknown {
   );
 
   if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, []);
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
   return {
     modified_shell_id: result.modifiedShellId,
     flange_feature_id: result.flangeFeatureId,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
+    shape_history: result.shape_history ?? [],
   };
 }
 
@@ -1213,12 +1228,13 @@ function handleRipEdge(args: Record<string, unknown>): unknown {
   const result = getGeometryBinding().ripEdge(partId, edgeId);
 
   if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, []);
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
   return {
     modified_shell_id: result.modifiedShellId,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
+    shape_history: result.shape_history ?? [],
   };
 }
 
@@ -1297,7 +1313,7 @@ function handleTrimBodyWithPlane(args: Record<string, unknown>): unknown {
   const result = getGeometryBinding().trimBodyWithPlane(partId, plane, keepPositiveSide as boolean);
 
   if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, []);
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
   const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
@@ -1305,6 +1321,7 @@ function handleTrimBodyWithPlane(args: Record<string, unknown>): unknown {
     trimmed_shell_id: result.trimmedShellId,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
     mesh_url: `${meshBaseUrl}/mesh/${result.trimmedShellId}.glb`,
+    shape_history: result.shape_history ?? [],
   };
 }
 
