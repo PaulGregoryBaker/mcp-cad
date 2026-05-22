@@ -69,6 +69,7 @@ endif()
 # ─── Geometry Engine Library ─────────────────────────────────────────────────
 add_library(geometry_engine STATIC
   src/geometry/geometry_service.cc
+  src/geometry/shape_history.cc
   src/geometry/topology_graph.cc
   src/acl/feature_extractor.cc
 )

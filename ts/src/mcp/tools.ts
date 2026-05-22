@@ -231,6 +231,21 @@ export function getToolDefinitions(): object[] {
       },
     },
     {
+      name: 'get_transaction_history',
+      description:
+        'Returns the shape topology history accumulated in a transaction. Available for active and committed transactions; returns TRANSACTION_NOT_FOUND for rolled-back transactions.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          transaction_id: {
+            type: 'string',
+            description: 'Transaction id returned by begin_transaction',
+          },
+        },
+        required: ['transaction_id'],
+      },
+    },
+    {
       name: 'compute_intersections',
       description: 'Detects volumetric clashes between a set of shell bodies. Non-mutating.',
       inputSchema: {
@@ -529,6 +544,9 @@ export async function dispatchTool(
 
       case 'rollback_transaction':
         return handleRollbackTransaction(args);
+
+      case 'get_transaction_history':
+        return handleGetTransactionHistory(args);
 
       case 'split_body_by_plane':
         return handleSplitBodyByPlane(args);
@@ -974,6 +992,35 @@ function handleRollbackTransaction(args: Record<string, unknown>): unknown {
   };
 }
 
+function handleGetTransactionHistory(args: Record<string, unknown>): unknown {
+  const transactionId = requireString(args, 'transaction_id');
+
+  const existing = transactionRegistry.get(transactionId);
+  if (!existing) {
+    throwError(
+      ErrorCodes.TRANSACTION_NOT_FOUND,
+      `Transaction ${transactionId} does not exist in this session.`,
+      true,
+      'begin_transaction',
+    );
+  }
+
+  if (existing.state === 'rolled_back') {
+    throwError(
+      ErrorCodes.TRANSACTION_NOT_FOUND,
+      `Transaction ${transactionId} has been rolled back; history is no longer available.`,
+      true,
+      'begin_transaction',
+    );
+  }
+
+  const records = transactionRegistry.getHistory(transactionId);
+  return {
+    transaction_id: transactionId,
+    records,
+  };
+}
+
 // ─── Argument helpers ─────────────────────────────────────────────────────────
 
 function requireString(args: Record<string, unknown>, key: string): string {
@@ -1372,7 +1419,7 @@ function handleSplitBodyByBends(args: Record<string, unknown>): unknown {
   }
 
   if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, []);
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
   const allIds = [...result.panel_ids, ...result.protrusion_ids];
@@ -1387,5 +1434,6 @@ function handleSplitBodyByBends(args: Record<string, unknown>): unknown {
     detected_mode: result.detected_mode,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
     mesh_urls: allIds.map(id => `${meshBaseUrl}/mesh/${id}.glb`),
+    shape_history: result.shape_history ?? [],
   };
 }

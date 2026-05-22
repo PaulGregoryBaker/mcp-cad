@@ -89,6 +89,7 @@
 
 // ─── Project includes ────────────────────────────────────────────────────────
 #include "geometry_service.hpp"
+#include "shape_history.hpp"
 
 // ─── Standard library ────────────────────────────────────────────────────────
 #include <unordered_map>
@@ -1675,7 +1676,8 @@ private:
                      const SolidId& parentId,
                      double angleThresholdDeg,
                      double defaultThicknessMm,
-                     std::vector<ShellId>& panelIds)
+                     std::vector<ShellId>& panelIds,
+                     std::vector<ShapeHistoryRecord>* historyOut = nullptr)
   {
     TopTools_IndexedMapOfShape faceMap;
     TopExp::MapShapes(shape, TopAbs_FACE, faceMap);
@@ -1758,6 +1760,13 @@ private:
                             "Extruded panel has zero volume (non-manifold result)", true, "rollback");
       }
 
+      if (historyOut) {
+        auto records = captureHistory(prism, faceMaker.Face(),
+                                      [](const TopoDS_Shape& s){ return shapeId(s); },
+                                      "split_body_by_bends");
+        historyOut->insert(historyOut->end(), records.begin(), records.end());
+      }
+
       ShellId sid = generateUUID();
       shells_[sid] = ShellState{sid, parentId, prism.Shape()};
       panelIds.push_back(sid);
@@ -1780,7 +1789,8 @@ private:
                   double maxThicknessMm,
                   std::vector<ShellId>& panelIds,
                   std::vector<ShellId>& /*protrusionIds*/,
-                  TopoDS_Shape* remainderOut = nullptr)
+                  TopoDS_Shape* remainderOut = nullptr,
+                  std::vector<ShapeHistoryRecord>* historyOut = nullptr)
   {
     GProp_GProps solidProps;
     BRepGProp::VolumeProperties(solid, solidProps);
@@ -1874,6 +1884,13 @@ private:
       BRepGProp::VolumeProperties(extract.Shape(), ep);
       if (std::abs(ep.Mass()) < 1e-6) continue;  // empty slab — skip
 
+      if (historyOut) {
+        auto records = captureHistory(extract, remainder,
+                                      [](const TopoDS_Shape& s){ return shapeId(s); },
+                                      "split_body_by_bends");
+        historyOut->insert(historyOut->end(), records.begin(), records.end());
+      }
+
       ShellId panelId = generateUUID();
       shells_[panelId] = ShellState{panelId, parentId, extract.Shape()};
       panelIds.push_back(panelId);
@@ -1881,6 +1898,12 @@ private:
       // Remainder = remainder minus the panel slab
       BRepAlgoAPI_Cut cutRemainder(remainder, hs.Solid());
       cutRemainder.Build();
+      if (historyOut && cutRemainder.IsDone()) {
+        auto records = captureHistory(cutRemainder, remainder,
+                                      [](const TopoDS_Shape& s){ return shapeId(s); },
+                                      "split_body_by_bends");
+        historyOut->insert(historyOut->end(), records.begin(), records.end());
+      }
       if (!cutRemainder.IsDone() || cutRemainder.Shape().IsNull()) break;
       remainder = cutRemainder.Shape();
     }
@@ -2073,12 +2096,14 @@ private:
         }
       }
 
+      std::vector<ShapeHistoryRecord> shapeHistory;
       TopoDS_Shape firstPassRemainder;
       if (mode == "thin_solid") {
         splitMode2(workShape, planeHalfSize, parentId, angleThresholdDeg, maxThicknessMm,
-                   panelIds, protrusionIds, &firstPassRemainder);
+                   panelIds, protrusionIds, &firstPassRemainder, &shapeHistory);
       } else {
-        splitMode1BFS(workShape, parentId, angleThresholdDeg, defaultThicknessMm, panelIds);
+        splitMode1BFS(workShape, parentId, angleThresholdDeg, defaultThicknessMm, panelIds,
+                      &shapeHistory);
       }
 
       // T022 — Recursive decomposition into remainder solid(s)
@@ -2139,7 +2164,7 @@ private:
       return DecomposedByBendsResult{
           std::move(panelIds), std::move(panelBboxes),
           std::move(protrusionIds), std::move(protrusionBboxes),
-          token, mode};
+          token, mode, std::move(shapeHistory)};
 
     } catch (const GeometryError&) {
       throw;

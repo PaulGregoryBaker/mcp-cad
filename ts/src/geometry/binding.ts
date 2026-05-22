@@ -92,6 +92,12 @@ export interface GeometryAddon {
     protrusion_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>;
     rollbackToken: string;
     detected_mode: string;
+    shape_history?: Array<{
+      verdict: 'modified' | 'generated' | 'deleted';
+      original_id: string;
+      new_id: string;
+      operation_label: string;
+    }>;
   };
 }
 
@@ -401,7 +407,7 @@ export class GeometryBinding {
     maxThicknessMm?: number,
     defaultThicknessMm?: number,
     maxRecursionDepth?: number,
-  ): { panel_ids: string[]; panel_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>; protrusion_ids: string[]; protrusion_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>; rollbackToken: string; detected_mode: string } {
+  ): { panel_ids: string[]; panel_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>; protrusion_ids: string[]; protrusion_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>; rollbackToken: string; detected_mode: string; shape_history?: Array<{ verdict: 'modified' | 'generated' | 'deleted'; original_id: string; new_id: string; operation_label: string }> } {
     try {
       return this.addon.splitBodyByBends(
         partId, angleThresholdDeg, maxThicknessMm, defaultThicknessMm, maxRecursionDepth,

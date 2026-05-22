@@ -760,12 +760,23 @@ Napi::Value SplitBodyByBends(const Napi::CallbackInfo& info) {
       return arr;
     };
 
+    Napi::Array histArr = Napi::Array::New(env, res.shapeHistory.size());
+    for (size_t i = 0; i < res.shapeHistory.size(); ++i) {
+      Napi::Object rec = Napi::Object::New(env);
+      rec.Set("verdict",         Napi::String::New(env, res.shapeHistory[i].verdict));
+      rec.Set("original_id",     Napi::String::New(env, res.shapeHistory[i].originalId));
+      rec.Set("new_id",          Napi::String::New(env, res.shapeHistory[i].newId));
+      rec.Set("operation_label", Napi::String::New(env, res.shapeHistory[i].operationLabel));
+      histArr.Set(static_cast<uint32_t>(i), rec);
+    }
+
     result.Set("panel_ids",           panelArr);
     result.Set("panel_bboxes",        serializeBboxes(res.panelBboxes));
     result.Set("protrusion_ids",      protrusionArr);
     result.Set("protrusion_bboxes",   serializeBboxes(res.protrusionBboxes));
     result.Set("detected_mode",       Napi::String::New(env, res.detectedMode));
     result.Set("rollbackToken",       Napi::String::New(env, res.rollbackToken));
+    result.Set("shape_history",       histArr);
     return result;
   })
   return env.Undefined();

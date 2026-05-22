@@ -18,6 +18,7 @@
 
 #include "topology_graph.hpp"
 #include "snapshot.hpp"
+#include "shape_history.hpp"
 
 namespace mcp_cad {
 
@@ -196,12 +197,13 @@ struct BBox3D {
 };
 
 struct DecomposedByBendsResult {
-  std::vector<ShellId> panelIds;        // flat solid panels
-  std::vector<BBox3D>  panelBboxes;     // AABB for each panel (parallel to panelIds)
-  std::vector<ShellId> protrusionIds;   // flanges / tabs extracted before splitting
-  std::vector<BBox3D>  protrusionBboxes; // AABB for each protrusion (parallel to protrusionIds)
-  SnapshotId           rollbackToken;
-  std::string          detectedMode;    // "surface" | "thin_solid"
+  std::vector<ShellId>          panelIds;        // flat solid panels
+  std::vector<BBox3D>           panelBboxes;     // AABB for each panel (parallel to panelIds)
+  std::vector<ShellId>          protrusionIds;   // flanges / tabs extracted before splitting
+  std::vector<BBox3D>           protrusionBboxes; // AABB for each protrusion
+  SnapshotId                    rollbackToken;
+  std::string                   detectedMode;    // "surface" | "thin_solid"
+  std::vector<ShapeHistoryRecord> shapeHistory;  // face-level lineage records
 };
 
 // ─── Error code constants (Feature 003-split-by-bends-enhanced) ─────────────

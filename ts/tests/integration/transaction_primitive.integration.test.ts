@@ -104,6 +104,11 @@ function buildMockAddon(): GeometryAddon {
       panel_ids: ['p1'], panel_bboxes: [],
       protrusion_ids: [], protrusion_bboxes: [],
       rollbackToken: snap(), detected_mode: 'thin_solid',
+      shape_history: [
+        { verdict: 'modified',  original_id: 'f1', new_id: 'f1a', operation_label: 'split_body_by_bends' },
+        { verdict: 'generated', original_id: 'f2', new_id: 'f2a', operation_label: 'split_body_by_bends' },
+        { verdict: 'deleted',   original_id: 'f3', new_id: '',    operation_label: 'split_body_by_bends' },
+      ],
     })),
 
     // Expose `cleared` to tests so they can assert clearSnapshots was called.
@@ -373,5 +378,108 @@ describe('Transaction primitive Phase 2 — mutating tools accept transaction_id
     // No additional createSnapshot call during the joined decompose_volume
     const snapCallsAfter = (mock.createSnapshot as ReturnType<typeof vi.fn>).mock.calls.length;
     expect(snapCallsAfter).toBe(snapCallsBefore);
+  });
+});
+
+// ─── Phase 3: shape history capture via get_transaction_history ───────────────
+
+describe('Transaction primitive Phase 3 — shape history capture', () => {
+  let mock: ReturnType<typeof buildMockAddon>;
+
+  beforeEach(() => {
+    mock = buildMockAddon();
+    setGeometryBindingMock(mock);
+    transactionRegistry.reset();
+  });
+
+  afterEach(() => {
+    setGeometryBindingMock(undefined);
+    transactionRegistry.reset();
+    vi.restoreAllMocks();
+  });
+
+  // ── Case (a): history accumulated after split ──────────────────────────────
+
+  it('begin → split_body_by_bends → get_transaction_history returns 3 records', async () => {
+    const begin = (await dispatchTool('begin_transaction', {
+      label: 'history test',
+    }, config)) as { transaction_id: string };
+
+    const splitResult = (await dispatchTool('split_body_by_bends', {
+      part_id: 'cube-solid',
+    }, config)) as { shape_history: unknown[] };
+
+    // The handler should pass shape_history through in the response
+    expect(splitResult.shape_history).toHaveLength(3);
+
+    const history = (await dispatchTool('get_transaction_history', {
+      transaction_id: begin.transaction_id,
+    }, config)) as { transaction_id: string; records: Array<{ verdict: string; original_id: string; new_id: string; operation_label: string }> };
+
+    expect(history.transaction_id).toBe(begin.transaction_id);
+    expect(history.records).toHaveLength(3);
+    expect(history.records[0]).toMatchObject({
+      verdict: 'modified',
+      original_id: 'f1',
+      new_id: 'f1a',
+      operation_label: 'split_body_by_bends',
+    });
+    expect(history.records[2]).toMatchObject({
+      verdict: 'deleted',
+      original_id: 'f3',
+      new_id: '',
+    });
+  });
+
+  // ── Case (b): history still available after commit ─────────────────────────
+
+  it('begin → split → commit → get_transaction_history still returns records', async () => {
+    const begin = (await dispatchTool('begin_transaction', {
+      label: 'history post-commit',
+    }, config)) as { transaction_id: string };
+
+    await dispatchTool('split_body_by_bends', { part_id: 'cube-solid' }, config);
+
+    await dispatchTool('commit_transaction', {
+      transaction_id: begin.transaction_id,
+    }, config);
+
+    const history = (await dispatchTool('get_transaction_history', {
+      transaction_id: begin.transaction_id,
+    }, config)) as { records: unknown[] };
+
+    expect(history.records).toHaveLength(3);
+  });
+
+  // ── Case (c): history not available after rollback ─────────────────────────
+
+  it('begin → split → rollback → get_transaction_history returns TRANSACTION_NOT_FOUND', async () => {
+    const begin = (await dispatchTool('begin_transaction', {
+      label: 'history post-rollback',
+    }, config)) as { transaction_id: string };
+
+    await dispatchTool('split_body_by_bends', { part_id: 'cube-solid' }, config);
+
+    await dispatchTool('rollback_transaction', {
+      transaction_id: begin.transaction_id,
+    }, config);
+
+    await expectStructuredError(
+      dispatchTool('get_transaction_history', {
+        transaction_id: begin.transaction_id,
+      }, config),
+      'TRANSACTION_NOT_FOUND',
+    );
+  });
+
+  // ── Case (d): get_transaction_history on unknown id ──────────────────────────
+
+  it('get_transaction_history with unknown id returns TRANSACTION_NOT_FOUND', async () => {
+    await expectStructuredError(
+      dispatchTool('get_transaction_history', {
+        transaction_id: 'transaction://no-such-transaction',
+      }, config),
+      'TRANSACTION_NOT_FOUND',
+    );
   });
 });
