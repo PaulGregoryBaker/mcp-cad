@@ -207,14 +207,29 @@ struct BBox3D {
   double xMax, yMax, zMax;
 };
 
+// Tracks which panel each protrusion was cut from.
+// parentPanelId is empty for protrusions extracted before any panel cut (pre-cut pass).
+struct ProtrusionParent {
+  ShellId protrusionId;
+  ShellId parentPanelId;  // empty string → no parent panel (pre-cut extraction)
+};
+
 struct DecomposedByBendsResult {
-  std::vector<ShellId>          panelIds;        // flat solid panels
-  std::vector<BBox3D>           panelBboxes;     // AABB for each panel (parallel to panelIds)
-  std::vector<ShellId>          protrusionIds;   // flanges / tabs extracted before splitting
-  std::vector<BBox3D>           protrusionBboxes; // AABB for each protrusion
+  std::vector<ShellId>          panelIds;           // flat solid panels
+  std::vector<BBox3D>           panelBboxes;        // AABB for each panel (parallel to panelIds)
+  std::vector<ShellId>          protrusionIds;      // flanges / tabs extracted from the solid
+  std::vector<BBox3D>           protrusionBboxes;   // AABB for each protrusion
+  std::vector<ProtrusionParent> protrusionParents;  // parent panel for each protrusion
   SnapshotId                    rollbackToken;
-  std::string                   detectedMode;    // "surface" | "thin_solid"
-  std::vector<ShapeHistoryRecord> shapeHistory;  // face-level lineage records
+  std::string                   detectedMode;       // "surface" | "thin_solid"
+  std::vector<ShapeHistoryRecord> shapeHistory;     // face-level lineage records
+};
+
+struct RemoveProtrusionsResult {
+  ShellId              cleanedPartId;   // same ID as input, geometry updated in-place
+  std::vector<ShellId> protrusionIds;  // each extracted protrusion as a new shell
+  std::vector<BBox3D>  protrusionBboxes;
+  SnapshotId           rollbackToken;
 };
 
 // ─── Error code constants (Feature 003-split-by-bends-enhanced) ─────────────
@@ -345,13 +360,21 @@ public:
   // Decomposes a shell into planar panels by splitting at every bend edge.
   // Mode is auto-detected: thin-solid (wall ≤ maxThicknessMm) uses cutting planes
   // to preserve original wall thickness; surface/thick models extrude each face
-  // group by defaultThicknessMm. Protrusions are returned separately.
+  // group by defaultThicknessMm. Protrusions are returned separately with parent tracking.
   virtual DecomposedByBendsResult splitBodyByBends(
       const ShellId& partId,
       double         angleThresholdDeg,
       double         maxThicknessMm    = 5.0,
       double         defaultThicknessMm = 1.0,
-      int            maxRecursionDepth  = 0) = 0;
+      int            maxRecursionDepth  = 1) = 0;
+
+  // Detects and extracts all protrusions/flanges from a shell without splitting
+  // into panels. The shell geometry is updated in-place (cleaned); extracted
+  // protrusions are returned as new shells. Mutating — creates a rollback token.
+  virtual RemoveProtrusionsResult removeProtrusions(
+      const ShellId& partId,
+      double         angleThresholdDeg = 30.0,
+      double         maxThicknessMm    = 5.0) = 0;
 
   // ── Snapshot / rollback ────────────────────────────────────────────────────
   virtual SnapshotId    createSnapshot(const std::string& label)            = 0;

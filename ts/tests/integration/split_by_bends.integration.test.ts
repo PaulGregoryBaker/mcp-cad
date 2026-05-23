@@ -18,10 +18,13 @@ import { loadConfig } from '../../src/config/loader';
 // ─── Addon detection ──────────────────────────────────────────────────────────
 
 function findAddonPath(): string | undefined {
+  // Prefer Release (kept current by `cmake-js build`). Fall back to Debug only
+  // if Release is missing. Prior ordering checked Debug first and silently
+  // used stale binaries when the developer rebuilt Release.
   const candidates = [
+    path.resolve(__dirname, '../../../cpp/build/Release/geometry_addon.node'),
     path.resolve(__dirname, '../../../cpp/build-vcpkg/Debug/geometry_addon.node'),
     path.resolve(__dirname, '../../../cpp/build/Debug/geometry_addon.node'),
-    path.resolve(__dirname, '../../../cpp/build/Release/geometry_addon.node'),
   ];
   return candidates.find(p => fs.existsSync(p));
 }
@@ -76,7 +79,7 @@ console.log('split_body_by_bends.hollow cube tests starting...');
   });
 
   
-  it('two hollow cubes → thin_solid mode, 12 panels, 4 protrusions', async () => {
+  it('two hollow cubes → thin_solid mode, 12 panels, 0 protrusions', async () => {
     if (!addonAvailable) return;
 console.log('split_body_by_bends.two hollow cubes tests starting...');
 
@@ -110,10 +113,104 @@ console.log('split_body_by_bends.two hollow cubes tests starting...');
 
     expect(result.detected_mode).toBe('thin_solid');
     expect(result.panel_count).toBe(12);
-    expect(result.protrusion_count).toBe(4);
+    // testcube has no real tab/boss features. The previous expectation of 4
+    // was driven by a misdetection bug (outer wall slabs being misclassified
+    // as plate-style protrusions); see isPanelSized in geometry_service.cc.
+    expect(result.protrusion_count).toBe(0);
     expect(result.panel_ids).toHaveLength(12);
     expect(result.rollback_token).toBeDefined();
   });
+
+  // ── Diagnostic: protrusion bboxes must be local features, not full panels ──
+  //
+  // Regression test for the bug where `split_body_by_bends` on testcube.step
+  // returns protrusion shells that are actually outer-cube panel slabs. The
+  // root cause is half-space extraction at an interior host plane over-
+  // capturing everything beyond the plane.
+  //
+  // Validation: each protrusion's AABB volume must be MUCH smaller than the
+  // largest panel's AABB volume. A real protrusion (tab, boss, flange) is a
+  // localized feature and should not approach panel dimensions.
+  it('testcube: protrusion bboxes are local features, not panel-sized', async () => {
+    if (!addonAvailable) return;
+
+    const fixturePath = findFixture('testcube.step');
+    if (!fixturePath) {
+      console.warn('testcube.step not found — skipping');
+      return;
+    }
+    const config = loadConfig(configPath);
+
+    const clean = await dispatchTool('clean_geometry', { file_path: fixturePath }, config) as { solid_id: string };
+    const result = await dispatchTool('split_body_by_bends', {
+      part_id: clean.solid_id,
+      angle_threshold_deg: 45,
+      max_thickness_mm: 2.0,
+      max_recursion_depth: 2,
+    }, config) as {
+      panel_count: number;
+      protrusion_count: number;
+      panel_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>;
+      protrusion_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>;
+    };
+    expect(result.panel_count).toBe(12);
+    expect(result.protrusion_count).toBe(0);
+
+    const bboxVolume = (b: { x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }) =>
+      (b.x_max - b.x_min) * (b.y_max - b.y_min) * (b.z_max - b.z_min);
+    const maxDim = (b: { x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }) =>
+      Math.max(b.x_max - b.x_min, b.y_max - b.y_min, b.z_max - b.z_min);
+
+    const panelVolumes = result.panel_bboxes.map(bboxVolume);
+    const largestPanelVolume = Math.max(...panelVolumes);
+    const largestPanelMaxDim = Math.max(...result.panel_bboxes.map(maxDim));
+
+    // Log diagnostic info so failures are easy to interpret.
+    // eslint-disable-next-line no-console
+    console.log('panel bbox volumes (sorted desc):',
+      [...panelVolumes].sort((a, b) => b - a).map(v => v.toFixed(0)));
+    // eslint-disable-next-line no-console
+    console.log('protrusion bbox volumes (sorted desc):',
+      result.protrusion_bboxes.map(bboxVolume).sort((a, b) => b - a).map(v => v.toFixed(0)));
+    // eslint-disable-next-line no-console
+    console.log('protrusion bbox max-dimensions:',
+      result.protrusion_bboxes.map(maxDim).map(d => d.toFixed(1)));
+    // eslint-disable-next-line no-console
+    console.log('largest panel volume:', largestPanelVolume.toFixed(0),
+                'largest panel max-dim:', largestPanelMaxDim.toFixed(1));
+
+    // Print each protrusion's AABB coordinates so we can identify what face
+    // and what extraction direction produced it.
+    const fmtBbox = (b: { x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }) =>
+      `x[${b.x_min.toFixed(1)}..${b.x_max.toFixed(1)}]` +
+      ` y[${b.y_min.toFixed(1)}..${b.y_max.toFixed(1)}]` +
+      ` z[${b.z_min.toFixed(1)}..${b.z_max.toFixed(1)}]` +
+      ` dims=${(b.x_max - b.x_min).toFixed(1)}×${(b.y_max - b.y_min).toFixed(1)}×${(b.z_max - b.z_min).toFixed(1)}`;
+    // eslint-disable-next-line no-console
+    console.log('protrusion bbox coords:');
+    result.protrusion_bboxes.forEach((b, i) => {
+      // eslint-disable-next-line no-console
+      console.log(`  [${i}] ${fmtBbox(b)}`);
+    });
+    // eslint-disable-next-line no-console
+    console.log('panel bbox coords:');
+    result.panel_bboxes.forEach((b, i) => {
+      // eslint-disable-next-line no-console
+      console.log(`  [${i}] ${fmtBbox(b)}`);
+    });
+
+    // Each protrusion must be much smaller than the largest panel.
+    // A real protrusion's volume should be < 25% of the largest panel's volume.
+    for (let i = 0; i < result.protrusion_bboxes.length; i++) {
+      const pVol = bboxVolume(result.protrusion_bboxes[i]);
+      const pMaxDim = maxDim(result.protrusion_bboxes[i]);
+      expect(pVol, `protrusion ${i} volume ${pVol.toFixed(0)} should be < 25% of largest panel volume ${largestPanelVolume.toFixed(0)}`)
+        .toBeLessThan(largestPanelVolume * 0.25);
+      expect(pMaxDim, `protrusion ${i} max-dimension ${pMaxDim.toFixed(1)} should be < 75% of largest panel max-dimension ${largestPanelMaxDim.toFixed(1)}`)
+        .toBeLessThan(largestPanelMaxDim * 0.75);
+    }
+  });
+
 /*
     it('Braai fixture → split by bends, part count reasonable', async () => {
       if (!addonAvailable) return;

@@ -168,6 +168,18 @@ export function startMeshServer(port: number): http.Server {
     }
   });
 
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(
+        `[mesh-server] Port ${port} is already in use — mesh server will not start. ` +
+        `Kill the previous process or set MESH_PORT to a free port.`,
+      );
+      // Do NOT crash: the MCP stdio transport still works without the mesh server.
+    } else {
+      console.error('[mesh-server] Unexpected error:', err);
+    }
+  });
+
   server.listen(port);
   return server;
 }

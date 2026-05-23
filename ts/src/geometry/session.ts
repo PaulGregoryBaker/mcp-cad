@@ -106,3 +106,60 @@ export class SessionState {
 
 // Singleton session for the process
 export const session = new SessionState();
+
+// ─── Semantic persistence singletons (Feature 005) ────────────────────────────
+
+import type { PersistenceConfig } from '../config/loader';
+import type { SemanticPersistencePort } from '../semantic/port';
+import type { SemanticStore as SemanticStoreType } from '../semantic/semantic_store';
+
+let _semanticPort: SemanticPersistencePort | null = null;
+let _semanticStore: SemanticStoreType | null = null;
+
+/**
+ * Initialises the Dolt adapter and semantic store from config.
+ * Called once at server startup when persistence is configured.
+ * Throws PERSISTENCE_UNAVAILABLE if the Dolt server is unreachable.
+ */
+export async function initSemanticPersistence(
+  persistence: PersistenceConfig,
+): Promise<{ port: SemanticPersistencePort; store: SemanticStoreType }> {
+  const { DoltAdapter } = await import('../semantic/dolt_adapter.js');
+  const { SemanticStore } = await import('../semantic/semantic_store.js');
+  const { applyMigrations } = await import('../semantic/migration_runner.js');
+  const mysql = await import('mysql2/promise');
+
+  const adapter = new DoltAdapter({
+    host: persistence.host,
+    port: persistence.port,
+    user: 'root',
+    password: '',
+    database: persistence.database,
+  });
+  await adapter.connect();
+
+  // Run migrations via a dedicated single connection.
+  const migConn = await mysql.createConnection({
+    host: persistence.host,
+    port: persistence.port,
+    user: 'root',
+    password: '',
+    database: persistence.database,
+  });
+  await applyMigrations(migConn);
+  await migConn.end();
+
+  const store = new SemanticStore(adapter);
+  _semanticPort = adapter;
+  _semanticStore = store;
+
+  return { port: adapter, store };
+}
+
+export function getSemanticPort(): SemanticPersistencePort | null {
+  return _semanticPort;
+}
+
+export function getSemanticStore(): SemanticStoreType | null {
+  return _semanticStore;
+}

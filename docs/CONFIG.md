@@ -46,6 +46,13 @@ environmental:
   marine_grade: boolean            # Blocks adhesive/plastic fasteners
   high_vibration: boolean          # optional
   outdoor_exposed: boolean         # optional
+
+persistence:                       # optional — Dolt semantic persistence
+  driver: dolt                     # Only supported driver; omit block to disable persistence
+  host: 127.0.0.1                  # Default: 127.0.0.1
+  port: 3306                       # Default: 3306
+  database: string                 # e.g. "semantic_braai" — one DB per product
+  data_dir: ./state/dolt           # Directory for dolt sql-server data (default: ./state/dolt)
 ```
 
 ## Validation
@@ -104,4 +111,12 @@ logistics:
 environmental:
   fire_rated: false
   marine_grade: false
+
+# Optional — remove block if Dolt persistence is not in use
+persistence:
+  driver: dolt
+  host: 127.0.0.1
+  port: 3306
+  database: semantic_braai
+  data_dir: ./state/dolt/braai
 ```

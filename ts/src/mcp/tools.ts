@@ -19,6 +19,26 @@ import { session } from '../geometry/session';
 import { jobQueue } from '../geometry/jobs';
 import { toStructuredError, throwError, ErrorCodes } from './errors';
 import { transactionRegistry } from './transactions';
+import type { SemanticStore } from '../semantic/semantic_store';
+import { SemanticStoreError } from '../semantic/semantic_store';
+import { MappingLayer } from '../semantic/mapping_layer';
+
+let _semanticStore: SemanticStore | null = null;
+
+export function setSemanticStore(store: SemanticStore): void {
+  _semanticStore = store;
+}
+
+function getSemanticStore(): SemanticStore {
+  if (!_semanticStore) {
+    throwError(
+      ErrorCodes.PERSISTENCE_UNAVAILABLE,
+      'Semantic store is not initialised. Ensure persistence.driver is configured.',
+      false,
+    );
+  }
+  return _semanticStore;
+}
 import type { ManufacturingConfig } from '../config/loader';
 import { MaterialStore } from '../manufacturing/material';
 import { isJointTypeAllowed } from '../manufacturing/rules';
@@ -451,6 +471,109 @@ export function getToolDefinitions(): object[] {
       },
     },
     {
+      name: 'declare_semantic_entity',
+      description:
+        'Declares a named semantic entity (panel, joint_interface, etc.) within a transaction. The entity is identified by a URI of the form semantic://<product>/<slug>.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'semantic://<product>/<slug>' },
+          type: {
+            type: 'string',
+            enum: ['panel', 'panel_group', 'joint_interface', 'functional_system', 'spatial_region'],
+          },
+          purpose: { type: 'array', items: { type: 'string' } },
+          relationships: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                relationship: {
+                  type: 'string',
+                  enum: ['contains', 'bounded_by', 'connected_to', 'manufactured_as', 'joined_by', 'bent_along'],
+                },
+                target: { type: 'string' },
+              },
+              required: ['relationship', 'target'],
+            },
+          },
+          transaction_id: { type: 'string' },
+        },
+        required: ['id', 'type', 'transaction_id'],
+      },
+    },
+    {
+      name: 'bind_semantic_entity',
+      description:
+        'Binds a semantic entity to geometry. Supports face_group (explicit face IDs), body (a shell body ID), or spatial_region (between two named entities — resolved at query time).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          semantic_id: { type: 'string' },
+          binding: {
+            oneOf: [
+              {
+                type: 'object',
+                properties: {
+                  kind: { type: 'string', enum: ['face_group'] },
+                  face_ids: { type: 'array', items: { type: 'string' }, minItems: 1 },
+                },
+                required: ['kind', 'face_ids'],
+              },
+              {
+                type: 'object',
+                properties: {
+                  kind: { type: 'string', enum: ['body'] },
+                  body_id: { type: 'string' },
+                },
+                required: ['kind', 'body_id'],
+              },
+              {
+                type: 'object',
+                properties: {
+                  kind: { type: 'string', enum: ['spatial_region'] },
+                  between: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    minItems: 2,
+                    maxItems: 2,
+                  },
+                },
+                required: ['kind', 'between'],
+              },
+            ],
+          },
+          transaction_id: { type: 'string' },
+        },
+        required: ['semantic_id', 'binding', 'transaction_id'],
+      },
+    },
+    {
+      name: 'resolve_geometry',
+      description:
+        'Returns the geometry binding for a semantic entity. Pass at_revision to query point-in-time state via Dolt AS OF.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          semantic_id: { type: 'string' },
+          at_revision: { type: 'integer', description: 'Topology revision number for time-travel queries' },
+        },
+        required: ['semantic_id'],
+      },
+    },
+    {
+      name: 'semantic_lineage',
+      description:
+        'Returns the full history of geometry bindings for a semantic entity, in topology revision order. Each row shows which transaction caused the binding and the remap_reason (if remapped by the mapping layer).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          semantic_id: { type: 'string' },
+        },
+        required: ['semantic_id'],
+      },
+    },
+    {
       name: 'split_body_by_bends',
       description:
         'Decomposes a shell body into planar panels by splitting at every bend. Auto-detects mode: thin-solid (wall ≤ max_thickness_mm) cuts solid into panels preserving original wall thickness; surface/conceptual mode extrudes each panel face by default_thickness_mm. Returns separate panel_ids and protrusion_ids for flanges/tabs. Mutating — creates a rollback token.',
@@ -481,7 +604,30 @@ export function getToolDefinitions(): object[] {
             minimum: 0,
             maximum: 10,
             description:
-              'Maximum recursion depth for nested decomposition. 0 = single pass. When > 0 the remainder solid after each pass is recursively decomposed, accumulating all panels and protrusions. Default 0.',
+              'Maximum recursion depth for nested decomposition. 0 = single pass. When > 0 the remainder solid after each pass is recursively decomposed, accumulating all panels and protrusions. Default 1.',
+          },
+          transaction_id: { type: 'string' },
+        },
+        required: ['part_id'],
+      },
+    },
+    {
+      name: 'remove_protrusions',
+      description:
+        'Detects and extracts all protrusions (flanges, tabs, bosses) from a shell body without splitting it into panels. The part geometry is updated in-place (cleaned); each extracted protrusion is returned as a new shell. Useful as a pre-processing step before further operations, or as a standalone simplification. Mutating — creates a rollback token.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_id: { type: 'string', description: 'Shell to clean protrusions from' },
+          angle_threshold_deg: {
+            type: 'number',
+            minimum: 0,
+            description: 'Minimum dihedral deviation to classify a face group as primary panel. Default 30.0 degrees.',
+          },
+          max_thickness_mm: {
+            type: 'number',
+            minimum: 0,
+            description: 'Maximum protrusion thickness to detect. Geometry thicker than this is treated as a primary panel face. Default 5.0 mm.',
           },
           transaction_id: { type: 'string' },
         },
@@ -537,13 +683,13 @@ export async function dispatchTool(
         return handleRollback(args);
 
       case 'begin_transaction':
-        return handleBeginTransaction(args);
+        return await handleBeginTransaction(args);
 
       case 'commit_transaction':
-        return handleCommitTransaction(args);
+        return await handleCommitTransaction(args);
 
       case 'rollback_transaction':
-        return handleRollbackTransaction(args);
+        return await handleRollbackTransaction(args);
 
       case 'get_transaction_history':
         return handleGetTransactionHistory(args);
@@ -580,6 +726,21 @@ export async function dispatchTool(
 
       case 'split_body_by_bends':
         return handleSplitBodyByBends(args);
+
+      case 'remove_protrusions':
+        return handleRemoveProtrusions(args);
+
+      case 'declare_semantic_entity':
+        return await handleDeclareSemanticEntity(args);
+
+      case 'bind_semantic_entity':
+        return await handleBindSemanticEntity(args);
+
+      case 'resolve_geometry':
+        return await handleResolveGeometry(args);
+
+      case 'semantic_lineage':
+        return await handleSemanticLineage(args);
 
       default:
         throwError(ErrorCodes.INTERNAL_ERROR, `Unknown tool: ${toolName}`, false);
@@ -937,14 +1098,14 @@ function handleRollback(args: Record<string, unknown>): unknown {
 
 // ─── Transaction primitive handlers (Feature 004) ─────────────────────────────
 
-function handleBeginTransaction(args: Record<string, unknown>): unknown {
+async function handleBeginTransaction(args: Record<string, unknown>): Promise<unknown> {
   const label = requireString(args, 'label');
   const product = typeof args.product === 'string' ? args.product : undefined;
 
   // Capture the pre-transaction geometry state. The snapshot id doubles as the
   // rollback token: rolling back the transaction restores this snapshot.
   const snapshotId = getGeometryBinding().createSnapshot(label);
-  const txn = transactionRegistry.begin(label, snapshotId, product);
+  const txn = await transactionRegistry.begin(label, snapshotId, product);
 
   return {
     transaction_id: txn.id,
@@ -955,15 +1116,51 @@ function handleBeginTransaction(args: Record<string, unknown>): unknown {
   };
 }
 
-function handleCommitTransaction(args: Record<string, unknown>): unknown {
+async function handleCommitTransaction(args: Record<string, unknown>): Promise<unknown> {
   const transactionId = requireString(args, 'transaction_id');
 
-  const txn = transactionRegistry.commit(transactionId);
+  // Phase 3: run the mapping layer remap before merging the Dolt branch.
+  if (_semanticStore) {
+    const port = _semanticStore.getPort();
+    try {
+      // Insert a topology_revision placeholder (brep_file_path/sha will be
+      // filled in by a future geometry-export step; for Phase 3 we record a
+      // sentinel so the foreign key chain is consistent).
+      const revisionId = await port.insertTopologyRevision({
+        transaction_id: transactionId,
+        brep_file_path: '',
+        brep_sha256: '0'.repeat(64),
+      });
+
+      // Persist in-memory shape history from TransactionRegistry to Dolt.
+      const inMemoryHistory = transactionRegistry.getHistory(transactionId);
+      const shapeHistoryRows = inMemoryHistory.map((r) => ({
+        transaction_id: transactionId,
+        verdict: r.verdict as import('../semantic/types').ShapeVerdict,
+        original_id: r.original_id,
+        new_id: r.new_id ?? null,
+        operation_label: r.operation_label,
+      }));
+      await port.insertShapeHistory(shapeHistoryRows);
+
+      const mappingLayer = new MappingLayer(_semanticStore);
+      const affectedIds = await mappingLayer.applyShapeHistoryToBindings(transactionId, revisionId);
+      await mappingLayer.refreshDerivedBindings(transactionId, revisionId, affectedIds);
+    } catch (err) {
+      throwError(
+        ErrorCodes.PERSISTENCE_COMMIT_FAILED,
+        `Mapping layer remap failed: ${String(err)}`,
+        true,
+        'commit_transaction',
+      );
+    }
+  }
+
+  const txn = await transactionRegistry.commit(transactionId);
 
   // Drop the pre-transaction snapshot — committed changes are permanent.
   // Note: this clears all snapshots in the registry (no per-id clear primitive
   // exists yet). In MVP single-session there is at most one outer snapshot.
-  // Phase 2 (T016) adds a per-id clearSnapshot primitive.
   getGeometryBinding().clearSnapshots();
 
   return {
@@ -973,7 +1170,7 @@ function handleCommitTransaction(args: Record<string, unknown>): unknown {
   };
 }
 
-function handleRollbackTransaction(args: Record<string, unknown>): unknown {
+async function handleRollbackTransaction(args: Record<string, unknown>): Promise<unknown> {
   const transactionId = requireString(args, 'transaction_id');
 
   // Look up the transaction first so we know which snapshot to restore. The
@@ -991,7 +1188,7 @@ function handleRollbackTransaction(args: Record<string, unknown>): unknown {
   }
 
   const result = getGeometryBinding().restoreSnapshot(existing.snapshotId);
-  const txn = transactionRegistry.rollback(transactionId);
+  const txn = await transactionRegistry.rollback(transactionId);
 
   return {
     transaction_id: txn.id,
@@ -1000,6 +1197,114 @@ function handleRollbackTransaction(args: Record<string, unknown>): unknown {
     restored_solid_ids: result.restoredSolidIds,
     restored_shell_ids: result.restoredShellIds,
   };
+}
+
+// ─── Semantic Mapping Layer handlers (Feature 005) ────────────────────────────
+
+function mapSemanticStoreError(err: unknown): never {
+  if (err instanceof SemanticStoreError) {
+    throwError(err.code as (typeof ErrorCodes)[keyof typeof ErrorCodes], err.message, true);
+  }
+  throw err;
+}
+
+async function handleDeclareSemanticEntity(args: Record<string, unknown>): Promise<unknown> {
+  const id = requireString(args, 'id');
+  const type = requireString(args, 'type');
+  const transactionId = requireString(args, 'transaction_id');
+  const purpose = Array.isArray(args.purpose) ? (args.purpose as string[]) : undefined;
+  const relationships = Array.isArray(args.relationships)
+    ? (args.relationships as Array<{ relationship: string; target: string }>)
+    : undefined;
+
+  const store = getSemanticStore();
+  try {
+    const entity = await store.declareEntity({ id, type, purpose, relationships, transaction_id: transactionId });
+    return {
+      id: entity.id,
+      type: entity.type,
+      state: entity.state,
+      created_in_transaction: entity.created_in_transaction,
+    };
+  } catch (err) {
+    mapSemanticStoreError(err);
+  }
+}
+
+async function handleBindSemanticEntity(args: Record<string, unknown>): Promise<unknown> {
+  const semanticId = requireString(args, 'semantic_id');
+  const transactionId = requireString(args, 'transaction_id');
+  const bindingArg = args.binding;
+
+  if (!bindingArg || typeof bindingArg !== 'object' || !('kind' in bindingArg)) {
+    throwError(ErrorCodes.BINDING_KIND_NOT_SUPPORTED, 'binding must have a kind field', false);
+  }
+
+  const store = getSemanticStore();
+  try {
+    const mapping = await store.bindEntity({
+      semantic_id: semanticId,
+      binding: bindingArg as import('../semantic/types').Binding,
+      transaction_id: transactionId,
+    });
+    return {
+      revision_id: mapping.revision_id,
+      semantic_id: mapping.semantic_id,
+      binding_kind: mapping.binding_kind,
+      binding: mapping.binding,
+      topology_revision: mapping.topology_revision,
+    };
+  } catch (err) {
+    mapSemanticStoreError(err);
+  }
+}
+
+async function handleResolveGeometry(args: Record<string, unknown>): Promise<unknown> {
+  const semanticId = requireString(args, 'semantic_id');
+  const atRevision = typeof args.at_revision === 'number' ? args.at_revision : undefined;
+
+  const store = getSemanticStore();
+  try {
+    const mapping = atRevision !== undefined
+      ? await store.resolveAtRevision(semanticId, atRevision)
+      : await store.resolveCurrent({ semantic_id: semanticId });
+
+    return {
+      semantic_id: mapping.semantic_id,
+      binding_kind: mapping.binding_kind,
+      binding: mapping.binding,
+      topology_revision: mapping.topology_revision,
+      remap_reason: mapping.remap_reason,
+      ...((mapping as { materialised_face_ids?: string[] }).materialised_face_ids !== undefined
+        ? { materialised_face_ids: (mapping as { materialised_face_ids?: string[] }).materialised_face_ids }
+        : {}),
+    };
+  } catch (err) {
+    mapSemanticStoreError(err);
+  }
+}
+
+async function handleSemanticLineage(args: Record<string, unknown>): Promise<unknown> {
+  const semanticId = requireString(args, 'semantic_id');
+
+  const store = getSemanticStore();
+  try {
+    const lineage = await store.getMappingLineage(semanticId);
+    return {
+      semantic_id: semanticId,
+      lineage: lineage.map((m) => ({
+        revision_id: m.revision_id,
+        transaction_id: m.created_in_transaction,
+        binding_kind: m.binding_kind,
+        binding: m.binding,
+        topology_revision: m.topology_revision,
+        remap_reason: m.remap_reason,
+        created_at: m.created_at,
+      })),
+    };
+  } catch (err) {
+    mapSemanticStoreError(err);
+  }
 }
 
 function handleGetTransactionHistory(args: Record<string, unknown>): unknown {
@@ -1417,7 +1722,7 @@ function handleSplitBodyByBends(args: Record<string, unknown>): unknown {
     : 1.0;
   const maxRecursionDepth = typeof args['max_recursion_depth'] === 'number'
     ? Math.max(0, Math.round(args['max_recursion_depth']))
-    : 0;
+    : 1;
 
   if (threshold < 0) {
     throwError(ErrorCodes.GE_DECOMPOSE_BY_BENDS_FAILED, 'angle_threshold_deg must be non-negative', true);
@@ -1448,9 +1753,38 @@ function handleSplitBodyByBends(args: Record<string, unknown>): unknown {
     protrusion_ids: result.protrusion_ids,
     protrusion_count: result.protrusion_ids.length,
     protrusion_bboxes: result.protrusion_bboxes,
+    protrusion_parents: result.protrusion_parents,
     detected_mode: result.detected_mode,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
     mesh_urls: allIds.map(id => `${meshBaseUrl}/mesh/${id}.glb`),
     shape_history: result.shape_history ?? [],
+  };
+}
+
+function handleRemoveProtrusions(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  const angleThresholdDeg = typeof args['angle_threshold_deg'] === 'number'
+    ? args['angle_threshold_deg']
+    : 30.0;
+  const maxThicknessMm = typeof args['max_thickness_mm'] === 'number'
+    ? args['max_thickness_mm']
+    : 5.0;
+
+  const ctx = resolveTransactionContext(args);
+  const result = getGeometryBinding().removeProtrusions(partId, angleThresholdDeg, maxThicknessMm);
+
+  for (const shellId of result.protrusion_ids) {
+    session.registerShell(shellId);
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  const allIds = [result.cleaned_part_id, ...result.protrusion_ids];
+  return {
+    cleaned_part_id: result.cleaned_part_id,
+    protrusion_ids: result.protrusion_ids,
+    protrusion_count: result.protrusion_count,
+    protrusion_bboxes: result.protrusion_bboxes,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
+    mesh_urls: allIds.map(id => `${meshBaseUrl}/mesh/${id}.glb`),
   };
 }

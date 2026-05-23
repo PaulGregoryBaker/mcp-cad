@@ -90,6 +90,7 @@ export interface GeometryAddon {
     panel_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>;
     protrusion_ids: string[];
     protrusion_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>;
+    protrusion_parents: Array<{ protrusion_id: string; parent_panel_id: string | null }>;
     rollbackToken: string;
     detected_mode: string;
     shape_history?: Array<{
@@ -98,6 +99,17 @@ export interface GeometryAddon {
       new_id: string;
       operation_label: string;
     }>;
+  };
+  removeProtrusions(
+    partId: string,
+    angleThresholdDeg?: number,
+    maxThicknessMm?: number,
+  ): {
+    cleaned_part_id: string;
+    protrusion_ids: string[];
+    protrusion_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>;
+    protrusion_count: number;
+    rollbackToken: string;
   };
 }
 
@@ -407,11 +419,23 @@ export class GeometryBinding {
     maxThicknessMm?: number,
     defaultThicknessMm?: number,
     maxRecursionDepth?: number,
-  ): { panel_ids: string[]; panel_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>; protrusion_ids: string[]; protrusion_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>; rollbackToken: string; detected_mode: string; shape_history?: Array<{ verdict: 'modified' | 'generated' | 'deleted'; original_id: string; new_id: string; operation_label: string }> } {
+  ): ReturnType<GeometryAddon['splitBodyByBends']> {
     try {
       return this.addon.splitBodyByBends(
         partId, angleThresholdDeg, maxThicknessMm, defaultThicknessMm, maxRecursionDepth,
       );
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  removeProtrusions(
+    partId: string,
+    angleThresholdDeg?: number,
+    maxThicknessMm?: number,
+  ): ReturnType<GeometryAddon['removeProtrusions']> {
+    try {
+      return this.addon.removeProtrusions(partId, angleThresholdDeg, maxThicknessMm);
     } catch (err) {
       throw toStructuredError(err);
     }

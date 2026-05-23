@@ -1338,6 +1338,20 @@ private:
     bool             hasBackPlane = false;
     gp_Pnt           backCentroid;
     gp_Vec           backNormal;     // points away from the protrusion body
+
+    // For Option-2 interior-host tabs: bounded box scoped to the cap's footprint.
+    // When useBoundedTabBox=true, extractProtrusion ignores hasBackPlane and builds
+    // a box in the (tabU, tabV, panelNormal) frame, sized to the cap's 2D footprint
+    // × tabHeight along panelNormal. This avoids the over-extraction that a half-space
+    // would cause when the host is interior to the solid.
+    bool             useBoundedTabBox = false;
+    gp_Vec           tabU;            // in-plane axis 1 (perpendicular to panelNormal)
+    gp_Vec           tabV;            // in-plane axis 2 (perpendicular to panelNormal)
+    double           tabUMin = 0.0;
+    double           tabUMax = 0.0;
+    double           tabVMin = 0.0;
+    double           tabVMax = 0.0;
+    double           tabHeight = 0.0; // cap-to-host offset along panelNormal
   };
 
   // T017 — Detect protrusion candidates before any panel cutting.
@@ -1360,6 +1374,69 @@ private:
       for (int idx : groups[g].faceIndices)
         faceToGroup[idx] = g;
     }
+
+    // ── AABB + hull-ratio classification (used by both detection passes) ──
+    // Compute the solid's tight AABB and, for each face group, the fraction of
+    // its vertices that touch the AABB boundary. Groups with low hullRatio are
+    // "interior" — sitting inside the solid rather than on its outer hull.
+    // For interior hosts, half-space extraction over-extracts; bounded-box
+    // extraction must be used instead.
+    double sxMin = 1e30, syMin = 1e30, szMin = 1e30;
+    double sxMax = -1e30, syMax = -1e30, szMax = -1e30;
+    for (TopExp_Explorer ex(shape, TopAbs_VERTEX); ex.More(); ex.Next()) {
+      gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(ex.Current()));
+      sxMin = std::min(sxMin, p.X()); sxMax = std::max(sxMax, p.X());
+      syMin = std::min(syMin, p.Y()); syMax = std::max(syMax, p.Y());
+      szMin = std::min(szMin, p.Z()); szMax = std::max(szMax, p.Z());
+    }
+    constexpr double kHullTol = 0.5;  // mm — vertex this close to AABB face = on hull
+    auto vertexOnHull = [&](const gp_Pnt& p) {
+      return std::abs(p.X() - sxMin) <= kHullTol || std::abs(p.X() - sxMax) <= kHullTol
+          || std::abs(p.Y() - syMin) <= kHullTol || std::abs(p.Y() - syMax) <= kHullTol
+          || std::abs(p.Z() - szMin) <= kHullTol || std::abs(p.Z() - szMax) <= kHullTol;
+    };
+    std::vector<double> hullRatio(groups.size(), 0.0);
+    for (int g = 0; g < (int)groups.size(); ++g) {
+      int onHull = 0, total = 0;
+      for (int fi : groups[g].faceIndices) {
+        const TopoDS_Face& f = TopoDS::Face(faceMap(fi));
+        for (TopExp_Explorer ex(f, TopAbs_VERTEX); ex.More(); ex.Next()) {
+          ++total;
+          if (vertexOnHull(BRep_Tool::Pnt(TopoDS::Vertex(ex.Current())))) ++onHull;
+        }
+      }
+      hullRatio[g] = total > 0 ? (double)onHull / total : 0.0;
+    }
+    constexpr double kInteriorThreshold = 0.50;
+
+    // Helper: project a face's vertices onto a (u, v) plane through `origin`,
+    // return the 2D bounding box in (u, v).
+    auto projectFootprint = [&](const TopoDS_Face& face, const gp_Pnt& origin,
+                                const gp_Vec& u, const gp_Vec& v,
+                                double& uMin, double& uMax,
+                                double& vMin, double& vMax) {
+      uMin = 1e30; uMax = -1e30; vMin = 1e30; vMax = -1e30;
+      for (TopExp_Explorer ex(face, TopAbs_VERTEX); ex.More(); ex.Next()) {
+        gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(ex.Current()));
+        gp_Vec toP(origin, p);
+        double uc = u.Dot(toP);
+        double vc = v.Dot(toP);
+        uMin = std::min(uMin, uc); uMax = std::max(uMax, uc);
+        vMin = std::min(vMin, vc); vMax = std::max(vMax, vc);
+      }
+    };
+
+    // Helper: build (tabU, tabV) perpendicular to a given normal.
+    auto buildInPlaneAxes = [](const gp_Vec& n, gp_Vec& u, gp_Vec& v) -> bool {
+      gp_Vec seed = (std::abs(n.X()) < 0.9) ? gp_Vec(1, 0, 0) : gp_Vec(0, 1, 0);
+      u = seed - n.Multiplied(n.Dot(seed));
+      if (u.Magnitude() < 1e-6) return false;
+      u.Normalize();
+      v = n.Crossed(u);
+      if (v.Magnitude() < 1e-6) return false;
+      v.Normalize();
+      return true;
+    };
 
     // Build edge-to-faces and face-to-adjacent-faces maps
     TopTools_IndexedDataMapOfShapeListOfShape edgeToFaces;
@@ -1539,6 +1616,30 @@ private:
           pc.hasBackPlane = true;
           pc.backCentroid = faceCentroid[capIdx];
           pc.backNormal   = capNormVec;
+        } else if (hullRatio[matchedPanelGroup] < kInteriorThreshold) {
+          // Tab-style on an INTERIOR host: half-space extraction would over-extract
+          // everything on the +panelNormal side (including outer-hull material that
+          // happens to lie beyond the host plane). Use a bounded box scoped to the
+          // cap face's footprint instead.
+          gp_Vec tabU, tabV;
+          if (buildInPlaneAxes(pc.panelNormal, tabU, tabV)) {
+            const TopoDS_Face& capFace2 = TopoDS::Face(faceMap(capIdx));
+            double uMin, uMax, vMin, vMax;
+            projectFootprint(capFace2, pc.panelCentroid, tabU, tabV,
+                             uMin, uMax, vMin, vMax);
+            if (uMax > uMin && vMax > vMin) {
+              gp_Vec hostToCap(pc.panelCentroid, faceCentroid[capIdx]);
+              double offset = std::abs(pc.panelNormal.Dot(hostToCap));
+              pc.useBoundedTabBox = true;
+              pc.tabU      = tabU;
+              pc.tabV      = tabV;
+              pc.tabUMin   = uMin;
+              pc.tabUMax   = uMax;
+              pc.tabVMin   = vMin;
+              pc.tabVMax   = vMax;
+              pc.tabHeight = offset;
+            }
+          }
         }
         candidates.push_back(std::move(pc));
         for (int fi : component) claimed[fi] = true;
@@ -1561,6 +1662,74 @@ private:
         }
       }
     }
+
+    // ── Option-2 pass: detect tabs/bosses whose cap face is itself a primary
+    // face group sitting on an interior host (missed by the BFS, which only
+    // seeds from non-primary faces). Uses the AABB-derived hullRatio computed
+    // at the top of this function.
+    for (int cap = 0; cap < (int)groups.size(); ++cap) {
+      if (!groups[cap].isOuter || claimedPanelGroup[cap]) continue;
+      if (hullRatio[cap] >= kInteriorThreshold) continue;  // cap must be interior
+
+      int    bestHost     = -1;
+      double bestHostArea = 0.0;
+
+      for (int host = 0; host < (int)groups.size(); ++host) {
+        if (host == cap || !groups[host].isOuter || claimedPanelGroup[host]) continue;
+        if (hullRatio[host] >= kInteriorThreshold) continue;  // host must also be interior
+
+        double dotProd = groups[cap].normal.Dot(groups[host].normal);
+        if (dotProd < 0.85) continue;                          // tab-style only
+        if (groups[cap].area >= 0.30 * groups[host].area) continue;
+
+        gp_Vec hostToCap(groups[host].centroid, groups[cap].centroid);
+        double offset = std::abs(groups[host].normal.Dot(hostToCap));
+        if (offset < 1e-3 || offset > maxThicknessMm) continue;
+
+        if (groups[host].area > bestHostArea) {
+          bestHost     = host;
+          bestHostArea = groups[host].area;
+        }
+      }
+
+      if (bestHost < 0) continue;
+
+      gp_Vec tabU, tabV;
+      if (!buildInPlaneAxes(groups[bestHost].normal, tabU, tabV)) continue;
+
+      // Project all cap-group face vertices onto the (tabU, tabV) plane.
+      double uMin = 1e30, uMax = -1e30, vMin = 1e30, vMax = -1e30;
+      for (int fi : groups[cap].faceIndices) {
+        double u0, u1, v0, v1;
+        projectFootprint(TopoDS::Face(faceMap(fi)), groups[bestHost].centroid,
+                         tabU, tabV, u0, u1, v0, v1);
+        uMin = std::min(uMin, u0); uMax = std::max(uMax, u1);
+        vMin = std::min(vMin, v0); vMax = std::max(vMax, v1);
+      }
+      if (uMax <= uMin || vMax <= vMin) continue;
+
+      gp_Vec hostToCap(groups[bestHost].centroid, groups[cap].centroid);
+      double offset = std::abs(groups[bestHost].normal.Dot(hostToCap));
+
+      ProtrusionCandidate pc;
+      pc.faceIndices      = groups[cap].faceIndices;
+      pc.panelCentroid    = groups[bestHost].centroid;
+      pc.panelNormal      = groups[bestHost].normal;
+      pc.useBoundedTabBox = true;
+      pc.tabU             = tabU;
+      pc.tabV             = tabV;
+      pc.tabUMin          = uMin;
+      pc.tabUMax          = uMax;
+      pc.tabVMin          = vMin;
+      pc.tabVMax          = vMax;
+      pc.tabHeight        = offset;
+
+      candidates.push_back(std::move(pc));
+      for (int fi : groups[cap].faceIndices) claimed[fi] = true;
+      claimedPanelGroup[cap]      = true;
+      claimedPanelGroup[bestHost] = true;
+    }
+
     return candidates;
   }
 
@@ -1600,7 +1769,48 @@ private:
         pc.panelCentroid.Z() + refSign * pc.panelNormal.Z() * 1e4);
 
     TopoDS_Shape cutter;
-    if (pc.hasBackPlane) {
+    if (pc.useBoundedTabBox) {
+      // Option-2 interior-host tab: build a box scoped to the cap's 2D
+      // footprint (precomputed in (tabU, tabV)) × tab height along panelNormal.
+      // The box brackets the tab volume exactly, so the boolean Common
+      // captures only the tab and not the surrounding solid.
+      constexpr double pad   = 0.5;  // mm — pad footprint to ensure full capture
+      constexpr double bleed = 0.5;  // mm — extend slightly past both planes
+      double uSize = (pc.tabUMax - pc.tabUMin) + 2.0 * pad;
+      double vSize = (pc.tabVMax - pc.tabVMin) + 2.0 * pad;
+      double hSize = pc.tabHeight + 2.0 * bleed;
+
+      // Box origin: low-(u,v) corner, dropped slightly below the host plane.
+      gp_Pnt origin(
+          pc.panelCentroid.X()
+            + pc.tabU.X() * (pc.tabUMin - pad)
+            + pc.tabV.X() * (pc.tabVMin - pad)
+            - pc.panelNormal.X() * bleed,
+          pc.panelCentroid.Y()
+            + pc.tabU.Y() * (pc.tabUMin - pad)
+            + pc.tabV.Y() * (pc.tabVMin - pad)
+            - pc.panelNormal.Y() * bleed,
+          pc.panelCentroid.Z()
+            + pc.tabU.Z() * (pc.tabUMin - pad)
+            + pc.tabV.Z() * (pc.tabVMin - pad)
+            - pc.panelNormal.Z() * bleed);
+
+      gp_Dir zAxis(pc.panelNormal.X(), pc.panelNormal.Y(), pc.panelNormal.Z());
+      gp_Dir xAxis(pc.tabU.X(), pc.tabU.Y(), pc.tabU.Z());
+      gp_Ax2 ax(origin, zAxis, xAxis);
+
+      BRepPrimAPI_MakeBox boxMaker(ax, uSize, vSize, hSize);
+      try {
+        boxMaker.Build();
+        if (!boxMaker.IsDone())
+          throw GeometryError(GE_DECOMPOSE_PROTRUSION_EXTRACT_FAILED,
+                              "Could not build bounded tab box", true, "rollback");
+        cutter = boxMaker.Solid();
+      } catch (const Standard_Failure&) {
+        throw GeometryError(GE_DECOMPOSE_PROTRUSION_EXTRACT_FAILED,
+                            "Bounded tab box construction threw", true, "rollback");
+      }
+    } else if (pc.hasBackPlane) {
       // Plate-style: build a bounded slab box between the back plane and the
       // panel plane. Half-space intersection produces a fragile cutter that
       // can corrupt the solid; a real bounded box is robust.
@@ -1674,6 +1884,42 @@ private:
 
     remainder = cutRemainder.Shape();
     return extract.Shape();
+  }
+
+  // Sanity check: a real protrusion (tab/boss/flange) is a localized feature,
+  // small in at least two of three axes relative to the host solid. A "panel-
+  // sized" candidate spans > 80% of the solid in 2+ axes — that's a wall slab
+  // misdetected as a protrusion (e.g. when nested-cube topology lets BFS
+  // wrap a plate-style candidate around a full outer face). Reject those so
+  // the geometry stays in workShape for splitMode2 to handle as a panel.
+  static bool isPanelSized(const TopoDS_Shape& candidate, const TopoDS_Shape& solid) {
+    auto extentVia = [](const TopoDS_Shape& s,
+                        double& dx, double& dy, double& dz) -> bool {
+      double xMin = 1e30, yMin = 1e30, zMin = 1e30;
+      double xMax = -1e30, yMax = -1e30, zMax = -1e30;
+      bool any = false;
+      for (TopExp_Explorer ex(s, TopAbs_VERTEX); ex.More(); ex.Next()) {
+        gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(ex.Current()));
+        xMin = std::min(xMin, p.X()); xMax = std::max(xMax, p.X());
+        yMin = std::min(yMin, p.Y()); yMax = std::max(yMax, p.Y());
+        zMin = std::min(zMin, p.Z()); zMax = std::max(zMax, p.Z());
+        any = true;
+      }
+      if (!any) return false;
+      dx = xMax - xMin; dy = yMax - yMin; dz = zMax - zMin;
+      return true;
+    };
+
+    double cx, cy, cz, sx, sy, sz;
+    if (!extentVia(candidate, cx, cy, cz)) return false;
+    if (!extentVia(solid, sx, sy, sz))     return false;
+
+    constexpr double kPanelThreshold = 0.80;
+    int largeAxes = 0;
+    if (sx > 1e-6 && cx / sx > kPanelThreshold) ++largeAxes;
+    if (sy > 1e-6 && cy / sy > kPanelThreshold) ++largeAxes;
+    if (sz > 1e-6 && cz / sz > kPanelThreshold) ++largeAxes;
+    return largeAxes >= 2;
   }
 
   // Mode 1: BFS + extrusion (surface/conceptual model).
@@ -1794,7 +2040,8 @@ private:
                   double angleThresholdDeg,
                   double maxThicknessMm,
                   std::vector<ShellId>& panelIds,
-                  std::vector<ShellId>& /*protrusionIds*/,
+                  std::vector<ShellId>& protrusionIds,
+                  std::vector<ProtrusionParent>& protrusionParents,
                   TopoDS_Shape* remainderOut = nullptr,
                   std::vector<ShapeHistoryRecord>* historyOut = nullptr)
   {
@@ -1900,6 +2147,8 @@ private:
       ShellId panelId = generateUUID();
       shells_[panelId] = ShellState{panelId, parentId, extract.Shape()};
       panelIds.push_back(panelId);
+      (void)protrusionIds;       // reserved for future post-cut handling
+      (void)protrusionParents;   // reserved for future post-cut handling
 
       // Remainder = remainder minus the panel slab
       BRepAlgoAPI_Cut cutRemainder(remainder, hs.Solid());
@@ -1926,8 +2175,9 @@ private:
       double               maxThicknessMm,
       double               defaultThicknessMm,
       int                  remainingDepth,
-      std::vector<ShellId>& panelIds,
-      std::vector<ShellId>& protrusionIds)
+      std::vector<ShellId>&        panelIds,
+      std::vector<ShellId>&        protrusionIds,
+      std::vector<ProtrusionParent>& protrusionParents)
   {
     if (remainingDepth <= 0 || shape.IsNull()) return;
 
@@ -1980,9 +2230,11 @@ private:
       TopoDS_Shape newRemainder;
       try {
         TopoDS_Shape ps = extractProtrusion(workShape, pc, newRemainder, localHalfSize);
+        if (isPanelSized(ps, workShape)) continue;  // false positive — leave for splitMode2
         ShellId pid = generateUUID();
         shells_[pid] = ShellState{pid, parentId, ps};
         protrusionIds.push_back(pid);
+        protrusionParents.push_back({pid, ""});  // pre-cut: panel not yet determined
         workShape = std::move(newRemainder);
       } catch (const GeometryError&) {}
     }
@@ -1990,7 +2242,7 @@ private:
     TopoDS_Shape childRemainder;
     if (mode == "thin_solid") {
       splitMode2(workShape, localHalfSize, parentId, angleThresholdDeg, maxThicknessMm,
-                 panelIds, protrusionIds, &childRemainder);
+                 panelIds, protrusionIds, protrusionParents, &childRemainder);
     } else {
       splitMode1BFS(workShape, parentId, angleThresholdDeg, defaultThicknessMm, panelIds);
       return;  // surface mode has no structured remainder
@@ -2002,12 +2254,14 @@ private:
     bool hadSolid = false;
     for (TopExp_Explorer ex(childRemainder, TopAbs_SOLID); ex.More(); ex.Next()) {
       recursiveDecompose(ex.Current(), parentId, angleThresholdDeg, maxThicknessMm,
-                         defaultThicknessMm, remainingDepth - 1, panelIds, protrusionIds);
+                         defaultThicknessMm, remainingDepth - 1, panelIds, protrusionIds,
+                         protrusionParents);
       hadSolid = true;
     }
     if (!hadSolid) {
       recursiveDecompose(childRemainder, parentId, angleThresholdDeg, maxThicknessMm,
-                         defaultThicknessMm, remainingDepth - 1, panelIds, protrusionIds);
+                         defaultThicknessMm, remainingDepth - 1, panelIds, protrusionIds,
+                         protrusionParents);
     }
   }
 
@@ -2017,7 +2271,7 @@ private:
                                             double angleThresholdDeg,
                                             double maxThicknessMm    = 5.0,
                                             double defaultThicknessMm = 1.0,
-                                            int    maxRecursionDepth  = 0) override {
+                                            int    maxRecursionDepth  = 1) override {
 
     std::lock_guard<std::mutex> lock(mutex_);
     TopoDS_Shape inputShape;
@@ -2084,8 +2338,9 @@ private:
       double planeHalfSize = (diagSq > 0 ? std::sqrt(diagSq) : 1000.0) * 1.1 + 10.0;
 
       // T019 — Detect and extract protrusions before panel cutting.
-      std::vector<ShellId> panelIds;
-      std::vector<ShellId> protrusionIds;
+      std::vector<ShellId>         panelIds;
+      std::vector<ShellId>         protrusionIds;
+      std::vector<ProtrusionParent> protrusionParents;
 
       auto protrCandidates = detectProtrusions(shape, faceMapPre, faceGroupsPre, maxThicknessMm);
       TopoDS_Shape workShape = shape;
@@ -2093,9 +2348,14 @@ private:
         TopoDS_Shape newRemainder;
         try {
           TopoDS_Shape protrusionSolid = extractProtrusion(workShape, pc, newRemainder, planeHalfSize);
+          // Reject panel-sized extractions: those are false positives from
+          // detection misfiring on wall slabs (see isPanelSized). Leave the
+          // geometry in workShape so splitMode2 handles it as a panel.
+          if (isPanelSized(protrusionSolid, workShape)) continue;
           ShellId pid = generateUUID();
           shells_[pid] = ShellState{pid, parentId, protrusionSolid};
           protrusionIds.push_back(pid);
+          protrusionParents.push_back({pid, ""});  // pre-cut: no panel assigned yet
           workShape = std::move(newRemainder);
         } catch (const GeometryError&) {
           // Non-fatal: skip this protrusion if extraction fails
@@ -2106,7 +2366,7 @@ private:
       TopoDS_Shape firstPassRemainder;
       if (mode == "thin_solid") {
         splitMode2(workShape, planeHalfSize, parentId, angleThresholdDeg, maxThicknessMm,
-                   panelIds, protrusionIds, &firstPassRemainder, &shapeHistory);
+                   panelIds, protrusionIds, protrusionParents, &firstPassRemainder, &shapeHistory);
       } else {
         splitMode1BFS(workShape, parentId, angleThresholdDeg, defaultThicknessMm, panelIds,
                       &shapeHistory);
@@ -2117,12 +2377,14 @@ private:
         bool hadSolid = false;
         for (TopExp_Explorer ex(firstPassRemainder, TopAbs_SOLID); ex.More(); ex.Next()) {
           recursiveDecompose(ex.Current(), parentId, angleThresholdDeg, maxThicknessMm,
-                             defaultThicknessMm, maxRecursionDepth - 1, panelIds, protrusionIds);
+                             defaultThicknessMm, maxRecursionDepth - 1, panelIds,
+                             protrusionIds, protrusionParents);
           hadSolid = true;
         }
         if (!hadSolid) {
           recursiveDecompose(firstPassRemainder, parentId, angleThresholdDeg, maxThicknessMm,
-                             defaultThicknessMm, maxRecursionDepth - 1, panelIds, protrusionIds);
+                             defaultThicknessMm, maxRecursionDepth - 1, panelIds,
+                             protrusionIds, protrusionParents);
         }
       }
 
@@ -2170,7 +2432,114 @@ private:
       return DecomposedByBendsResult{
           std::move(panelIds), std::move(panelBboxes),
           std::move(protrusionIds), std::move(protrusionBboxes),
+          std::move(protrusionParents),
           token, mode, std::move(shapeHistory)};
+
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_DECOMPOSE_BY_BENDS_FAILED",
+                          std::string("OCCT exception: ") + e.GetMessageString(),
+                          true, "");
+    }
+  }
+
+  // ── Remove protrusions ────────────────────────────────────────────────────
+
+  RemoveProtrusionsResult removeProtrusions(
+      const ShellId& partId,
+      double angleThresholdDeg = 30.0,
+      double maxThicknessMm   = 5.0) override {
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    TopoDS_Shape inputShape;
+    SolidId      inputParentId;
+    {
+      auto shellIt = shells_.find(partId);
+      auto solidIt = solids_.find(partId);
+      if (shellIt != shells_.end()) {
+        inputShape    = shellIt->second.shape;
+        inputParentId = shellIt->second.parentSolidId;
+      } else if (solidIt != solids_.end()) {
+        inputShape    = solidIt->second.shape;
+        inputParentId = partId;
+      } else {
+        throw GeometryError("GE_SHELL_NOT_FOUND", "Shell not found: " + partId, false, "");
+      }
+    }
+
+    SnapshotId token = createSnapshotLocked("before removeProtrusions on " + partId);
+
+    try {
+      // Compute planeHalfSize from vertex bounds (same approach as splitBodyByBends).
+      double bxMin = 1e30, bxMax = -1e30;
+      double byMin = 1e30, byMax = -1e30;
+      double bzMin = 1e30, bzMax = -1e30;
+      for (TopExp_Explorer ex(inputShape, TopAbs_VERTEX); ex.More(); ex.Next()) {
+        gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(ex.Current()));
+        bxMin = std::min(bxMin, p.X()); bxMax = std::max(bxMax, p.X());
+        byMin = std::min(byMin, p.Y()); byMax = std::max(byMax, p.Y());
+        bzMin = std::min(bzMin, p.Z()); bzMax = std::max(bzMax, p.Z());
+      }
+      double diagSq = (bxMax-bxMin)*(bxMax-bxMin)
+                    + (byMax-byMin)*(byMax-byMin)
+                    + (bzMax-bzMin)*(bzMax-bzMin);
+      double planeHalfSize = (diagSq > 0 ? std::sqrt(diagSq) : 1000.0) * 1.1 + 10.0;
+
+      GProp_GProps vp;
+      BRepGProp::VolumeProperties(inputShape, vp);
+      gp_Pnt solidCentroid = vp.CentreOfMass();
+
+      TopTools_IndexedMapOfShape faceMap;
+      TopExp::MapShapes(inputShape, TopAbs_FACE, faceMap);
+      auto faceGroups = buildFaceGroups(inputShape, faceMap, angleThresholdDeg, solidCentroid);
+      auto candidates = detectProtrusions(inputShape, faceMap, faceGroups, maxThicknessMm);
+
+      std::vector<ShellId> protrusionIds;
+      TopoDS_Shape workShape = inputShape;
+      for (const auto& pc : candidates) {
+        TopoDS_Shape newRemainder;
+        try {
+          TopoDS_Shape ps = extractProtrusion(workShape, pc, newRemainder, planeHalfSize);
+          ShellId pid = generateUUID();
+          shells_[pid] = ShellState{pid, inputParentId, ps};
+          protrusionIds.push_back(pid);
+          workShape = std::move(newRemainder);
+        } catch (const GeometryError&) {}
+      }
+
+      // Update the original part's geometry in-place with the cleaned shape.
+      auto shellIt = shells_.find(partId);
+      if (shellIt != shells_.end()) {
+        shellIt->second.shape = workShape;
+      }
+
+      // Compute bboxes for extracted protrusions.
+      constexpr double kTol = 1.0;
+      std::vector<BBox3D> protrusionBboxes;
+      protrusionBboxes.reserve(protrusionIds.size());
+      for (const auto& pid : protrusionIds) {
+        auto it = shells_.find(pid);
+        if (it == shells_.end()) { protrusionBboxes.push_back({0,0,0,0,0,0}); continue; }
+        Bnd_Box b;
+        for (TopExp_Explorer ex(it->second.shape, TopAbs_VERTEX); ex.More(); ex.Next()) {
+          gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(ex.Current()));
+          if (p.X() < bxMin - kTol || p.X() > bxMax + kTol) continue;
+          if (p.Y() < byMin - kTol || p.Y() > byMax + kTol) continue;
+          if (p.Z() < bzMin - kTol || p.Z() > bzMax + kTol) continue;
+          b.Add(p);
+        }
+        if (!b.IsVoid()) {
+          double xMin, yMin, zMin, xMax, yMax, zMax;
+          b.Get(xMin, yMin, zMin, xMax, yMax, zMax);
+          protrusionBboxes.push_back({xMin, yMin, zMin, xMax, yMax, zMax});
+        } else {
+          protrusionBboxes.push_back({0,0,0,0,0,0});
+        }
+      }
+
+      return RemoveProtrusionsResult{partId, std::move(protrusionIds),
+                                     std::move(protrusionBboxes), token};
 
     } catch (const GeometryError&) {
       throw;

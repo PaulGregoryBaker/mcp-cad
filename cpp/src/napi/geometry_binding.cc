@@ -855,6 +855,17 @@ Napi::Value SplitBodyByBends(const Napi::CallbackInfo& info) {
     for (size_t i = 0; i < res.protrusionIds.size(); ++i)
       protrusionArr.Set(static_cast<uint32_t>(i), Napi::String::New(env, res.protrusionIds[i]));
 
+    Napi::Array parentArr = Napi::Array::New(env, res.protrusionParents.size());
+    for (size_t i = 0; i < res.protrusionParents.size(); ++i) {
+      Napi::Object pair = Napi::Object::New(env);
+      pair.Set("protrusion_id", Napi::String::New(env, res.protrusionParents[i].protrusionId));
+      const std::string& ppId = res.protrusionParents[i].parentPanelId;
+      pair.Set("parent_panel_id", ppId.empty()
+                                    ? env.Null()
+                                    : Napi::Value(Napi::String::New(env, ppId)));
+      parentArr.Set(static_cast<uint32_t>(i), pair);
+    }
+
     auto serializeBboxes = [&](const std::vector<BBox3D>& bboxes) {
       Napi::Array arr = Napi::Array::New(env, bboxes.size());
       for (size_t i = 0; i < bboxes.size(); ++i) {
@@ -884,9 +895,53 @@ Napi::Value SplitBodyByBends(const Napi::CallbackInfo& info) {
     result.Set("panel_bboxes",        serializeBboxes(res.panelBboxes));
     result.Set("protrusion_ids",      protrusionArr);
     result.Set("protrusion_bboxes",   serializeBboxes(res.protrusionBboxes));
+    result.Set("protrusion_parents",  parentArr);
     result.Set("detected_mode",       Napi::String::New(env, res.detectedMode));
     result.Set("rollbackToken",       Napi::String::New(env, res.rollbackToken));
     result.Set("shape_history",       histArr);
+    return result;
+  })
+  return env.Undefined();
+}
+
+Napi::Value RemoveProtrusions(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsString()) {
+    Napi::TypeError::New(env, "removeProtrusions(partId, angleThresholdDeg?, maxThicknessMm?)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string partId           = info[0].As<Napi::String>().Utf8Value();
+  double      angleThresholdDeg = info.Length() >= 2 && info[1].IsNumber()
+                                    ? info[1].As<Napi::Number>().DoubleValue() : 30.0;
+  double      maxThicknessMm   = info.Length() >= 3 && info[2].IsNumber()
+                                    ? info[2].As<Napi::Number>().DoubleValue() : 5.0;
+
+  TRY_GEOMETRY(env, {
+    RemoveProtrusionsResult res = svc().removeProtrusions(partId, angleThresholdDeg, maxThicknessMm);
+    Napi::Object result = Napi::Object::New(env);
+
+    Napi::Array protrusionArr = Napi::Array::New(env, res.protrusionIds.size());
+    for (size_t i = 0; i < res.protrusionIds.size(); ++i)
+      protrusionArr.Set(static_cast<uint32_t>(i), Napi::String::New(env, res.protrusionIds[i]));
+
+    Napi::Array bboxArr = Napi::Array::New(env, res.protrusionBboxes.size());
+    for (size_t i = 0; i < res.protrusionBboxes.size(); ++i) {
+      Napi::Object b = Napi::Object::New(env);
+      b.Set("x_min", Napi::Number::New(env, res.protrusionBboxes[i].xMin));
+      b.Set("y_min", Napi::Number::New(env, res.protrusionBboxes[i].yMin));
+      b.Set("z_min", Napi::Number::New(env, res.protrusionBboxes[i].zMin));
+      b.Set("x_max", Napi::Number::New(env, res.protrusionBboxes[i].xMax));
+      b.Set("y_max", Napi::Number::New(env, res.protrusionBboxes[i].yMax));
+      b.Set("z_max", Napi::Number::New(env, res.protrusionBboxes[i].zMax));
+      bboxArr.Set(static_cast<uint32_t>(i), b);
+    }
+
+    result.Set("cleaned_part_id",    Napi::String::New(env, res.cleanedPartId));
+    result.Set("protrusion_ids",     protrusionArr);
+    result.Set("protrusion_bboxes",  bboxArr);
+    result.Set("protrusion_count",   Napi::Number::New(env, static_cast<double>(res.protrusionIds.size())));
+    result.Set("rollbackToken",      Napi::String::New(env, res.rollbackToken));
     return result;
   })
   return env.Undefined();
@@ -954,6 +1009,7 @@ void RegisterGeometryMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("addFlange",             Napi::Function::New(env, AddFlange));
   exports.Set("ripEdge",               Napi::Function::New(env, RipEdge));
   exports.Set("splitBodyByBends",      Napi::Function::New(env, SplitBodyByBends));
+  exports.Set("removeProtrusions",     Napi::Function::New(env, RemoveProtrusions));
 }
 
 }  // namespace mcp_cad
