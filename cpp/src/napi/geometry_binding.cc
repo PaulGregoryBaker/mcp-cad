@@ -981,6 +981,214 @@ static const char* manifoldIssueTypeToString(ManifoldIssue::Type t) {
   }
 }
 
+// ─── Feature 006-geometry-primitives US2 (Interrogation) ────────────────────
+
+Napi::Value ComputeBoundingBox(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsString()) {
+    Napi::TypeError::New(env, "computeBoundingBox(entityId: string)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string entityId = info[0].As<Napi::String>().Utf8Value();
+  TRY_GEOMETRY(env, {
+    BoundingBoxResult res = svc().computeBoundingBox(entityId);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("x_min", Napi::Number::New(env, res.xMin));
+    result.Set("y_min", Napi::Number::New(env, res.yMin));
+    result.Set("z_min", Napi::Number::New(env, res.zMin));
+    result.Set("x_max", Napi::Number::New(env, res.xMax));
+    result.Set("y_max", Napi::Number::New(env, res.yMax));
+    result.Set("z_max", Napi::Number::New(env, res.zMax));
+    return result;
+  })
+  return env.Undefined();
+}
+
+Napi::Value ComputeMassProperties(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsString()) {
+    Napi::TypeError::New(env, "computeMassProperties(entityId: string, properties?: string[])").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string entityId = info[0].As<Napi::String>().Utf8Value();
+  std::vector<std::string> properties;
+  if (info.Length() >= 2 && info[1].IsArray()) {
+    Napi::Array propsArr = info[1].As<Napi::Array>();
+    properties.reserve(propsArr.Length());
+    for (uint32_t i = 0; i < propsArr.Length(); ++i) {
+      properties.push_back(propsArr.Get(i).As<Napi::String>().Utf8Value());
+    }
+  }
+
+  TRY_GEOMETRY(env, {
+    MassPropertiesResult res = svc().computeMassProperties(entityId, properties);
+    Napi::Object result = Napi::Object::New(env);
+    if (res.volume.has_value()) {
+      result.Set("volume", Napi::Number::New(env, *res.volume));
+    }
+    if (res.surfaceArea.has_value()) {
+      result.Set("surface_area", Napi::Number::New(env, *res.surfaceArea));
+    }
+    if (res.centroid.has_value()) {
+      Napi::Array centroidArr = Napi::Array::New(env, 3);
+      centroidArr.Set(0u, Napi::Number::New(env, (*res.centroid)[0]));
+      centroidArr.Set(1u, Napi::Number::New(env, (*res.centroid)[1]));
+      centroidArr.Set(2u, Napi::Number::New(env, (*res.centroid)[2]));
+      result.Set("centroid", centroidArr);
+    }
+    if (res.inertiaTensor.has_value()) {
+      Napi::Array inertiaArr = Napi::Array::New(env, 9);
+      for (uint32_t i = 0; i < 9; ++i) {
+        inertiaArr.Set(i, Napi::Number::New(env, (*res.inertiaTensor)[i]));
+      }
+      result.Set("inertia_tensor", inertiaArr);
+    }
+    return result;
+  })
+  return env.Undefined();
+}
+
+Napi::Value MeasureDistance(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 3) {
+    Napi::TypeError::New(env, "measureDistance(entityA: string, entityB: string, measurementType: string)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string entityA = info[0].As<Napi::String>().Utf8Value();
+  std::string entityB = info[1].As<Napi::String>().Utf8Value();
+  std::string mType   = info[2].As<Napi::String>().Utf8Value();
+
+  TRY_GEOMETRY(env, {
+    MeasureResult res = svc().measureDistance(entityA, entityB, mType);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("value", Napi::Number::New(env, res.value));
+    result.Set("measurement_type", Napi::String::New(env, res.measurementType));
+    return result;
+  })
+  return env.Undefined();
+}
+
+Napi::Value ExploreTopology(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 2) {
+    Napi::TypeError::New(env, "exploreTopology(entityId: string, returnType: string)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string entityId   = info[0].As<Napi::String>().Utf8Value();
+  std::string returnType = info[1].As<Napi::String>().Utf8Value();
+
+  TRY_GEOMETRY(env, {
+    ExploreResult res = svc().exploreTopology(entityId, returnType);
+    Napi::Object result = Napi::Object::New(env);
+    Napi::Array entityArr = Napi::Array::New(env, res.entityIds.size());
+    for (size_t i = 0; i < res.entityIds.size(); ++i) {
+      entityArr.Set(i, Napi::String::New(env, res.entityIds[i]));
+    }
+    result.Set("entity_ids", entityArr);
+    return result;
+  })
+  return env.Undefined();
+}
+
+Napi::Value FuseBodies(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 2) {
+    Napi::TypeError::New(env, "fuseBodies(tools: Array<string>, fuzzyTolerance: number)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  Napi::Array toolsArr = info[0].As<Napi::Array>();
+  std::vector<std::string> tools;
+  tools.reserve(toolsArr.Length());
+  for (uint32_t i = 0; i < toolsArr.Length(); ++i) {
+    tools.push_back(toolsArr.Get(i).As<Napi::String>().Utf8Value());
+  }
+  double fuzzyTolerance = info[1].As<Napi::Number>().DoubleValue();
+
+  TRY_GEOMETRY(env, {
+    FuseResult res = svc().fuseBodies(tools, fuzzyTolerance);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("solid_id",       Napi::String::New(env, res.solidId));
+    result.Set("disjoint",      Napi::Boolean::New(env, res.disjoint));
+    result.Set("rollback_token",  Napi::String::New(env, res.rollbackToken));
+    Napi::Array histArr = Napi::Array::New(env, res.shapeHistory.size());
+    for (size_t i = 0; i < res.shapeHistory.size(); ++i) {
+      Napi::Object rec = Napi::Object::New(env);
+      rec.Set("verdict",         Napi::String::New(env, res.shapeHistory[i].verdict));
+      rec.Set("original_id",     Napi::String::New(env, res.shapeHistory[i].originalId));
+      rec.Set("new_id",          Napi::String::New(env, res.shapeHistory[i].newId));
+      rec.Set("operation_label", Napi::String::New(env, res.shapeHistory[i].operationLabel));
+      histArr.Set(static_cast<uint32_t>(i), rec);
+    }
+    result.Set("shape_history", histArr);
+    return result;
+  })
+  return env.Undefined();
+}
+
+Napi::Value CutBodies(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 3) {
+    Napi::TypeError::New(env, "cutBodies(blank: string, tools: Array<string>, keepTools: boolean)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string blank = info[0].As<Napi::String>().Utf8Value();
+  Napi::Array toolsArr = info[1].As<Napi::Array>();
+  std::vector<std::string> tools;
+  tools.reserve(toolsArr.Length());
+  for (uint32_t i = 0; i < toolsArr.Length(); ++i) {
+    tools.push_back(toolsArr.Get(i).As<Napi::String>().Utf8Value());
+  }
+  bool keepTools = info[2].As<Napi::Boolean>().Value();
+
+  TRY_GEOMETRY(env, {
+    CutResult res = svc().cutBodies(blank, tools, keepTools);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("solid_id",       Napi::String::New(env, res.solidId));
+    result.Set("rollback_token",  Napi::String::New(env, res.rollbackToken));
+    Napi::Array histArr = Napi::Array::New(env, res.shapeHistory.size());
+    for (size_t i = 0; i < res.shapeHistory.size(); ++i) {
+      Napi::Object rec = Napi::Object::New(env);
+      rec.Set("verdict",         Napi::String::New(env, res.shapeHistory[i].verdict));
+      rec.Set("original_id",     Napi::String::New(env, res.shapeHistory[i].originalId));
+      rec.Set("new_id",          Napi::String::New(env, res.shapeHistory[i].newId));
+      rec.Set("operation_label", Napi::String::New(env, res.shapeHistory[i].operationLabel));
+      histArr.Set(static_cast<uint32_t>(i), rec);
+    }
+    result.Set("shape_history", histArr);
+    return result;
+  })
+  return env.Undefined();
+}
+
+Napi::Value IntersectBodies(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 2) {
+    Napi::TypeError::New(env, "intersectBodies(a: string, b: string)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string a = info[0].As<Napi::String>().Utf8Value();
+  std::string b = info[1].As<Napi::String>().Utf8Value();
+
+  TRY_GEOMETRY(env, {
+    IntersectResult res = svc().intersectBodies(a, b);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("solid_id",       Napi::String::New(env, res.solidId));
+    result.Set("rollback_token",  Napi::String::New(env, res.rollbackToken));
+    Napi::Array histArr = Napi::Array::New(env, res.shapeHistory.size());
+    for (size_t i = 0; i < res.shapeHistory.size(); ++i) {
+      Napi::Object rec = Napi::Object::New(env);
+      rec.Set("verdict",         Napi::String::New(env, res.shapeHistory[i].verdict));
+      rec.Set("original_id",     Napi::String::New(env, res.shapeHistory[i].originalId));
+      rec.Set("new_id",          Napi::String::New(env, res.shapeHistory[i].newId));
+      rec.Set("operation_label", Napi::String::New(env, res.shapeHistory[i].operationLabel));
+      histArr.Set(static_cast<uint32_t>(i), rec);
+    }
+    result.Set("shape_history", histArr);
+    return result;
+  })
+  return env.Undefined();
+}
+
 // ─── Registration ─────────────────────────────────────────────────────────────
 
 void RegisterGeometryMethods(Napi::Env env, Napi::Object exports) {
@@ -1010,6 +1218,15 @@ void RegisterGeometryMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("ripEdge",               Napi::Function::New(env, RipEdge));
   exports.Set("splitBodyByBends",      Napi::Function::New(env, SplitBodyByBends));
   exports.Set("removeProtrusions",     Napi::Function::New(env, RemoveProtrusions));
+
+  // Feature 006
+  exports.Set("computeBoundingBox",    Napi::Function::New(env, ComputeBoundingBox));
+  exports.Set("computeMassProperties", Napi::Function::New(env, ComputeMassProperties));
+  exports.Set("measureDistance",       Napi::Function::New(env, MeasureDistance));
+  exports.Set("exploreTopology",       Napi::Function::New(env, ExploreTopology));
+  exports.Set("fuseBodies",            Napi::Function::New(env, FuseBodies));
+  exports.Set("cutBodies",             Napi::Function::New(env, CutBodies));
+  exports.Set("intersectBodies",       Napi::Function::New(env, IntersectBodies));
 }
 
 }  // namespace mcp_cad

@@ -82,6 +82,16 @@
 #include <BRepTools_ReShape.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
 
+#include <BRepBuilderAPI_Transform.hxx>
+#include <ShapeUpgrade_UnifySameDomain.hxx>
+#include <BRepOffsetAPI_MakeOffsetShape.hxx>
+#include <TDocStd_Application.hxx>
+#include <TDocStd_Document.hxx>
+#include <XCAFDoc_DocumentTool.hxx>
+#include <XCAFDoc_ShapeTool.hxx>
+#include <XCAFDoc_Location.hxx>
+#include <TDF_Label.hxx>
+
 #include <gp_Pnt.hxx>
 #include <gp_Vec.hxx>
 #include <gp_Dir.hxx>
@@ -999,29 +1009,361 @@ public:
 
     const GeometrySnapshot& snap = it->second;
 
-    // Restore solid and shell registries to snapshot state
-    // Keep only entries that existed at snapshot time
-    auto filterMap = [](auto& map, const std::vector<std::string>& keepIds) {
-      std::unordered_map<std::string, typename std::decay_t<decltype(map)>::mapped_type> kept;
-      for (const auto& id : keepIds) {
-        auto it = map.find(id);
-        if (it != map.end()) {
-          kept[id] = it->second;
-        }
-      }
-      map = std::move(kept);
-    };
-
-    filterMap(solids_,  snap.solidIds);
-    filterMap(shells_,  snap.shellIds);
-    filterMap(unfolds_, snap.unfoldIds);
+    auto sIt = snapshotSolids_.find(snapshotId);
+    if (sIt != snapshotSolids_.end()) {
+      solids_ = sIt->second;
+    }
+    auto hIt = snapshotShells_.find(snapshotId);
+    if (hIt != snapshotShells_.end()) {
+      shells_ = hIt->second;
+    }
+    auto uIt = snapshotUnfolds_.find(snapshotId);
+    if (uIt != snapshotUnfolds_.end()) {
+      unfolds_ = uIt->second;
+    }
 
     return RestoreResult{snap.solidIds, snap.shellIds};
+  }
+
+  BoundingBoxResult computeBoundingBox(const std::string& entityId) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    try {
+      TopoDS_Shape shape = lookupEntityLocked(entityId);
+      Bnd_Box box;
+      BRepBndLib::AddOptimal(shape, box);
+      double xMin, yMin, zMin, xMax, yMax, zMax;
+      box.Get(xMin, yMin, zMin, xMax, yMax, zMax);
+      return BoundingBoxResult{xMin, yMin, zMin, xMax, yMax, zMax};
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_EMPTY_RESULT",
+                          std::string("OCCT bounding box exception: ") + e.GetMessageString(),
+                          true, "");
+    }
+  }
+
+  MassPropertiesResult computeMassProperties(const std::string& entityId, const std::vector<std::string>& properties) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    try {
+      TopoDS_Shape shape = lookupEntityLocked(entityId);
+      MassPropertiesResult result;
+      bool reqVol = false, reqSurf = false, reqCent = false, reqInert = false;
+      if (properties.empty()) {
+        reqVol = reqSurf = reqCent = reqInert = true;
+      } else {
+        for (const auto& p : properties) {
+          if (p == "volume") reqVol = true;
+          else if (p == "surface_area") reqSurf = true;
+          else if (p == "centroid") reqCent = true;
+          else if (p == "inertia_tensor") reqInert = true;
+        }
+      }
+      if (reqVol || reqCent || reqInert) {
+        GProp_GProps volProps;
+        BRepGProp::VolumeProperties(shape, volProps);
+        if (reqVol) result.volume = volProps.Mass();
+        if (reqCent) {
+          gp_Pnt c = volProps.CentreOfMass();
+          result.centroid = std::array<double, 3>{c.X(), c.Y(), c.Z()};
+        }
+        if (reqInert) {
+          gp_Mat inertia = volProps.MatrixOfInertia();
+          std::array<double, 9> tensor{
+            inertia(1,1), inertia(1,2), inertia(1,3),
+            inertia(2,1), inertia(2,2), inertia(2,3),
+            inertia(3,1), inertia(3,2), inertia(3,3)
+          };
+          result.inertiaTensor = tensor;
+        }
+      }
+      if (reqSurf) {
+        GProp_GProps surfProps;
+        BRepGProp::SurfaceProperties(shape, surfProps);
+        result.surfaceArea = surfProps.Mass();
+      }
+      return result;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_EMPTY_RESULT",
+                          std::string("OCCT mass properties exception: ") + e.GetMessageString(),
+                          true, "");
+    }
+  }
+
+  MeasureResult measureDistance(const std::string& entityA, const std::string& entityB, const std::string& measurementType) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    try {
+      TopoDS_Shape shapeA = lookupEntityLocked(entityA);
+      TopoDS_Shape shapeB = lookupEntityLocked(entityB);
+
+      if (measurementType == "angle") {
+        if (shapeA.ShapeType() != TopAbs_FACE || shapeB.ShapeType() != TopAbs_FACE) {
+          throw GeometryError("GE_ALIGN_UNSUPPORTED", "Angle measurement only supported between two planar faces", true, "");
+        }
+        const TopoDS_Face& faceA = TopoDS::Face(shapeA);
+        const TopoDS_Face& faceB = TopoDS::Face(shapeB);
+        Handle(Geom_Surface) surfA = BRep_Tool::Surface(faceA);
+        Handle(Geom_Surface) surfB = BRep_Tool::Surface(faceB);
+        if (surfA.IsNull() || !surfA->IsKind(STANDARD_TYPE(Geom_Plane)) ||
+            surfB.IsNull() || !surfB->IsKind(STANDARD_TYPE(Geom_Plane))) {
+          throw GeometryError("GE_ALIGN_UNSUPPORTED", "Both faces must be planar for angle measurement", true, "");
+        }
+        Handle(Geom_Plane) planeA = Handle(Geom_Plane)::DownCast(surfA);
+        Handle(Geom_Plane) planeB = Handle(Geom_Plane)::DownCast(surfB);
+        gp_Dir dirA = planeA->Position().Direction();
+        gp_Dir dirB = planeB->Position().Direction();
+        double dot = std::clamp(dirA.Dot(dirB), -1.0, 1.0);
+        double angleRad = std::acos(dot);
+        double angleDeg = angleRad * 180.0 / M_PI;
+        if (angleDeg > 180.0) angleDeg = 360.0 - angleDeg;
+        return MeasureResult{angleDeg, "angle"};
+      } else {
+        BRepExtrema_DistShapeShape distCalc(shapeA, shapeB);
+        distCalc.Perform();
+        if (!distCalc.IsDone()) {
+          throw GeometryError("GE_EMPTY_RESULT", "Distance computation failed", true, "");
+        }
+        double val = distCalc.Value();
+        return MeasureResult{val, measurementType};
+      }
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_EMPTY_RESULT",
+                          std::string("OCCT measure distance exception: ") + e.GetMessageString(),
+                          true, "");
+    }
+  }
+
+  ExploreResult exploreTopology(const std::string& entityId, const std::string& returnType) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    try {
+      TopoDS_Shape shape = lookupEntityLocked(entityId);
+      ExploreResult result;
+
+      TopAbs_ShapeEnum typeEnum;
+      if (returnType == "solid") typeEnum = TopAbs_SOLID;
+      else if (returnType == "shell") typeEnum = TopAbs_SHELL;
+      else if (returnType == "face") typeEnum = TopAbs_FACE;
+      else if (returnType == "edge") typeEnum = TopAbs_EDGE;
+      else if (returnType == "vertex") typeEnum = TopAbs_VERTEX;
+      else {
+        throw GeometryError("GE_EMPTY_RESULT", "Invalid return type: " + returnType, false, "");
+      }
+
+      TopExp_Explorer exp(shape, typeEnum);
+      TopTools_IndexedMapOfShape subShapeMap;
+      for (; exp.More(); exp.Next()) {
+        subShapeMap.Add(exp.Current());
+      }
+      for (int i = 1; i <= subShapeMap.Extent(); ++i) {
+        result.entityIds.push_back(shapeId(subShapeMap(i)));
+      }
+      return result;
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_EMPTY_RESULT",
+                          std::string("OCCT explore topology exception: ") + e.GetMessageString(),
+                          true, "");
+    }
+  }
+
+  FuseResult fuseBodies(const std::vector<ShellId>& tools, double fuzzyTolerance) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (tools.size() < 2) {
+      throw GeometryError("GE_BOOLEAN_FAILURE", "At least two shells required for fuse operation", false, "");
+    }
+
+    std::vector<TopoDS_Shape> toolShapes;
+    for (const auto& id : tools) {
+      auto it = shells_.find(id);
+      if (it == shells_.end()) {
+        throw GeometryError("GE_SHELL_NOT_FOUND", "Shell not found in session: " + id, false, "");
+      }
+      toolShapes.push_back(it->second.shape);
+    }
+
+    SnapshotId token = createSnapshotLocked("before fuseBodies");
+
+    try {
+      TopoDS_Shape currentShape = toolShapes[0];
+      std::vector<ShapeHistoryRecord> history;
+      bool disjoint = false;
+
+      for (size_t i = 1; i < toolShapes.size(); ++i) {
+        BRepAlgoAPI_Fuse fuser(currentShape, toolShapes[i]);
+        if (fuzzyTolerance > 0.0) {
+          fuser.SetFuzzyValue(fuzzyTolerance);
+        }
+        fuser.Build();
+        if (!fuser.IsDone()) {
+          throw GeometryError("GE_BOOLEAN_FAILURE", "Boolean fuse failed", true, "rollback");
+        }
+
+        TopoDS_Shape nextShape = fuser.Shape();
+        BRepCheck_Analyzer checker(nextShape);
+        if (!checker.IsValid()) {
+          throw GeometryError("GE_BOOLEAN_FAILURE", "Boolean fuse result is invalid", true, "rollback");
+        }
+
+        if (nextShape.ShapeType() == TopAbs_COMPOUND) {
+          disjoint = true;
+        }
+
+        auto h1 = captureHistory(fuser, currentShape, [](const TopoDS_Shape& s) { return shapeId(s); }, "fuse_bodies");
+        auto h2 = captureHistory(fuser, toolShapes[i], [](const TopoDS_Shape& s) { return shapeId(s); }, "fuse_bodies");
+        history.insert(history.end(), h1.begin(), h1.end());
+        history.insert(history.end(), h2.begin(), h2.end());
+
+        currentShape = nextShape;
+      }
+
+      for (const auto& id : tools) {
+        shells_.erase(id);
+      }
+
+      ShellId resultId = generateUUID();
+      shells_[resultId] = ShellState{resultId, "", currentShape};
+
+      return FuseResult{resultId, disjoint, token, std::move(history)};
+
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_BOOLEAN_FAILURE",
+                          std::string("OCCT exception during fuse: ") + e.GetMessageString(),
+                          true, "rollback");
+    }
+  }
+
+  CutResult cutBodies(const ShellId& blank, const std::vector<ShellId>& tools, bool keepTools) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto blankIt = shells_.find(blank);
+    if (blankIt == shells_.end()) {
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Blank shell not found: " + blank, false, "");
+    }
+    TopoDS_Shape blankShape = blankIt->second.shape;
+
+    std::vector<TopoDS_Shape> toolShapes;
+    for (const auto& id : tools) {
+      auto it = shells_.find(id);
+      if (it == shells_.end()) {
+        throw GeometryError("GE_SHELL_NOT_FOUND", "Tool shell not found: " + id, false, "");
+      }
+      toolShapes.push_back(it->second.shape);
+    }
+
+    SnapshotId token = createSnapshotLocked("before cutBodies on " + blank);
+
+    try {
+      TopoDS_Shape currentShape = blankShape;
+      std::vector<ShapeHistoryRecord> history;
+
+      for (const auto& toolShape : toolShapes) {
+        BRepAlgoAPI_Cut cutter(currentShape, toolShape);
+        cutter.Build();
+        if (!cutter.IsDone()) {
+          throw GeometryError("GE_BOOLEAN_FAILURE", "Boolean cut failed", true, "rollback");
+        }
+
+        TopoDS_Shape nextShape = cutter.Shape();
+        BRepCheck_Analyzer checker(nextShape);
+        if (!checker.IsValid()) {
+          throw GeometryError("GE_BOOLEAN_FAILURE", "Boolean cut result is invalid", true, "rollback");
+        }
+
+        auto h1 = captureHistory(cutter, currentShape, [](const TopoDS_Shape& s) { return shapeId(s); }, "cut_bodies");
+        auto h2 = captureHistory(cutter, toolShape, [](const TopoDS_Shape& s) { return shapeId(s); }, "cut_bodies");
+        history.insert(history.end(), h1.begin(), h1.end());
+        history.insert(history.end(), h2.begin(), h2.end());
+
+        currentShape = nextShape;
+      }
+
+      shells_.erase(blank);
+      if (!keepTools) {
+        for (const auto& id : tools) {
+          shells_.erase(id);
+        }
+      }
+
+      ShellId resultId = generateUUID();
+      shells_[resultId] = ShellState{resultId, "", currentShape};
+
+      return CutResult{resultId, token, std::move(history)};
+
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_BOOLEAN_FAILURE",
+                          std::string("OCCT exception during cut: ") + e.GetMessageString(),
+                          true, "rollback");
+    }
+  }
+
+  IntersectResult intersectBodies(const ShellId& a, const ShellId& b) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto itA = shells_.find(a);
+    if (itA == shells_.end()) {
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell A not found: " + a, false, "");
+    }
+    auto itB = shells_.find(b);
+    if (itB == shells_.end()) {
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell B not found: " + b, false, "");
+    }
+
+    TopoDS_Shape shapeA = itA->second.shape;
+    TopoDS_Shape shapeB = itB->second.shape;
+
+    SnapshotId token = createSnapshotLocked("before intersectBodies on " + a + " and " + b);
+
+    try {
+      BRepAlgoAPI_Common common(shapeA, shapeB);
+      common.Build();
+      if (!common.IsDone()) {
+        throw GeometryError("GE_BOOLEAN_FAILURE", "Boolean intersection failed", true, "rollback");
+      }
+
+      TopoDS_Shape resultShape = common.Shape();
+      BRepCheck_Analyzer checker(resultShape);
+      if (!checker.IsValid()) {
+        throw GeometryError("GE_BOOLEAN_FAILURE", "Boolean intersection result is invalid", true, "rollback");
+      }
+
+      GProp_GProps volProps;
+      BRepGProp::VolumeProperties(resultShape, volProps);
+      if (std::abs(volProps.Mass()) < 1e-6) {
+        throw GeometryError("GE_BOOLEAN_EMPTY_RESULT", "Boolean intersection result is empty", true, "rollback");
+      }
+
+      auto h1 = captureHistory(common, shapeA, [](const TopoDS_Shape& s) { return shapeId(s); }, "intersect_bodies");
+      auto h2 = captureHistory(common, shapeB, [](const TopoDS_Shape& s) { return shapeId(s); }, "intersect_bodies");
+      std::vector<ShapeHistoryRecord> history;
+      history.insert(history.end(), h1.begin(), h1.end());
+      history.insert(history.end(), h2.begin(), h2.end());
+
+      shells_.erase(a);
+      shells_.erase(b);
+
+      ShellId resultId = generateUUID();
+      shells_[resultId] = ShellState{resultId, "", resultShape};
+
+      return IntersectResult{resultId, token, std::move(history)};
+
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_BOOLEAN_FAILURE",
+                          std::string("OCCT exception during intersect: ") + e.GetMessageString(),
+                          true, "rollback");
+    }
   }
 
   void clearSnapshots() override {
     std::lock_guard<std::mutex> lock(mutex_);
     snapshots_.clear();
+    snapshotSolids_.clear();
+    snapshotShells_.clear();
+    snapshotUnfolds_.clear();
   }
 
 private:
@@ -1031,8 +1373,67 @@ private:
   std::unordered_map<ShellId,   ShellState>   shells_;
   std::unordered_map<UnfoldId,  UnfoldState>  unfolds_;
   std::unordered_map<SnapshotId, GeometrySnapshot> snapshots_;
+  std::unordered_map<SnapshotId, std::unordered_map<SolidId, SolidState>> snapshotSolids_;
+  std::unordered_map<SnapshotId, std::unordered_map<ShellId, ShellState>> snapshotShells_;
+  std::unordered_map<SnapshotId, std::unordered_map<UnfoldId, UnfoldState>> snapshotUnfolds_;
 
   // ── Private helpers ──────────────────────────────────────────────────────
+
+  TopoDS_Shape lookupEntityLocked(const std::string& entityId) const {
+    auto solidIt = solids_.find(entityId);
+    if (solidIt != solids_.end()) {
+      return solidIt->second.shape;
+    }
+    auto shellIt = shells_.find(entityId);
+    if (shellIt != shells_.end()) {
+      return shellIt->second.shape;
+    }
+    for (const auto& kv : solids_) {
+      TopExp_Explorer faceExp(kv.second.shape, TopAbs_FACE);
+      for (; faceExp.More(); faceExp.Next()) {
+        const TopoDS_Shape& s = faceExp.Current();
+        if (shapeId(s) == entityId) return s;
+      }
+      TopExp_Explorer edgeExp(kv.second.shape, TopAbs_EDGE);
+      for (; edgeExp.More(); edgeExp.Next()) {
+        const TopoDS_Shape& s = edgeExp.Current();
+        if (shapeId(s) == entityId) return s;
+      }
+      TopExp_Explorer vertexExp(kv.second.shape, TopAbs_VERTEX);
+      for (; vertexExp.More(); vertexExp.Next()) {
+        const TopoDS_Shape& s = vertexExp.Current();
+        if (shapeId(s) == entityId) return s;
+      }
+      TopExp_Explorer shellExp(kv.second.shape, TopAbs_SHELL);
+      for (; shellExp.More(); shellExp.Next()) {
+        const TopoDS_Shape& s = shellExp.Current();
+        if (shapeId(s) == entityId) return s;
+      }
+    }
+    for (const auto& kv : shells_) {
+      TopExp_Explorer faceExp(kv.second.shape, TopAbs_FACE);
+      for (; faceExp.More(); faceExp.Next()) {
+        const TopoDS_Shape& s = faceExp.Current();
+        if (shapeId(s) == entityId) return s;
+      }
+      TopExp_Explorer edgeExp(kv.second.shape, TopAbs_EDGE);
+      for (; edgeExp.More(); edgeExp.Next()) {
+        const TopoDS_Shape& s = edgeExp.Current();
+        if (shapeId(s) == entityId) return s;
+      }
+      TopExp_Explorer vertexExp(kv.second.shape, TopAbs_VERTEX);
+      for (; vertexExp.More(); vertexExp.Next()) {
+        const TopoDS_Shape& s = vertexExp.Current();
+        if (shapeId(s) == entityId) return s;
+      }
+      TopExp_Explorer shellExp(kv.second.shape, TopAbs_SHELL);
+      for (; shellExp.More(); shellExp.Next()) {
+        const TopoDS_Shape& s = shellExp.Current();
+        if (shapeId(s) == entityId) return s;
+      }
+    }
+    throw GeometryError("GE_SOLID_NOT_FOUND", "Entity not found in session: " + entityId, false, "");
+  }
 
   SnapshotId createSnapshotLocked(const std::string& label) {
     GeometrySnapshot snap;
@@ -1045,6 +1446,9 @@ private:
     for (const auto& kv : unfolds_) snap.unfoldIds.push_back(kv.first);
 
     snapshots_[snap.snapshotId] = snap;
+    snapshotSolids_[snap.snapshotId] = solids_;
+    snapshotShells_[snap.snapshotId] = shells_;
+    snapshotUnfolds_[snap.snapshotId] = unfolds_;
     return snap.snapshotId;
   }
 

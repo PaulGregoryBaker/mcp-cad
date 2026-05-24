@@ -217,3 +217,124 @@ export interface MergeBodyResult {
   rollbackToken: string;
   shape_history?: ShapeHistoryRecord[];
 }
+
+// ── Assembly IDs ──────────────────────────────────────────────────────────────
+export type AssemblyId  = string;
+export type ComponentId = string;
+
+// ── Boolean results ───────────────────────────────────────────────────────────
+export interface FuseResult {
+  solid_id: string;
+  disjoint: boolean;
+  rollback_token: string;
+  shape_history?: ShapeHistoryRecord[];
+}
+
+export interface CutResult {
+  solid_id: string;
+  rollback_token: string;
+  shape_history?: ShapeHistoryRecord[];
+}
+
+export interface IntersectResult {
+  solid_id: string;
+  rollback_token: string;
+  shape_history?: ShapeHistoryRecord[];
+}
+
+// ── Interrogation results ─────────────────────────────────────────────────────
+export interface BoundingBoxResult {
+  x_min: number; y_min: number; z_min: number;
+  x_max: number; y_max: number; z_max: number;
+}
+
+export interface MassPropertiesResult {
+  volume?: number;
+  surface_area?: number;
+  centroid?: [number, number, number];
+  inertia_tensor?: [number, number, number, number, number, number, number, number, number];
+}
+
+export interface MeasureResult {
+  value: number;
+  measurement_type: string;
+}
+
+export interface ExploreResult {
+  entity_ids: string[];
+}
+
+// ── Transform result ──────────────────────────────────────────────────────────
+export interface TransformResult {
+  solid_id: string;
+  rollback_token: string;
+  shape_history?: ShapeHistoryRecord[];
+}
+
+// ── Direct edit results ───────────────────────────────────────────────────────
+export interface FilletResult {
+  solid_id: string;
+  rollback_token: string;
+  shape_history?: ShapeHistoryRecord[];
+}
+export interface ChamferResult  extends FilletResult {}   // same shape
+export interface SimplifyResult extends FilletResult {}
+export interface OffsetShapeResult extends FilletResult {}
+
+export interface HealExResult {
+  solid_id: string;
+  heal_complete: boolean;
+  remaining_issues: string[];
+  rollback_token: string;
+  shape_history?: ShapeHistoryRecord[];
+}
+
+export interface DeleteFaceResult {
+  solid_ids: string[];
+  rollback_token: string;
+  shape_history?: ShapeHistoryRecord[];
+}
+
+// ── Sewing ────────────────────────────────────────────────────────────────────
+export interface SewResult {
+  solid_id: string;
+  sew_complete: boolean;
+  free_edges: string[];
+  rollback_token: string;
+  shape_history?: ShapeHistoryRecord[];
+}
+
+// ── Assembly ──────────────────────────────────────────────────────────────────
+export interface CreateAssemblyResult {
+  assembly_id: string;
+}
+
+export interface AddInstanceResult {
+  component_id: string;
+  rollback_token: string;
+}
+
+export type LocationMatrix16 = [
+  number, number, number, number,
+  number, number, number, number,
+  number, number, number, number,
+  number, number, number, number
+];
+
+export interface MateRigidResult {
+  component_id: string;
+  location_matrix: LocationMatrix16;
+  rollback_token: string;
+}
+
+export interface AssemblyNode {
+  component_id: string;
+  shape_id: string;
+  location_matrix: LocationMatrix16;
+  children: AssemblyNode[];
+}
+
+export interface ListAssemblyResult {
+  assembly_id: string;
+  root: AssemblyNode;
+}

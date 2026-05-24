@@ -28,6 +28,13 @@ import type {
   RipEdgeResult,
   MergeBodyResult,
   CuttingPlane,
+  BoundingBoxResult,
+  MassPropertiesResult,
+  MeasureResult,
+  ExploreResult,
+  FuseResult,
+  CutResult,
+  IntersectResult,
 } from './types';
 
 // ─── Addon interface ──────────────────────────────────────────────────────────
@@ -63,6 +70,13 @@ export interface GeometryAddon {
   restoreSnapshot(snapshotId: string): RestoreResult;
   clearSnapshot(snapshotId: string): void;
   clearSnapshots(): void;
+  computeBoundingBox(entityId: string): BoundingBoxResult;
+  computeMassProperties(entityId: string, properties?: string[]): MassPropertiesResult;
+  measureDistance(entityA: string, entityB: string, measurementType: string): MeasureResult;
+  exploreTopology(entityId: string, returnType: string): ExploreResult;
+  fuseBodies(tools: string[], fuzzyTolerance: number): FuseResult;
+  cutBodies(blank: string, tools: string[], keepTools: boolean): CutResult;
+  intersectBodies(a: string, b: string): IntersectResult;
   computeIntersections(partIds: string[]): ClashReport;
   computeGaps(partAId: string, partBId: string, maxDistanceThresholdMm: number): GapReport;
   trimBodyWithPlane(partId: string, plane: CuttingPlane, keepPositiveSide: boolean): TrimBodyResult;
@@ -315,6 +329,62 @@ export class GeometryBinding {
 
   clearSnapshots(): void {
     this.addon.clearSnapshots();
+  }
+
+  computeBoundingBox(entityId: string): BoundingBoxResult {
+    try {
+      return this.addon.computeBoundingBox(entityId);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  computeMassProperties(entityId: string, properties?: string[]): MassPropertiesResult {
+    try {
+      return this.addon.computeMassProperties(entityId, properties);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  measureDistance(entityA: string, entityB: string, measurementType: string): MeasureResult {
+    try {
+      return this.addon.measureDistance(entityA, entityB, measurementType);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  exploreTopology(entityId: string, returnType: string): ExploreResult {
+    try {
+      return this.addon.exploreTopology(entityId, returnType);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  fuseBodies(tools: string[], fuzzyTolerance: number): FuseResult {
+    try {
+      return this.addon.fuseBodies(tools, fuzzyTolerance);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  cutBodies(blank: string, tools: string[], keepTools: boolean): CutResult {
+    try {
+      return this.addon.cutBodies(blank, tools, keepTools);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  intersectBodies(a: string, b: string): IntersectResult {
+    try {
+      return this.addon.intersectBodies(a, b);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
   }
 
   computeIntersections(partIds: string[]): ClashReport {

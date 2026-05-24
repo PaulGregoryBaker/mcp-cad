@@ -15,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <array>
 
 #include "topology_graph.hpp"
 #include "snapshot.hpp"
@@ -232,12 +233,156 @@ struct RemoveProtrusionsResult {
   SnapshotId           rollbackToken;
 };
 
+// ── Assembly IDs ──────────────────────────────────────────────────────────────
+using AssemblyId  = std::string;
+using ComponentId = std::string;
+
+// ── Boolean results ───────────────────────────────────────────────────────────
+struct FuseResult {
+  ShellId solidId;
+  bool disjoint;
+  SnapshotId rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+struct CutResult {
+  ShellId solidId;
+  SnapshotId rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+struct IntersectResult {
+  ShellId solidId;
+  SnapshotId rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+// ── Interrogation results ─────────────────────────────────────────────────────
+struct BoundingBoxResult {
+  double xMin, yMin, zMin;
+  double xMax, yMax, zMax;
+};
+
+struct MassPropertiesResult {
+  std::optional<double> volume;
+  std::optional<double> surfaceArea;
+  std::optional<std::array<double,3>> centroid;
+  std::optional<std::array<double,9>> inertiaTensor;
+};
+
+struct MeasureResult {
+  double value;
+  std::string measurementType;
+};
+
+struct ExploreResult {
+  std::vector<std::string> entityIds;
+};
+
+// ── Transform result ──────────────────────────────────────────────────────────
+struct TransformResult {
+  ShellId solidId;
+  SnapshotId rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+// ── Direct edit results ───────────────────────────────────────────────────────
+struct FilletResult {
+  ShellId solidId;
+  SnapshotId rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+struct ChamferResult {
+  ShellId solidId;
+  SnapshotId rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+struct SimplifyResult {
+  ShellId solidId;
+  SnapshotId rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+struct HealExResult {
+  ShellId solidId;
+  bool healComplete;
+  std::vector<std::string> remainingIssues;
+  SnapshotId rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+struct OffsetShapeResult {
+  ShellId solidId;
+  SnapshotId rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+struct DeleteFaceResult {
+  std::vector<ShellId> solidIds;
+  SnapshotId rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+// ── Sewing result ─────────────────────────────────────────────────────────────
+struct SewResult {
+  ShellId solidId;
+  bool sewComplete;
+  std::vector<std::string> freeEdges;
+  SnapshotId rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+// ── Assembly results ──────────────────────────────────────────────────────────
+struct CreateAssemblyResult {
+  AssemblyId assemblyId;
+};
+
+struct AddInstanceResult {
+  ComponentId componentId;
+  SnapshotId rollbackToken;
+};
+
+struct LocationMatrix {
+  std::array<double,16> m;
+};
+
+struct MateRigidResult {
+  ComponentId componentId;
+  LocationMatrix locationMatrix;
+  SnapshotId rollbackToken;
+};
+
+struct AssemblyNode {
+  ComponentId componentId;
+  std::string shapeId;
+  LocationMatrix locationMatrix;
+  std::vector<AssemblyNode> children;
+};
+
+struct ListAssemblyResult {
+  AssemblyId assemblyId;
+  AssemblyNode root;
+};
+
 // ─── Error code constants (Feature 003-split-by-bends-enhanced) ─────────────
 
 constexpr const char* GE_DECOMPOSE_THICKNESS_MISMATCH     = "GE_DECOMPOSE_THICKNESS_MISMATCH";
 constexpr const char* GE_DECOMPOSE_EXTRUDE_FAILED         = "GE_DECOMPOSE_EXTRUDE_FAILED";
 constexpr const char* GE_DECOMPOSE_CUT_FAILED             = "GE_DECOMPOSE_CUT_FAILED";
 constexpr const char* GE_DECOMPOSE_PROTRUSION_EXTRACT_FAILED = "GE_DECOMPOSE_PROTRUSION_EXTRACT_FAILED";
+
+// ─── Error codes — Feature 006-geometry-primitives ────────────────────────────
+constexpr const char* GE_BOOLEAN_EMPTY_RESULT      = "GE_BOOLEAN_EMPTY_RESULT";
+constexpr const char* GE_ALIGN_UNSUPPORTED         = "GE_ALIGN_UNSUPPORTED";
+constexpr const char* GE_SCALE_NON_UNIFORM         = "GE_SCALE_NON_UNIFORM";
+constexpr const char* GE_FILLET_TOO_LARGE          = "GE_FILLET_TOO_LARGE";
+constexpr const char* GE_CHAMFER_TOO_LARGE         = "GE_CHAMFER_TOO_LARGE";
+constexpr const char* GE_HEAL_INCOMPLETE           = "GE_HEAL_INCOMPLETE";
+constexpr const char* GE_SEW_INCOMPLETE            = "GE_SEW_INCOMPLETE";
+constexpr const char* GE_ASSEMBLY_MATE_UNSUPPORTED = "GE_ASSEMBLY_MATE_UNSUPPORTED";
+constexpr const char* GE_ASSEMBLY_CROSS_DOCUMENT   = "GE_ASSEMBLY_CROSS_DOCUMENT";
 
 // ─── GeometryService interface ───────────────────────────────────────────────
 
@@ -380,6 +525,17 @@ public:
   virtual SnapshotId    createSnapshot(const std::string& label)            = 0;
   virtual RestoreResult restoreSnapshot(const SnapshotId& snapshotId)       = 0;
   virtual void          clearSnapshots()                                     = 0;
+
+  // ── Feature 006-geometry-primitives US2 (Interrogation) ────────────────────
+  virtual BoundingBoxResult    computeBoundingBox(const std::string& entityId) = 0;
+  virtual MassPropertiesResult computeMassProperties(const std::string& entityId, const std::vector<std::string>& properties) = 0;
+  virtual MeasureResult        measureDistance(const std::string& entityA, const std::string& entityB, const std::string& measurementType) = 0;
+  virtual ExploreResult        exploreTopology(const std::string& entityId, const std::string& returnType) = 0;
+
+  // ── Feature 006-geometry-primitives US1 (Boolean Operations) ────────────────
+  virtual FuseResult           fuseBodies(const std::vector<ShellId>& tools, double fuzzyTolerance) = 0;
+  virtual CutResult            cutBodies(const ShellId& blank, const std::vector<ShellId>& tools, bool keepTools) = 0;
+  virtual IntersectResult      intersectBodies(const ShellId& a, const ShellId& b) = 0;
 };
 
 }  // namespace mcp_cad

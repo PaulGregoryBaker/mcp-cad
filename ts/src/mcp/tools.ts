@@ -634,6 +634,126 @@ export function getToolDefinitions(): object[] {
         required: ['part_id'],
       },
     },
+    {
+      name: 'fuse_bodies',
+      description: 'Merges two or more solids/shells into a single continuous body using a Boolean union. Returns a new body id. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          tools: {
+            type: 'array',
+            items: { type: 'string' },
+            minItems: 2,
+            description: 'IDs of the bodies to fuse'
+          },
+          fuzzy_tolerance: {
+            type: 'number',
+            default: 1e-5,
+            description: 'Fuzzy tolerance for near-coincident geometry (mm)'
+          },
+          transaction_id: { type: 'string' }
+        },
+        required: ['tools', 'transaction_id']
+      }
+    },
+    {
+      name: 'cut_bodies',
+      description: 'Subtracts tool bodies from a blank body (Boolean difference). Returns the modified blank as a new body id. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          blank: { type: 'string', description: 'Body to cut into' },
+          tools: {
+            type: 'array',
+            items: { type: 'string' },
+            minItems: 1,
+            description: 'Cutter body IDs'
+          },
+          keep_tools: {
+            type: 'boolean',
+            default: false,
+            description: 'If false, tool bodies are removed from the session after the cut'
+          },
+          transaction_id: { type: 'string' }
+        },
+        required: ['blank', 'tools', 'transaction_id']
+      }
+    },
+    {
+      name: 'intersect_bodies',
+      description: 'Returns the shared volume between two overlapping bodies (Boolean intersection). Returns a new body id, or GE_BOOLEAN_EMPTY_RESULT if no overlap. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          target_a: { type: 'string', description: 'First body ID' },
+          target_b: { type: 'string', description: 'Second body ID' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['target_a', 'target_b', 'transaction_id']
+      }
+    },
+    {
+      name: 'bounding_box',
+      description: 'Returns the axis-aligned bounding box of a body, face, edge, or vertex. Non-mutating.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          target: { type: 'string', description: 'Entity ID (solid, shell, face, edge, or vertex)' }
+        },
+        required: ['target']
+      }
+    },
+    {
+      name: 'mass_properties',
+      description: 'Returns physical properties of a solid or shell: volume, surface area, centroid, and/or inertia tensor. Non-mutating.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          target:     { type: 'string', description: 'Body ID' },
+          properties: {
+            type: 'array',
+            items: { type: 'string', enum: ['volume', 'surface_area', 'centroid', 'inertia_tensor'] },
+            minItems: 1,
+            default: ['volume', 'surface_area', 'centroid', 'inertia_tensor']
+          }
+        },
+        required: ['target']
+      }
+    },
+    {
+      name: 'measure_distance',
+      description: 'Measures the minimum distance, maximum distance, or angle between two topological entities. Non-mutating.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          target_a:        { type: 'string', description: 'First entity ID (face, edge, vertex, or body)' },
+          target_b:        { type: 'string', description: 'Second entity ID' },
+          measurement_type: {
+            type: 'string',
+            enum: ['min_distance', 'max_distance', 'angle'],
+            default: 'min_distance',
+            description: 'angle is only supported between two planar faces'
+          }
+        },
+        required: ['target_a', 'target_b']
+      }
+    },
+    {
+      name: 'explore_topology',
+      description: 'Returns an ordered list of sub-entity IDs of the specified type within a body. Non-mutating. Order is deterministic for identical inputs.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          target:      { type: 'string', description: 'Body or shell ID to explore' },
+          return_type: {
+            type: 'string',
+            enum: ['solid', 'shell', 'face', 'edge', 'vertex'],
+            description: 'Sub-entity type to return'
+          }
+        },
+        required: ['target', 'return_type']
+      }
+    }
   ];
 }
 
@@ -648,6 +768,27 @@ export async function dispatchTool(
     switch (toolName) {
       case 'clean_geometry':
         return handleCleanGeometry(args);
+
+      case 'fuse_bodies':
+        return handleFuseBodies(args);
+
+      case 'cut_bodies':
+        return handleCutBodies(args);
+
+      case 'intersect_bodies':
+        return handleIntersectBodies(args);
+
+      case 'bounding_box':
+        return handleBoundingBox(args);
+
+      case 'mass_properties':
+        return handleMassProperties(args);
+
+      case 'measure_distance':
+        return handleMeasureDistance(args);
+
+      case 'explore_topology':
+        return handleExploreTopology(args);
 
       case 'decompose_volume':
         return handleDecomposeVolume(args);
@@ -1593,6 +1734,107 @@ function handleComputeGaps(args: Record<string, unknown>): unknown {
       origin: report.gapBoundingBox.origin,
       dimensions: report.gapBoundingBox.dimensions,
     },
+  };
+}
+
+function handleBoundingBox(args: Record<string, unknown>): unknown {
+  const target = requireString(args, 'target');
+  const result = getGeometryBinding().computeBoundingBox(target);
+  return {
+    x_min: result.x_min,
+    y_min: result.y_min,
+    z_min: result.z_min,
+    x_max: result.x_max,
+    y_max: result.y_max,
+    z_max: result.z_max,
+  };
+}
+
+function handleMassProperties(args: Record<string, unknown>): unknown {
+  const target = requireString(args, 'target');
+  const properties = args['properties'] as string[] | undefined;
+  const result = getGeometryBinding().computeMassProperties(target, properties);
+  return {
+    volume: result.volume,
+    surface_area: result.surface_area,
+    centroid: result.centroid,
+    inertia_tensor: result.inertia_tensor,
+  };
+}
+
+function handleMeasureDistance(args: Record<string, unknown>): unknown {
+  const targetA = requireString(args, 'target_a');
+  const targetB = requireString(args, 'target_b');
+  const mType   = (args['measurement_type'] as string | undefined) ?? 'min_distance';
+  const result = getGeometryBinding().measureDistance(targetA, targetB, mType);
+  return {
+    value: result.value,
+    measurement_type: result.measurement_type,
+  };
+}
+
+function handleExploreTopology(args: Record<string, unknown>): unknown {
+  const target     = requireString(args, 'target');
+  const returnType = requireString(args, 'return_type');
+  const result = getGeometryBinding().exploreTopology(target, returnType);
+  return {
+    entity_ids: result.entity_ids,
+  };
+}
+
+function handleFuseBodies(args: Record<string, unknown>): unknown {
+  const tools = requireStringArray(args, 'tools');
+  const fuzzyTolerance = (args['fuzzy_tolerance'] as number | undefined) ?? 1e-5;
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().fuseBodies(tools, fuzzyTolerance);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  return {
+    solid_id: result.solid_id,
+    disjoint: result.disjoint,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    shape_history: result.shape_history ?? [],
+  };
+}
+
+function handleCutBodies(args: Record<string, unknown>): unknown {
+  const blank = requireString(args, 'blank');
+  const tools = requireStringArray(args, 'tools');
+  const keepTools = (args['keep_tools'] as boolean | undefined) ?? false;
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().cutBodies(blank, tools, keepTools);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  return {
+    solid_id: result.solid_id,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    shape_history: result.shape_history ?? [],
+  };
+}
+
+function handleIntersectBodies(args: Record<string, unknown>): unknown {
+  const targetA = requireString(args, 'target_a');
+  const targetB = requireString(args, 'target_b');
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().intersectBodies(targetA, targetB);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  return {
+    solid_id: result.solid_id,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    shape_history: result.shape_history ?? [],
   };
 }
 
