@@ -551,6 +551,15 @@ public:
   virtual HealExResult         healGeometryEx(const ShellId& partId, bool fixTolerances, bool fixWires) = 0;
   virtual OffsetShapeResult    offsetShape(const ShellId& partId, double offsetValue, double tolerance) = 0;
   virtual DeleteFaceResult     deleteFace(const ShellId& partId, const std::vector<std::string>& faceIds, bool healRemaining) = 0;
+
+  // ── Feature 006-geometry-primitives US5 (Sewing) ────────────────────────────
+  virtual SewResult            sewFaces(const std::vector<std::string>& entityIds, double tolerance, bool makeSolid) = 0;
+
+  // ── Feature 006-geometry-primitives US6 (Assembly) ──────────────────────────
+  virtual CreateAssemblyResult createAssemblyDocument() = 0;
+  virtual AddInstanceResult    addAssemblyInstance(const AssemblyId& assemblyId, const std::string& shapeId, double tx, double ty, double tz, double qw, double qx, double qy, double qz) = 0;
+  virtual MateRigidResult      mateRigid(const AssemblyId& assemblyId, const std::string& srcEntityId, const std::string& dstEntityId, bool flipAlignment) = 0;
+  virtual ListAssemblyResult   listAssemblyTree(const AssemblyId& assemblyId) = 0;
 };
 
 }  // namespace mcp_cad

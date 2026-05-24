@@ -59,6 +59,7 @@
 | `TopExp_Explorer` | Iterate topology (faces, edges) | ✅ Stable |
 | `TopExp::MapShapes` | Index shape elements | ✅ Stable |
 | `BRepCheck_Analyzer` | Manifold detection | ✅ Stable |
+| `BRepBuilderAPI_Transform` | `translate_body`/`rotate_body`/`mirror_body`/`scale_body`/`align_to_face` — rigid and scaling body transforms | ✅ Stable |
 | `ShapeFix_Shape` | Topological healing | ✅ Stable (minor caveats — see OCCT_STABILITY.md) |
 
 ---
@@ -68,6 +69,7 @@
 | API | Usage | Stability |
 |-----|-------|-----------|
 | `BRepAlgoAPI_Cut` | Volume decomposition; `trim_body_with_plane` keeps one half | ⚠️ See OCCT_STABILITY.md §Brittle Operations |
+| `BRepAlgoAPI_Fuse` | `fuse_bodies` — fuses overlapping solid bodies | ⚠️ Disjoint shapes return compound |
 | `BRepAlgoAPI_Section` | Cross-section extraction | ⚠️ Near-tangent face edge case |
 | `BRepAlgoAPI_Common` | `compute_intersections` — computes volumetric intersection between shell pairs | ⚠️ Can raise `Standard_Failure` on degenerate inputs |
 | `BRepPrimAPI_MakeHalfSpace` | `trim_body_with_plane` — builds infinite cutting tool from plane face | ✅ Stable |
@@ -81,6 +83,7 @@
 | API | Usage | Stability |
 |-----|-------|-----------|
 | `BRepOffsetAPI_MakeOffset` | Kerf offset for tab-slot; also used for `offset_face` (post-INF-03) | ✅ Stable for convex shapes |
+| `BRepOffsetAPI_MakeOffsetShape` | `offset_shape` — offsets solid bodies inward or outward | ⚠️ Failures possible on sharp non-convex edges |
 | `BRepOffsetAPI_MakeFlatFace` | Sheet metal unfolding fallback | ⚠️ Post-MVP only (180° hems) |
 
 ---
@@ -100,6 +103,7 @@
 | API | Usage | Stability |
 |-----|-------|-----------|
 | `ShapeFix_Shape` | Post-import shape healing | ✅ Stable |
+| `ShapeUpgrade_UnifySameDomain` | `simplify_body` — merges redundant co-planar faces and co-linear edges | ✅ Stable |
 | `ShapeFix_Edge` | Edge geometry repair | ✅ Stable |
 | `ShapeFix_Face` | Degenerate face repair | ✅ Stable |
 
@@ -115,6 +119,25 @@
 
 ---
 
+### TKFillet — Fillet and chamfer operations
+
+| API | Usage | Stability |
+|-----|-------|-----------|
+| `BRepFilletAPI_MakeFillet` | `fillet_edges` — fillets sharp edges | ⚠️ Large radii can fail on adjacent complex faces |
+| `BRepFilletAPI_MakeChamfer` | `chamfer_edges` — chamfers sharp edges | ⚠️ Large distances can fail |
+
+---
+
+### TKXCAF — Assembly and extended data exchange
+
+| API | Usage | Stability |
+|-----|-------|-----------|
+| `TDocStd_Document` | Assembly document management | ✅ Stable |
+| `XCAFDoc_ShapeTool` | XCAF shape and assembly hierarchy tool | ✅ Stable |
+| `XCAFDoc_Location` | Retrieve and set component location matrices | ✅ Stable |
+
+---
+
 ## APIs Explicitly NOT Used (Deferred Post-MVP)
 
 | API | Reason Deferred |
@@ -123,7 +146,6 @@
 | `BRepPrimAPI_MakeSphere/Cylinder` | No primitive creation needed |
 | `Geom_BSplineSurface` (authoring) | Read-only; no NURBS authoring |
 | `STEPControl_Writer` | STEP assembly export post-MVP |
-| `BRepAlgoAPI_Fuse` | `merge_bodies_with_bend` — post-INF-03 scope |
 | `BRepBuilderAPI_MakeWire` (for rip) | `rip_edge` — post-INF-03 scope |
 
 ---

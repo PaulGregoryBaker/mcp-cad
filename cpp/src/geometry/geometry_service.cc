@@ -77,10 +77,14 @@
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
+#include <BRepFilletAPI_MakeChamfer.hxx>
+#include <BRepOffset_Mode.hxx>
 #include <BRepBuilderAPI_MakeSolid.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
 #include <BRepTools_ReShape.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
+#include <TDataStd_Name.hxx>
+#include <TCollection_AsciiString.hxx>
 
 #include <BRepBuilderAPI_Transform.hxx>
 #include <ShapeUpgrade_UnifySameDomain.hxx>
@@ -91,6 +95,8 @@
 #include <XCAFDoc_ShapeTool.hxx>
 #include <XCAFDoc_Location.hxx>
 #include <TDF_Label.hxx>
+#include <gp_Quaternion.hxx>
+#include <BinXCAFDrivers.hxx>
 
 #include <gp_Pnt.hxx>
 #include <gp_Vec.hxx>
@@ -177,11 +183,22 @@ struct UnfoldState {
   std::string dxfContent;
 };
 
+struct AssemblyState {
+  AssemblyId id;
+  Handle(TDocStd_Document) doc;
+  Handle(XCAFDoc_ShapeTool) shapeTool;
+  TDF_Label assemblyLabel;
+  std::unordered_map<ComponentId, TDF_Label> components;
+};
+
 // ─── GeometryServiceImpl ─────────────────────────────────────────────────────
 
 class GeometryServiceImpl : public GeometryService {
 public:
-  GeometryServiceImpl() = default;
+  GeometryServiceImpl() {
+    app_ = new TDocStd_Application();
+    BinXCAFDrivers::DefineFormat(app_);
+  }
   ~GeometryServiceImpl() override = default;
 
   // ── STEP import ──────────────────────────────────────────────────────────
@@ -1021,6 +1038,10 @@ public:
     if (uIt != snapshotUnfolds_.end()) {
       unfolds_ = uIt->second;
     }
+    auto aIt = snapshotAssemblies_.find(snapshotId);
+    if (aIt != snapshotAssemblies_.end()) {
+      assemblies_ = aIt->second;
+    }
 
     return RestoreResult{snap.solidIds, snap.shellIds};
   }
@@ -1440,12 +1461,760 @@ public:
     }
   }
 
+  FilletResult filletEdges(const ShellId& partId, const std::vector<std::string>& edgeIds, double radiusMm) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    TopoDS_Shape originalShape;
+    bool isSolid = false;
+    auto shellIt = shells_.find(partId);
+    auto solidIt = solids_.find(partId);
+    if (shellIt != shells_.end()) {
+      originalShape = shellIt->second.shape;
+    } else if (solidIt != solids_.end()) {
+      originalShape = solidIt->second.shape;
+      isSolid = true;
+    } else {
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell/solid not found: " + partId, false, "");
+    }
+
+    SnapshotId token = createSnapshotLocked("before filletEdges on " + partId);
+
+    try {
+      BRepFilletAPI_MakeFillet filletMaker(originalShape);
+      std::set<std::string> targetEdgeIds(edgeIds.begin(), edgeIds.end());
+      int edgesAdded = 0;
+
+      TopExp_Explorer exp(originalShape, TopAbs_EDGE);
+      for (; exp.More(); exp.Next()) {
+        const TopoDS_Edge& edge = TopoDS::Edge(exp.Current());
+        if (targetEdgeIds.count(shapeId(edge))) {
+          filletMaker.Add(radiusMm, edge);
+          edgesAdded++;
+        }
+      }
+
+      if (edgesAdded == 0) {
+        throw GeometryError("GE_FILLET_TOO_LARGE", "No matching edges found to fillet", true, "rollback");
+      }
+
+      filletMaker.Build();
+      if (!filletMaker.IsDone()) {
+        throw GeometryError("GE_FILLET_TOO_LARGE", "Fillet failed (radius may be too large)", true, "rollback");
+      }
+
+      TopoDS_Shape resultShape = filletMaker.Shape();
+      BRepCheck_Analyzer checker(resultShape);
+      if (!checker.IsValid()) {
+        throw GeometryError("GE_FILLET_TOO_LARGE", "Fillet result is invalid (radius may be too large)", true, "rollback");
+      }
+
+      if (isSolid) {
+        solids_[partId].shape = resultShape;
+      } else {
+        shells_[partId].shape = resultShape;
+      }
+
+      auto history = captureHistory(filletMaker, originalShape, [](const TopoDS_Shape& s) { return shapeId(s); }, "fillet_edges");
+      return FilletResult{partId, token, std::move(history)};
+
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_FILLET_TOO_LARGE",
+                          std::string("OCCT exception during fillet: ") + e.GetMessageString(),
+                          true, "rollback");
+    }
+  }
+
+  ChamferResult chamferEdges(const ShellId& partId, const std::vector<std::string>& edgeIds, double distanceMm) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    TopoDS_Shape originalShape;
+    bool isSolid = false;
+    auto shellIt = shells_.find(partId);
+    auto solidIt = solids_.find(partId);
+    if (shellIt != shells_.end()) {
+      originalShape = shellIt->second.shape;
+    } else if (solidIt != solids_.end()) {
+      originalShape = solidIt->second.shape;
+      isSolid = true;
+    } else {
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell/solid not found: " + partId, false, "");
+    }
+
+    SnapshotId token = createSnapshotLocked("before chamferEdges on " + partId);
+
+    try {
+      BRepFilletAPI_MakeChamfer chamferMaker(originalShape);
+      std::set<std::string> targetEdgeIds(edgeIds.begin(), edgeIds.end());
+      int edgesAdded = 0;
+
+      TopExp_Explorer exp(originalShape, TopAbs_EDGE);
+      for (; exp.More(); exp.Next()) {
+        const TopoDS_Edge& edge = TopoDS::Edge(exp.Current());
+        if (targetEdgeIds.count(shapeId(edge))) {
+          chamferMaker.Add(distanceMm, edge);
+          edgesAdded++;
+        }
+      }
+
+      if (edgesAdded == 0) {
+        throw GeometryError("GE_CHAMFER_TOO_LARGE", "No matching edges found to chamfer", true, "rollback");
+      }
+
+      chamferMaker.Build();
+      if (!chamferMaker.IsDone()) {
+        throw GeometryError("GE_CHAMFER_TOO_LARGE", "Chamfer failed (distance may be too large)", true, "rollback");
+      }
+
+      TopoDS_Shape resultShape = chamferMaker.Shape();
+      BRepCheck_Analyzer checker(resultShape);
+      if (!checker.IsValid()) {
+        throw GeometryError("GE_CHAMFER_TOO_LARGE", "Chamfer result is invalid (distance may be too large)", true, "rollback");
+      }
+
+      if (isSolid) {
+        solids_[partId].shape = resultShape;
+      } else {
+        shells_[partId].shape = resultShape;
+      }
+
+      auto history = captureHistory(chamferMaker, originalShape, [](const TopoDS_Shape& s) { return shapeId(s); }, "chamfer_edges");
+      return ChamferResult{partId, token, std::move(history)};
+
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_CHAMFER_TOO_LARGE",
+                          std::string("OCCT exception during chamfer: ") + e.GetMessageString(),
+                          true, "rollback");
+    }
+  }
+
+  SimplifyResult simplifyBody(const ShellId& partId, bool unifyFaces, bool unifyEdges) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    TopoDS_Shape originalShape;
+    bool isSolid = false;
+    auto shellIt = shells_.find(partId);
+    auto solidIt = solids_.find(partId);
+    if (shellIt != shells_.end()) {
+      originalShape = shellIt->second.shape;
+    } else if (solidIt != solids_.end()) {
+      originalShape = solidIt->second.shape;
+      isSolid = true;
+    } else {
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell/solid not found: " + partId, false, "");
+    }
+
+    SnapshotId token = createSnapshotLocked("before simplifyBody on " + partId);
+
+    try {
+      ShapeUpgrade_UnifySameDomain unifier(originalShape, unifyEdges, unifyFaces);
+      unifier.Build();
+      TopoDS_Shape resultShape = unifier.Shape();
+
+      BRepCheck_Analyzer checker(resultShape);
+      if (!checker.IsValid()) {
+        throw GeometryError("GE_BOOLEAN_FAILURE", "Simplify result shape is invalid", true, "rollback");
+      }
+
+      if (isSolid) {
+        solids_[partId].shape = resultShape;
+      } else {
+        shells_[partId].shape = resultShape;
+      }
+
+      std::vector<ShapeHistoryRecord> history;
+      Handle(BRepTools_History) unifHistory = unifier.History();
+      if (!unifHistory.IsNull()) {
+        TopExp_Explorer faceExp(originalShape, TopAbs_FACE);
+        for (; faceExp.More(); faceExp.Next()) {
+          const TopoDS_Shape& face = faceExp.Current();
+          std::string origId = shapeId(face);
+          if (origId.empty()) continue;
+
+          if (unifHistory->IsRemoved(face)) {
+            history.push_back(ShapeHistoryRecord{"deleted", origId, "", "simplify_body"});
+          } else {
+            const TopTools_ListOfShape& modified = unifHistory->Modified(face);
+            for (TopTools_ListIteratorOfListOfShape itM(modified); itM.More(); itM.Next()) {
+              std::string newId = shapeId(itM.Value());
+              if (!newId.empty()) {
+                history.push_back(ShapeHistoryRecord{"modified", origId, newId, "simplify_body"});
+              }
+            }
+            const TopTools_ListOfShape& generated = unifHistory->Generated(face);
+            for (TopTools_ListIteratorOfListOfShape itG(generated); itG.More(); itG.Next()) {
+              std::string newId = shapeId(itG.Value());
+              if (!newId.empty()) {
+                history.push_back(ShapeHistoryRecord{"generated", origId, newId, "simplify_body"});
+              }
+            }
+          }
+        }
+      }
+
+      return SimplifyResult{partId, token, std::move(history)};
+
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_BOOLEAN_FAILURE",
+                          std::string("OCCT exception during simplify: ") + e.GetMessageString(),
+                          true, "rollback");
+    }
+  }
+
+  HealExResult healGeometryEx(const ShellId& partId, bool fixTolerances, bool fixWires) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    TopoDS_Shape originalShape;
+    bool isSolid = false;
+    auto shellIt = shells_.find(partId);
+    auto solidIt = solids_.find(partId);
+    if (shellIt != shells_.end()) {
+      originalShape = shellIt->second.shape;
+    } else if (solidIt != solids_.end()) {
+      originalShape = solidIt->second.shape;
+      isSolid = true;
+    } else {
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell/solid not found: " + partId, false, "");
+    }
+
+    SnapshotId token = createSnapshotLocked("before healGeometryEx on " + partId);
+
+    try {
+      ShapeFix_Shape fixer(originalShape);
+      fixer.Perform();
+      TopoDS_Shape resultShape = fixer.Shape();
+
+      BRepCheck_Analyzer checker(resultShape);
+      bool healComplete = checker.IsValid();
+      std::vector<std::string> remainingIssues;
+      if (!healComplete) {
+        remainingIssues.push_back("Result shape remains invalid under BRepCheck_Analyzer");
+      }
+
+      if (isSolid) {
+        solids_[partId].shape = resultShape;
+      } else {
+        shells_[partId].shape = resultShape;
+      }
+
+      std::vector<ShapeHistoryRecord> history;
+      Handle(BRepTools_ReShape) shapeFixHistory = fixer.Context();
+      if (!shapeFixHistory.IsNull()) {
+        TopExp_Explorer faceExp(originalShape, TopAbs_FACE);
+        for (; faceExp.More(); faceExp.Next()) {
+          const TopoDS_Shape& face = faceExp.Current();
+          std::string origId = shapeId(face);
+          if (origId.empty()) continue;
+
+          TopoDS_Shape newFace = shapeFixHistory->Value(face);
+          if (newFace.IsNull()) {
+            history.push_back(ShapeHistoryRecord{"deleted", origId, "", "heal_geometry_ex"});
+          } else if (!newFace.IsSame(face)) {
+            history.push_back(ShapeHistoryRecord{"modified", origId, shapeId(newFace), "heal_geometry_ex"});
+          }
+        }
+      }
+
+      return HealExResult{partId, healComplete, remainingIssues, token, std::move(history)};
+
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_HEAL_INCOMPLETE",
+                          std::string("OCCT exception during heal: ") + e.GetMessageString(),
+                          true, "rollback");
+    }
+  }
+
+  OffsetShapeResult offsetShape(const ShellId& partId, double offsetValue, double tolerance) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    TopoDS_Shape originalShape;
+    bool isSolid = false;
+    auto shellIt = shells_.find(partId);
+    auto solidIt = solids_.find(partId);
+    if (shellIt != shells_.end()) {
+      originalShape = shellIt->second.shape;
+    } else if (solidIt != solids_.end()) {
+      originalShape = solidIt->second.shape;
+      isSolid = true;
+    } else {
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell/solid not found: " + partId, false, "");
+    }
+
+    SnapshotId token = createSnapshotLocked("before offsetShape on " + partId);
+
+    try {
+      BRepOffsetAPI_MakeOffsetShape maker;
+      maker.PerformByJoin(originalShape, offsetValue, tolerance, BRepOffset_Skin);
+      if (!maker.IsDone()) {
+        throw GeometryError("GE_BOOLEAN_FAILURE", "Offset operation failed to complete", true, "rollback");
+      }
+      TopoDS_Shape resultShape = maker.Shape();
+      BRepCheck_Analyzer checker(resultShape);
+      if (!checker.IsValid()) {
+        throw GeometryError("GE_BOOLEAN_FAILURE", "Offset result is invalid", true, "rollback");
+      }
+
+      if (isSolid) {
+        solids_[partId].shape = resultShape;
+      } else {
+        shells_[partId].shape = resultShape;
+      }
+
+      auto history = captureHistory(maker, originalShape, [](const TopoDS_Shape& s) { return shapeId(s); }, "offset_shape");
+      return OffsetShapeResult{partId, token, std::move(history)};
+
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_BOOLEAN_FAILURE",
+                          std::string("OCCT exception during offset: ") + e.GetMessageString(),
+                          true, "rollback");
+    }
+  }
+
+  DeleteFaceResult deleteFace(const ShellId& partId, const std::vector<std::string>& faceIds, bool healRemaining) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    TopoDS_Shape originalShape;
+    bool isSolid = false;
+    auto shellIt = shells_.find(partId);
+    auto solidIt = solids_.find(partId);
+    if (shellIt != shells_.end()) {
+      originalShape = shellIt->second.shape;
+    } else if (solidIt != solids_.end()) {
+      originalShape = solidIt->second.shape;
+      isSolid = true;
+    } else {
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell/solid not found: " + partId, false, "");
+    }
+
+    SnapshotId token = createSnapshotLocked("before deleteFace on " + partId);
+
+    try {
+      std::set<std::string> facesToDelete(faceIds.begin(), faceIds.end());
+      std::vector<TopoDS_Face> keptFaces;
+
+      TopExp_Explorer exp(originalShape, TopAbs_FACE);
+      for (; exp.More(); exp.Next()) {
+        const TopoDS_Face& face = TopoDS::Face(exp.Current());
+        if (facesToDelete.count(shapeId(face)) == 0) {
+          keptFaces.push_back(face);
+        }
+      }
+
+      if (keptFaces.empty()) {
+        throw GeometryError("GE_BOOLEAN_FAILURE", "Cannot delete all faces of the shell", true, "rollback");
+      }
+
+      TopoDS_Shape resultShape;
+      if (healRemaining) {
+        BRepBuilderAPI_Sewing sewer;
+        sewer.Init();
+        for (const auto& face : keptFaces) {
+          sewer.Add(face);
+        }
+        sewer.Perform();
+        resultShape = sewer.SewedShape();
+
+        ShapeFix_Shape fixer(resultShape);
+        fixer.Perform();
+        resultShape = fixer.Shape();
+      } else {
+        BRep_Builder builder;
+        TopoDS_Shell newShell;
+        builder.MakeShell(newShell);
+        for (const auto& face : keptFaces) {
+          builder.Add(newShell, face);
+        }
+        resultShape = newShell;
+      }
+
+      std::vector<TopoDS_Shape> disconnectedShapes;
+      if (resultShape.ShapeType() == TopAbs_COMPOUND) {
+        TopExp_Explorer shellExp(resultShape, TopAbs_SHELL);
+        for (; shellExp.More(); shellExp.Next()) {
+          disconnectedShapes.push_back(shellExp.Current());
+        }
+        if (disconnectedShapes.empty()) {
+          TopExp_Explorer faceExp(resultShape, TopAbs_FACE);
+          if (faceExp.More()) {
+            BRep_Builder builder;
+            TopoDS_Shell newShell;
+            builder.MakeShell(newShell);
+            for (; faceExp.More(); faceExp.Next()) {
+              builder.Add(newShell, TopoDS::Face(faceExp.Current()));
+            }
+            disconnectedShapes.push_back(newShell);
+          }
+        }
+      } else {
+        disconnectedShapes.push_back(resultShape);
+      }
+
+      if (isSolid) {
+        solids_.erase(partId);
+      } else {
+        shells_.erase(partId);
+      }
+
+      std::vector<ShellId> solidIds;
+      for (const auto& shape : disconnectedShapes) {
+        ShellId newId = generateUUID();
+        shells_[newId] = ShellState{newId, "", shape};
+        solidIds.push_back(newId);
+      }
+
+      std::vector<ShapeHistoryRecord> history;
+      for (const auto& faceId : faceIds) {
+        history.push_back(ShapeHistoryRecord{"deleted", faceId, "", "delete_face"});
+      }
+      for (const auto& face : keptFaces) {
+        std::string id = shapeId(face);
+        history.push_back(ShapeHistoryRecord{"modified", id, id, "delete_face"});
+      }
+
+      return DeleteFaceResult{solidIds, token, std::move(history)};
+
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_BOOLEAN_FAILURE",
+                          std::string("OCCT exception during delete face: ") + e.GetMessageString(),
+                          true, "rollback");
+    }
+  }
+
+  SewResult sewFaces(const std::vector<std::string>& entityIds, double tolerance, bool makeSolid) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    SnapshotId token = createSnapshotLocked("before sewFaces");
+
+    try {
+      BRepBuilderAPI_Sewing sewer;
+      sewer.Init();
+      sewer.SetTolerance(tolerance);
+
+      std::vector<TopoDS_Shape> inputShapes;
+      for (const auto& id : entityIds) {
+        TopoDS_Shape shape = lookupEntityLocked(id);
+        sewer.Add(shape);
+        inputShapes.push_back(shape);
+      }
+
+      sewer.Perform();
+      TopoDS_Shape sewedShape = sewer.SewedShape();
+
+      Standard_Integer nbFree = sewer.NbFreeEdges();
+      std::vector<std::string> freeEdges;
+      for (Standard_Integer i = 1; i <= nbFree; ++i) {
+        TopoDS_Edge edge = TopoDS::Edge(sewer.FreeEdge(i));
+        freeEdges.push_back(shapeId(edge));
+      }
+      bool sewComplete = (nbFree == 0);
+
+      TopoDS_Shape finalShape = sewedShape;
+      if (makeSolid && sewComplete) {
+        if (finalShape.ShapeType() == TopAbs_SHELL) {
+          BRepBuilderAPI_MakeSolid solidMaker(TopoDS::Shell(finalShape));
+          if (solidMaker.IsDone()) {
+            finalShape = solidMaker.Solid();
+          }
+        } else if (finalShape.ShapeType() == TopAbs_COMPOUND) {
+          TopExp_Explorer shellExp(finalShape, TopAbs_SHELL);
+          if (shellExp.More()) {
+            BRepBuilderAPI_MakeSolid solidMaker(TopoDS::Shell(shellExp.Current()));
+            if (solidMaker.IsDone()) {
+              finalShape = solidMaker.Solid();
+            }
+          }
+        }
+      }
+
+      // Remove inputs from session
+      for (const auto& id : entityIds) {
+        shells_.erase(id);
+        solids_.erase(id);
+      }
+
+      ShellId resultId = generateUUID();
+      if (finalShape.ShapeType() == TopAbs_SOLID) {
+        solids_[resultId] = SolidState{resultId, finalShape};
+      } else {
+        shells_[resultId] = ShellState{resultId, "", finalShape};
+      }
+
+      // Capture history
+      std::vector<ShapeHistoryRecord> history;
+      for (const auto& inputShape : inputShapes) {
+        TopExp_Explorer faceExp(inputShape, TopAbs_FACE);
+        for (; faceExp.More(); faceExp.Next()) {
+          const TopoDS_Shape& face = faceExp.Current();
+          std::string origId = shapeId(face);
+          if (origId.empty()) continue;
+
+          if (sewer.IsModified(face)) {
+            TopoDS_Shape newFace = sewer.Modified(face);
+            if (!newFace.IsNull()) {
+              history.push_back(ShapeHistoryRecord{"modified", origId, shapeId(newFace), "sew_faces"});
+            }
+          } else {
+            history.push_back(ShapeHistoryRecord{"modified", origId, origId, "sew_faces"});
+          }
+        }
+      }
+
+      return SewResult{resultId, sewComplete, freeEdges, token, std::move(history)};
+
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_SEW_INCOMPLETE",
+                          std::string("OCCT exception during sew: ") + e.GetMessageString(),
+                          true, "rollback");
+    }
+  }
+
+  CreateAssemblyResult createAssemblyDocument() override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    SnapshotId token = createSnapshotLocked("before createAssemblyDocument");
+
+    try {
+      Handle(TDocStd_Document) doc;
+      app_->NewDocument("BinXCAF", doc);
+
+      Handle(XCAFDoc_ShapeTool) shapeTool = XCAFDoc_DocumentTool::ShapeTool(doc->Main());
+      TDF_Label assemblyLabel = shapeTool->NewShape();
+      AssemblyId assemblyId = generateUUID();
+      assemblies_[assemblyId] = AssemblyState{assemblyId, doc, shapeTool, assemblyLabel, {}};
+
+      return CreateAssemblyResult{assemblyId};
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_BOOLEAN_FAILURE",
+                          std::string("OCCT exception during create assembly: ") + e.GetMessageString(),
+                          true, "rollback");
+    }
+  }
+
+  AddInstanceResult addAssemblyInstance(const AssemblyId& assemblyId, const std::string& targetShapeId, double tx, double ty, double tz, double qw, double qx, double qy, double qz) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = assemblies_.find(assemblyId);
+    if (it == assemblies_.end()) {
+      throw GeometryError("GE_SOLID_NOT_FOUND", "Assembly document not found: " + assemblyId, false, "");
+    }
+
+    TopoDS_Shape targetShape;
+    auto shellIt = shells_.find(targetShapeId);
+    auto solidIt = solids_.find(targetShapeId);
+    if (shellIt != shells_.end()) {
+      targetShape = shellIt->second.shape;
+    } else if (solidIt != solids_.end()) {
+      targetShape = solidIt->second.shape;
+    } else {
+      throw GeometryError("GE_SOLID_NOT_FOUND", "Target shape not found for assembly instance: " + targetShapeId, false, "");
+    }
+
+    SnapshotId token = createSnapshotLocked("before addAssemblyInstance in " + assemblyId);
+
+    try {
+      TDF_Label defLabel = it->second.shapeTool->AddShape(targetShape, Standard_False, Standard_False);
+      
+      gp_Trsf trsf;
+      gp_Quaternion q(qx, qy, qz, qw);
+      gp_Vec t(tx, ty, tz);
+      trsf.SetRotation(q);
+      trsf.SetTranslation(t);
+      TopLoc_Location loc(trsf);
+
+      TDF_Label compLabel = it->second.shapeTool->AddComponent(it->second.assemblyLabel, defLabel, loc);
+      it->second.shapeTool->UpdateAssemblies();
+
+      ComponentId compId = generateUUID();
+      it->second.components[compId] = compLabel;
+
+      return AddInstanceResult{compId};
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_BOOLEAN_FAILURE",
+                          std::string("OCCT exception during add instance: ") + e.GetMessageString(),
+                          true, "rollback");
+    }
+  }
+
+  MateRigidResult mateRigid(const AssemblyId& assemblyId, const std::string& srcEntityId, const std::string& dstEntityId, bool flipAlignment) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = assemblies_.find(assemblyId);
+    if (it == assemblies_.end()) {
+      throw GeometryError("GE_SOLID_NOT_FOUND", "Assembly document not found: " + assemblyId, false, "");
+    }
+
+    TopoDS_Shape srcFaceShape = lookupEntityLocked(srcEntityId);
+    TopoDS_Shape dstFaceShape = lookupEntityLocked(dstEntityId);
+    if (srcFaceShape.ShapeType() != TopAbs_FACE || dstFaceShape.ShapeType() != TopAbs_FACE) {
+      throw GeometryError("GE_ASSEMBLY_MATE_UNSUPPORTED", "Mated entities must be faces", true, "");
+    }
+
+    const TopoDS_Face& srcFace = TopoDS::Face(srcFaceShape);
+    const TopoDS_Face& dstFace = TopoDS::Face(dstFaceShape);
+    Handle(Geom_Surface) srcSurf = BRep_Tool::Surface(srcFace);
+    Handle(Geom_Surface) dstSurf = BRep_Tool::Surface(dstFace);
+    if (srcSurf.IsNull() || !srcSurf->IsKind(STANDARD_TYPE(Geom_Plane)) ||
+        dstSurf.IsNull() || !dstSurf->IsKind(STANDARD_TYPE(Geom_Plane))) {
+      throw GeometryError("GE_ASSEMBLY_MATE_UNSUPPORTED", "Mated faces must be planar", true, "");
+    }
+
+    SnapshotId token = createSnapshotLocked("before mateRigid in " + assemblyId);
+
+    try {
+      Handle(Geom_Plane) srcPlane = Handle(Geom_Plane)::DownCast(srcSurf);
+      Handle(Geom_Plane) dstPlane = Handle(Geom_Plane)::DownCast(dstSurf);
+
+      gp_Ax3 srcAx3 = srcPlane->Position();
+      gp_Ax3 dstAx3 = dstPlane->Position();
+      if (flipAlignment) {
+        dstAx3.ZReverse();
+      }
+
+      gp_Trsf trsf;
+      trsf.SetTransformation(srcAx3, dstAx3);
+
+      ShellId srcParentId = findParentShellIdLocked(srcEntityId);
+      TopoDS_Shape parentShape = lookupEntityLocked(srcParentId);
+      TDF_Label parentDefLabel;
+      TDF_Label compLabel;
+      ComponentId compId = "";
+      if (it->second.shapeTool->FindShape(parentShape, parentDefLabel)) {
+        for (const auto& kv : it->second.components) {
+          TDF_Label refLabel;
+          if (XCAFDoc_ShapeTool::GetReferredShape(kv.second, refLabel)) {
+            if (refLabel.IsEqual(parentDefLabel)) {
+              compLabel = kv.second;
+              compId = kv.first;
+              break;
+            }
+          }
+        }
+      }
+
+      if (compLabel.IsNull()) {
+        throw GeometryError("GE_ASSEMBLY_MATE_UNSUPPORTED", "Mated component not found in assembly", true, "");
+      }
+
+      TopLoc_Location currentLoc;
+      Handle(XCAFDoc_Location) locAttr;
+      if (compLabel.FindAttribute(XCAFDoc_Location::GetID(), locAttr)) {
+        currentLoc = locAttr->Get();
+      }
+      gp_Trsf currentTrsf = currentLoc.Transformation();
+      gp_Trsf newTrsf = trsf * currentTrsf;
+      XCAFDoc_Location::Set(compLabel, TopLoc_Location(newTrsf));
+      it->second.shapeTool->UpdateAssemblies();
+
+      LocationMatrix locMat;
+      locMat.m = {
+        newTrsf.Value(1,1), newTrsf.Value(2,1), newTrsf.Value(3,1), 0.0,
+        newTrsf.Value(1,2), newTrsf.Value(2,2), newTrsf.Value(3,2), 0.0,
+        newTrsf.Value(1,3), newTrsf.Value(2,3), newTrsf.Value(3,3), 0.0,
+        newTrsf.Value(1,4), newTrsf.Value(2,4), newTrsf.Value(3,4), 1.0
+      };
+
+      return MateRigidResult{compId, locMat, token};
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_ASSEMBLY_MATE_UNSUPPORTED",
+                          std::string("OCCT exception during mate: ") + e.GetMessageString(),
+                          true, "rollback");
+    }
+  }
+
+  ListAssemblyResult listAssemblyTree(const AssemblyId& assemblyId) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = assemblies_.find(assemblyId);
+    if (it == assemblies_.end()) {
+      throw GeometryError("GE_SOLID_NOT_FOUND", "Assembly document not found: " + assemblyId, false, "");
+    }
+
+    try {
+      TDF_LabelSequence roots;
+      it->second.shapeTool->GetFreeShapes(roots);
+
+      std::function<AssemblyNode(const TDF_Label&)> buildNode = [&](const TDF_Label& label) -> AssemblyNode {
+        AssemblyNode node;
+
+        TopoDS_Shape shape;
+        if (it->second.shapeTool->GetShape(label, shape)) {
+          node.shapeId = shapeId(shape);
+        }
+
+        ComponentId compId = "";
+        for (const auto& kv : it->second.components) {
+          if (kv.second.IsEqual(label)) {
+            compId = kv.first;
+            break;
+          }
+        }
+        node.componentId = compId;
+
+        TopLoc_Location loc;
+        Handle(XCAFDoc_Location) locAttr;
+        if (label.FindAttribute(XCAFDoc_Location::GetID(), locAttr)) {
+          loc = locAttr->Get();
+        }
+        gp_Trsf trsf = loc.Transformation();
+        node.locationMatrix = {
+          trsf.Value(1,1), trsf.Value(2,1), trsf.Value(3,1), 0.0,
+          trsf.Value(1,2), trsf.Value(2,2), trsf.Value(3,2), 0.0,
+          trsf.Value(1,3), trsf.Value(2,3), trsf.Value(3,3), 0.0,
+          trsf.Value(1,4), trsf.Value(2,4), trsf.Value(3,4), 1.0
+        };
+
+        TDF_LabelSequence children;
+        it->second.shapeTool->GetComponents(label, children);
+        for (Standard_Integer i = 1; i <= children.Length(); ++i) {
+          node.children.push_back(buildNode(children.Value(i)));
+        }
+
+        return node;
+      };
+
+      ListAssemblyResult result;
+      result.assemblyId = assemblyId;
+      result.root.componentId = "";
+      result.root.shapeId = assemblyId;
+      result.root.locationMatrix = {
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0
+      };
+
+      for (Standard_Integer i = 1; i <= roots.Length(); ++i) {
+        TDF_Label rLabel = roots.Value(i);
+        if (rLabel.IsEqual(it->second.assemblyLabel)) {
+          TDF_LabelSequence children;
+          it->second.shapeTool->GetComponents(rLabel, children);
+          for (Standard_Integer j = 1; j <= children.Length(); ++j) {
+            result.root.children.push_back(buildNode(children.Value(j)));
+          }
+        } else {
+          result.root.children.push_back(buildNode(rLabel));
+        }
+      }
+      return result;
+
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_BOOLEAN_FAILURE",
+                          std::string("OCCT exception during list assembly: ") + e.GetMessageString(),
+                          false, "");
+    }
+  }
+
   void clearSnapshots() override {
     std::lock_guard<std::mutex> lock(mutex_);
     snapshots_.clear();
     snapshotSolids_.clear();
     snapshotShells_.clear();
     snapshotUnfolds_.clear();
+    snapshotAssemblies_.clear();
   }
 
 private:
@@ -1458,6 +2227,9 @@ private:
   std::unordered_map<SnapshotId, std::unordered_map<SolidId, SolidState>> snapshotSolids_;
   std::unordered_map<SnapshotId, std::unordered_map<ShellId, ShellState>> snapshotShells_;
   std::unordered_map<SnapshotId, std::unordered_map<UnfoldId, UnfoldState>> snapshotUnfolds_;
+  std::unordered_map<AssemblyId, AssemblyState> assemblies_;
+  std::unordered_map<SnapshotId, std::unordered_map<AssemblyId, AssemblyState>> snapshotAssemblies_;
+  Handle(TDocStd_Application) app_;
 
   // ── Private helpers ──────────────────────────────────────────────────────
 
@@ -1531,6 +2303,7 @@ private:
     snapshotSolids_[snap.snapshotId] = solids_;
     snapshotShells_[snap.snapshotId] = shells_;
     snapshotUnfolds_[snap.snapshotId] = unfolds_;
+    snapshotAssemblies_[snap.snapshotId] = assemblies_;
     return snap.snapshotId;
   }
 

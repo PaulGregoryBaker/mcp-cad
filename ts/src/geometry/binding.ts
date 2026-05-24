@@ -36,6 +36,17 @@ import type {
   CutResult,
   IntersectResult,
   TransformResult,
+  FilletResult,
+  ChamferResult,
+  SimplifyResult,
+  HealExResult,
+  OffsetShapeResult,
+  DeleteFaceResult,
+  SewResult,
+  CreateAssemblyResult,
+  AddInstanceResult,
+  MateRigidResult,
+  ListAssemblyResult,
 } from './types';
 
 // ─── Addon interface ──────────────────────────────────────────────────────────
@@ -120,6 +131,12 @@ export interface GeometryAddon {
     flipNormal: boolean,
     keepOriginal: boolean,
   ): TransformResult;
+  filletEdges(partId: string, edgeIds: string[], radiusMm: number): FilletResult;
+  chamferEdges(partId: string, edgeIds: string[], distanceMm: number): ChamferResult;
+  simplifyBody(partId: string, unifyFaces: boolean, unifyEdges: boolean): SimplifyResult;
+  healGeometryEx(partId: string, fixTolerances: boolean, fixWires: boolean): HealExResult;
+  offsetShape(partId: string, offsetValue: number, tolerance: number): OffsetShapeResult;
+  deleteFace(partId: string, faceIds: string[], healRemaining: boolean): DeleteFaceResult;
   computeIntersections(partIds: string[]): ClashReport;
   computeGaps(partAId: string, partBId: string, maxDistanceThresholdMm: number): GapReport;
   trimBodyWithPlane(partId: string, plane: CuttingPlane, keepPositiveSide: boolean): TrimBodyResult;
@@ -168,6 +185,26 @@ export interface GeometryAddon {
     protrusion_count: number;
     rollbackToken: string;
   };
+  sewFaces(entityIds: string[], tolerance: number, makeSolid: boolean): SewResult;
+  createAssemblyDocument(): CreateAssemblyResult;
+  addAssemblyInstance(
+    assemblyId: string,
+    shapeId: string,
+    tx: number,
+    ty: number,
+    tz: number,
+    qw: number,
+    qx: number,
+    qy: number,
+    qz: number,
+  ): AddInstanceResult;
+  mateRigid(
+    assemblyId: string,
+    srcEntityId: string,
+    dstEntityId: string,
+    flipAlignment: boolean,
+  ): MateRigidResult;
+  listAssemblyTree(assemblyId: string): ListAssemblyResult;
 }
 
 export const kerfOffsetMm = {
@@ -526,6 +563,54 @@ export class GeometryBinding {
     }
   }
 
+  filletEdges(partId: string, edgeIds: string[], radiusMm: number): FilletResult {
+    try {
+      return this.addon.filletEdges(partId, edgeIds, radiusMm);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  chamferEdges(partId: string, edgeIds: string[], distanceMm: number): ChamferResult {
+    try {
+      return this.addon.chamferEdges(partId, edgeIds, distanceMm);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  simplifyBody(partId: string, unifyFaces: boolean, unifyEdges: boolean): SimplifyResult {
+    try {
+      return this.addon.simplifyBody(partId, unifyFaces, unifyEdges);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  healGeometryEx(partId: string, fixTolerances: boolean, fixWires: boolean): HealExResult {
+    try {
+      return this.addon.healGeometryEx(partId, fixTolerances, fixWires);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  offsetShape(partId: string, offsetValue: number, tolerance: number): OffsetShapeResult {
+    try {
+      return this.addon.offsetShape(partId, offsetValue, tolerance);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  deleteFace(partId: string, faceIds: string[], healRemaining: boolean): DeleteFaceResult {
+    try {
+      return this.addon.deleteFace(partId, faceIds, healRemaining);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
   computeIntersections(partIds: string[]): ClashReport {
     try {
       return this.addon.computeIntersections(partIds);
@@ -645,6 +730,68 @@ export class GeometryBinding {
   ): ReturnType<GeometryAddon['removeProtrusions']> {
     try {
       return this.addon.removeProtrusions(partId, angleThresholdDeg, maxThicknessMm);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  sewFaces(entityIds: string[], tolerance: number, makeSolid: boolean): SewResult {
+    try {
+      const res = this.addon.sewFaces(entityIds, tolerance, makeSolid);
+      return {
+        solid_id: (res as any).shell_id,
+        sew_complete: res.sew_complete,
+        free_edges: res.free_edges,
+        rollback_token: res.rollback_token,
+        shape_history: res.shape_history,
+      };
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  createAssemblyDocument(): CreateAssemblyResult {
+    try {
+      return this.addon.createAssemblyDocument();
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  addAssemblyInstance(
+    assemblyId: string,
+    shapeId: string,
+    tx: number,
+    ty: number,
+    tz: number,
+    qw: number,
+    qx: number,
+    qy: number,
+    qz: number,
+  ): AddInstanceResult {
+    try {
+      return this.addon.addAssemblyInstance(assemblyId, shapeId, tx, ty, tz, qw, qx, qy, qz);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  mateRigid(
+    assemblyId: string,
+    srcEntityId: string,
+    dstEntityId: string,
+    flipAlignment: boolean,
+  ): MateRigidResult {
+    try {
+      return this.addon.mateRigid(assemblyId, srcEntityId, dstEntityId, flipAlignment);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  listAssemblyTree(assemblyId: string): ListAssemblyResult {
+    try {
+      return this.addon.listAssemblyTree(assemblyId);
     } catch (err) {
       throw toStructuredError(err);
     }

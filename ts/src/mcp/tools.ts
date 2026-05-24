@@ -828,6 +828,162 @@ export function getToolDefinitions(): object[] {
         },
         required: ['source_face', 'destination_face', 'transaction_id']
       }
+    },
+    {
+      name: 'fillet_edges',
+      description: 'Applies a circular fillet of the given radius to the specified edges. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_id:        { type: 'string', description: 'Body/shell containing the edges' },
+          targets:        { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Edge IDs to fillet' },
+          radius:         { type: 'number', exclusiveMinimum: 0, description: 'Fillet radius in mm' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['part_id', 'targets', 'radius', 'transaction_id']
+      }
+    },
+    {
+      name: 'chamfer_edges',
+      description: 'Applies an angled chamfer of the given distance to the specified edges. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_id:        { type: 'string', description: 'Body/shell containing the edges' },
+          targets:        { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Edge IDs to chamfer' },
+          distance:       { type: 'number', exclusiveMinimum: 0, description: 'Chamfer offset distance in mm' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['part_id', 'targets', 'distance', 'transaction_id']
+      }
+    },
+    {
+      name: 'simplify_body',
+      description: 'Merges co-planar adjacent faces and collinear edges into single entities (ShapeUpgrade_UnifySameDomain). Reduces face count without changing geometry. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_id:        { type: 'string', description: 'Body/shell to simplify' },
+          unify_faces:    { type: 'boolean', default: true, description: 'Merge co-planar adjacent faces' },
+          unify_edges:    { type: 'boolean', default: true, description: 'Merge collinear adjacent edges' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['part_id', 'transaction_id']
+      }
+    },
+    {
+      name: 'heal_geometry_ex',
+      description: 'Repairs B-Rep validity issues (gaps, bad tolerances, invalid wires) using ShapeFix_Shape. Returns heal_complete: true if BRepCheck_Analyzer passes on the result. Non-destructive but mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_id:          { type: 'string', description: 'Body/shell to heal' },
+          fix_tolerances:   { type: 'boolean', default: true, description: 'Repair loose tolerancing issues' },
+          fix_wires:        { type: 'boolean', default: true, description: 'Heal open or incorrect wires' },
+          transaction_id:   { type: 'string' }
+        },
+        required: ['part_id', 'transaction_id']
+      }
+    },
+    {
+      name: 'offset_shape',
+      description: 'Offsets the boundary of a solid outward (positive) or inward (negative) by the given distance. Distinct from offset_face (which offsets a single face in 2D). Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_id:        { type: 'string', description: 'Body/shell to offset' },
+          offset_value:   { type: 'number', description: 'Offset distance in mm. Positive = outward (thicken), negative = inward (shrink).' },
+          tolerance:      { type: 'number', default: 1e-4, description: 'Shape tolerance (mm)' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['part_id', 'offset_value', 'transaction_id']
+      }
+    },
+    {
+      name: 'delete_face',
+      description: 'Removes specified faces and attempts to heal the surrounding topology. May produce multiple bodies if removal disconnects the shape. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_id:        { type: 'string', description: 'Body containing the faces' },
+          targets:        { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Face IDs to delete' },
+          heal_remaining: { type: 'boolean', default: true, description: 'If true, attempt to stitch/sew the remaining faces' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['part_id', 'targets', 'transaction_id']
+      }
+    },
+    {
+      name: 'sew_faces',
+      description: 'Stitches adjacent open faces or shells together into a single shell or solid. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          targets: { type: 'array', items: { type: 'string' }, minItems: 2, description: 'Face or shell IDs to sew together' },
+          tolerance: { type: 'number', default: 1e-3, description: 'Maximum sewing gap tolerance (mm)' },
+          make_solid: { type: 'boolean', default: false, description: 'If true and result is a closed shell, convert to a solid body' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['targets', 'transaction_id']
+      }
+    },
+    {
+      name: 'create_assembly_document',
+      description: 'Creates a new empty hierarchical assembly document inside an XCAF session. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          transaction_id: { type: 'string' }
+        },
+        required: ['transaction_id']
+      }
+    },
+    {
+      name: 'add_assembly_instance',
+      description: 'Adds a solid or shell as a component instance in an assembly document at an optional location. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          assembly_id: { type: 'string', description: 'Assembly document ID' },
+          target: { type: 'string', description: 'Solid or shell ID of the component to instance' },
+          location: {
+            type: 'object',
+            properties: {
+              translation: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[x, y, z] offset in mm' },
+              orientation: { type: 'array', items: { type: 'number' }, minItems: 4, maxItems: 4, description: '[qw, qx, qy, qz] quaternion' }
+            },
+            required: ['translation', 'orientation']
+          },
+          transaction_id: { type: 'string' }
+        },
+        required: ['assembly_id', 'target', 'transaction_id']
+      }
+    },
+    {
+      name: 'mate_rigid',
+      description: 'Repositions the source component so its face mates flatly against the destination component\'s face. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          assembly_id: { type: 'string', description: 'Assembly document ID' },
+          source_face: { type: 'string', description: 'Face ID on the source component instance to move' },
+          destination_face: { type: 'string', description: 'Target face ID on a static component instance' },
+          flip_alignment: { type: 'boolean', default: false, description: 'If true, reverse the mate normal direction' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['assembly_id', 'source_face', 'destination_face', 'transaction_id']
+      }
+    },
+    {
+      name: 'list_assembly_tree',
+      description: 'Returns the hierarchical tree of all component instances, their parts, and relative location matrices. Non-mutating.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          assembly_id: { type: 'string', description: 'Assembly document ID' }
+        },
+        required: ['assembly_id']
+      }
     }
   ];
 }
@@ -879,6 +1035,39 @@ export async function dispatchTool(
 
       case 'align_to_face':
         return handleAlignToFace(args);
+
+      case 'fillet_edges':
+        return handleFilletEdges(args);
+
+      case 'chamfer_edges':
+        return handleChamferEdges(args);
+
+      case 'simplify_body':
+        return handleSimplifyBody(args);
+
+      case 'heal_geometry_ex':
+        return handleHealGeometryEx(args);
+
+      case 'offset_shape':
+        return handleOffsetShape(args);
+
+      case 'delete_face':
+        return handleDeleteFace(args);
+
+      case 'sew_faces':
+        return handleSewFaces(args);
+
+      case 'create_assembly_document':
+        return handleCreateAssemblyDocument(args);
+
+      case 'add_assembly_instance':
+        return handleAddAssemblyInstance(args);
+
+      case 'mate_rigid':
+        return handleMateRigid(args);
+
+      case 'list_assembly_tree':
+        return handleListAssemblyTree(args);
 
       case 'decompose_volume':
         return handleDecomposeVolume(args);
@@ -2299,5 +2488,254 @@ function handleAlignToFace(args: Record<string, unknown>): unknown {
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
     mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
     shape_history: result.shape_history ?? [],
+  };
+}
+
+function handleFilletEdges(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  const targets = requireStringArray(args, 'targets');
+  const radius = args['radius'] as number;
+  if (typeof radius !== 'number' || radius <= 0) {
+    throwError(ErrorCodes.GE_FILLET_TOO_LARGE, 'radius must be a positive number', false);
+  }
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().filletEdges(partId, targets, radius);
+  session.registerShell(result.solid_id);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: result.solid_id,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    shape_history: result.shape_history ?? [],
+  };
+}
+
+function handleChamferEdges(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  const targets = requireStringArray(args, 'targets');
+  const distance = args['distance'] as number;
+  if (typeof distance !== 'number' || distance <= 0) {
+    throwError(ErrorCodes.GE_CHAMFER_TOO_LARGE, 'distance must be a positive number', false);
+  }
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().chamferEdges(partId, targets, distance);
+  session.registerShell(result.solid_id);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: result.solid_id,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    shape_history: result.shape_history ?? [],
+  };
+}
+
+function handleSimplifyBody(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  const unifyFaces = (args['unify_faces'] as boolean | undefined) ?? true;
+  const unifyEdges = (args['unify_edges'] as boolean | undefined) ?? true;
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().simplifyBody(partId, unifyFaces, unifyEdges);
+  session.registerShell(result.solid_id);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: result.solid_id,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    shape_history: result.shape_history ?? [],
+  };
+}
+
+function handleHealGeometryEx(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  const fixTolerances = (args['fix_tolerances'] as boolean | undefined) ?? true;
+  const fixWires = (args['fix_wires'] as boolean | undefined) ?? true;
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().healGeometryEx(partId, fixTolerances, fixWires);
+  session.registerShell(result.solid_id);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: result.solid_id,
+    heal_complete: result.heal_complete,
+    remaining_issues: result.remaining_issues,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    shape_history: result.shape_history ?? [],
+  };
+}
+
+function handleOffsetShape(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  const offsetValue = args['offset_value'] as number;
+  const tolerance = (args['tolerance'] as number | undefined) ?? 1e-4;
+  if (typeof offsetValue !== 'number') {
+    throwError(ErrorCodes.GE_BOOLEAN_FAILURE, 'offset_value must be a number', false);
+  }
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().offsetShape(partId, offsetValue, tolerance);
+  session.registerShell(result.solid_id);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: result.solid_id,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    shape_history: result.shape_history ?? [],
+  };
+}
+
+function handleDeleteFace(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  const targets = requireStringArray(args, 'targets');
+  const healRemaining = (args['heal_remaining'] as boolean | undefined) ?? true;
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().deleteFace(partId, targets, healRemaining);
+  for (const solidId of result.solid_ids) {
+    session.registerShell(solidId);
+  }
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_ids: result.solid_ids,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    mesh_urls: result.solid_ids.map(id => `${meshBaseUrl}/mesh/${id}.glb`),
+    shape_history: result.shape_history ?? [],
+  };
+}
+
+function handleSewFaces(args: Record<string, unknown>): unknown {
+  const targets = requireStringArray(args, 'targets');
+  const tolerance = (args['tolerance'] as number | undefined) ?? 1e-3;
+  const makeSolid = (args['make_solid'] as boolean | undefined) ?? false;
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().sewFaces(targets, tolerance, makeSolid);
+  session.registerShell(result.solid_id);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    shell_id: result.solid_id,
+    sew_complete: result.sew_complete,
+    free_edges: result.free_edges,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    shape_history: result.shape_history ?? [],
+  };
+}
+
+function handleCreateAssemblyDocument(args: Record<string, unknown>): unknown {
+  const ctx = resolveTransactionContext(args);
+  if (ctx.mode !== 'join') {
+    throwError(ErrorCodes.TRANSACTION_REQUIRED, 'create_assembly_document requires an active transaction', false);
+  }
+  const result = getGeometryBinding().createAssemblyDocument();
+  return {
+    assembly_id: result.assembly_id,
+    rollback_token: ctx.transactionId,
+  };
+}
+
+function handleAddAssemblyInstance(args: Record<string, unknown>): unknown {
+  const assemblyId = requireString(args, 'assembly_id');
+  const target = requireString(args, 'target');
+  const location = args['location'] as { translation: number[]; orientation: number[] } | undefined;
+  const ctx = resolveTransactionContext(args);
+  if (ctx.mode !== 'join') {
+    throwError(ErrorCodes.TRANSACTION_REQUIRED, 'add_assembly_instance requires an active transaction', false);
+  }
+
+  let tx = 0.0, ty = 0.0, tz = 0.0;
+  let qw = 1.0, qx = 0.0, qy = 0.0, qz = 0.0;
+
+  if (location) {
+    const { translation, orientation } = location;
+    if (Array.isArray(translation) && translation.length === 3) {
+      [tx, ty, tz] = translation;
+    }
+    if (Array.isArray(orientation) && orientation.length === 4) {
+      [qw, qx, qy, qz] = orientation;
+    }
+  }
+
+  const result = getGeometryBinding().addAssemblyInstance(
+    assemblyId,
+    target,
+    tx,
+    ty,
+    tz,
+    qw,
+    qx,
+    qy,
+    qz,
+  );
+
+  return {
+    component_id: result.component_id,
+    rollback_token: ctx.transactionId,
+  };
+}
+
+function handleMateRigid(args: Record<string, unknown>): unknown {
+  const assemblyId = requireString(args, 'assembly_id');
+  const srcFace = requireString(args, 'source_face');
+  const dstFace = requireString(args, 'destination_face');
+  const flipAlignment = (args['flip_alignment'] as boolean | undefined) ?? false;
+  const ctx = resolveTransactionContext(args);
+  if (ctx.mode !== 'join') {
+    throwError(ErrorCodes.TRANSACTION_REQUIRED, 'mate_rigid requires an active transaction', false);
+  }
+
+  const result = getGeometryBinding().mateRigid(assemblyId, srcFace, dstFace, flipAlignment);
+
+  return {
+    component_id: result.component_id,
+    location_matrix: result.location_matrix,
+    rollback_token: ctx.transactionId,
+  };
+}
+
+function handleListAssemblyTree(args: Record<string, unknown>): unknown {
+  const assemblyId = requireString(args, 'assembly_id');
+  const result = getGeometryBinding().listAssemblyTree(assemblyId);
+  return {
+    assembly_id: result.assembly_id,
+    root: result.root,
   };
 }
