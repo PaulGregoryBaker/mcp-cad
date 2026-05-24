@@ -1358,6 +1358,88 @@ public:
     }
   }
 
+  TransformResult translateBody(const ShellId& solidId, double dx, double dy, double dz, bool keepOriginal) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    gp_Vec vec(dx, dy, dz);
+    gp_Trsf trsf;
+    trsf.SetTranslation(vec);
+    return applyTransformLocked(solidId, trsf, keepOriginal, "translate_body");
+  }
+
+  TransformResult rotateBody(const ShellId& solidId, double axisPointX, double axisPointY, double axisPointZ, double axisDirX, double axisDirY, double axisDirZ, double angleDeg, bool keepOriginal) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    gp_Pnt pivot(axisPointX, axisPointY, axisPointZ);
+    gp_Dir dir(axisDirX, axisDirY, axisDirZ);
+    gp_Ax1 axis(pivot, dir);
+    double angleRad = angleDeg * M_PI / 180.0;
+    gp_Trsf trsf;
+    trsf.SetRotation(axis, angleRad);
+    return applyTransformLocked(solidId, trsf, keepOriginal, "rotate_body");
+  }
+
+  TransformResult mirrorBody(const ShellId& solidId, double planeOriginX, double planeOriginY, double planeOriginZ, double planeNormalX, double planeNormalY, double planeNormalZ, bool keepOriginal) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    gp_Pnt origin(planeOriginX, planeOriginY, planeOriginZ);
+    gp_Dir normal(planeNormalX, planeNormalY, planeNormalZ);
+    gp_Ax2 plane(origin, normal);
+    gp_Trsf trsf;
+    trsf.SetMirror(plane);
+    return applyTransformLocked(solidId, trsf, keepOriginal, "mirror_body");
+  }
+
+  TransformResult scaleBody(const ShellId& solidId, double originX, double originY, double originZ, double scaleFactor, bool keepOriginal) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (scaleFactor <= 0.0) {
+      throw GeometryError("GE_SCALE_NON_UNIFORM", "Scale factor must be greater than zero", true, "");
+    }
+    gp_Pnt center(originX, originY, originZ);
+    gp_Trsf trsf;
+    trsf.SetScale(center, scaleFactor);
+    return applyTransformLocked(solidId, trsf, keepOriginal, "scale_body");
+  }
+
+  TransformResult alignToFace(const std::string& sourceFaceId, const std::string& destFaceId, bool flipNormal, bool keepOriginal) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    try {
+      TopoDS_Shape srcShape = lookupEntityLocked(sourceFaceId);
+      TopoDS_Shape dstShape = lookupEntityLocked(destFaceId);
+      if (srcShape.ShapeType() != TopAbs_FACE || dstShape.ShapeType() != TopAbs_FACE) {
+        throw GeometryError("GE_ALIGN_UNSUPPORTED", "Both inputs must be faces for alignment", true, "");
+      }
+      const TopoDS_Face& srcFace = TopoDS::Face(srcShape);
+      const TopoDS_Face& dstFace = TopoDS::Face(dstShape);
+
+      Handle(Geom_Surface) srcSurf = BRep_Tool::Surface(srcFace);
+      Handle(Geom_Surface) dstSurf = BRep_Tool::Surface(dstFace);
+      if (srcSurf.IsNull() || !srcSurf->IsKind(STANDARD_TYPE(Geom_Plane)) ||
+          dstSurf.IsNull() || !dstSurf->IsKind(STANDARD_TYPE(Geom_Plane))) {
+        throw GeometryError("GE_ALIGN_UNSUPPORTED", "Both faces must be planar for face alignment", true, "");
+      }
+      Handle(Geom_Plane) srcPlane = Handle(Geom_Plane)::DownCast(srcSurf);
+      Handle(Geom_Plane) dstPlane = Handle(Geom_Plane)::DownCast(dstSurf);
+
+      gp_Ax3 srcAx3 = srcPlane->Position();
+      gp_Ax3 dstAx3 = dstPlane->Position();
+
+      if (flipNormal) {
+        dstAx3.ZReverse();
+      }
+
+      gp_Trsf trsf;
+      trsf.SetTransformation(srcAx3, dstAx3);
+
+      ShellId parentId = findParentShellIdLocked(sourceFaceId);
+      return applyTransformLocked(parentId, trsf, keepOriginal, "align_to_face");
+
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_BOOLEAN_FAILURE",
+                          std::string("OCCT exception during align: ") + e.GetMessageString(),
+                          true, "rollback");
+    }
+  }
+
   void clearSnapshots() override {
     std::lock_guard<std::mutex> lock(mutex_);
     snapshots_.clear();
@@ -1450,6 +1532,89 @@ private:
     snapshotShells_[snap.snapshotId] = shells_;
     snapshotUnfolds_[snap.snapshotId] = unfolds_;
     return snap.snapshotId;
+  }
+
+  ShellId findParentShellIdLocked(const std::string& subShapeId) const {
+    for (const auto& kv : shells_) {
+      if (kv.first == subShapeId) return kv.first;
+      TopExp_Explorer exp(kv.second.shape, TopAbs_FACE);
+      for (; exp.More(); exp.Next()) {
+        if (shapeId(exp.Current()) == subShapeId) return kv.first;
+      }
+      TopExp_Explorer expEdge(kv.second.shape, TopAbs_EDGE);
+      for (; expEdge.More(); expEdge.Next()) {
+        if (shapeId(expEdge.Current()) == subShapeId) return kv.first;
+      }
+    }
+    for (const auto& kv : solids_) {
+      if (kv.first == subShapeId) return kv.first;
+      TopExp_Explorer exp(kv.second.shape, TopAbs_FACE);
+      for (; exp.More(); exp.Next()) {
+        if (shapeId(exp.Current()) == subShapeId) return kv.first;
+      }
+      TopExp_Explorer expEdge(kv.second.shape, TopAbs_EDGE);
+      for (; expEdge.More(); expEdge.Next()) {
+        if (shapeId(expEdge.Current()) == subShapeId) return kv.first;
+      }
+    }
+    throw GeometryError("GE_SOLID_NOT_FOUND", "Parent shell/solid containing face/edge not found: " + subShapeId, false, "");
+  }
+
+  TransformResult applyTransformLocked(const ShellId& solidId, const gp_Trsf& trsf, bool keepOriginal, const std::string& opName) {
+    TopoDS_Shape originalShape;
+    bool isSolid = false;
+    auto shellIt = shells_.find(solidId);
+    auto solidIt = solids_.find(solidId);
+    if (shellIt != shells_.end()) {
+      originalShape = shellIt->second.shape;
+    } else if (solidIt != solids_.end()) {
+      originalShape = solidIt->second.shape;
+      isSolid = true;
+    } else {
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell/solid not found: " + solidId, false, "");
+    }
+
+    SnapshotId token = createSnapshotLocked("before " + opName + " on " + solidId);
+
+    try {
+      BRepBuilderAPI_Transform transformer(originalShape, trsf, Standard_True);
+      transformer.Build();
+      if (!transformer.IsDone()) {
+        throw GeometryError("GE_BOOLEAN_FAILURE", "Transform failed", true, "rollback");
+      }
+
+      TopoDS_Shape transformedShape = transformer.Shape();
+      BRepCheck_Analyzer checker(transformedShape);
+      if (!checker.IsValid()) {
+        throw GeometryError("GE_BOOLEAN_FAILURE", "Transformed shape is invalid", true, "rollback");
+      }
+
+      auto history = captureHistory(transformer, originalShape, [](const TopoDS_Shape& s) { return shapeId(s); }, opName);
+
+      if (!keepOriginal) {
+        if (isSolid) {
+          solids_.erase(solidId);
+        } else {
+          shells_.erase(solidId);
+        }
+      }
+
+      ShellId resultId = generateUUID();
+      if (isSolid) {
+        solids_[resultId] = SolidState{resultId, transformedShape};
+      } else {
+        shells_[resultId] = ShellState{resultId, "", transformedShape};
+      }
+
+      return TransformResult{resultId, token, std::move(history)};
+
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_BOOLEAN_FAILURE",
+                          std::string("OCCT exception during transform: ") + e.GetMessageString(),
+                          true, "rollback");
+    }
   }
 
   void buildTopologyGraph(const TopoDS_Shape& shape, TopologyGraph& graph) {

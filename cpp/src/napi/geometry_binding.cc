@@ -1189,6 +1189,125 @@ Napi::Value IntersectBodies(const Napi::CallbackInfo& info) {
   return env.Undefined();
 }
 
+static Napi::Object makeTransformResultObject(Napi::Env env, const TransformResult& res) {
+  Napi::Object result = Napi::Object::New(env);
+  result.Set("solid_id",        Napi::String::New(env, res.solidId));
+  result.Set("rollback_token", Napi::String::New(env, res.rollbackToken));
+  Napi::Array histArr = Napi::Array::New(env, res.shapeHistory.size());
+  for (size_t i = 0; i < res.shapeHistory.size(); ++i) {
+    Napi::Object rec = Napi::Object::New(env);
+    rec.Set("verdict",         Napi::String::New(env, res.shapeHistory[i].verdict));
+    rec.Set("original_id",     Napi::String::New(env, res.shapeHistory[i].originalId));
+    rec.Set("new_id",          Napi::String::New(env, res.shapeHistory[i].newId));
+    rec.Set("operation_label", Napi::String::New(env, res.shapeHistory[i].operationLabel));
+    histArr.Set(static_cast<uint32_t>(i), rec);
+  }
+  result.Set("shape_history", histArr);
+  return result;
+}
+
+Napi::Value TranslateBody(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 5) {
+    Napi::TypeError::New(env, "translateBody(solidId: string, dx: number, dy: number, dz: number, keepOriginal: boolean)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string solidId = info[0].As<Napi::String>().Utf8Value();
+  double dx = info[1].As<Napi::Number>().DoubleValue();
+  double dy = info[2].As<Napi::Number>().DoubleValue();
+  double dz = info[3].As<Napi::Number>().DoubleValue();
+  bool keepOriginal = info[4].As<Napi::Boolean>().Value();
+
+  TRY_GEOMETRY(env, {
+    TransformResult res = svc().translateBody(solidId, dx, dy, dz, keepOriginal);
+    return makeTransformResultObject(env, res);
+  })
+  return env.Undefined();
+}
+
+Napi::Value RotateBody(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 9) {
+    Napi::TypeError::New(env, "rotateBody(solidId: string, px: number, py: number, pz: number, dx: number, dy: number, dz: number, angleDeg: number, keepOriginal: boolean)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string solidId = info[0].As<Napi::String>().Utf8Value();
+  double px = info[1].As<Napi::Number>().DoubleValue();
+  double py = info[2].As<Napi::Number>().DoubleValue();
+  double pz = info[3].As<Napi::Number>().DoubleValue();
+  double dx = info[4].As<Napi::Number>().DoubleValue();
+  double dy = info[5].As<Napi::Number>().DoubleValue();
+  double dz = info[6].As<Napi::Number>().DoubleValue();
+  double angleDeg = info[7].As<Napi::Number>().DoubleValue();
+  bool keepOriginal = info[8].As<Napi::Boolean>().Value();
+
+  TRY_GEOMETRY(env, {
+    TransformResult res = svc().rotateBody(solidId, px, py, pz, dx, dy, dz, angleDeg, keepOriginal);
+    return makeTransformResultObject(env, res);
+  })
+  return env.Undefined();
+}
+
+Napi::Value MirrorBody(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 8) {
+    Napi::TypeError::New(env, "mirrorBody(solidId: string, ox: number, oy: number, oz: number, nx: number, ny: number, nz: number, keepOriginal: boolean)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string solidId = info[0].As<Napi::String>().Utf8Value();
+  double ox = info[1].As<Napi::Number>().DoubleValue();
+  double oy = info[2].As<Napi::Number>().DoubleValue();
+  double oz = info[3].As<Napi::Number>().DoubleValue();
+  double nx = info[4].As<Napi::Number>().DoubleValue();
+  double ny = info[5].As<Napi::Number>().DoubleValue();
+  double nz = info[6].As<Napi::Number>().DoubleValue();
+  bool keepOriginal = info[7].As<Napi::Boolean>().Value();
+
+  TRY_GEOMETRY(env, {
+    TransformResult res = svc().mirrorBody(solidId, ox, oy, oz, nx, ny, nz, keepOriginal);
+    return makeTransformResultObject(env, res);
+  })
+  return env.Undefined();
+}
+
+Napi::Value ScaleBody(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 6) {
+    Napi::TypeError::New(env, "scaleBody(solidId: string, ox: number, oy: number, oz: number, factor: number, keepOriginal: boolean)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string solidId = info[0].As<Napi::String>().Utf8Value();
+  double ox = info[1].As<Napi::Number>().DoubleValue();
+  double oy = info[2].As<Napi::Number>().DoubleValue();
+  double oz = info[3].As<Napi::Number>().DoubleValue();
+  double factor = info[4].As<Napi::Number>().DoubleValue();
+  bool keepOriginal = info[5].As<Napi::Boolean>().Value();
+
+  TRY_GEOMETRY(env, {
+    TransformResult res = svc().scaleBody(solidId, ox, oy, oz, factor, keepOriginal);
+    return makeTransformResultObject(env, res);
+  })
+  return env.Undefined();
+}
+
+Napi::Value AlignToFace(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 4) {
+    Napi::TypeError::New(env, "alignToFace(srcFaceId: string, dstFaceId: string, flipNormal: boolean, keepOriginal: boolean)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string srcFaceId = info[0].As<Napi::String>().Utf8Value();
+  std::string dstFaceId = info[1].As<Napi::String>().Utf8Value();
+  bool flipNormal = info[2].As<Napi::Boolean>().Value();
+  bool keepOriginal = info[3].As<Napi::Boolean>().Value();
+
+  TRY_GEOMETRY(env, {
+    TransformResult res = svc().alignToFace(srcFaceId, dstFaceId, flipNormal, keepOriginal);
+    return makeTransformResultObject(env, res);
+  })
+  return env.Undefined();
+}
+
 // ─── Registration ─────────────────────────────────────────────────────────────
 
 void RegisterGeometryMethods(Napi::Env env, Napi::Object exports) {
@@ -1227,6 +1346,12 @@ void RegisterGeometryMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("fuseBodies",            Napi::Function::New(env, FuseBodies));
   exports.Set("cutBodies",             Napi::Function::New(env, CutBodies));
   exports.Set("intersectBodies",       Napi::Function::New(env, IntersectBodies));
+
+  exports.Set("translateBody",         Napi::Function::New(env, TranslateBody));
+  exports.Set("rotateBody",            Napi::Function::New(env, RotateBody));
+  exports.Set("mirrorBody",            Napi::Function::New(env, MirrorBody));
+  exports.Set("scaleBody",             Napi::Function::New(env, ScaleBody));
+  exports.Set("alignToFace",           Napi::Function::New(env, AlignToFace));
 }
 
 }  // namespace mcp_cad

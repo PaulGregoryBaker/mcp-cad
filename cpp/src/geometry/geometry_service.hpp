@@ -536,6 +536,13 @@ public:
   virtual FuseResult           fuseBodies(const std::vector<ShellId>& tools, double fuzzyTolerance) = 0;
   virtual CutResult            cutBodies(const ShellId& blank, const std::vector<ShellId>& tools, bool keepTools) = 0;
   virtual IntersectResult      intersectBodies(const ShellId& a, const ShellId& b) = 0;
+
+  // ── Feature 006-geometry-primitives US3 (Geometric Transformations) ─────────
+  virtual TransformResult      translateBody(const ShellId& solidId, double dx, double dy, double dz, bool keepOriginal) = 0;
+  virtual TransformResult      rotateBody(const ShellId& solidId, double axOriginX, double axOriginY, double axOriginZ, double axDirX, double axDirY, double axDirZ, double angleDeg, bool keepOriginal) = 0;
+  virtual TransformResult      mirrorBody(const ShellId& solidId, double plOriginX, double plOriginY, double plOriginZ, double plNormX, double plNormY, double plNormZ, bool keepOriginal) = 0;
+  virtual TransformResult      scaleBody(const ShellId& solidId, double originX, double originY, double originZ, double scaleFactor, bool keepOriginal) = 0;
+  virtual TransformResult      alignToFace(const std::string& sourceFaceId, const std::string& destFaceId, bool flipNormal, bool keepOriginal) = 0;
 };
 
 }  // namespace mcp_cad

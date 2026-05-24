@@ -753,6 +753,81 @@ export function getToolDefinitions(): object[] {
         },
         required: ['target', 'return_type']
       }
+    },
+    {
+      name: 'translate_body',
+      description: 'Moves one or more bodies along a 3D vector. Produces a new body id per target. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          targets:        { type: 'array', items: { type: 'string' }, minItems: 1, description: 'IDs of bodies to translate' },
+          vector:         { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[dx, dy, dz] translation vector in mm' },
+          keep_original:  { type: 'boolean', default: false, description: 'If true, keep the original body' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['targets', 'vector', 'transaction_id']
+      }
+    },
+    {
+      name: 'rotate_body',
+      description: 'Rotates one or more bodies around a defined axis. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          targets:          { type: 'array', items: { type: 'string' }, minItems: 1, description: 'IDs of bodies to rotate' },
+          axis_origin:      { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[x, y, z] of a point on the rotation axis (mm)' },
+          axis_direction:   { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[dx, dy, dz] direction vector of the axis' },
+          angle_degrees:    { type: 'number', description: 'Rotation angle in degrees (right-hand rule)' },
+          keep_original:    { type: 'boolean', default: false, description: 'If true, keep the original body' },
+          transaction_id:   { type: 'string' }
+        },
+        required: ['targets', 'axis_origin', 'axis_direction', 'angle_degrees', 'transaction_id']
+      }
+    },
+    {
+      name: 'mirror_body',
+      description: 'Mirrors one or more bodies across a defined plane. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          targets:        { type: 'array', items: { type: 'string' }, minItems: 1, description: 'IDs of bodies to mirror' },
+          plane_origin:   { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[x, y, z] of a point on the mirror plane (mm)' },
+          plane_normal:   { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[nx, ny, nz] plane normal' },
+          keep_original:  { type: 'boolean', default: false, description: 'If true, keep the original body' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['targets', 'plane_origin', 'plane_normal', 'transaction_id']
+      }
+    },
+    {
+      name: 'scale_body',
+      description: 'Uniformly scales one or more bodies relative to a fixed origin. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          targets:        { type: 'array', items: { type: 'string' }, minItems: 1, description: 'IDs of bodies to scale' },
+          origin:         { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[x, y, z] scale origin (mm)' },
+          scale_factor:   { type: 'number', minimum: 0.0001, description: 'Uniform scale factor (> 0)' },
+          keep_original:  { type: 'boolean', default: false, description: 'If true, keep the original body' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['targets', 'origin', 'scale_factor', 'transaction_id']
+      }
+    },
+    {
+      name: 'align_to_face',
+      description: 'Repositions the body containing source_face so that source_face is coincident with destination_face. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          source_face:    { type: 'string', description: 'Face ID on the body to move' },
+          destination_face: { type: 'string', description: 'Target face ID (this body does not move)' },
+          flip_normal:    { type: 'boolean', default: false, description: 'If true, source face normal is flipped before alignment' },
+          keep_original:  { type: 'boolean', default: false, description: 'If true, keep the original body' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['source_face', 'destination_face', 'transaction_id']
+      }
     }
   ];
 }
@@ -789,6 +864,21 @@ export async function dispatchTool(
 
       case 'explore_topology':
         return handleExploreTopology(args);
+
+      case 'translate_body':
+        return handleTranslateBody(args);
+
+      case 'rotate_body':
+        return handleRotateBody(args);
+
+      case 'mirror_body':
+        return handleMirrorBody(args);
+
+      case 'scale_body':
+        return handleScaleBody(args);
+
+      case 'align_to_face':
+        return handleAlignToFace(args);
 
       case 'decompose_volume':
         return handleDecomposeVolume(args);
@@ -2028,5 +2118,186 @@ function handleRemoveProtrusions(args: Record<string, unknown>): unknown {
     protrusion_bboxes: result.protrusion_bboxes,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
     mesh_urls: allIds.map(id => `${meshBaseUrl}/mesh/${id}.glb`),
+  };
+}
+
+function handleTranslateBody(args: Record<string, unknown>): unknown {
+  const targets = requireStringArray(args, 'targets');
+  const vec = args['vector'] as number[];
+  if (!Array.isArray(vec) || vec.length < 3) {
+    throwError(ErrorCodes.GE_BOOLEAN_FAILURE, 'vector must be an array of 3 numbers', false);
+  }
+  const keepOriginal = (args['keep_original'] as boolean | undefined) ?? false;
+  const ctx = resolveTransactionContext(args);
+
+  const results = [];
+  for (const target of targets) {
+    const res = getGeometryBinding().translateBody(target, vec[0], vec[1], vec[2], keepOriginal);
+    results.push(res);
+    session.registerShell(res.solid_id);
+    if (ctx.mode === 'join') {
+      transactionRegistry.appendHistory(ctx.transactionId, res.shape_history ?? []);
+    }
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: results.length === 1 ? results[0].solid_id : results[results.length - 1].solid_id,
+    solid_ids: results.map(r => r.solid_id),
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : results[0].rollback_token,
+    mesh_urls: results.map(r => `${meshBaseUrl}/mesh/${r.solid_id}.glb`),
+    shape_history: results.flatMap(r => r.shape_history ?? []),
+  };
+}
+
+function handleRotateBody(args: Record<string, unknown>): unknown {
+  const targets = requireStringArray(args, 'targets');
+  const axisOrigin = args['axis_origin'] as number[];
+  const axisDirection = args['axis_direction'] as number[];
+  const angleDeg = args['angle_degrees'] as number;
+  if (!Array.isArray(axisOrigin) || axisOrigin.length < 3) {
+    throwError(ErrorCodes.GE_BOOLEAN_FAILURE, 'axis_origin must be an array of 3 numbers', false);
+  }
+  if (!Array.isArray(axisDirection) || axisDirection.length < 3) {
+    throwError(ErrorCodes.GE_BOOLEAN_FAILURE, 'axis_direction must be an array of 3 numbers', false);
+  }
+  if (typeof angleDeg !== 'number') {
+    throwError(ErrorCodes.GE_BOOLEAN_FAILURE, 'angle_degrees must be a number', false);
+  }
+  const keepOriginal = (args['keep_original'] as boolean | undefined) ?? false;
+  const ctx = resolveTransactionContext(args);
+
+  const results = [];
+  for (const target of targets) {
+    const res = getGeometryBinding().rotateBody(
+      target,
+      axisOrigin[0],
+      axisOrigin[1],
+      axisOrigin[2],
+      axisDirection[0],
+      axisDirection[1],
+      axisDirection[2],
+      angleDeg,
+      keepOriginal,
+    );
+    results.push(res);
+    session.registerShell(res.solid_id);
+    if (ctx.mode === 'join') {
+      transactionRegistry.appendHistory(ctx.transactionId, res.shape_history ?? []);
+    }
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: results.length === 1 ? results[0].solid_id : results[results.length - 1].solid_id,
+    solid_ids: results.map(r => r.solid_id),
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : results[0].rollback_token,
+    mesh_urls: results.map(r => `${meshBaseUrl}/mesh/${r.solid_id}.glb`),
+    shape_history: results.flatMap(r => r.shape_history ?? []),
+  };
+}
+
+function handleMirrorBody(args: Record<string, unknown>): unknown {
+  const targets = requireStringArray(args, 'targets');
+  const planeOrigin = args['plane_origin'] as number[];
+  const planeNormal = args['plane_normal'] as number[];
+  if (!Array.isArray(planeOrigin) || planeOrigin.length < 3) {
+    throwError(ErrorCodes.GE_BOOLEAN_FAILURE, 'plane_origin must be an array of 3 numbers', false);
+  }
+  if (!Array.isArray(planeNormal) || planeNormal.length < 3) {
+    throwError(ErrorCodes.GE_BOOLEAN_FAILURE, 'plane_normal must be an array of 3 numbers', false);
+  }
+  const keepOriginal = (args['keep_original'] as boolean | undefined) ?? false;
+  const ctx = resolveTransactionContext(args);
+
+  const results = [];
+  for (const target of targets) {
+    const res = getGeometryBinding().mirrorBody(
+      target,
+      planeOrigin[0],
+      planeOrigin[1],
+      planeOrigin[2],
+      planeNormal[0],
+      planeNormal[1],
+      planeNormal[2],
+      keepOriginal,
+    );
+    results.push(res);
+    session.registerShell(res.solid_id);
+    if (ctx.mode === 'join') {
+      transactionRegistry.appendHistory(ctx.transactionId, res.shape_history ?? []);
+    }
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: results.length === 1 ? results[0].solid_id : results[results.length - 1].solid_id,
+    solid_ids: results.map(r => r.solid_id),
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : results[0].rollback_token,
+    mesh_urls: results.map(r => `${meshBaseUrl}/mesh/${r.solid_id}.glb`),
+    shape_history: results.flatMap(r => r.shape_history ?? []),
+  };
+}
+
+function handleScaleBody(args: Record<string, unknown>): unknown {
+  const targets = requireStringArray(args, 'targets');
+  const origin = args['origin'] as number[];
+  const scaleFactor = args['scale_factor'] as number;
+  if (!Array.isArray(origin) || origin.length < 3) {
+    throwError(ErrorCodes.GE_BOOLEAN_FAILURE, 'origin must be an array of 3 numbers', false);
+  }
+  if (typeof scaleFactor !== 'number' || scaleFactor <= 0) {
+    throwError(ErrorCodes.GE_SCALE_NON_UNIFORM, 'scale_factor must be a positive number', false);
+  }
+  const keepOriginal = (args['keep_original'] as boolean | undefined) ?? false;
+  const ctx = resolveTransactionContext(args);
+
+  const results = [];
+  for (const target of targets) {
+    const res = getGeometryBinding().scaleBody(
+      target,
+      origin[0],
+      origin[1],
+      origin[2],
+      scaleFactor,
+      keepOriginal,
+    );
+    results.push(res);
+    session.registerShell(res.solid_id);
+    if (ctx.mode === 'join') {
+      transactionRegistry.appendHistory(ctx.transactionId, res.shape_history ?? []);
+    }
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: results.length === 1 ? results[0].solid_id : results[results.length - 1].solid_id,
+    solid_ids: results.map(r => r.solid_id),
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : results[0].rollback_token,
+    mesh_urls: results.map(r => `${meshBaseUrl}/mesh/${r.solid_id}.glb`),
+    shape_history: results.flatMap(r => r.shape_history ?? []),
+  };
+}
+
+function handleAlignToFace(args: Record<string, unknown>): unknown {
+  const srcFace = requireString(args, 'source_face');
+  const dstFace = requireString(args, 'destination_face');
+  const flipNormal = (args['flip_normal'] as boolean | undefined) ?? false;
+  const keepOriginal = (args['keep_original'] as boolean | undefined) ?? false;
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().alignToFace(srcFace, dstFace, flipNormal, keepOriginal);
+  session.registerShell(result.solid_id);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: result.solid_id,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    shape_history: result.shape_history ?? [],
   };
 }

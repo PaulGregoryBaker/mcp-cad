@@ -35,6 +35,7 @@ import type {
   FuseResult,
   CutResult,
   IntersectResult,
+  TransformResult,
 } from './types';
 
 // ─── Addon interface ──────────────────────────────────────────────────────────
@@ -77,6 +78,48 @@ export interface GeometryAddon {
   fuseBodies(tools: string[], fuzzyTolerance: number): FuseResult;
   cutBodies(blank: string, tools: string[], keepTools: boolean): CutResult;
   intersectBodies(a: string, b: string): IntersectResult;
+  translateBody(
+    solidId: string,
+    dx: number,
+    dy: number,
+    dz: number,
+    keepOriginal: boolean,
+  ): TransformResult;
+  rotateBody(
+    solidId: string,
+    axisPointX: number,
+    axisPointY: number,
+    axisPointZ: number,
+    axisDirX: number,
+    axisDirY: number,
+    axisDirZ: number,
+    angleDeg: number,
+    keepOriginal: boolean,
+  ): TransformResult;
+  mirrorBody(
+    solidId: string,
+    planeOriginX: number,
+    planeOriginY: number,
+    planeOriginZ: number,
+    planeNormalX: number,
+    planeNormalY: number,
+    planeNormalZ: number,
+    keepOriginal: boolean,
+  ): TransformResult;
+  scaleBody(
+    solidId: string,
+    originX: number,
+    originY: number,
+    originZ: number,
+    scaleFactor: number,
+    keepOriginal: boolean,
+  ): TransformResult;
+  alignToFace(
+    srcFaceId: string,
+    dstFaceId: string,
+    flipNormal: boolean,
+    keepOriginal: boolean,
+  ): TransformResult;
   computeIntersections(partIds: string[]): ClashReport;
   computeGaps(partAId: string, partBId: string, maxDistanceThresholdMm: number): GapReport;
   trimBodyWithPlane(partId: string, plane: CuttingPlane, keepPositiveSide: boolean): TrimBodyResult;
@@ -382,6 +425,102 @@ export class GeometryBinding {
   intersectBodies(a: string, b: string): IntersectResult {
     try {
       return this.addon.intersectBodies(a, b);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  translateBody(
+    solidId: string,
+    dx: number,
+    dy: number,
+    dz: number,
+    keepOriginal: boolean,
+  ): TransformResult {
+    try {
+      return this.addon.translateBody(solidId, dx, dy, dz, keepOriginal);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  rotateBody(
+    solidId: string,
+    axisPointX: number,
+    axisPointY: number,
+    axisPointZ: number,
+    axisDirX: number,
+    axisDirY: number,
+    axisDirZ: number,
+    angleDeg: number,
+    keepOriginal: boolean,
+  ): TransformResult {
+    try {
+      return this.addon.rotateBody(
+        solidId,
+        axisPointX,
+        axisPointY,
+        axisPointZ,
+        axisDirX,
+        axisDirY,
+        axisDirZ,
+        angleDeg,
+        keepOriginal,
+      );
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  mirrorBody(
+    solidId: string,
+    planeOriginX: number,
+    planeOriginY: number,
+    planeOriginZ: number,
+    planeNormalX: number,
+    planeNormalY: number,
+    planeNormalZ: number,
+    keepOriginal: boolean,
+  ): TransformResult {
+    try {
+      return this.addon.mirrorBody(
+        solidId,
+        planeOriginX,
+        planeOriginY,
+        planeOriginZ,
+        planeNormalX,
+        planeNormalY,
+        planeNormalZ,
+        keepOriginal,
+      );
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  scaleBody(
+    solidId: string,
+    originX: number,
+    originY: number,
+    originZ: number,
+    scaleFactor: number,
+    keepOriginal: boolean,
+  ): TransformResult {
+    try {
+      return this.addon.scaleBody(solidId, originX, originY, originZ, scaleFactor, keepOriginal);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  alignToFace(
+    srcFaceId: string,
+    dstFaceId: string,
+    flipNormal: boolean,
+    keepOriginal: boolean,
+  ): TransformResult {
+    try {
+      return this.addon.alignToFace(srcFaceId, dstFaceId, flipNormal, keepOriginal);
     } catch (err) {
       throw toStructuredError(err);
     }
