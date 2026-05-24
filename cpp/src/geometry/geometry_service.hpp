@@ -543,6 +543,14 @@ public:
   virtual TransformResult      mirrorBody(const ShellId& solidId, double plOriginX, double plOriginY, double plOriginZ, double plNormX, double plNormY, double plNormZ, bool keepOriginal) = 0;
   virtual TransformResult      scaleBody(const ShellId& solidId, double originX, double originY, double originZ, double scaleFactor, bool keepOriginal) = 0;
   virtual TransformResult      alignToFace(const std::string& sourceFaceId, const std::string& destFaceId, bool flipNormal, bool keepOriginal) = 0;
+
+  // ── Feature 006-geometry-primitives US4 (Direct Edit Operations) ────────────
+  virtual FilletResult         filletEdges(const ShellId& partId, const std::vector<std::string>& edgeIds, double radiusMm) = 0;
+  virtual ChamferResult        chamferEdges(const ShellId& partId, const std::vector<std::string>& edgeIds, double distanceMm) = 0;
+  virtual SimplifyResult       simplifyBody(const ShellId& partId, bool unifyFaces, bool unifyEdges) = 0;
+  virtual HealExResult         healGeometryEx(const ShellId& partId, bool fixTolerances, bool fixWires) = 0;
+  virtual OffsetShapeResult    offsetShape(const ShellId& partId, double offsetValue, double tolerance) = 0;
+  virtual DeleteFaceResult     deleteFace(const ShellId& partId, const std::vector<std::string>& faceIds, bool healRemaining) = 0;
 };
 
 }  // namespace mcp_cad
