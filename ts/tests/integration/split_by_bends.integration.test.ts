@@ -79,7 +79,7 @@ console.log('split_body_by_bends.hollow cube tests starting...');
   });
 
   
-  it('two hollow cubes → thin_solid mode, 12 panels, 0 protrusions', async () => {
+  it('two hollow cubes → thin_solid mode, 12 panels, 4 bridge flanges', async () => {
     if (!addonAvailable) return;
 console.log('split_body_by_bends.two hollow cubes tests starting...');
 
@@ -113,10 +113,10 @@ console.log('split_body_by_bends.two hollow cubes tests starting...');
 
     expect(result.detected_mode).toBe('thin_solid');
     expect(result.panel_count).toBe(12);
-    // testcube has no real tab/boss features. The previous expectation of 4
-    // was driven by a misdetection bug (outer wall slabs being misclassified
-    // as plate-style protrusions); see isPanelSized in geometry_service.cc.
-    expect(result.protrusion_count).toBe(0);
+    // testcube has 4 real bridge flanges connecting the inner and outer cubes.
+    // Option-3 in detectProtrusions detects these as anti-parallel interior
+    // face-group pairs (thin slabs) using bounded-box extraction.
+    expect(result.protrusion_count).toBe(4);
     expect(result.panel_ids).toHaveLength(12);
     expect(result.rollback_token).toBeDefined();
   });
@@ -154,7 +154,7 @@ console.log('split_body_by_bends.two hollow cubes tests starting...');
       protrusion_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>;
     };
     expect(result.panel_count).toBe(12);
-    expect(result.protrusion_count).toBe(0);
+    expect(result.protrusion_count).toBe(4);
 
     const bboxVolume = (b: { x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }) =>
       (b.x_max - b.x_min) * (b.y_max - b.y_min) * (b.z_max - b.z_min);
@@ -199,15 +199,20 @@ console.log('split_body_by_bends.two hollow cubes tests starting...');
       console.log(`  [${i}] ${fmtBbox(b)}`);
     });
 
-    // Each protrusion must be much smaller than the largest panel.
-    // A real protrusion's volume should be < 25% of the largest panel's volume.
+    // Each protrusion must be a localized feature, not panel-sized.
+    // Volume cap (25%) catches plate-style misdetections where a half-space
+    // cut over-extracts an entire wall slab. The max-dimension cap (85%)
+    // accommodates bridge flanges that legitimately span the inner cube's
+    // full height (150 mm of the 200 mm outer assembly, ~75%) plus a small
+    // boolean-extraction bleed margin — anything beyond 85% indicates the
+    // extraction has wrapped around the outer hull.
     for (let i = 0; i < result.protrusion_bboxes.length; i++) {
       const pVol = bboxVolume(result.protrusion_bboxes[i]);
       const pMaxDim = maxDim(result.protrusion_bboxes[i]);
       expect(pVol, `protrusion ${i} volume ${pVol.toFixed(0)} should be < 25% of largest panel volume ${largestPanelVolume.toFixed(0)}`)
         .toBeLessThan(largestPanelVolume * 0.25);
-      expect(pMaxDim, `protrusion ${i} max-dimension ${pMaxDim.toFixed(1)} should be < 75% of largest panel max-dimension ${largestPanelMaxDim.toFixed(1)}`)
-        .toBeLessThan(largestPanelMaxDim * 0.75);
+      expect(pMaxDim, `protrusion ${i} max-dimension ${pMaxDim.toFixed(1)} should be < 85% of largest panel max-dimension ${largestPanelMaxDim.toFixed(1)}`)
+        .toBeLessThan(largestPanelMaxDim * 0.85);
     }
   });
 

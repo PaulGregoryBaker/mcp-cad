@@ -77,6 +77,7 @@
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
+#include <BRepBuilderAPI_MakeSolid.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
 #include <BRepTools_ReShape.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
@@ -100,6 +101,7 @@
 #include <chrono>
 #include <random>
 #include <algorithm>
+#include <array>
 #include <set>
 #include <iomanip>
 #include <functional>
@@ -1352,6 +1354,11 @@ private:
     double           tabVMin = 0.0;
     double           tabVMax = 0.0;
     double           tabHeight = 0.0; // cap-to-host offset along panelNormal
+    // When >=0, override the default 0.5 mm pad/bleed used by extractProtrusion.
+    // Option-3 bridge flanges sit flush against neighbouring panels; the default
+    // pad bleeds into those panels and inflates the extracted protrusion bbox.
+    double           tightPad   = -1.0;
+    double           tightBleed = -1.0;
   };
 
   // T017 — Detect protrusion candidates before any panel cutting.
@@ -1730,6 +1737,147 @@ private:
       claimedPanelGroup[bestHost] = true;
     }
 
+    // ── Option-3 pass: detect bridge/flange protrusions — anti-parallel
+    // interior face groups that form a thin slab (e.g. connecting flanges
+    // between two concentric hollow cubes). Neither BFS nor Option-2 can
+    // detect these because both exposed faces are primary groups and they
+    // are anti-parallel, not parallel. We pair them by:
+    //   1. Both interior (hullRatio < kInteriorThreshold)
+    //   2. Anti-parallel normals (dot < -0.85)
+    //   3. Normal-direction offset ≤ maxThicknessMm
+    //   4. Similar areas (within 3:1)
+    //   5. Overlapping 2-D footprints (rules out false pairs at same Y but
+    //      different X, e.g. flanges on opposite sides of the solid)
+    // Helper: find all interior groups coplanar AND topologically connected
+    // to group g (same normal, same plane within 0.5 mm, and reachable via
+    // shared edges between member faces). A meshed/triangulated flange face
+    // is often emitted as two coplanar triangles that buildFaceGroups can't
+    // merge if their shared diagonal is treated as a non-coplanar edge —
+    // without this consolidation Option-3 would produce one candidate per
+    // triangle. Topology (not just coplanarity) ensures we don't pull in
+    // physically separate flanges that happen to lie on the same plane.
+    auto coplanarSiblings = [&](int g) -> std::vector<int> {
+      std::vector<int> out = {g};
+      const gp_Vec& n = groups[g].normal;
+      const gp_Pnt& c = groups[g].centroid;
+      std::set<int> inSet{g};
+      std::set<int> faceSet(groups[g].faceIndices.begin(),
+                            groups[g].faceIndices.end());
+      bool grew = true;
+      while (grew) {
+        grew = false;
+        for (int s = 0; s < (int)groups.size(); ++s) {
+          if (inSet.count(s)) continue;
+          if (!groups[s].isOuter || claimedPanelGroup[s]) continue;
+          if (hullRatio[s] >= kInteriorThreshold) continue;
+          if (groups[s].normal.Dot(n) < 0.95) continue;
+          gp_Vec delta(c, groups[s].centroid);
+          if (std::abs(n.Dot(delta)) > 0.5) continue;
+          bool adj = false;
+          for (int fi : groups[s].faceIndices) {
+            for (int nbr : faceAdj[fi]) {
+              if (faceSet.count(nbr)) { adj = true; break; }
+            }
+            if (adj) break;
+          }
+          if (!adj) continue;
+          out.push_back(s);
+          inSet.insert(s);
+          for (int fi : groups[s].faceIndices) faceSet.insert(fi);
+          grew = true;
+        }
+      }
+      return out;
+    };
+
+    for (int capIdx3 = 0; capIdx3 < (int)groups.size(); ++capIdx3) {
+      if (!groups[capIdx3].isOuter || claimedPanelGroup[capIdx3]) continue;
+      if (hullRatio[capIdx3] >= kInteriorThreshold) continue;
+
+      for (int backIdx = capIdx3 + 1; backIdx < (int)groups.size(); ++backIdx) {
+        if (!groups[backIdx].isOuter || claimedPanelGroup[backIdx]) continue;
+        if (hullRatio[backIdx] >= kInteriorThreshold) continue;
+
+        double dp = groups[capIdx3].normal.Dot(groups[backIdx].normal);
+        if (dp > -0.85) continue;  // must be anti-parallel
+
+        gp_Vec c2b(groups[capIdx3].centroid, groups[backIdx].centroid);
+        double slabOffset = std::abs(groups[capIdx3].normal.Dot(c2b));
+        if (slabOffset < 1e-3 || slabOffset > maxThicknessMm) continue;
+
+        // Consolidate coplanar siblings into the cap-side and back-side
+        // logical faces, then aggregate their areas and footprints.
+        auto capSibs  = coplanarSiblings(capIdx3);
+        auto backSibs = coplanarSiblings(backIdx);
+
+        double capArea = 0.0, backArea = 0.0;
+        for (int s : capSibs)  capArea  += groups[s].area;
+        for (int s : backSibs) backArea += groups[s].area;
+
+        double minA = std::min(capArea, backArea);
+        double maxA = std::max(capArea, backArea);
+        if (maxA < 1e-6 || minA / maxA < 0.30) continue;
+
+        gp_Vec tabU3, tabV3;
+        if (!buildInPlaneAxes(groups[capIdx3].normal, tabU3, tabV3)) continue;
+
+        // CRITICAL: use back centroid as the footprint reference so the
+        // (tabUMin..tabUMax) bounds line up with panelCentroid (also set to
+        // back centroid) when extractProtrusion builds the bounded box.
+        // Mixing cap and back centroids here shifts the extraction box by
+        // the in-plane offset between the two triangulated face centroids.
+        const gp_Pnt& orig3 = groups[backIdx].centroid;
+        auto unionFootprint = [&](const std::vector<int>& sibs,
+                                  double& uMin, double& uMax,
+                                  double& vMin, double& vMax) {
+          uMin = 1e30; uMax = -1e30; vMin = 1e30; vMax = -1e30;
+          for (int s : sibs) {
+            for (int fi : groups[s].faceIndices) {
+              double u0, u1, v0, v1;
+              projectFootprint(TopoDS::Face(faceMap(fi)), orig3, tabU3, tabV3,
+                               u0, u1, v0, v1);
+              uMin = std::min(uMin, u0); uMax = std::max(uMax, u1);
+              vMin = std::min(vMin, v0); vMax = std::max(vMax, v1);
+            }
+          }
+        };
+
+        double cUMin, cUMax, cVMin, cVMax;
+        double bUMin, bUMax, bVMin, bVMax;
+        unionFootprint(capSibs,  cUMin, cUMax, cVMin, cVMax);
+        unionFootprint(backSibs, bUMin, bUMax, bVMin, bVMax);
+
+        double overlapU = std::min(cUMax, bUMax) - std::max(cUMin, bUMin);
+        double overlapV = std::min(cVMax, bVMax) - std::max(cVMin, bVMin);
+        if (overlapU <= 0.0 || overlapV <= 0.0) continue;
+
+        ProtrusionCandidate pc3;
+        for (int s : capSibs)  for (int fi : groups[s].faceIndices)  pc3.faceIndices.push_back(fi);
+        for (int s : backSibs) for (int fi : groups[s].faceIndices)  pc3.faceIndices.push_back(fi);
+        pc3.panelCentroid    = groups[backIdx].centroid;
+        pc3.panelNormal      = groups[capIdx3].normal;
+        pc3.useBoundedTabBox = true;
+        pc3.tabU             = tabU3;
+        pc3.tabV             = tabV3;
+        pc3.tabUMin          = std::max(cUMin, bUMin);
+        pc3.tabUMax          = std::min(cUMax, bUMax);
+        pc3.tabVMin          = std::max(cVMin, bVMin);
+        pc3.tabVMax          = std::min(cVMax, bVMax);
+        pc3.tabHeight        = slabOffset;
+        // Bridge flanges butt directly against adjacent cube walls; the
+        // default 0.5 mm pad/bleed catches a sliver of those walls and
+        // inflates the extracted bbox. 0.05 mm is enough for boolean
+        // robustness without crossing into adjacent material.
+        pc3.tightPad         = 0.05;
+        pc3.tightBleed       = 0.05;
+
+        candidates.push_back(std::move(pc3));
+        for (int s : capSibs)  claimedPanelGroup[s] = true;
+        for (int s : backSibs) claimedPanelGroup[s] = true;
+        break;
+      }
+    }
+
     return candidates;
   }
 
@@ -1774,8 +1922,8 @@ private:
       // footprint (precomputed in (tabU, tabV)) × tab height along panelNormal.
       // The box brackets the tab volume exactly, so the boolean Common
       // captures only the tab and not the surrounding solid.
-      constexpr double pad   = 0.5;  // mm — pad footprint to ensure full capture
-      constexpr double bleed = 0.5;  // mm — extend slightly past both planes
+      const double pad   = (pc.tightPad   >= 0.0) ? pc.tightPad   : 0.5;
+      const double bleed = (pc.tightBleed >= 0.0) ? pc.tightBleed : 0.5;
       double uSize = (pc.tabUMax - pc.tabUMin) + 2.0 * pad;
       double vSize = (pc.tabVMax - pc.tabVMin) + 2.0 * pad;
       double hSize = pc.tabHeight + 2.0 * bleed;
@@ -2239,6 +2387,27 @@ private:
       } catch (const GeometryError&) {}
     }
 
+    // If protrusion extraction disconnected workShape into multiple solids
+    // (e.g., testcube's bridge flanges connected the inner and outer hollow
+    // cubes; removing them leaves two separate solids), splitMode2 would
+    // bundle the inner and outer walls into mixed panels because each outer
+    // face would find an anti-parallel match across the void. Recurse on each
+    // component separately so each cube is decomposed in isolation.
+    {
+      std::vector<TopoDS_Shape> components;
+      for (TopExp_Explorer ex(workShape, TopAbs_SOLID); ex.More(); ex.Next()) {
+        components.push_back(ex.Current());
+      }
+      if (components.size() > 1) {
+        for (const auto& comp : components) {
+          recursiveDecompose(comp, parentId, angleThresholdDeg, maxThicknessMm,
+                             defaultThicknessMm, remainingDepth, panelIds,
+                             protrusionIds, protrusionParents);
+        }
+        return;
+      }
+    }
+
     TopoDS_Shape childRemainder;
     if (mode == "thin_solid") {
       splitMode2(workShape, localHalfSize, parentId, angleThresholdDeg, maxThicknessMm,
@@ -2362,9 +2531,157 @@ private:
         }
       }
 
+      // If protrusion extraction disconnected workShape into multiple solids
+      // (e.g., the four bridge flanges in testcube.step were the only links
+      // between the inner and outer hollow cubes — removing them leaves two
+      // separate solids), splitMode2 run on the combined shape would pair
+      // inner-cube and outer-cube outer faces across the void and produce
+      // 25 mm-thick "panels" that wrap both walls plus the gap. OCCT may
+      // keep the disconnected result as one Solid with multiple Shells, so
+      // TopAbs_SOLID iteration alone misses it — run a face-level BFS via
+      // shared edges to find connected components, then rebuild a Solid
+      // per component using the original Shells inside it.
+      auto splitConnectedComponents = [](const TopoDS_Shape& s) -> std::vector<TopoDS_Shape> {
+        // Find connected face components via shared edges. Each component is
+        // one closed surface; for nested hollow shapes (hollow cube), one
+        // component is the outer surface and another is the inner void
+        // surface. Then group components into solids by bbox containment:
+        // each "outer envelope" pairs with the largest other component that
+        // fits inside it (its immediate void). Smaller nested components
+        // belong to subsequent solids.
+        TopTools_IndexedMapOfShape faceMap;
+        TopExp::MapShapes(s, TopAbs_FACE, faceMap);
+        int nF = faceMap.Extent();
+        if (nF == 0) return {};
+
+        TopTools_IndexedDataMapOfShapeListOfShape edgeFaces;
+        TopExp::MapShapesAndAncestors(s, TopAbs_EDGE, TopAbs_FACE, edgeFaces);
+
+        std::vector<int> comp(nF + 1, -1);
+        int nComp = 0;
+        for (int seed = 1; seed <= nF; ++seed) {
+          if (comp[seed] >= 0) continue;
+          comp[seed] = nComp;
+          std::vector<int> q{seed};
+          while (!q.empty()) {
+            int cur = q.back(); q.pop_back();
+            const TopoDS_Face& f = TopoDS::Face(faceMap(cur));
+            for (TopExp_Explorer ex(f, TopAbs_EDGE); ex.More(); ex.Next()) {
+              const TopoDS_Edge& e = TopoDS::Edge(ex.Current());
+              if (!edgeFaces.Contains(e)) continue;
+              const TopTools_ListOfShape& adj = edgeFaces.FindFromKey(e);
+              for (TopTools_ListIteratorOfListOfShape it(adj); it.More(); it.Next()) {
+                int nb = faceMap.FindIndex(it.Value());
+                if (nb > 0 && comp[nb] < 0) { comp[nb] = nComp; q.push_back(nb); }
+              }
+            }
+          }
+          ++nComp;
+        }
+        if (nComp <= 1) return {};
+
+        // Build a Shell per component and compute its bbox.
+        std::vector<TopoDS_Shell> compShells(nComp);
+        std::vector<std::array<double,6>> compBox(nComp,
+            {1e30, -1e30, 1e30, -1e30, 1e30, -1e30});
+        BRep_Builder builder;
+        for (int c = 0; c < nComp; ++c) builder.MakeShell(compShells[c]);
+        for (int fi = 1; fi <= nF; ++fi) {
+          int c = comp[fi];
+          const TopoDS_Face& f = TopoDS::Face(faceMap(fi));
+          builder.Add(compShells[c], f);
+          for (TopExp_Explorer vx(f, TopAbs_VERTEX); vx.More(); vx.Next()) {
+            gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(vx.Current()));
+            compBox[c][0] = std::min(compBox[c][0], p.X());
+            compBox[c][1] = std::max(compBox[c][1], p.X());
+            compBox[c][2] = std::min(compBox[c][2], p.Y());
+            compBox[c][3] = std::max(compBox[c][3], p.Y());
+            compBox[c][4] = std::min(compBox[c][4], p.Z());
+            compBox[c][5] = std::max(compBox[c][5], p.Z());
+          }
+        }
+
+        // Sort components by bbox volume (largest first).
+        auto vol = [](const std::array<double,6>& b) {
+          return (b[1]-b[0]) * (b[3]-b[2]) * (b[5]-b[4]);
+        };
+        std::vector<int> order(nComp);
+        for (int c = 0; c < nComp; ++c) order[c] = c;
+        std::sort(order.begin(), order.end(),
+                  [&](int a, int b){ return vol(compBox[a]) > vol(compBox[b]); });
+
+        // Helper: does box b contain box i (with tolerance)?
+        auto contains = [&](int outer, int inner) {
+          const auto& bo = compBox[outer]; const auto& bi = compBox[inner];
+          constexpr double tol = 1e-3;
+          return bi[0] >= bo[0] - tol && bi[1] <= bo[1] + tol
+              && bi[2] >= bo[2] - tol && bi[3] <= bo[3] + tol
+              && bi[4] >= bo[4] - tol && bi[5] <= bo[5] + tol;
+        };
+
+        // Determine each component's "containment depth": how many other
+        // components strictly contain it. Depth 0 = outermost. Depth 1 =
+        // immediate void of a depth-0. Depth 2 = outermost of nested solid
+        // (contained by depth-0 and depth-1). Depth 3 = void of that. So
+        // even-depth components are outer envelopes; odd-depth components
+        // are the voids of the next-shallower outer.
+        std::vector<int> depth(nComp, 0);
+        for (int a = 0; a < nComp; ++a) {
+          for (int b = 0; b < nComp; ++b) {
+            if (a == b) continue;
+            if (contains(b, a)) ++depth[a];
+          }
+        }
+        // Group: each even-depth component is an outer. Its immediate void
+        // is the odd-depth component that it directly contains with no
+        // intervening even-depth component between them.
+        std::vector<std::pair<int, std::vector<int>>> groups;
+        for (int o = 0; o < nComp; ++o) {
+          if (depth[o] % 2 != 0) continue;  // skip voids
+          std::vector<int> voids;
+          for (int v = 0; v < nComp; ++v) {
+            if (v == o) continue;
+            if (depth[v] != depth[o] + 1) continue;  // must be direct child
+            if (!contains(o, v)) continue;
+            voids.push_back(v);
+          }
+          groups.push_back({o, std::move(voids)});
+        }
+
+        if (groups.size() <= 1) return {};
+
+        std::vector<TopoDS_Shape> result;
+        for (const auto& g : groups) {
+          BRepBuilderAPI_MakeSolid mk(compShells[g.first]);
+          for (int vi : g.second) mk.Add(compShells[vi]);
+          mk.Build();
+          if (mk.IsDone()) result.push_back(mk.Solid());
+        }
+        return result;
+      };
+
+      std::vector<TopoDS_Shape> wsComponents = splitConnectedComponents(workShape);
+      if (wsComponents.empty()) {
+        for (TopExp_Explorer ex(workShape, TopAbs_SOLID); ex.More(); ex.Next()) {
+          wsComponents.push_back(ex.Current());
+        }
+      }
+
       std::vector<ShapeHistoryRecord> shapeHistory;
       TopoDS_Shape firstPassRemainder;
-      if (mode == "thin_solid") {
+      if (wsComponents.size() > 1) {
+        // Each component is now a simple closed solid (a hollow cube after
+        // flange extraction); a single splitMode2 pass produces the panels.
+        // depth=1 ensures recursiveDecompose runs once but does not recurse
+        // on its own remainder — the bleed from protrusion extraction
+        // leaves 0.05 mm-thick face slivers in the workShape that deeper
+        // recursion would emit as spurious extra panels.
+        for (const auto& comp : wsComponents) {
+          recursiveDecompose(comp, parentId, angleThresholdDeg, maxThicknessMm,
+                             defaultThicknessMm, /*depth=*/1,
+                             panelIds, protrusionIds, protrusionParents);
+        }
+      } else if (mode == "thin_solid") {
         splitMode2(workShape, planeHalfSize, parentId, angleThresholdDeg, maxThicknessMm,
                    panelIds, protrusionIds, protrusionParents, &firstPassRemainder, &shapeHistory);
       } else {
