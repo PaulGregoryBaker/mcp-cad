@@ -1881,10 +1881,12 @@ function handleExtendFaceToTarget(args: Record<string, unknown>): unknown {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     modified_shell_id: result.modifiedShellId,
     extension_distance_mm: result.extensionDistanceMm,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
+    mesh_url: `${meshBaseUrl}/mesh/${result.modifiedShellId}.glb`,
     shape_history: result.shape_history ?? [],
   };
 }
@@ -1904,9 +1906,11 @@ function handleOffsetFace(args: Record<string, unknown>): unknown {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     modified_shell_id: result.modifiedShellId,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
+    mesh_url: `${meshBaseUrl}/mesh/${result.modifiedShellId}.glb`,
     shape_history: result.shape_history ?? [],
   };
 }
@@ -1937,10 +1941,12 @@ function handleAddFlange(args: Record<string, unknown>): unknown {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     modified_shell_id: result.modifiedShellId,
     flange_feature_id: result.flangeFeatureId,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
+    mesh_url: `${meshBaseUrl}/mesh/${result.modifiedShellId}.glb`,
     shape_history: result.shape_history ?? [],
   };
 }
@@ -1956,9 +1962,11 @@ function handleRipEdge(args: Record<string, unknown>): unknown {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     modified_shell_id: result.modifiedShellId,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
+    mesh_url: `${meshBaseUrl}/mesh/${result.modifiedShellId}.glb`,
     shape_history: result.shape_history ?? [],
   };
 }
@@ -2072,10 +2080,12 @@ function handleFuseBodies(args: Record<string, unknown>): unknown {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     solid_id: result.solid_id,
     disjoint: result.disjoint,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
     shape_history: result.shape_history ?? [],
   };
 }
@@ -2092,9 +2102,11 @@ function handleCutBodies(args: Record<string, unknown>): unknown {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     solid_id: result.solid_id,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
     shape_history: result.shape_history ?? [],
   };
 }
@@ -2110,9 +2122,11 @@ function handleIntersectBodies(args: Record<string, unknown>): unknown {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     solid_id: result.solid_id,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
     shape_history: result.shape_history ?? [],
   };
 }
