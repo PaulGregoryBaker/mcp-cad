@@ -317,6 +317,8 @@ Napi::Value UnfoldShell(const Napi::CallbackInfo& info) {
     result.Set("flatHeightMm", Napi::Number::New(env, res.flatHeightMm));
     result.Set("kFactorUsed",  Napi::Number::New(env, res.kFactorUsed));
     result.Set("bendCount",    Napi::Number::New(env, res.bendCount));
+    result.Set("validated",    Napi::Boolean::New(env, res.validated));
+    result.Set("detectedThickness", Napi::Number::New(env, res.detectedThickness));
     result.Set("rollbackToken", Napi::String::New(env, res.rollbackToken));
     Napi::Array histArr = Napi::Array::New(env, res.shapeHistory.size());
     for (size_t i = 0; i < res.shapeHistory.size(); ++i) {
@@ -1695,6 +1697,57 @@ Napi::Value ListAssemblyTree(const Napi::CallbackInfo& info) {
   return env.Undefined();
 }
 
+Napi::Value ValidateSheetMetal(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsString()) {
+    Napi::TypeError::New(env, "validateSheetMetal(partId: string)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string partId = info[0].As<Napi::String>().Utf8Value();
+  TRY_GEOMETRY(env, {
+    SheetMetalValidationResult res = svc().validateSheetMetal(partId);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("is_valid", Napi::Boolean::New(env, res.isValid));
+    result.Set("nominal_thickness", Napi::Number::New(env, res.nominalThickness));
+    result.Set("can_flatten", Napi::Boolean::New(env, res.canFlatten));
+    Napi::Array errs = Napi::Array::New(env, res.validationErrors.size());
+    for (size_t i = 0; i < res.validationErrors.size(); ++i) {
+      errs.Set(i, Napi::String::New(env, res.validationErrors[i]));
+    }
+    result.Set("validation_errors", errs);
+    return result;
+  })
+  return env.Undefined();
+}
+
+Napi::Value ReconstructCurvedBends(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsString()) {
+    Napi::TypeError::New(env, "reconstructCurvedBends(partId: string)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string partId = info[0].As<Napi::String>().Utf8Value();
+  TRY_GEOMETRY(env, {
+    CurvedRebuildResult res = svc().reconstructCurvedBends(partId);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("solidId", Napi::String::New(env, res.solidId));
+    result.Set("bendsReplaced", Napi::Number::New(env, res.bendsReplaced));
+    result.Set("rollbackToken", Napi::String::New(env, res.rollbackToken));
+    Napi::Array histArr = Napi::Array::New(env, res.shapeHistory.size());
+    for (size_t i = 0; i < res.shapeHistory.size(); ++i) {
+      Napi::Object rec = Napi::Object::New(env);
+      rec.Set("verdict",         Napi::String::New(env, res.shapeHistory[i].verdict));
+      rec.Set("original_id",     Napi::String::New(env, res.shapeHistory[i].originalId));
+      rec.Set("new_id",          Napi::String::New(env, res.shapeHistory[i].newId));
+      rec.Set("operation_label", Napi::String::New(env, res.shapeHistory[i].operationLabel));
+      histArr.Set(static_cast<uint32_t>(i), rec);
+    }
+    result.Set("shape_history", histArr);
+    return result;
+  })
+  return env.Undefined();
+}
+
 // ─── Registration ─────────────────────────────────────────────────────────────
 
 void RegisterGeometryMethods(Napi::Env env, Napi::Object exports) {
@@ -1754,6 +1807,10 @@ void RegisterGeometryMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("addAssemblyInstance",   Napi::Function::New(env, AddAssemblyInstance));
   exports.Set("mateRigid",             Napi::Function::New(env, MateRig));
   exports.Set("listAssemblyTree",      Napi::Function::New(env, ListAssemblyTree));
+
+  // Feature 007
+  exports.Set("validateSheetMetal",    Napi::Function::New(env, ValidateSheetMetal));
+  exports.Set("reconstructCurvedBends", Napi::Function::New(env, ReconstructCurvedBends));
 }
 
 }  // namespace mcp_cad

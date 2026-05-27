@@ -383,10 +383,11 @@ console.log('split_body_by_bends.Braai fixture tests starting...');
 */
   // The flange tabs on cube_with_flanges are all classified as "outer" faces by the
   // centroid-based isOuter heuristic, so detectProtrusions (which only scans for
-  // non-outer faces adjacent to outer faces) returns 0 protrusions. The flanges are
-  // instead absorbed into the 6 panel slabs — each flange outer face finds the same
-  // inner cutting plane as its parent wall, so the panel slab includes the flange.
-  it('cube with flanges → thin_solid mode, 6 panels (flanges absorbed into slabs)', async () => {
+  // non-outer faces adjacent to outer faces) returns 0 protrusions. Under tight local
+  // oriented-box cutting, the flanges are isolated as their own clean flat panels
+  // rather than being over-captured and absorbed into parent slabs, resulting in
+  // exactly 10 clean panels (6 parent walls + 4 flanges) with 0 bends.
+  it('cube with flanges → thin_solid mode, 10 clean isolated panels (6 walls + 4 flanges)', async () => {
     if (!addonAvailable) return;
 
     const fixturePath = findFixture('cube_with_flanges.stp');
@@ -407,9 +408,9 @@ console.log('split_body_by_bends.Braai fixture tests starting...');
     }, config) as any;
 
     expect(result.detected_mode).toBe('thin_solid');
-    expect(result.panel_count).toBe(6);
+    expect(result.panel_count).toBe(10);
     expect(result.protrusion_count).toBe(0);
-    expect(result.panel_ids).toHaveLength(6);
+    expect(result.panel_ids).toHaveLength(10);
     expect(result.rollback_token).toBeDefined();
   });
   

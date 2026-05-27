@@ -109,6 +109,8 @@ export interface UnfoldResult {
   flatHeightMm: number;
   kFactorUsed: number;
   bendCount: number;
+  validated?: boolean;
+  detectedThickness?: number;
   rollbackToken: string;
   shape_history?: ShapeHistoryRecord[];
 }
@@ -337,4 +339,27 @@ export interface AssemblyNode {
 export interface ListAssemblyResult {
   assembly_id: string;
   root: AssemblyNode;
+}
+
+// ── Feature 007-sheet-metal-unfolding ───────────────────────────────────────
+export interface SheetMetalValidationResult {
+  is_valid: boolean;
+  nominal_thickness: number;
+  can_flatten: boolean;
+  validation_errors: string[];
+}
+
+export interface GapSewResult {
+  solid_id: string;
+  sew_complete: boolean;
+  max_gap_found: number;
+  rollback_token: string;
+  shape_history?: ShapeHistoryRecord[];
+}
+
+export interface CurvedRebuildResult {
+  solid_id: string;
+  bends_replaced: number;
+  rollback_token: string;
+  shape_history?: ShapeHistoryRecord[];
 }

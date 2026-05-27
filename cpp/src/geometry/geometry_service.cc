@@ -568,27 +568,821 @@ public:
                           "Shell not found: " + shellId, false, "");
     }
 
+    TopoDS_Shape activeShape = shells_[shellId].shape;
+
+    // 1. Gap sewing: integrate BRepBuilderAPI_Sewing with tolerance 0.1 mm
+    BRepBuilderAPI_Sewing sewer;
+    sewer.Init();
+    sewer.SetTolerance(0.1);
+    sewer.Add(activeShape);
+    sewer.Perform();
+    TopoDS_Shape sewedShape = sewer.SewedShape();
+    if (!sewedShape.IsNull()) {
+      activeShape = sewedShape;
+    }
+
+    // Open edge audit: throw GE_UNFOLD_SEWING_FAILED if gaps remain open above tolerance
+    Standard_Integer nbFree = sewer.NbFreeEdges();
+    std::vector<TopoDS_Edge> freeEdges;
+    for (Standard_Integer i = 1; i <= nbFree; ++i) {
+      freeEdges.push_back(TopoDS::Edge(sewer.FreeEdge(i)));
+    }
+    for (size_t i = 0; i < freeEdges.size(); ++i) {
+      for (size_t j = i + 1; j < freeEdges.size(); ++j) {
+        BRepExtrema_DistShapeShape dist(freeEdges[i], freeEdges[j]);
+        if (dist.IsDone()) {
+          double d = dist.Value();
+          if (d > 0.1 && d <= 1.0) {
+            throw GeometryError("GE_UNFOLD_SEWING_FAILED",
+                                "GE_UNFOLD_SEWING_FAILED: Gaps remain open above tolerance of 0.1 mm after sewing.",
+                                false, "");
+          }
+        }
+      }
+    }
+
+    SheetMetalValidationResult val = validateSheetMetalShapeLocked(activeShape);
+    if (!val.isValid) {
+      std::string code = "GE_INVALID_SHEET_METAL";
+      std::string msg = "Sheet metal validation failed: ";
+      if (!val.validationErrors.empty()) {
+        msg += val.validationErrors[0];
+        if (val.validationErrors[0].find("GE_UNFOLD_CYCLE_DETECTED") != std::string::npos) {
+          code = "GE_UNFOLD_CYCLE_DETECTED";
+        } else if (val.validationErrors[0].find("GE_UNFOLD_T_JUNCTION") != std::string::npos) {
+          code = "GE_UNFOLD_T_JUNCTION";
+        }
+      }
+      throw GeometryError(code, msg, false, "");
+    }
+
     SnapshotId token = createSnapshotLocked("before unfold of " + shellId);
 
     try {
-      // Phase A stub: full CadQuery unfold implemented in Phase C (T070)
-      // Returns placeholder dimensions derived from bounding box
-      const TopoDS_Shape& shellShape = shells_[shellId].shape;
+      // Helper: calculate face center
+      auto faceCenter = [](const TopoDS_Face& f) -> gp_Pnt {
+        GProp_GProps fp;
+        BRepGProp::SurfaceProperties(f, fp);
+        return fp.CentreOfMass();
+      };
 
-      // Compute bounding box for flat dimensions
-      Bnd_Box bbox;
-      BRepBndLib::Add(shellShape, bbox);
-      double xMin, yMin, zMin, xMax, yMax, zMax;
-      bbox.Get(xMin, yMin, zMin, xMax, yMax, zMax);
+      // Helper: calculate min local dimension (width/height) of a planar face in its own plane
+      auto minLocalDimension = [](const TopoDS_Face& f) -> double {
+        Handle(Geom_Surface) surf = BRep_Tool::Surface(f);
+        if (surf.IsNull() || !surf->IsKind(STANDARD_TYPE(Geom_Plane))) return 0.0;
+        Handle(Geom_Plane) plane = Handle(Geom_Plane)::DownCast(surf);
+        gp_Pln pln = plane->Pln();
+        gp_Ax3 pos = pln.Position();
+        gp_Dir dirX = pos.XDirection();
+        gp_Dir dirY = pos.YDirection();
 
-      double flatW = xMax - xMin;
-      double flatH = yMax - yMin;
+        double uMin = 1e30, uMax = -1e30;
+        double vMin = 1e30, vMax = -1e30;
+        bool any = false;
+        for (TopExp_Explorer ex(f, TopAbs_VERTEX); ex.More(); ex.Next()) {
+          gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(ex.Current()));
+          gp_Vec vec(pos.Location(), p);
+          double u = vec.Dot(gp_Vec(dirX));
+          double v = vec.Dot(gp_Vec(dirY));
+          uMin = std::min(uMin, u); uMax = std::max(uMax, u);
+          vMin = std::min(vMin, v); vMax = std::max(vMax, v);
+          any = true;
+        }
+        if (!any) return 0.0;
+        return std::min(uMax - uMin, vMax - vMin);
+      };
+
+      // Helper: check if two edges are geometrically coincident
+      auto edgesAreCoincident = [](const TopoDS_Edge& e1, const TopoDS_Edge& e2) -> bool {
+        Standard_Real f1, l1, f2, l2;
+        Handle(Geom_Curve) c1 = BRep_Tool::Curve(e1, f1, l1);
+        Handle(Geom_Curve) c2 = BRep_Tool::Curve(e2, f2, l2);
+        if (c1.IsNull() || c2.IsNull()) return false;
+
+        gp_Pnt pMid1 = c1->Value((f1 + l1) * 0.5);
+        gp_Pnt pMid2 = c2->Value((f2 + l2) * 0.5);
+
+        double dist = pMid1.Distance(pMid2);
+        if (dist > 3.0) return false;
+
+        GProp_GProps prop1, prop2;
+        BRepGProp::LinearProperties(e1, prop1);
+        BRepGProp::LinearProperties(e2, prop2);
+        double len1 = prop1.Mass();
+        double len2 = prop2.Mass();
+        if (std::abs(len1 - len2) > 10.0) return false;
+
+        gp_Pnt p1, p2;
+        gp_Vec v1, v2;
+        c1->D1((f1 + l1) * 0.5, p1, v1);
+        c2->D1((f2 + l2) * 0.5, p2, v2);
+        if (v1.Magnitude() > 1e-10) v1.Normalize();
+        if (v2.Magnitude() > 1e-10) v2.Normalize();
+        return std::abs(v1.Dot(v2)) >= 0.90;
+      };
+
+      // Helper: check if two faces share an edge
+      auto findSharedEdge = [&](const TopoDS_Face& f1, const TopoDS_Face& f2, TopoDS_Edge& shared) -> bool {
+        TopExp_Explorer e1(f1, TopAbs_EDGE);
+        for (; e1.More(); e1.Next()) {
+          const TopoDS_Edge& edge1 = TopoDS::Edge(e1.Current());
+          Standard_Real first1, last1;
+          Handle(Geom_Curve) c1 = BRep_Tool::Curve(edge1, first1, last1);
+          gp_Pnt pMid1 = !c1.IsNull() ? c1->Value((first1 + last1) * 0.5) : gp_Pnt(0,0,0);
+
+          TopExp_Explorer e2(f2, TopAbs_EDGE);
+          for (; e2.More(); e2.Next()) {
+            const TopoDS_Edge& edge2 = TopoDS::Edge(e2.Current());
+            Standard_Real first2, last2;
+            Handle(Geom_Curve) c2 = BRep_Tool::Curve(edge2, first2, last2);
+            gp_Pnt pMid2 = !c2.IsNull() ? c2->Value((first2 + last2) * 0.5) : gp_Pnt(0,0,0);
+
+
+
+            if (edge1.IsSame(edge2) || edgesAreCoincident(edge1, edge2)) {
+              shared = edge1;
+              return true;
+            }
+          }
+        }
+        return false;
+      };
+
+      // 1. Gather all planar faces and compute their areas
+      std::vector<std::pair<TopoDS_Face, double>> planarFacesWithArea;
+      TopExp_Explorer faceExp(activeShape, TopAbs_FACE);
+      for (; faceExp.More(); faceExp.Next()) {
+        const TopoDS_Face& face = TopoDS::Face(faceExp.Current());
+        Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
+        if (!surf.IsNull() && surf->IsKind(STANDARD_TYPE(Geom_Plane))) {
+          GProp_GProps fp;
+          BRepGProp::SurfaceProperties(face, fp);
+          double area = fp.Mass();
+          planarFacesWithArea.push_back({face, area});
+        }
+      }
+
+
+      // If no planar faces, fall back to simple bounding box
+      if (planarFacesWithArea.empty()) {
+        Bnd_Box bbox;
+        BRepBndLib::AddOptimal(activeShape, bbox);
+        double xMin, yMin, zMin, xMax, yMax, zMax;
+        bbox.Get(xMin, yMin, zMin, xMax, yMax, zMax);
+        double flatW = xMax - xMin;
+        double flatH = yMax - yMin;
+        UnfoldId id = generateUUID();
+        unfolds_[id] = UnfoldState{id, shellId, flatW, flatH, kFactor, 0, ""};
+        return UnfoldResult{id, flatW, flatH, kFactor, 0, true, val.nominalThickness, token, {}};
+      }
+
+      // 2. Perform pairwise face matching to identify thin-sheet skins (panels)
+      struct PlaneFaceInfo {
+        TopoDS_Face face;
+        double area;
+        gp_Pnt center;
+        gp_Vec normal;
+        double D;
+        bool matched = false;
+        int partnerIdx = -1;
+      };
+
+      std::vector<PlaneFaceInfo> planeInfos;
+      for (const auto& pair : planarFacesWithArea) {
+        // Skip narrow thickness/side-edge faces whose width is less than 2.5 * thickness.
+        // This prevents side-edge faces from incorrectly matching major flat skins.
+        if (minLocalDimension(pair.first) < 2.5 * val.nominalThickness) {
+          continue;
+        }
+        PlaneFaceInfo info;
+        info.face = pair.first;
+        info.area = pair.second;
+        info.center = faceCenter(info.face);
+        info.normal = faceOutwardNormal(info.face);
+        info.D = info.normal.Dot(gp_Vec(info.center.X(), info.center.Y(), info.center.Z()));
+        planeInfos.push_back(info);
+      }
+      // Merge coplanar face infos to handle split segments robustly
+      std::vector<PlaneFaceInfo> mergedPlaneInfos;
+      for (const auto& info : planeInfos) {
+        bool found = false;
+        for (auto& mInfo : mergedPlaneInfos) {
+          if (info.normal.Dot(mInfo.normal) > 0.95) {
+            double dist = std::abs(gp_Vec(info.center, mInfo.center).Dot(info.normal));
+            if (dist < 0.1) {
+              double oldArea = mInfo.area;
+              mInfo.area += info.area;
+              mInfo.center = gp_Pnt(
+                  (mInfo.center.XYZ() * oldArea + info.center.XYZ() * info.area) / mInfo.area
+              );
+              found = true;
+              break;
+            }
+          }
+        }
+        if (!found) {
+          mergedPlaneInfos.push_back(info);
+        }
+      }
+      planeInfos = std::move(mergedPlaneInfos);
+
+      // Sort planeInfos in descending order of area to ensure large skins are matched first
+      std::sort(planeInfos.begin(), planeInfos.end(), [](const PlaneFaceInfo& a, const PlaneFaceInfo& b) {
+        return a.area > b.area;
+      });
+
+      int N = static_cast<int>(planeInfos.size());
+      for (int i = 0; i < N; ++i) {
+        if (planeInfos[i].matched) continue;
+
+        int bestPartner = -1;
+        double bestDist = 0.0;
+        double maxScore = -1.0;
+
+        for (int j = 0; j < N; ++j) {
+          if (i == j || planeInfos[j].matched) continue;
+
+          // Check if normals are opposite (anti-parallel)
+          double dot = planeInfos[i].normal.Dot(planeInfos[j].normal);
+          if (dot < -0.95) {
+            // Perpendicular thickness distance
+            gp_Vec diff(planeInfos[i].center, planeInfos[j].center);
+            double dist = std::abs(diff.Dot(planeInfos[i].normal));
+
+            if (dist >= 0.5 && dist <= 6.0) {
+              // Overlap projection check: centers projected onto the plane should be close
+              gp_Vec proj = diff - planeInfos[i].normal * diff.Dot(planeInfos[i].normal);
+              double projDist = proj.Magnitude();
+              
+              double overlapThreshold = 2.0 * std::sqrt(planeInfos[i].area + planeInfos[j].area);
+              if (projDist < overlapThreshold) {
+                double score = planeInfos[j].area / (1.0 + projDist);
+                if (score > maxScore) {
+                  maxScore = score;
+                  bestPartner = j;
+                  bestDist = dist;
+                }
+              }
+            }
+          }
+        }
+
+        if (bestPartner != -1) {
+          planeInfos[i].matched = true;
+          planeInfos[i].partnerIdx = bestPartner;
+          planeInfos[bestPartner].matched = true;
+          planeInfos[bestPartner].partnerIdx = i;
+        }
+      }
+
+      struct Panel {
+        int idxA;
+        int idxB;
+      };
+
+      std::vector<Panel> panels;
+      for (int i = 0; i < N; ++i) {
+        if (planeInfos[i].matched && planeInfos[i].partnerIdx > i) {
+          double minDimA = minLocalDimension(planeInfos[i].face);
+          // Skip narrow thickness/side-edge faces
+          if (minDimA < 2.5 * val.nominalThickness) {
+            continue;
+          }
+          Panel p;
+          p.idxA = i;
+          p.idxB = planeInfos[i].partnerIdx;
+          panels.push_back(p);
+        }
+      }
+
+      // If no valid broad panels, fall back
+      if (panels.empty()) {
+        Bnd_Box bbox;
+        BRepBndLib::AddOptimal(activeShape, bbox);
+        double xMin, yMin, zMin, xMax, yMax, zMax;
+        bbox.Get(xMin, yMin, zMin, xMax, yMax, zMax);
+        double flatW = xMax - xMin;
+        double flatH = yMax - yMin;
+        UnfoldId id = generateUUID();
+        unfolds_[id] = UnfoldState{id, shellId, flatW, flatH, kFactor, 0, ""};
+        return UnfoldResult{id, flatW, flatH, kFactor, 0, true, val.nominalThickness, token, {}};
+      }
+
+      // Deduplicate coincident panels (e.g., due to duplicate/overlapping faces from CAD merge/fuse operations)
+      std::vector<Panel> uniquePanels;
+
+      for (const auto& p : panels) {
+        gp_Pnt cA = planeInfos[p.idxA].center;
+        gp_Pnt cB = planeInfos[p.idxB].center;
+        gp_Pnt pCenter((cA.X() + cB.X()) * 0.5, (cA.Y() + cB.Y()) * 0.5, (cA.Z() + cB.Z()) * 0.5);
+        gp_Vec pNorm = planeInfos[p.idxA].normal;
+
+        bool isDuplicate = false;
+        for (const auto& existing : uniquePanels) {
+          gp_Pnt ecA = planeInfos[existing.idxA].center;
+          gp_Pnt ecB = planeInfos[existing.idxB].center;
+          gp_Pnt eCenter((ecA.X() + ecB.X()) * 0.5, (ecA.Y() + ecB.Y()) * 0.5, (ecA.Z() + ecB.Z()) * 0.5);
+          gp_Vec eNorm = planeInfos[existing.idxA].normal;
+
+          double dist = pCenter.Distance(eCenter);
+          double dot = std::abs(pNorm.Dot(eNorm));
+
+          if (dist < 1.0 && dot > 0.95) {
+            isDuplicate = true;
+            break;
+          }
+        }
+
+        if (!isDuplicate) {
+          uniquePanels.push_back(p);
+        }
+      }
+      panels = uniquePanels;
+
+      // Sort panels to be completely rotation-invariant by using total panel area as the primary key
+      std::sort(panels.begin(), panels.end(), [&](const Panel& p1, const Panel& p2) {
+        double area1 = planeInfos[p1.idxA].area + planeInfos[p1.idxB].area;
+        double area2 = planeInfos[p2.idxA].area + planeInfos[p2.idxB].area;
+        if (std::abs(area1 - area2) > 1e-3) {
+          return area1 > area2; // sort by total panel area descending
+        }
+        double a1 = planeInfos[p1.idxA].area;
+        double a2 = planeInfos[p2.idxA].area;
+        if (std::abs(a1 - a2) > 1e-3) {
+          return a1 > a2;
+        }
+        TopTools_IndexedMapOfShape edges1, edges2;
+        TopExp::MapShapes(planeInfos[p1.idxA].face, TopAbs_EDGE, edges1);
+        TopExp::MapShapes(planeInfos[p2.idxA].face, TopAbs_EDGE, edges2);
+        return edges1.Extent() > edges2.Extent();
+      });
+
+      int P = static_cast<int>(panels.size());
+      std::vector<TopoDS_Face> uniqueFaces(P);
+      for (int i = 0; i < P; ++i) {
+        uniqueFaces[i] = planeInfos[panels[i].idxA].face;
+      }
+      int M = P;
+
+
+      // Helper to check panel connections
+      auto findPanelConnection = [&](int p1, int p2, int& faceIdx1, int& faceIdx2, TopoDS_Edge& connEdge) -> bool {
+        std::pair<int, int> pairs[4] = {
+          {panels[p1].idxA, panels[p2].idxA},
+          {panels[p1].idxA, panels[p2].idxB},
+          {panels[p1].idxB, panels[p2].idxA},
+          {panels[p1].idxB, panels[p2].idxB}
+        };
+
+        for (const auto& pair : pairs) {
+          if (findSharedEdge(planeInfos[pair.first].face, planeInfos[pair.second].face, connEdge)) {
+            faceIdx1 = pair.first;
+            faceIdx2 = pair.second;
+            return true;
+          }
+        }
+
+        // Try curved face connection
+        TopExp_Explorer faceExpAll(activeShape, TopAbs_FACE);
+        for (; faceExpAll.More(); faceExpAll.Next()) {
+          const TopoDS_Face& fCur = TopoDS::Face(faceExpAll.Current());
+          Handle(Geom_Surface) surf = BRep_Tool::Surface(fCur);
+          if (surf.IsNull() || surf->IsKind(STANDARD_TYPE(Geom_Plane))) continue;
+
+          for (const auto& pair : pairs) {
+            bool sharesI = false;
+            TopoDS_Edge edgeI;
+            TopExp_Explorer eC1(fCur, TopAbs_EDGE);
+            for (; eC1.More(); eC1.Next()) {
+              const TopoDS_Edge& eCurved = TopoDS::Edge(eC1.Current());
+              TopExp_Explorer expI(planeInfos[pair.first].face, TopAbs_EDGE);
+              for (; expI.More(); expI.Next()) {
+                if (eCurved.IsSame(expI.Current())) { sharesI = true; edgeI = eCurved; break; }
+              }
+            }
+
+            bool sharesJ = false;
+            TopExp_Explorer eC2(fCur, TopAbs_EDGE);
+            for (; eC2.More(); eC2.Next()) {
+              const TopoDS_Edge& eCurved = TopoDS::Edge(eC2.Current());
+              TopExp_Explorer expJ(planeInfos[pair.second].face, TopAbs_EDGE);
+              for (; expJ.More(); expJ.Next()) {
+                if (eCurved.IsSame(expJ.Current())) { sharesJ = true; break; }
+              }
+            }
+
+            if (sharesI && sharesJ) {
+              faceIdx1 = pair.first;
+              faceIdx2 = pair.second;
+              connEdge = edgeI;
+              return true;
+            }
+          }
+        }
+        return false;
+      };
+
+      // 3. Build connectivity graph
+      struct PanelEdge {
+        int nbrPanelIdx;
+        int faceIdxCur;
+        int faceIdxNbr;
+        TopoDS_Edge edge;
+      };
+
+      std::vector<std::vector<PanelEdge>> panelAdj(P);
+      std::vector<std::vector<std::pair<int, TopoDS_Edge>>> adj(P);
+
+      for (int i = 0; i < P; ++i) {
+        for (int j = i + 1; j < P; ++j) {
+          int f1, f2;
+          TopoDS_Edge conn;
+          if (findPanelConnection(i, j, f1, f2, conn)) {
+            panelAdj[i].push_back({j, f1, f2, conn});
+            panelAdj[j].push_back({i, f2, f1, conn});
+
+            adj[i].push_back({j, conn});
+            adj[j].push_back({i, conn});
+          }
+        }
+      }
+
+      // 4. BFS over Panel nodes
+      std::vector<gp_Trsf> flatTransformsForFaces(N);
+      std::vector<gp_Trsf> flatTransforms(P);
+      std::vector<bool> visited(P, false);
+      std::vector<int> parent(P, -1);
+      int bendCount = 0;
+
+      std::vector<int> q;
+      q.push_back(0);
+      visited[0] = true;
+      flatTransforms[0] = gp_Trsf(); // identity
+      flatTransformsForFaces[panels[0].idxA] = gp_Trsf();
+      flatTransformsForFaces[panels[0].idxB] = gp_Trsf();
+
+      size_t head = 0;
+      while (head < q.size()) {
+        int cur = q[head++];
+        for (const auto& conn : panelAdj[cur]) {
+          int nbr = conn.nbrPanelIdx;
+          if (!visited[nbr]) {
+            visited[nbr] = true;
+            parent[nbr] = cur;
+            bendCount++;
+
+            int fCur = conn.faceIdxCur;
+            int fNbr = conn.faceIdxNbr;
+            const TopoDS_Edge& originalEdge = conn.edge;
+
+            // Rotation in original space
+            Standard_Real firstParam, lastParam;
+            Handle(Geom_Curve) curve = BRep_Tool::Curve(originalEdge, firstParam, lastParam);
+            gp_Pnt pMid;
+            gp_Vec dE;
+            if (!curve.IsNull()) {
+              double midParam = (firstParam + lastParam) * 0.5;
+              gp_Pnt p;
+              gp_Vec v;
+              curve->D1(midParam, p, v);
+              pMid = p;
+              dE = v;
+            } else {
+              TopExp_Explorer vExp(originalEdge, TopAbs_VERTEX);
+              if (vExp.More()) {
+                pMid = BRep_Tool::Pnt(TopoDS::Vertex(vExp.Current()));
+              } else {
+                pMid = gp_Pnt(0, 0, 0);
+              }
+              dE = gp_Vec(0, 0, 1);
+            }
+            if (dE.Magnitude() > 1e-10) dE.Normalize();
+            else dE = gp_Vec(0, 0, 1);
+
+            GProp_GProps fpCur, fpNbr;
+            BRepGProp::SurfaceProperties(planeInfos[fCur].face, fpCur);
+            BRepGProp::SurfaceProperties(planeInfos[fNbr].face, fpNbr);
+            gp_Pnt cCur = fpCur.CentreOfMass();
+            gp_Pnt cNbr = fpNbr.CentreOfMass();
+
+            gp_Vec nCur = planeInfos[fCur].normal;
+            gp_Vec nNbr = planeInfos[fNbr].normal;
+
+            gp_Vec wCur(pMid, cCur);
+            gp_Vec wNbr(pMid, cNbr);
+
+            gp_Vec vCur = wCur - gp_Vec(nCur) * wCur.Dot(nCur);
+            gp_Vec vNbr = wNbr - gp_Vec(nNbr) * wNbr.Dot(nNbr);
+
+            if (vCur.Magnitude() > 1e-10) vCur.Normalize();
+            if (vNbr.Magnitude() > 1e-10) vNbr.Normalize();
+
+            gp_Vec xAx = vCur;
+            gp_Vec yAx = dE.Crossed(vCur);
+            if (yAx.Magnitude() > 1e-10) yAx.Normalize();
+
+            double xVal = vNbr.Dot(xAx);
+            double yVal = vNbr.Dot(yAx);
+            double phi = std::atan2(yVal, xVal);
+
+            double theta = M_PI - phi;
+
+            gp_Pnt pMidTransformed = pMid.Transformed(flatTransformsForFaces[fCur]);
+            gp_Vec dETransformed = dE.Transformed(flatTransformsForFaces[fCur]);
+
+            gp_Ax1 rotationAxis(pMidTransformed, gp_Dir(dETransformed.X(), dETransformed.Y(), dETransformed.Z()));
+            gp_Trsf localRotation;
+            localRotation.SetRotation(rotationAxis, theta);
+
+            gp_Trsf cumulative = localRotation * flatTransformsForFaces[fCur];
+            flatTransformsForFaces[panels[nbr].idxA] = cumulative;
+            flatTransformsForFaces[panels[nbr].idxB] = cumulative;
+            flatTransforms[nbr] = cumulative;
+
+            q.push_back(nbr);
+          }
+        }
+      }
+
+      // 5. Transform all vertices of all panel skins and project to local 2D plane of Face 0
+      int baseFace = panels[0].idxA;
+      gp_Pnt c0;
+      GProp_GProps fp0;
+      BRepGProp::SurfaceProperties(planeInfos[baseFace].face, fp0);
+      c0 = fp0.CentreOfMass();
+      gp_Vec n0 = planeInfos[baseFace].normal;
+
+      gp_Vec uAxis;
+      bool foundEdge = false;
+      TopExp_Explorer edgeExp(planeInfos[baseFace].face, TopAbs_EDGE);
+      for (; edgeExp.More(); edgeExp.Next()) {
+        const TopoDS_Edge& edge = TopoDS::Edge(edgeExp.Current());
+        Standard_Real first, last;
+        Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, first, last);
+        if (!curve.IsNull() && curve->IsKind(STANDARD_TYPE(Geom_Line))) {
+          gp_Pnt p1 = curve->Value(first);
+          gp_Pnt p2 = curve->Value(last);
+          gp_Vec edgeVec(p1, p2);
+          if (edgeVec.Magnitude() > 1e-6) {
+            uAxis = edgeVec;
+            uAxis.Normalize();
+            foundEdge = true;
+            break;
+          }
+        }
+      }
+
+      if (!foundEdge) {
+        if (std::abs(n0.X()) < 0.9) {
+          uAxis = gp_Vec(0, -n0.Z(), n0.Y());
+        } else {
+          uAxis = gp_Vec(-n0.Y(), n0.X(), 0);
+        }
+        uAxis.Normalize();
+      }
+
+      gp_Vec vAxis = n0.Crossed(uAxis);
+      vAxis.Normalize();
+
+      double uMin = 1e30, uMax = -1e30;
+      double vMin = 1e30, vMax = -1e30;
+
+      for (int i = 0; i < P; ++i) {
+        if (!visited[i]) continue;
+        int idxA = panels[i].idxA;
+        int idxB = panels[i].idxB;
+
+        for (int idx : {idxA, idxB}) {
+          TopExp_Explorer vertexExp(planeInfos[idx].face, TopAbs_VERTEX);
+          for (; vertexExp.More(); vertexExp.Next()) {
+            const TopoDS_Vertex& v = TopoDS::Vertex(vertexExp.Current());
+            gp_Pnt p = BRep_Tool::Pnt(v);
+            gp_Pnt pTransformed = p.Transformed(flatTransformsForFaces[idx]);
+
+            gp_Vec toPt(c0, pTransformed);
+            double uVal = toPt.Dot(uAxis);
+            double vVal = toPt.Dot(vAxis);
+            uMin = std::min(uMin, uVal); uMax = std::max(uMax, uVal);
+            vMin = std::min(vMin, vVal); vMax = std::max(vMax, vVal);
+          }
+        }
+      }
+
+      double flatW = uMax - uMin;
+      double flatH = vMax - vMin;
+
+      // Handle edge case where flatW or flatH is near zero
+      if (flatW < 1e-5) flatW = 1.0;
+      if (flatH < 1e-5) flatH = 1.0;
+
+      // Generate DXF content
+      std::ostringstream dxf;
+      dxf << "  0\nSECTION\n  2\nHEADER\n  0\nENDSEC\n"
+          << "  0\nSECTION\n  2\nTABLES\n"
+          << "  0\nTABLE\n  2\nLTYPE\n 70\n1\n"
+          << "  0\nLTYPE\n  2\nCONTINUOUS\n 70\n0\n  3\nSolid line\n 72\n65\n 73\n0\n 40\n0.0\n"
+          << "  0\nLTYPE\n  2\nDASHED\n 70\n0\n  3\nDashed line __ __ __ __ __\n 72\n65\n 73\n2\n 40\n6.35\n 49\n3.175\n 49\n-3.175\n"
+          << "  0\nENDTAB\n"
+          << "  0\nTABLE\n  2\nLAYER\n 70\n4\n"
+          << "  0\nLAYER\n  2\n0\n 70\n0\n 62\n7\n  6\nCONTINUOUS\n"
+          << "  0\nLAYER\n  2\nCUT\n 70\n0\n 62\n1\n  6\nCONTINUOUS\n"
+          << "  0\nLAYER\n  2\nBEND_UP\n 70\n0\n 62\n3\n  6\nDASHED\n"
+          << "  0\nLAYER\n  2\nBEND_DOWN\n 70\n0\n 62\n4\n  6\nDASHED\n"
+          << "  0\nENDTAB\n"
+          << "  0\nENDSEC\n"
+          << "  0\nSECTION\n  2\nENTITIES\n";
+
+      // Helper to project 3D point to 2D flat coordinates
+      auto projectTo2D = [&](const gp_Pnt& p) -> gp_Pnt2d {
+        gp_Vec toPt(c0, p);
+        return gp_Pnt2d(toPt.Dot(uAxis), toPt.Dot(vAxis));
+      };
+
+      // Collect bend edges to avoid drawing them on the CUT layer
+      std::vector<TopoDS_Edge> bendEdges;
+      for (const auto& adjList : adj) {
+        for (const auto& edgePair : adjList) {
+          bendEdges.push_back(edgePair.second);
+        }
+      }
+
+      auto isBendEdge = [&](const TopoDS_Edge& edge) -> bool {
+        for (const auto& be : bendEdges) {
+          if (edge.IsSame(be)) return true;
+        }
+        return false;
+      };
+
+      // 1. Draw outer boundaries and cutouts (non-bend edges) on the 'CUT' layer
+      for (int i = 0; i < M; ++i) {
+        if (!visited[i]) continue;
+        TopExp_Explorer edgeExpCut(uniqueFaces[i], TopAbs_EDGE);
+        for (; edgeExpCut.More(); edgeExpCut.Next()) {
+          const TopoDS_Edge& edge = TopoDS::Edge(edgeExpCut.Current());
+          if (isBendEdge(edge)) continue; // skip bend centerlines
+
+          Standard_Real first, last;
+          Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, first, last);
+          if (!curve.IsNull()) {
+            if (curve->IsKind(STANDARD_TYPE(Geom_Line))) {
+              TopoDS_Vertex v1, v2;
+              TopExp::Vertices(edge, v1, v2);
+              gp_Pnt pStart = BRep_Tool::Pnt(v1).Transformed(flatTransforms[i]);
+              gp_Pnt pEnd = BRep_Tool::Pnt(v2).Transformed(flatTransforms[i]);
+              gp_Pnt2d p1 = projectTo2D(pStart);
+              gp_Pnt2d p2 = projectTo2D(pEnd);
+
+              dxf << "  0\nLINE\n  8\nCUT\n 10\n" << p1.X() << "\n 20\n" << p1.Y() << "\n 30\n0.0\n"
+                  << " 11\n" << p2.X() << "\n 21\n" << p2.Y() << "\n 31\n0.0\n";
+            } else {
+              // Discretize curved edges (e.g. holes, fillets)
+              int numSegments = 30;
+              gp_Pnt2d prevPt;
+              for (int s = 0; s <= numSegments; ++s) {
+                double tParam = first + (last - first) * s / numSegments;
+                gp_Pnt pPt = curve->Value(tParam).Transformed(flatTransforms[i]);
+                gp_Pnt2d currPt = projectTo2D(pPt);
+                if (s > 0) {
+                  dxf << "  0\nLINE\n  8\nCUT\n 10\n" << prevPt.X() << "\n 20\n" << prevPt.Y() << "\n 30\n0.0\n"
+                      << " 11\n" << currPt.X() << "\n 21\n" << currPt.Y() << "\n 31\n0.0\n";
+                }
+                prevPt = currPt;
+              }
+            }
+          }
+        }
+      }
+
+      // 2. Draw bend centerlines on BEND_UP / BEND_DOWN layers, and inject text annotations
+      struct ProcessedBend {
+        int u;
+        int v;
+      };
+      std::vector<ProcessedBend> processedBends;
+
+      auto hasBeenProcessed = [&](int u, int v) -> bool {
+        for (const auto& pb : processedBends) {
+          if ((pb.u == u && pb.v == v) || (pb.u == v && pb.v == u)) return true;
+        }
+        return false;
+      };
+
+      // Traverse adjacency list and draw each bend centerline once
+      for (int cur = 0; cur < M; ++cur) {
+        if (!visited[cur]) continue;
+        for (const auto& edgePair : adj[cur]) {
+          int nbr = edgePair.first;
+          const TopoDS_Edge& originalEdge = edgePair.second;
+          if (hasBeenProcessed(cur, nbr)) continue;
+          processedBends.push_back({cur, nbr});
+
+          // Compute angle/direction to match BFS bend calculation
+          GProp_GProps fpCur, fpNbr;
+          BRepGProp::SurfaceProperties(uniqueFaces[cur], fpCur);
+          BRepGProp::SurfaceProperties(uniqueFaces[nbr], fpNbr);
+          gp_Pnt cCur = fpCur.CentreOfMass();
+          gp_Pnt cNbr = fpNbr.CentreOfMass();
+
+          Standard_Real firstParam, lastParam;
+          Handle(Geom_Curve) curve = BRep_Tool::Curve(originalEdge, firstParam, lastParam);
+          gp_Pnt pMid;
+          gp_Vec dE;
+          gp_Pnt pStart, pEnd;
+          if (!curve.IsNull()) {
+            double midParam = (firstParam + lastParam) * 0.5;
+            gp_Pnt p;
+            gp_Vec v;
+            curve->D1(midParam, p, v);
+            pMid = p;
+            dE = v;
+            TopoDS_Vertex v1, v2;
+            TopExp::Vertices(originalEdge, v1, v2);
+            pStart = BRep_Tool::Pnt(v1);
+            pEnd = BRep_Tool::Pnt(v2);
+          } else {
+            TopExp_Explorer ve(originalEdge, TopAbs_VERTEX);
+            if (ve.More()) {
+              pMid = BRep_Tool::Pnt(TopoDS::Vertex(ve.Current()));
+              pStart = pMid;
+              ve.Next();
+              if (ve.More()) {
+                pEnd = BRep_Tool::Pnt(TopoDS::Vertex(ve.Current()));
+              } else {
+                pEnd = pStart;
+              }
+            } else {
+              pMid = gp_Pnt(0, 0, 0);
+              pStart = pMid;
+              pEnd = pMid;
+            }
+            dE = gp_Vec(0, 0, 1);
+          }
+          if (dE.Magnitude() > 1e-10) dE.Normalize();
+          else dE = gp_Vec(0, 0, 1);
+
+          gp_Vec nCur = faceOutwardNormal(uniqueFaces[cur]);
+          gp_Vec nNbr = faceOutwardNormal(uniqueFaces[nbr]);
+          gp_Vec wCur(pMid, cCur);
+          gp_Vec wNbr(pMid, cNbr);
+          gp_Vec vCur = wCur - gp_Vec(nCur) * wCur.Dot(nCur);
+          gp_Vec vNbr = wNbr - gp_Vec(nNbr) * wNbr.Dot(nNbr);
+          if (vCur.Magnitude() > 1e-10) vCur.Normalize();
+          if (vNbr.Magnitude() > 1e-10) vNbr.Normalize();
+
+          gp_Vec xAx = vCur;
+          gp_Vec yAx = dE.Crossed(vCur);
+          if (yAx.Magnitude() > 1e-10) yAx.Normalize();
+
+          double xVal = vNbr.Dot(xAx);
+          double yVal = vNbr.Dot(yAx);
+          double phi = std::atan2(yVal, xVal);
+          double theta = M_PI - phi;
+
+          // Project endpoints to 2D
+          gp_Pnt pStartTransformed = pStart.Transformed(flatTransforms[cur]);
+          gp_Pnt pEndTransformed = pEnd.Transformed(flatTransforms[cur]);
+          gp_Pnt2d p1 = projectTo2D(pStartTransformed);
+          gp_Pnt2d p2 = projectTo2D(pEndTransformed);
+
+          double angleDeg = std::abs(theta) * 180.0 / M_PI;
+          bool isUp = (theta >= 0.0);
+          std::string layerName = isUp ? "BEND_UP" : "BEND_DOWN";
+          std::string labelText = (std::ostringstream() << std::fixed << std::setprecision(1) << angleDeg << "%%d " << (isUp ? "UP" : "DOWN")).str();
+
+          // Draw bend centerline
+          dxf << "  0\nLINE\n  8\n" << layerName << "\n 10\n" << p1.X() << "\n 20\n" << p1.Y() << "\n 30\n0.0\n"
+              << " 11\n" << p2.X() << "\n 21\n" << p2.Y() << "\n 31\n0.0\n";
+
+          // Calculate offset position for TEXT annotation
+          double mx = (p1.X() + p2.X()) * 0.5;
+          double my = (p1.Y() + p2.Y()) * 0.5;
+          double dx = p2.X() - p1.X();
+          double dy = p2.Y() - p1.Y();
+          double len = std::sqrt(dx*dx + dy*dy);
+          if (len > 1e-5) {
+            dx /= len;
+            dy /= len;
+          } else {
+            dx = 1.0;
+            dy = 0.0;
+          }
+          // Offset perpendicular by 3.0 mm
+          double tx = mx - dy * 3.0;
+          double ty = my + dx * 3.0;
+
+          // Draw TEXT entity
+          dxf << "  0\nTEXT\n  8\n" << layerName << "\n 10\n" << tx << "\n 20\n" << ty << "\n 30\n0.0\n"
+              << " 40\n2.5\n  1\n" << labelText << "\n";
+        }
+      }
+
+      dxf << "  0\nENDSEC\n  0\nEOF\n";
 
       UnfoldId id = generateUUID();
-      UnfoldState state{id, shellId, flatW, flatH, kFactor, 1, ""};
+      UnfoldState state{id, shellId, flatW, flatH, kFactor, bendCount, dxf.str()};
       unfolds_[id] = state;
 
-      return UnfoldResult{id, flatW, flatH, kFactor, 1, token, {}};
+      return UnfoldResult{id, flatW, flatH, kFactor, bendCount, true, val.nominalThickness, token, {}};
 
     } catch (const Standard_Failure& e) {
       throw GeometryError("GE_UNFOLD_FAILED",
@@ -608,17 +1402,21 @@ public:
                           "Unfold not found: " + unfoldId, false, "");
     }
 
-    // Phase A stub: full DXF export implemented in Phase C (T072)
     const UnfoldState& state = it->second;
-    std::ostringstream dxf;
-    dxf << "  0\nSECTION\n  2\nHEADER\n  0\nENDSEC\n"
-        << "  0\nSECTION\n  2\nENTITIES\n"
-        << "  0\nLINE\n  8\n0\n"
-        << " 10\n0.0\n 20\n0.0\n 30\n0.0\n"
-        << " 11\n" << state.flatWidthMm << "\n 21\n0.0\n 31\n0.0\n"
-        << "  0\nENDSEC\n  0\nEOF\n";
 
-    return DxfExportResult{dxf.str(), 4,
+    int entityCount = 0;
+    size_t pos = 0;
+    while ((pos = state.dxfContent.find("  0\nLINE", pos)) != std::string::npos) {
+      entityCount++;
+      pos += 7;
+    }
+    pos = 0;
+    while ((pos = state.dxfContent.find("  0\nTEXT", pos)) != std::string::npos) {
+      entityCount++;
+      pos += 7;
+    }
+
+    return DxfExportResult{state.dxfContent, entityCount,
                            state.flatWidthMm, state.flatHeightMm};
   }
 
@@ -824,6 +1622,26 @@ public:
       svg += "\" fill=\"";
       svg += COLOURS[colIdx % 8];
       svg += "\" opacity=\"0.7\" stroke=\"#333\" stroke-width=\"0.5\"/>\n";
+
+      // Draw bend lines in SVG if bendCount > 0
+      auto unfoldIt = unfolds_.find(pl.unfoldId);
+      if (unfoldIt != unfolds_.end() && unfoldIt->second.bendCount > 0) {
+        int bc = unfoldIt->second.bendCount;
+        double step = ph_ / static_cast<double>(bc + 1);
+        for (int i = 1; i <= bc; ++i) {
+          int ly = static_cast<int>(py + step * i);
+          svg += "<line x1=\"";
+          svg += std::to_string(px);
+          svg += "\" y1=\"";
+          svg += std::to_string(ly);
+          svg += "\" x2=\"";
+          svg += std::to_string(px + pw_);
+          svg += "\" y2=\"";
+          svg += std::to_string(ly);
+          svg += "\" stroke=\"#ffffff\" stroke-dasharray=\"2,2\" stroke-width=\"0.5\"/>\n";
+        }
+      }
+
       ++colIdx;
     }
     svg += "</svg>\n";
@@ -3549,9 +4367,12 @@ private:
 
     // For each outer group, find its closest anti-parallel inner group
     struct PanelCut {
-      gp_Pln  innerPlane;   // cutting plane (inner face plane)
-      gp_Pnt  outerRefPt;   // point clearly on the outer side of innerPlane
-      double  distFromCenter;
+      int                 groupI;
+      int                 groupJ;
+      double              bestDist;
+      double              distFromCenter;
+      std::vector<int>    allGroupsI;
+      std::vector<int>    allGroupsJ;
     };
 
     std::vector<PanelCut> cuts;
@@ -3560,6 +4381,20 @@ private:
     for (int i = 0; i < (int)groups.size(); ++i) {
       if (!groups[i].isOuter) continue;
 
+      // Skip non-planar face groups (rounded bends / corners)
+      const TopoDS_Face& fOut = TopoDS::Face(faceMap(groups[i].faceIndices[0]));
+      Handle(Geom_Surface) surfOut = BRep_Tool::Surface(fOut);
+      if (surfOut.IsNull() || !surfOut->IsKind(STANDARD_TYPE(Geom_Plane))) continue;
+
+      // Compute bounding box for group i safely using vertices
+      Bnd_Box boxI;
+      for (int idx : groups[i].faceIndices) {
+        const TopoDS_Face& f = TopoDS::Face(faceMap(idx));
+        for (TopExp_Explorer ex(f, TopAbs_VERTEX); ex.More(); ex.Next()) {
+          boxI.Add(BRep_Tool::Pnt(TopoDS::Vertex(ex.Current())));
+        }
+      }
+
       double bestDist = std::numeric_limits<double>::max();
       int    bestJ    = -1;
 
@@ -3567,30 +4402,58 @@ private:
         if (i == j || groups[j].isOuter) continue;
         if (groups[i].normal.Dot(groups[j].normal) > -0.95) continue;
 
-        // Measure face-to-face distance
-        const TopoDS_Face& fOut = TopoDS::Face(faceMap(groups[i].faceIndices[0]));
-        const TopoDS_Face& fIn  = TopoDS::Face(faceMap(groups[j].faceIndices[0]));
-        BRepExtrema_DistShapeShape d(fOut, fIn);
-        if (!d.IsDone() || d.Value() > maxThicknessMm) continue;
-        if (d.Value() < bestDist) { bestDist = d.Value(); bestJ = j; }
+        // Compute bounding box for group j safely using vertices
+        Bnd_Box boxJ;
+        for (int idx : groups[j].faceIndices) {
+          const TopoDS_Face& f = TopoDS::Face(faceMap(idx));
+          for (TopExp_Explorer ex(f, TopAbs_VERTEX); ex.More(); ex.Next()) {
+            boxJ.Add(BRep_Tool::Pnt(TopoDS::Vertex(ex.Current())));
+          }
+        }
+
+        // Check if group i and group j overlap transversely by inflating boxI
+        Bnd_Box boxI_inflated = boxI;
+        boxI_inflated.Enlarge(maxThicknessMm * 1.5);
+        if (boxI_inflated.IsOut(boxJ)) continue;
+
+        // Measure face-to-face distance using plane-to-plane projection
+        double dist = std::abs(gp_Vec(groups[i].centroid, groups[j].centroid).Dot(groups[i].normal));
+        if (dist > maxThicknessMm) continue;
+        if (dist < bestDist) { bestDist = dist; bestJ = j; }
       }
 
       if (bestJ < 0) continue;
 
-      // Inner face plane: use inner group's centroid and the outer normal's reverse
-      gp_Dir innerNormalDir(
-          -groups[i].normal.X(), -groups[i].normal.Y(), -groups[i].normal.Z());
-      gp_Pln innerPln(groups[bestJ].centroid, innerNormalDir);
-
-      // Outer reference point: clearly outside the solid on the outer face's side
-      gp_Pnt outerRef(
-          groups[i].centroid.X() + groups[i].normal.X() * (bestDist + 20.0),
-          groups[i].centroid.Y() + groups[i].normal.Y() * (bestDist + 20.0),
-          groups[i].centroid.Z() + groups[i].normal.Z() * (bestDist + 20.0));
-
       double distFromCenter = groups[i].normal.Dot(gp_Vec(solidCentroid, groups[i].centroid));
-      cuts.push_back({innerPln, outerRef, distFromCenter});
+      cuts.push_back({i, bestJ, bestDist, distFromCenter, {}, {}});
     }
+
+    // Merge coplanar cuts (belonging to same wall plane but split by holes)
+    std::vector<PanelCut> mergedCuts;
+    for (const auto& cut : cuts) {
+      bool foundCoplanar = false;
+      for (auto& mCut : mergedCuts) {
+        gp_Dir n1 = groups[cut.groupI].normal;
+        gp_Dir n2 = groups[mCut.groupI].normal;
+        if (n1.Dot(n2) > 0.95) {
+          double dist = std::abs(gp_Vec(groups[cut.groupI].centroid, groups[mCut.groupI].centroid).Dot(n1));
+          if (dist < 1.0) {
+            mCut.allGroupsI.push_back(cut.groupI);
+            mCut.allGroupsJ.push_back(cut.groupJ);
+            mCut.bestDist = std::min(mCut.bestDist, cut.bestDist);
+            foundCoplanar = true;
+            break;
+          }
+        }
+      }
+      if (!foundCoplanar) {
+        PanelCut newMCut = cut;
+        newMCut.allGroupsI = {cut.groupI};
+        newMCut.allGroupsJ = {cut.groupJ};
+        mergedCuts.push_back(newMCut);
+      }
+    }
+    cuts = std::move(mergedCuts);
 
     // Process outermost panels first (minimises corner-ownership artefacts)
     std::sort(cuts.begin(), cuts.end(), [](const PanelCut& a, const PanelCut& b) {
@@ -3602,26 +4465,62 @@ private:
     for (const auto& cut : cuts) {
       if (remainder.IsNull()) break;
 
-      // Half-space on the outer side of the inner plane.
-      // Use the precomputed planeHalfSize (diagonal of the original solid × 1.1 + 10 mm)
-      // so the planeFace always spans the full solid cross-section at this plane.
-      BRepBuilderAPI_MakeFace planeFaceMaker(
-          cut.innerPlane,
-          -planeHalfSize, planeHalfSize,
-          -planeHalfSize, planeHalfSize);
-      if (!planeFaceMaker.IsDone()) continue;
-      TopoDS_Face planeFace = planeFaceMaker.Face();
+      int i = cut.groupI;
+      double bestDist = cut.bestDist;
 
-      BRepPrimAPI_MakeHalfSpace hs(planeFace, cut.outerRefPt);
-      hs.Build();
-      if (!hs.IsDone()) continue;
+      // Define local coordinate system (U, V, N) for the flat face group i
+      gp_Dir N(groups[i].normal);
+      gp_Dir U;
+      if (std::abs(N.X()) < 0.9) U = gp_Dir(1, 0, 0).Crossed(N);
+      else U = gp_Dir(0, 1, 0).Crossed(N);
+      gp_Dir V = N.Crossed(U);
 
-      // Extract panel slab = remainder ∩ half-space
-      BRepAlgoAPI_Common extract(remainder, hs.Solid());
-      extract.Build();
-      if (!extract.IsDone() || extract.Shape().IsNull()) {
-        throw GeometryError(GE_DECOMPOSE_CUT_FAILED, "Panel extraction failed", true, "rollback");
+      // Find min/max of all vertices of group i in local axes
+      double uMin = 1e30, uMax = -1e30;
+      double vMin = 1e30, vMax = -1e30;
+      double nValue = 0.0;
+      bool firstPt = true;
+
+      for (int gIdx : cut.allGroupsI) {
+        for (int idx : groups[gIdx].faceIndices) {
+          const TopoDS_Face& f = TopoDS::Face(faceMap(idx));
+          for (TopExp_Explorer ex(f, TopAbs_VERTEX); ex.More(); ex.Next()) {
+            gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(ex.Current()));
+            double u = gp_Vec(p.XYZ()).Dot(U.XYZ());
+            double v = gp_Vec(p.XYZ()).Dot(V.XYZ());
+            double n = gp_Vec(p.XYZ()).Dot(N.XYZ());
+            uMin = std::min(uMin, u); uMax = std::max(uMax, u);
+            vMin = std::min(vMin, v); vMax = std::max(vMax, v);
+            if (firstPt) { nValue = n; firstPt = false; }
+          }
+        }
       }
+
+      double dx = uMax - uMin;
+      double dy = vMax - vMin;
+      double dz = bestDist + 1.0; // 0.5 mm bleed on each side
+
+      if (dx <= 1e-3 || dy <= 1e-3 || dz <= 1e-3) continue;
+
+      // Origin at local U*uMin + V*vMin + N*(nValue - bestDist - 0.5)
+      gp_Pnt origin(U.XYZ() * uMin + V.XYZ() * vMin + N.XYZ() * (nValue - bestDist - 0.5));
+      gp_Ax2 localSystem(origin, N, U);
+
+      std::cout << "[DEBUG splitMode2] Box solid info:" << std::endl;
+      std::cout << "  origin: (" << origin.X() << ", " << origin.Y() << ", " << origin.Z() << ")" << std::endl;
+      std::cout << "  N: (" << N.X() << ", " << N.Y() << ", " << N.Z() << ")" << std::endl;
+      std::cout << "  U: (" << U.X() << ", " << U.Y() << ", " << U.Z() << ")" << std::endl;
+      std::cout << "  dx=" << dx << ", dy=" << dy << ", dz=" << dz << std::endl;
+
+      BRepPrimAPI_MakeBox boxMaker(localSystem, dx, dy, dz);
+      boxMaker.Build();
+      if (!boxMaker.IsDone()) continue;
+      TopoDS_Solid boxSolid = boxMaker.Solid();
+
+      // Extract panel slab = remainder ∩ boxSolid
+      BRepAlgoAPI_Common extract(remainder, boxSolid);
+      extract.Build();
+      if (!extract.IsDone() || extract.Shape().IsNull()) continue;
 
       GProp_GProps ep;
       BRepGProp::VolumeProperties(extract.Shape(), ep);
@@ -3640,8 +4539,8 @@ private:
       (void)protrusionIds;       // reserved for future post-cut handling
       (void)protrusionParents;   // reserved for future post-cut handling
 
-      // Remainder = remainder minus the panel slab
-      BRepAlgoAPI_Cut cutRemainder(remainder, hs.Solid());
+      // Remainder = remainder minus the boxSolid
+      BRepAlgoAPI_Cut cutRemainder(remainder, boxSolid);
       cutRemainder.Build();
       if (historyOut && cutRemainder.IsDone()) {
         auto records = captureHistory(cutRemainder, remainder,
@@ -4256,16 +5155,103 @@ private:
         TopExp_Explorer edgeExp(fused, TopAbs_EDGE);
         for (; edgeExp.More(); edgeExp.Next()) {
           const TopoDS_Edge& e = TopoDS::Edge(edgeExp.Current());
-          if (wantAll ||
-              std::find(targetEdges.begin(), targetEdges.end(), shapeId(e)) != targetEdges.end()) {
+          bool shouldFillet = false;
+          if (wantAll) {
+            // Find edges that touch both original bodies inputA and inputB at both their start and end vertices.
+            // This isolates only the joint edges connecting the two parts.
+            TopoDS_Vertex vFirst, vLast;
+            TopExp_Explorer ve(e, TopAbs_VERTEX);
+            if (ve.More()) {
+              vFirst = TopoDS::Vertex(ve.Current());
+              ve.Next();
+            }
+            if (ve.More()) {
+              vLast = TopoDS::Vertex(ve.Current());
+            }
+
+            if (!vFirst.IsNull() && !vLast.IsNull()) {
+              BRepExtrema_DistShapeShape distFirstA(vFirst, inputA);
+              BRepExtrema_DistShapeShape distFirstB(vFirst, inputB);
+              BRepExtrema_DistShapeShape distLastA(vLast, inputA);
+              BRepExtrema_DistShapeShape distLastB(vLast, inputB);
+              if (distFirstA.IsDone() && distFirstB.IsDone() && distLastA.IsDone() && distLastB.IsDone()) {
+                double dF1 = distFirstA.Value();
+                double dF2 = distFirstB.Value();
+                double dL1 = distLastA.Value();
+                double dL2 = distLastB.Value();
+                if (dF1 < 0.1 && dF2 < 0.1 && dL1 < 0.1 && dL2 < 0.1) {
+                  double length = 0.0;
+                  GProp_GProps prop;
+                  BRepGProp::LinearProperties(e, prop);
+                  length = prop.Mass();
+                  if (length > 10.0) {
+                    shouldFillet = true;
+                  }
+                }
+              }
+            }
+          } else {
+            shouldFillet = (std::find(targetEdges.begin(), targetEdges.end(), shapeId(e)) != targetEdges.end());
+          }
+
+          if (shouldFillet) {
             filletMaker.Add(bendRadiusMm, e);
             addedAny = true;
           }
         }
         if (addedAny) {
-          filletMaker.Build();
-          if (filletMaker.IsDone() && !filletMaker.Shape().IsNull()) {
-            result = filletMaker.Shape();
+          bool ok = false;
+          try {
+            filletMaker.Build();
+            if (filletMaker.IsDone() && !filletMaker.Shape().IsNull()) {
+              result = filletMaker.Shape();
+              ok = true;
+            }
+          } catch (const Standard_Failure&) {
+            ok = false;
+          }
+
+          if (!ok && wantAll) {
+            // Fallback: if filleting all joint edges failed (e.g. radius conflict), try only the single longest joint edge.
+            TopoDS_Edge longestEdge;
+            double maxLength = 0.0;
+            TopExp_Explorer edgeExpFall(fused, TopAbs_EDGE);
+            for (; edgeExpFall.More(); edgeExpFall.Next()) {
+              const TopoDS_Edge& e = TopoDS::Edge(edgeExpFall.Current());
+              TopoDS_Vertex vFirst, vLast;
+              TopExp_Explorer ve(e, TopAbs_VERTEX);
+              if (ve.More()) { vFirst = TopoDS::Vertex(ve.Current()); ve.Next(); }
+              if (ve.More()) { vLast = TopoDS::Vertex(ve.Current()); }
+              if (!vFirst.IsNull() && !vLast.IsNull()) {
+                BRepExtrema_DistShapeShape distFirstA(vFirst, inputA);
+                BRepExtrema_DistShapeShape distFirstB(vFirst, inputB);
+                BRepExtrema_DistShapeShape distLastA(vLast, inputA);
+                BRepExtrema_DistShapeShape distLastB(vLast, inputB);
+                if (distFirstA.IsDone() && distFirstB.IsDone() && distLastA.IsDone() && distLastB.IsDone()) {
+                  if (distFirstA.Value() < 0.1 && distFirstB.Value() < 0.1 &&
+                      distLastA.Value() < 0.1 && distLastB.Value() < 0.1) {
+                    GProp_GProps prop;
+                    BRepGProp::LinearProperties(e, prop);
+                    double len = prop.Mass();
+                    if (len > maxLength) {
+                      maxLength = len;
+                      longestEdge = e;
+                    }
+                  }
+                }
+              }
+            }
+            if (maxLength > 10.0 && !longestEdge.IsNull()) {
+              BRepFilletAPI_MakeFillet fallbackMaker(fused);
+              fallbackMaker.Add(bendRadiusMm, longestEdge);
+              try {
+                fallbackMaker.Build();
+                if (fallbackMaker.IsDone() && !fallbackMaker.Shape().IsNull()) {
+                  result = fallbackMaker.Shape();
+                }
+              } catch (const Standard_Failure&) {
+              }
+            }
           }
         }
       } catch (const Standard_Failure&) {
@@ -5050,6 +6036,710 @@ private:
     double dot = std::clamp(nA.Dot(nB), -1.0, 1.0);
     double angleDeg = std::acos(dot) * 180.0 / M_PI;
     return angleDeg;
+  }
+  static bool detectCycleDFS(int u, int p, const std::vector<std::vector<int>>& adj, std::vector<bool>& visited) {
+    visited[u] = true;
+    for (int v : adj[u]) {
+      if (!visited[v]) {
+        if (detectCycleDFS(v, u, adj, visited)) return true;
+      } else if (v != p) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  SheetMetalValidationResult validateSheetMetalShapeLocked(const TopoDS_Shape& shape) {
+    SheetMetalValidationResult result;
+    result.isValid = false;
+    result.canFlatten = false;
+
+    // Helper: calculate face center
+    auto faceCenter = [](const TopoDS_Face& f) -> gp_Pnt {
+      GProp_GProps fp;
+      BRepGProp::SurfaceProperties(f, fp);
+      return fp.CentreOfMass();
+    };
+
+    // Helper: check if two faces share an edge
+    auto facesShareEdge = [](const TopoDS_Face& f1, const TopoDS_Face& f2) -> bool {
+      TopExp_Explorer e1(f1, TopAbs_EDGE);
+      for (; e1.More(); e1.Next()) {
+        const TopoDS_Edge& edge1 = TopoDS::Edge(e1.Current());
+        TopExp_Explorer e2(f2, TopAbs_EDGE);
+        for (; e2.More(); e2.Next()) {
+          if (edge1.IsSame(e2.Current())) {
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+
+    auto minLocalDimension = [](const TopoDS_Face& f) -> double {
+      Handle(Geom_Surface) surf = BRep_Tool::Surface(f);
+      if (surf.IsNull() || !surf->IsKind(STANDARD_TYPE(Geom_Plane))) return 0.0;
+      Handle(Geom_Plane) plane = Handle(Geom_Plane)::DownCast(surf);
+      gp_Pln pln = plane->Pln();
+      gp_Ax3 pos = pln.Position();
+      gp_Dir dirX = pos.XDirection();
+      gp_Dir dirY = pos.YDirection();
+
+      double uMin = 1e30, uMax = -1e30;
+      double vMin = 1e30, vMax = -1e30;
+      bool any = false;
+      for (TopExp_Explorer ex(f, TopAbs_VERTEX); ex.More(); ex.Next()) {
+        gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(ex.Current()));
+        gp_Vec vec(pos.Location(), p);
+        double u = vec.Dot(gp_Vec(dirX));
+        double v = vec.Dot(gp_Vec(dirY));
+        uMin = std::min(uMin, u); uMax = std::max(uMax, u);
+        vMin = std::min(vMin, v); vMax = std::max(vMax, v);
+        any = true;
+      }
+      if (!any) return 0.0;
+      return std::min(uMax - uMin, vMax - vMin);
+    };
+
+    try {
+      // 1. Gather all faces and compute total surface area
+      double totalArea = 0.0;
+      std::vector<std::pair<TopoDS_Face, double>> planarFacesWithArea;
+      double maxPlanarArea = 0.0;
+
+      TopExp_Explorer faceExp(shape, TopAbs_FACE);
+      int totalFaceCount = 0;
+      for (; faceExp.More(); faceExp.Next()) {
+        totalFaceCount++;
+        const TopoDS_Face& face = TopoDS::Face(faceExp.Current());
+        GProp_GProps fp;
+        BRepGProp::SurfaceProperties(face, fp);
+        double area = fp.Mass();
+        totalArea += area;
+
+        Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
+        if (!surf.IsNull() && surf->IsKind(STANDARD_TYPE(Geom_Plane))) {
+          planarFacesWithArea.push_back({face, area});
+          if (area > maxPlanarArea) maxPlanarArea = area;
+        }
+      }
+
+      if (totalFaceCount == 0 || planarFacesWithArea.empty()) {
+        result.validationErrors.push_back("Shape has no planar faces or is empty.");
+        return result;
+      }
+
+      // 2. Classify plane equation parameters for planar faces
+      struct PlaneFaceInfo {
+        TopoDS_Face face;
+        double area;
+        gp_Pnt center;
+        gp_Vec normal;
+        double D;
+        bool matched = false;
+        int partnerIdx = -1;
+      };
+
+      std::vector<PlaneFaceInfo> planeInfos;
+      for (const auto& pair : planarFacesWithArea) {
+        PlaneFaceInfo info;
+        info.face = pair.first;
+        info.area = pair.second;
+        info.center = faceCenter(info.face);
+        info.normal = faceOutwardNormal(info.face);
+        info.D = info.normal.Dot(gp_Vec(info.center.X(), info.center.Y(), info.center.Z()));
+        planeInfos.push_back(info);
+      }
+
+      // Merge coplanar face infos to handle split segments robustly
+      std::vector<PlaneFaceInfo> mergedPlaneInfos;
+      for (const auto& info : planeInfos) {
+        bool found = false;
+        for (auto& mInfo : mergedPlaneInfos) {
+          if (info.normal.Dot(mInfo.normal) > 0.95) {
+            double dist = std::abs(gp_Vec(info.center, mInfo.center).Dot(info.normal));
+            if (dist < 0.1) {
+              double oldArea = mInfo.area;
+              mInfo.area += info.area;
+              mInfo.center = gp_Pnt(
+                  (mInfo.center.XYZ() * oldArea + info.center.XYZ() * info.area) / mInfo.area
+              );
+              found = true;
+              break;
+            }
+          }
+        }
+        if (!found) {
+          mergedPlaneInfos.push_back(info);
+        }
+      }
+      planeInfos = std::move(mergedPlaneInfos);
+
+      // Sort planeInfos in descending order of area to ensure large skins are matched first
+      std::sort(planeInfos.begin(), planeInfos.end(), [](const PlaneFaceInfo& a, const PlaneFaceInfo& b) {
+        return a.area > b.area;
+      });
+
+      // 3. Perform pairwise face matching to identify thin-sheet skins
+      int N = static_cast<int>(planeInfos.size());
+      double areaWeightedThicknessSum = 0.0;
+      double matchedAreaSum = 0.0;
+
+      for (int i = 0; i < N; ++i) {
+        if (planeInfos[i].matched) continue;
+
+        int bestPartner = -1;
+        double bestDist = 0.0;
+        double maxScore = -1.0;
+
+        for (int j = 0; j < N; ++j) {
+          if (i == j || planeInfos[j].matched) continue;
+
+          // Check if normals are opposite (anti-parallel)
+          double dot = planeInfos[i].normal.Dot(planeInfos[j].normal);
+          if (dot < -0.95) {
+            // Perpendicular thickness distance
+            gp_Vec diff(planeInfos[i].center, planeInfos[j].center);
+            double dist = std::abs(diff.Dot(planeInfos[i].normal));
+
+            if (dist >= 0.5 && dist <= 6.0) {
+              // Overlap projection check: centers projected onto the plane should be close
+              gp_Vec proj = diff - planeInfos[i].normal * diff.Dot(planeInfos[i].normal);
+              double projDist = proj.Magnitude();
+              
+              double overlapThreshold = 2.0 * std::sqrt(planeInfos[i].area + planeInfos[j].area);
+              if (projDist < overlapThreshold) {
+                double score = planeInfos[j].area / (1.0 + projDist);
+                if (score > maxScore) {
+                  maxScore = score;
+                  bestPartner = j;
+                  bestDist = dist;
+                }
+              }
+            }
+          }
+        }
+
+        if (bestPartner != -1) {
+          planeInfos[i].matched = true;
+          planeInfos[i].partnerIdx = bestPartner;
+          planeInfos[bestPartner].matched = true;
+          planeInfos[bestPartner].partnerIdx = i;
+
+          double combinedArea = planeInfos[i].area + planeInfos[bestPartner].area;
+          areaWeightedThicknessSum += combinedArea * bestDist;
+          matchedAreaSum += combinedArea;
+        }
+      }
+
+      // If no matched panels, it's not a thin-sheet metal part
+      if (matchedAreaSum < 1e-5) {
+        result.validationErrors.push_back("No matching parallel thin-sheet face pairs found.");
+        return result;
+      }
+
+      double nominalThickness = areaWeightedThicknessSum / matchedAreaSum;
+      result.nominalThickness = nominalThickness;
+
+      // 4. Validate thickness uniformity and overall surface area ratio
+      double matchedRatio = matchedAreaSum / totalArea;
+      if (matchedRatio < 0.70) { // Enforce 70% limit for complex boundaries
+        std::cout << "[DEBUG VALIDATION] matchedRatio=" << matchedRatio 
+                  << " (matchedAreaSum=" << matchedAreaSum 
+                  << ", totalArea=" << totalArea << ")" << std::endl;
+        std::cout << "  Plane infos count N=" << N << std::endl;
+        for (int i = 0; i < N; ++i) {
+          std::cout << "    Face " << i 
+                    << ": area=" << planeInfos[i].area 
+                    << ", center=(" << planeInfos[i].center.X() << "," << planeInfos[i].center.Y() << "," << planeInfos[i].center.Z() << ")"
+                    << ", normal=(" << planeInfos[i].normal.X() << "," << planeInfos[i].normal.Y() << "," << planeInfos[i].normal.Z() << ")"
+                    << ", matched=" << (planeInfos[i].matched ? "true" : "false") 
+                    << ", partnerIdx=" << planeInfos[i].partnerIdx << std::endl;
+        }
+        result.validationErrors.push_back("Bulky or non-sheet-metal geometry detected. Area ratio of parallel skins is below limit.");
+        return result;
+      }
+
+      // Check thickness uniformity for each matched pair
+      for (int i = 0; i < N; ++i) {
+        if (planeInfos[i].matched && planeInfos[i].partnerIdx > i) {
+          int j = planeInfos[i].partnerIdx;
+          gp_Vec diff(planeInfos[i].center, planeInfos[j].center);
+          double dist = std::abs(diff.Dot(planeInfos[i].normal));
+          double dev = std::abs(dist - nominalThickness) / nominalThickness;
+          if (dev > 0.15) { // 15% tolerance
+            result.validationErrors.push_back("Non-uniform wall thickness detected. Wall thickness varies from nominal.");
+            return result;
+          }
+        }
+      }
+
+      // 5. Construct Face-Bend Panel Connectivity Graph and check for cycles/T-junctions
+      struct Panel {
+        int idxA;
+        int idxB;
+        std::vector<int> neighbors;
+      };
+
+      std::vector<Panel> panels;
+      for (int i = 0; i < N; ++i) {
+        if (planeInfos[i].matched && planeInfos[i].partnerIdx > i) {
+          // Skip narrow thickness faces
+          double minDim = minLocalDimension(planeInfos[i].face);
+          if (minDim < 2.5 * nominalThickness) {
+            continue;
+          }
+          // Skip extremely small matched face pairs that are actually thickness boundary faces
+          // rather than real unfolding panel sheets (e.g. area < 5.0 * t * t)
+          double faceArea = planeInfos[i].area;
+          if (faceArea < 5.0 * nominalThickness * nominalThickness) {
+            continue;
+          }
+          Panel p;
+          p.idxA = i;
+          p.idxB = planeInfos[i].partnerIdx;
+          panels.push_back(p);
+        }
+      }
+
+      int P = static_cast<int>(panels.size());
+
+      // Helper to check if two panels share a curved face or an edge
+      auto arePanelsConnected = [&](int p1, int p2) -> bool {
+        // Check direct edge sharing (sharp joint)
+        if (facesShareEdge(planeInfos[panels[p1].idxA].face, planeInfos[panels[p2].idxA].face) ||
+            facesShareEdge(planeInfos[panels[p1].idxA].face, planeInfos[panels[p2].idxB].face) ||
+            facesShareEdge(planeInfos[panels[p1].idxB].face, planeInfos[panels[p2].idxA].face) ||
+            facesShareEdge(planeInfos[panels[p1].idxB].face, planeInfos[panels[p2].idxB].face)) {
+          return true;
+        }
+
+        // Check connection via curved/cylindrical faces in the solid
+        TopExp_Explorer faceExpAll(shape, TopAbs_FACE);
+        for (; faceExpAll.More(); faceExpAll.Next()) {
+          const TopoDS_Face& fCur = TopoDS::Face(faceExpAll.Current());
+          Handle(Geom_Surface) surf = BRep_Tool::Surface(fCur);
+          if (surf.IsNull() || surf->IsKind(STANDARD_TYPE(Geom_Plane))) continue;
+
+          // If curved face shares edge with p1 and p2
+          bool connectsP1 = false;
+          bool connectsP2 = false;
+          TopExp_Explorer eCur(fCur, TopAbs_EDGE);
+          for (; eCur.More(); eCur.Next()) {
+            const TopoDS_Edge& edge = TopoDS::Edge(eCur.Current());
+            // Does it share with P1
+            TopExp_Explorer eP1A(planeInfos[panels[p1].idxA].face, TopAbs_EDGE);
+            for (; eP1A.More(); eP1A.Next()) {
+              if (edge.IsSame(eP1A.Current())) connectsP1 = true;
+            }
+            TopExp_Explorer eP1B(planeInfos[panels[p1].idxB].face, TopAbs_EDGE);
+            for (; eP1B.More(); eP1B.Next()) {
+              if (edge.IsSame(eP1B.Current())) connectsP1 = true;
+            }
+            // Does it share with P2
+            TopExp_Explorer eP2A(planeInfos[panels[p2].idxA].face, TopAbs_EDGE);
+            for (; eP2A.More(); eP2A.Next()) {
+              if (edge.IsSame(eP2A.Current())) connectsP2 = true;
+            }
+            TopExp_Explorer eP2B(planeInfos[panels[p2].idxB].face, TopAbs_EDGE);
+            for (; eP2B.More(); eP2B.Next()) {
+              if (edge.IsSame(eP2B.Current())) connectsP2 = true;
+            }
+          }
+
+          if (connectsP1 && connectsP2) return true;
+        }
+
+        return false;
+      };
+
+      // Populate adjacency
+      for (int i = 0; i < P; ++i) {
+        for (int j = i + 1; j < P; ++j) {
+          if (arePanelsConnected(i, j)) {
+            panels[i].neighbors.push_back(j);
+            panels[j].neighbors.push_back(i);
+          }
+        }
+      }
+
+      // Check for T-junctions:
+      // A joint/bend connections check: if any curved bend face connects 3 or more panels
+      TopExp_Explorer faceExpCylinder(shape, TopAbs_FACE);
+      for (; faceExpCylinder.More(); faceExpCylinder.Next()) {
+        const TopoDS_Face& fCur = TopoDS::Face(faceExpCylinder.Current());
+        Handle(Geom_Surface) surf = BRep_Tool::Surface(fCur);
+        if (surf.IsNull() || surf->IsKind(STANDARD_TYPE(Geom_Plane))) continue;
+
+        std::set<int> connectedPanels;
+        TopExp_Explorer eCur(fCur, TopAbs_EDGE);
+        for (; eCur.More(); eCur.Next()) {
+          const TopoDS_Edge& edge = TopoDS::Edge(eCur.Current());
+          for (int p = 0; p < P; ++p) {
+            TopExp_Explorer eP_A(planeInfos[panels[p].idxA].face, TopAbs_EDGE);
+            for (; eP_A.More(); eP_A.Next()) {
+              if (edge.IsSame(eP_A.Current())) connectedPanels.insert(p);
+            }
+            TopExp_Explorer eP_B(planeInfos[panels[p].idxB].face, TopAbs_EDGE);
+            for (; eP_B.More(); eP_B.Next()) {
+              if (edge.IsSame(eP_B.Current())) connectedPanels.insert(p);
+            }
+          }
+        }
+        if (connectedPanels.size() >= 3) {
+          result.validationErrors.push_back("GE_UNFOLD_T_JUNCTION: Un-unfoldable T-junction joint detected.");
+          return result;
+        }
+      }
+
+      // Check sharp edges T-junctions
+      TopExp_Explorer edgeExpAll(shape, TopAbs_EDGE);
+      for (; edgeExpAll.More(); edgeExpAll.Next()) {
+        const TopoDS_Edge& edge = TopoDS::Edge(edgeExpAll.Current());
+        std::set<int> connectedPanels;
+        for (int p = 0; p < P; ++p) {
+          TopExp_Explorer eP_A(planeInfos[panels[p].idxA].face, TopAbs_EDGE);
+          for (; eP_A.More(); eP_A.Next()) {
+            if (edge.IsSame(eP_A.Current())) connectedPanels.insert(p);
+          }
+          TopExp_Explorer eP_B(planeInfos[panels[p].idxB].face, TopAbs_EDGE);
+          for (; eP_B.More(); eP_B.Next()) {
+            if (edge.IsSame(eP_B.Current())) connectedPanels.insert(p);
+          }
+        }
+        if (connectedPanels.size() >= 3) {
+          result.validationErrors.push_back("GE_UNFOLD_T_JUNCTION: Un-unfoldable T-junction sharp edge joint detected.");
+          return result;
+        }
+      }
+
+      // Check for cycles using DFS cycle detection
+      std::vector<bool> visited(P, false);
+      std::vector<std::vector<int>> adjList(P);
+      for (int i = 0; i < P; ++i) adjList[i] = panels[i].neighbors;
+
+      for (int i = 0; i < P; ++i) {
+        if (!visited[i]) {
+          if (detectCycleDFS(i, -1, adjList, visited)) {
+            result.validationErrors.push_back("GE_UNFOLD_CYCLE_DETECTED: A cyclical bend loop was detected.");
+            return result;
+          }
+        }
+      }
+
+      result.isValid = true;
+      result.canFlatten = true;
+
+    } catch (const Standard_Failure& e) {
+      result.validationErrors.push_back("OCCT validation exception: " + std::string(e.GetMessageString()));
+    }
+
+    return result;
+  }
+
+  SheetMetalValidationResult validateSheetMetalLocked(const ShellId& partId) {
+    TopoDS_Shape shape;
+    if (auto sit = shells_.find(partId); sit != shells_.end()) {
+      shape = sit->second.shape;
+    } else if (auto it = solids_.find(partId); it != solids_.end()) {
+      shape = it->second.shape;
+    } else {
+      throw GeometryError("GE_SOLID_NOT_FOUND", "Shell not found: " + partId, false, "");
+    }
+    return validateSheetMetalShapeLocked(shape);
+  }
+
+  SheetMetalValidationResult validateSheetMetal(const ShellId& partId) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return validateSheetMetalLocked(partId);
+  }
+
+  CurvedRebuildResult reconstructCurvedBends(const ShellId& partId) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    TopoDS_Shape originalShape;
+    bool isSolid = false;
+    if (auto sit = shells_.find(partId); sit != shells_.end()) {
+      originalShape = sit->second.shape;
+    } else if (auto itS = solids_.find(partId); itS != solids_.end()) {
+      originalShape = itS->second.shape;
+      isSolid = true;
+    } else {
+      throw GeometryError("GE_SOLID_NOT_FOUND", "Shell or solid not found: " + partId, false, "");
+    }
+
+    // Validate that it's sheet metal first
+    SheetMetalValidationResult val = validateSheetMetalLocked(partId);
+    if (!val.isValid) {
+      throw GeometryError("GE_INVALID_SHEET_METAL", "Cannot reconstruct curved bends: Invalid sheet metal geometry.", false, "");
+    }
+
+    double t = val.nominalThickness;
+
+    SnapshotId token = createSnapshotLocked("before reconstructCurvedBends on " + partId);
+
+    try {
+      // Helper: calculate edge midpoint
+      auto edgeMidpoint = [](const TopoDS_Edge& edge) -> gp_Pnt {
+        Standard_Real f, l;
+        Handle(Geom_Curve) c = BRep_Tool::Curve(edge, f, l);
+        if (!c.IsNull()) {
+          return c->Value((f + l) * 0.5);
+        }
+        TopExp_Explorer ve(edge, TopAbs_VERTEX);
+        if (ve.More()) {
+          return BRep_Tool::Pnt(TopoDS::Vertex(ve.Current()));
+        }
+        return gp_Pnt(0, 0, 0);
+      };
+
+      // Helper: calculate average normal vector
+      auto averageNormal = [](const TopoDS_Face& f1, const TopoDS_Face& f2) -> gp_Vec {
+        gp_Vec n1 = faceOutwardNormal(f1);
+        gp_Vec n2 = faceOutwardNormal(f2);
+        gp_Vec nSum = n1 + n2;
+        if (nSum.Magnitude() > 1e-10) nSum.Normalize();
+        return nSum;
+      };
+
+      // Helper: check if two edges are parallel
+      auto edgesAreParallel = [](const TopoDS_Edge& e1, const TopoDS_Edge& e2) -> bool {
+        Standard_Real f1, l1, f2, l2;
+        Handle(Geom_Curve) c1 = BRep_Tool::Curve(e1, f1, l1);
+        Handle(Geom_Curve) c2 = BRep_Tool::Curve(e2, f2, l2);
+        if (!c1.IsNull() && !c2.IsNull()) {
+          gp_Pnt p1, p2;
+          gp_Vec v1, v2;
+          c1->D1((f1+l1)*0.5, p1, v1);
+          c2->D1((f2+l2)*0.5, p2, v2);
+          if (v1.Magnitude() > 1e-10) v1.Normalize();
+          if (v2.Magnitude() > 1e-10) v2.Normalize();
+          return std::abs(v1.Dot(v2)) >= 0.95;
+        }
+        return true;
+      };
+
+      // Helper: calculate face center
+      auto faceCenter = [](const TopoDS_Face& f) -> gp_Pnt {
+        GProp_GProps fp;
+        BRepGProp::SurfaceProperties(f, fp);
+        return fp.CentreOfMass();
+      };
+
+      // Find all planar faces
+      std::vector<std::pair<TopoDS_Face, double>> planarFacesWithArea;
+      TopExp_Explorer faceExp(originalShape, TopAbs_FACE);
+      for (; faceExp.More(); faceExp.Next()) {
+        const TopoDS_Face& face = TopoDS::Face(faceExp.Current());
+        Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
+        if (!surf.IsNull() && surf->IsKind(STANDARD_TYPE(Geom_Plane))) {
+          GProp_GProps fp;
+          BRepGProp::SurfaceProperties(face, fp);
+          planarFacesWithArea.push_back({face, fp.Mass()});
+        }
+      }
+
+      struct PlaneFaceInfo {
+        TopoDS_Face face;
+        gp_Pnt center;
+        gp_Vec normal;
+        bool matched = false;
+      };
+
+      std::vector<PlaneFaceInfo> planeInfos;
+      for (const auto& pair : planarFacesWithArea) {
+        PlaneFaceInfo info;
+        info.face = pair.first;
+        info.center = faceCenter(info.face);
+        info.normal = faceOutwardNormal(info.face);
+        planeInfos.push_back(info);
+      }
+
+      // Pair them up using the same thickness logic to identify matched skins
+      int N = static_cast<int>(planeInfos.size());
+      for (int i = 0; i < N; ++i) {
+        if (planeInfos[i].matched) continue;
+        int bestPartner = -1;
+        double minOverlapDist = 1e30;
+        for (int j = i + 1; j < N; ++j) {
+          if (planeInfos[j].matched) continue;
+          double dot = planeInfos[i].normal.Dot(planeInfos[j].normal);
+          if (dot < -0.95) {
+            gp_Vec diff(planeInfos[i].center, planeInfos[j].center);
+            double dist = std::abs(diff.Dot(planeInfos[i].normal));
+            gp_Vec proj = diff - planeInfos[i].normal * diff.Dot(planeInfos[i].normal);
+            double projDist = proj.Magnitude();
+            // Dist should be close to t
+            if (dist >= 0.7 * t && dist <= 1.3 * t) {
+              if (projDist < minOverlapDist) {
+                minOverlapDist = projDist;
+                bestPartner = j;
+              }
+            }
+          }
+        }
+        if (bestPartner != -1) {
+          planeInfos[i].matched = true;
+          planeInfos[bestPartner].matched = true;
+        }
+      }
+
+      // Keep only matched faces
+      auto minLocalDimension = [](const TopoDS_Face& f) -> double {
+        Handle(Geom_Surface) surf = BRep_Tool::Surface(f);
+        if (surf.IsNull() || !surf->IsKind(STANDARD_TYPE(Geom_Plane))) return 0.0;
+        Handle(Geom_Plane) plane = Handle(Geom_Plane)::DownCast(surf);
+        gp_Pln pln = plane->Pln();
+        gp_Ax3 pos = pln.Position();
+        gp_Dir dirX = pos.XDirection();
+        gp_Dir dirY = pos.YDirection();
+
+        double uMin = 1e30, uMax = -1e30;
+        double vMin = 1e30, vMax = -1e30;
+        bool any = false;
+        for (TopExp_Explorer ex(f, TopAbs_VERTEX); ex.More(); ex.Next()) {
+          gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(ex.Current()));
+          gp_Vec vec(pos.Location(), p);
+          double u = vec.Dot(gp_Vec(dirX));
+          double v = vec.Dot(gp_Vec(dirY));
+          uMin = std::min(uMin, u); uMax = std::max(uMax, u);
+          vMin = std::min(vMin, v); vMax = std::max(vMax, v);
+          any = true;
+        }
+        if (!any) return 0.0;
+        return std::min(uMax - uMin, vMax - vMin);
+      };
+
+      std::set<std::string> matchedFaceIds;
+      for (const auto& info : planeInfos) {
+        if (info.matched) {
+          double minDim = minLocalDimension(info.face);
+          if (minDim < 2.5 * t) {
+            continue;
+          }
+          matchedFaceIds.insert(shapeId(info.face));
+        }
+      }
+
+      struct SharpEdge {
+        TopoDS_Edge edge;
+        gp_Pnt mid;
+        gp_Vec avgNormal;
+        TopoDS_Face f1, f2;
+      };
+      std::vector<SharpEdge> sharpEdges;
+
+      TopTools_IndexedDataMapOfShapeListOfShape edgeFaceMap;
+      TopExp::MapShapesAndAncestors(originalShape, TopAbs_EDGE, TopAbs_FACE, edgeFaceMap);
+      for (int i = 1; i <= edgeFaceMap.Extent(); ++i) {
+        const TopoDS_Edge& edge = TopoDS::Edge(edgeFaceMap.FindKey(i));
+        const TopTools_ListOfShape& faces = edgeFaceMap(i);
+        if (faces.Extent() == 2) {
+          TopoDS_Face f1 = TopoDS::Face(faces.First());
+          TopoDS_Face f2 = TopoDS::Face(faces.Last());
+          bool f1Match = matchedFaceIds.count(shapeId(f1));
+          bool f2Match = matchedFaceIds.count(shapeId(f2));
+          std::cout << "[DEBUG reconstructCurvedBends] Edge #" << i << ": Face1=" << shapeId(f1) << " (match=" << f1Match << "), Face2=" << shapeId(f2) << " (match=" << f2Match << ")" << std::endl;
+          if (f1Match && f2Match) {
+            Handle(Geom_Surface) s1 = BRep_Tool::Surface(f1);
+            Handle(Geom_Surface) s2 = BRep_Tool::Surface(f2);
+            if (!s1.IsNull() && s1->IsKind(STANDARD_TYPE(Geom_Plane)) &&
+                !s2.IsNull() && s2->IsKind(STANDARD_TYPE(Geom_Plane))) {
+              gp_Vec n1 = faceOutwardNormal(f1);
+              gp_Vec n2 = faceOutwardNormal(f2);
+              double dot = std::clamp(n1.Dot(n2), -1.0, 1.0);
+              double angleDeg = std::acos(dot) * 180.0 / M_PI;
+              if (angleDeg >= 30.0 && angleDeg <= 150.0) {
+                SharpEdge se;
+                se.edge = edge;
+                se.mid = edgeMidpoint(edge);
+                se.avgNormal = averageNormal(f1, f2);
+                se.f1 = f1;
+                se.f2 = f2;
+                sharpEdges.push_back(se);
+              }
+            }
+          }
+        }
+      }
+
+      int S = static_cast<int>(sharpEdges.size());
+      std::vector<bool> matched(S, false);
+      std::vector<std::pair<int, int>> pairs;
+      for (int i = 0; i < S; ++i) {
+        if (matched[i]) continue;
+        for (int j = i + 1; j < S; ++j) {
+          if (matched[j]) continue;
+          double dist = sharpEdges[i].mid.Distance(sharpEdges[j].mid);
+          bool parallel = edgesAreParallel(sharpEdges[i].edge, sharpEdges[j].edge);
+          if (dist >= 0.7 * t && dist <= 1.3 * t) {
+            if (parallel) {
+              pairs.push_back({i, j});
+              matched[i] = true;
+              matched[j] = true;
+              break;
+            }
+          }
+        }
+      }
+
+      if (pairs.empty()) {
+        return CurvedRebuildResult{partId, 0, token, {}};
+      }
+
+      BRepFilletAPI_MakeFillet filletMaker(originalShape);
+      for (const auto& p : pairs) {
+        int idxI = p.first;
+        int idxE = p.second;
+        gp_Vec diff(sharpEdges[idxI].mid, sharpEdges[idxE].mid);
+        if (diff.Dot(sharpEdges[idxI].avgNormal) > 0) {
+          // idxE is exterior, idxI is interior
+        } else {
+          std::swap(idxI, idxE);
+        }
+
+        filletMaker.Add(t, sharpEdges[idxI].edge);
+        filletMaker.Add(2.0 * t, sharpEdges[idxE].edge);
+      }
+
+      filletMaker.Build();
+      if (!filletMaker.IsDone()) {
+        throw GeometryError("GE_UNFOLD_REBUILD_FAILED", "Fillet maker failed to reconstruct curved bends.", true, "rollback");
+      }
+
+      TopoDS_Shape resultShape = filletMaker.Shape();
+      BRepCheck_Analyzer checker(resultShape);
+      if (!checker.IsValid()) {
+        throw GeometryError("GE_UNFOLD_REBUILD_FAILED", "Fillet output is topologically invalid.", true, "rollback");
+      }
+
+      // Record shape history
+      std::vector<ShapeHistoryRecord> history;
+      TopExp_Explorer fExp(originalShape, TopAbs_FACE);
+      for (; fExp.More(); fExp.Next()) {
+        const TopoDS_Face& f = TopoDS::Face(fExp.Current());
+        std::string origId = shapeId(f);
+        const TopTools_ListOfShape& modified = filletMaker.Modified(f);
+        if (!modified.IsEmpty()) {
+          for (TopTools_ListIteratorOfListOfShape itM(modified); itM.More(); itM.Next()) {
+            history.push_back(ShapeHistoryRecord{"modified", origId, shapeId(itM.Value()), "reconstruct_curved_bends"});
+          }
+        }
+      }
+
+      // Register the updated shape
+      if (isSolid) {
+        solids_[partId].shape = resultShape;
+      } else {
+        shells_[partId].shape = resultShape;
+      }
+
+      return CurvedRebuildResult{partId, static_cast<int>(pairs.size()), token, std::move(history)};
+
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_UNFOLD_REBUILD_FAILED",
+                          std::string("OCCT exception in reconstructCurvedBends: ") + e.GetMessageString(),
+                          true, "rollback");
+    }
   }
 };
 

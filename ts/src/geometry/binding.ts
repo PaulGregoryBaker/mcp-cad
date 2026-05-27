@@ -47,6 +47,8 @@ import type {
   AddInstanceResult,
   MateRigidResult,
   ListAssemblyResult,
+  SheetMetalValidationResult,
+  CurvedRebuildResult,
 } from './types';
 
 // ─── Addon interface ──────────────────────────────────────────────────────────
@@ -205,6 +207,8 @@ export interface GeometryAddon {
     flipAlignment: boolean,
   ): MateRigidResult;
   listAssemblyTree(assemblyId: string): ListAssemblyResult;
+  validateSheetMetal(partId: string): SheetMetalValidationResult;
+  reconstructCurvedBends(partId: string): CurvedRebuildResult;
 }
 
 export const kerfOffsetMm = {
@@ -792,6 +796,28 @@ export class GeometryBinding {
   listAssemblyTree(assemblyId: string): ListAssemblyResult {
     try {
       return this.addon.listAssemblyTree(assemblyId);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  validateSheetMetal(partId: string): SheetMetalValidationResult {
+    try {
+      return this.addon.validateSheetMetal(partId);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  reconstructCurvedBends(partId: string): CurvedRebuildResult {
+    try {
+      const res = this.addon.reconstructCurvedBends(partId);
+      return {
+        solid_id: (res as any).solidId,
+        bends_replaced: (res as any).bendsReplaced,
+        rollback_token: (res as any).rollbackToken,
+        shape_history: (res as any).shape_history,
+      };
     } catch (err) {
       throw toStructuredError(err);
     }

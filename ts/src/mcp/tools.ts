@@ -107,17 +107,41 @@ export function getToolDefinitions(): object[] {
       },
     },
     {
-      name: 'apply_unfold',
-      description: 'Generates 2D flat pattern with bend compensation.',
+      name: 'validate_sheet_metal',
+      description: 'Inspects a 3D solid/shell and validates if it conforms to standard sheet metal constraints: uniform thickness and unfoldability (no T-junctions, no closed cycles). Non-mutating.',
       inputSchema: {
         type: 'object',
         properties: {
-          panel_id: { type: 'string' },
-          material_id: { type: 'string' },
-          k_factor: { type: 'number', minimum: 0, maximum: 1 },
-          transaction_id: { type: 'string' },
+          part_id: { type: 'string', description: 'ID of the body/shell to validate' }
         },
-        required: ['panel_id', 'material_id'],
+        required: ['part_id']
+      }
+    },
+    {
+      name: 'reconstruct_curved_bends',
+      description: 'Replaces infinitely sharp joint edges in a 3D CAD model with realistic rounded cylindrical bends based on material thickness (inner radius = t, outer radius = 2t). Returns a new replacement solid ID. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_id: { type: 'string', description: 'ID of the sharp-edge part to reconstruct' },
+          transaction_id: { type: 'string', description: 'Active transaction ID' }
+        },
+        required: ['part_id', 'transaction_id']
+      }
+    },
+    {
+      name: 'apply_unfold',
+      description: 'Validates, heals minor gaps (up to 0.1 mm), and flattens a 3D sheet metal shell using analytical K-factor calculations. Produces flat blank dimensions and registers the unfold pattern. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          panel_id: { type: 'string', description: 'ID of the sheet metal body to unfold' },
+          material_id: { type: 'string', description: 'Material ID from configuration' },
+          k_factor: { type: 'number', minimum: 0.25, maximum: 0.50, description: 'Optional K-factor override. Sourced from material DB if omitted.' },
+          auto_heal_tolerance: { type: 'number', default: 0.1, maximum: 0.1, description: 'Maximum gap tolerance (mm) for automatic sewing repair.' },
+          transaction_id: { type: 'string', description: 'Active transaction ID' }
+        },
+        required: ['panel_id', 'material_id', 'transaction_id'],
       },
     },
     {
@@ -1078,6 +1102,12 @@ export async function dispatchTool(
       case 'generate_reliefs':
         return handleGenerateReliefs(args);
 
+      case 'validate_sheet_metal':
+        return handleValidateSheetMetal(args);
+
+      case 'reconstruct_curved_bends':
+        return handleReconstructCurvedBends(args);
+
       case 'apply_unfold':
         return handleApplyUnfold(args, config);
 
@@ -1325,6 +1355,36 @@ function handleGenerateReliefs(args: Record<string, unknown>): unknown {
     modified_panel_id: panelId,
     relief_count: 4,  // placeholder; Phase C will use actual detection
     rollback_token: rollbackToken,
+  };
+}
+
+function handleValidateSheetMetal(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  const result = getGeometryBinding().validateSheetMetal(partId);
+  return {
+    is_valid: result.is_valid,
+    nominal_thickness: result.nominal_thickness,
+    can_flatten: result.can_flatten,
+    validation_errors: result.validation_errors,
+  };
+}
+
+function handleReconstructCurvedBends(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().reconstructCurvedBends(partId);
+  session.registerShell(result.solid_id);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  return {
+    solid_id: result.solid_id,
+    bends_replaced: result.bends_replaced,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    shape_history: result.shape_history ?? [],
   };
 }
 

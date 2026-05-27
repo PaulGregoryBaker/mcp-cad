@@ -71,6 +71,8 @@ struct UnfoldResult {
   double                          flatHeightMm;
   double                          kFactorUsed;
   int                             bendCount;
+  bool                            validated = false;
+  double                          detectedThickness = 0.0;
   SnapshotId                      rollbackToken;
   std::vector<ShapeHistoryRecord> shapeHistory;
 };
@@ -80,6 +82,28 @@ struct DxfExportResult {
   int         wireCount;
   double      bboxWidthMm;
   double      bboxHeightMm;
+};
+
+struct SheetMetalValidationResult {
+  bool                     isValid          = false;
+  double                   nominalThickness = 0.0;
+  bool                     canFlatten       = false;
+  std::vector<std::string> validationErrors;
+};
+
+struct GapSewResult {
+  ShellId                         solidId;
+  bool                            sewComplete      = false;
+  double                          maxGapFound      = 0.0;
+  SnapshotId                      rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+struct CurvedRebuildResult {
+  ShellId                         solidId;
+  int                             bendsReplaced    = 0;
+  SnapshotId                      rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
 };
 
 struct NestPlacement {
@@ -384,6 +408,13 @@ constexpr const char* GE_SEW_INCOMPLETE            = "GE_SEW_INCOMPLETE";
 constexpr const char* GE_ASSEMBLY_MATE_UNSUPPORTED = "GE_ASSEMBLY_MATE_UNSUPPORTED";
 constexpr const char* GE_ASSEMBLY_CROSS_DOCUMENT   = "GE_ASSEMBLY_CROSS_DOCUMENT";
 
+// ─── Error codes — Feature 007-sheet-metal-unfolding ──────────────────────────
+constexpr const char* GE_INVALID_SHEET_METAL      = "GE_INVALID_SHEET_METAL";
+constexpr const char* GE_UNFOLD_CYCLE_DETECTED    = "GE_UNFOLD_CYCLE_DETECTED";
+constexpr const char* GE_UNFOLD_T_JUNCTION        = "GE_UNFOLD_T_JUNCTION";
+constexpr const char* GE_UNFOLD_SEWING_FAILED      = "GE_UNFOLD_SEWING_FAILED";
+constexpr const char* GE_UNFOLD_REBUILD_FAILED     = "GE_UNFOLD_REBUILD_FAILED";
+
 // ─── GeometryService interface ───────────────────────────────────────────────
 
 /**
@@ -560,6 +591,10 @@ public:
   virtual AddInstanceResult    addAssemblyInstance(const AssemblyId& assemblyId, const std::string& shapeId, double tx, double ty, double tz, double qw, double qx, double qy, double qz) = 0;
   virtual MateRigidResult      mateRigid(const AssemblyId& assemblyId, const std::string& srcEntityId, const std::string& dstEntityId, bool flipAlignment) = 0;
   virtual ListAssemblyResult   listAssemblyTree(const AssemblyId& assemblyId) = 0;
+
+  // ── Feature 007-sheet-metal-unfolding ───────────────────────────────────────
+  virtual SheetMetalValidationResult validateSheetMetal(const ShellId& partId) = 0;
+  virtual CurvedRebuildResult        reconstructCurvedBends(const ShellId& partId) = 0;
 };
 
 }  // namespace mcp_cad
