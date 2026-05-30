@@ -226,11 +226,15 @@ describe('Unfold round-trip harness', () => {
     }, config);
     expect(ab?.merged_shell_id).toBeDefined();
 
+    // The 3rd panel touches the L only at a single corner vertex — the fuse
+    // produces an empty compound (no volumetric overlap, only point contact),
+    // which our explicit empty-fuse guard catches as GE_MERGE_FAILED. Older
+    // setups that masked this with the silent fillet fallback have been removed.
     await expect(dispatchTool('merge_bodies_with_bend', {
       part_a_id: ab.merged_shell_id, part_b_id: pC.id,
       target_edges: ['all'], bend_radius: 0.3,
       transaction_id: txn.transaction_id,
-    }, config)).rejects.toMatchObject({ code: 'GE_MERGE_FILLET_FAILED' });
+    }, config)).rejects.toMatchObject({ code: 'GE_MERGE_FAILED' });
 
 
     await dispatchTool('rollback_transaction', { transaction_id: txn.transaction_id }, config);
@@ -436,4 +440,159 @@ describe('Unfold round-trip harness', () => {
 
     await dispatchTool('rollback_transaction', { transaction_id: txn.transaction_id }, config);
   }, 60_000);
+
+  // ── CASE 5: asymmetric L (wall + small flange) — Issue #1 reproduction ──
+  //
+  // The user reported a shape with two ~150×150 panels at 90° plus a small
+  // ~80×24 protrusion below one panel.  The flat tile showed "2 bends" even
+  // though the physical shape has only ONE bend (the wall corner). The
+  // hypothesis: the unfold's panel-detection treats the protrusion as a
+  // separate panel and BFS counts the protrusion-to-main connection as a
+  // phantom bend.
+  //
+  // cube_with_flanges has 4 small flange panels each attached to a wall at
+  // 90°. Merging a wall + its perpendicular adjacent flange produces an
+  // L-shape with one panel much smaller than the other — the exact
+  // "asymmetric L" pattern the user hit. The flat should show:
+  //   – 1 bend  (the wall↔flange seam)
+  //   – flat length ≈ wallLong + flangeLong (along the bend direction)
+  //   – flat width  ≈ wallShort (with the flange's narrower width creating
+  //     a step in the outline, but NOT a phantom bend).
+  //
+  // If unfold reports bend_count != 1, Issue #1 is reproduced.
+
+  it('CASE 5a: asymmetric L (two cube faces, one offset along seam) unfolds to exactly 1 bend', async () => {
+    // Mirror of the screenshot scenario: two ~150x150 panels at 90° where
+    // ONE panel is shifted along the seam axis, creating an L-shape with
+    // an asymmetric outline (a step / protrusion sticking out beyond
+    // the matching edge).  The unfold of this body should report
+    // bend_count = 1 (the physical corner) — never 2.  A 2-bend result
+    // means panel detection has fragmented one panel into "main + step"
+    // and BFS counted the within-panel boundary as a phantom bend.
+    const { panels } = await splitTestcube();
+    const outer = outerPanels(panels);
+    expect(outer.length).toBe(6);
+
+    // Pick two perpendicular outer panels (different thickness axes).
+    let pA: PanelInfo | undefined;
+    let pB: PanelInfo | undefined;
+    for (const p of outer) {
+      if (!pA) { pA = p; continue; }
+      if (p.thicknessAxis !== pA.thicknessAxis) { pB = p; break; }
+    }
+    expect(pA).toBeDefined();
+    expect(pB).toBeDefined();
+
+    const txn: any = await dispatchTool('begin_transaction', { label: 'roundtrip_case5' }, config);
+
+    // Shift pB along an axis perpendicular to BOTH its thicknessAxis and
+    // pA's thicknessAxis. That direction lies along the shared seam — moving
+    // pB along it creates an asymmetric step at the join (one end overhangs).
+    const axes: Array<'X' | 'Y' | 'Z'> = ['X', 'Y', 'Z'];
+    const shiftAxis = axes.find(a => a !== pA!.thicknessAxis && a !== pB!.thicknessAxis)!;
+    const vec: [number, number, number] = [
+      shiftAxis === 'X' ? 25 : 0,
+      shiftAxis === 'Y' ? 25 : 0,
+      shiftAxis === 'Z' ? 25 : 0,
+    ];
+    const moved: any = await dispatchTool('translate_body', {
+      targets: [pB!.id], vector: vec, transaction_id: txn.transaction_id,
+    }, config);
+    const movedB = moved?.solid_ids?.[0] ?? pB!.id;
+    console.log(`[CASE 5] shift pB(${pB!.thicknessAxis}) by 25mm along ${shiftAxis}, new id=${movedB}`);
+
+    // After the shift, the two panels overlap on only part of their seam — an
+    // asymmetric L-with-step. Merge with bend.
+    let mergedId: string | undefined;
+    let mergeError: unknown;
+    try {
+      const m: any = await dispatchTool('merge_bodies_with_bend', {
+        part_a_id: pA!.id, part_b_id: movedB,
+        target_edges: ['all'], bend_radius: 0.3,
+        transaction_id: txn.transaction_id,
+      }, config);
+      mergedId = m?.merged_shell_id;
+    } catch (e) { mergeError = e; }
+
+    if (!mergedId) {
+      console.log('[CASE 5] merge failed:', (mergeError as { code?: string; message?: string }));
+      throw mergeError ?? new Error('merge produced no shell');
+    }
+
+    const unfold: any = await dispatchTool('apply_unfold', {
+      panel_id: mergedId,
+      material_id: config.materials[0]!.id,
+      transaction_id: txn.transaction_id,
+    }, config);
+
+    console.log(
+      `[CASE 5] flat=${unfold.flat_width_mm.toFixed(1)}×${unfold.flat_height_mm.toFixed(1)}mm ` +
+      `bends=${unfold.bend_count} thickness=${unfold.nominal_thickness_mm?.toFixed(3)}`);
+
+    // PRIMARY ASSERTION: one physical corner = one bend, regardless of outline shape.
+    expect(unfold.bend_count).toBe(1);
+    expect(unfold.nominal_thickness_mm).toBeGreaterThan(0.5);
+
+    await dispatchTool('rollback_transaction', { transaction_id: txn.transaction_id }, config);
+  }, 30_000);
+
+  // ── CASE 5b: chained merge where the 3rd panel is parallel to the 1st ──
+  //
+  // Attempts to form a "U-shape" from cube outer faces by chaining merges:
+  //   A=+X, B=+Y → L-shape (works), then add C=-X
+  // For a cube specifically, no 3-panel arrangement of outer faces can form
+  // a true flat-pattern-able hairpin: every pair of perpendicular faces
+  // shares an edge with EACH of the other 4, so adding the 3rd panel
+  // "wraps around" rather than extending linearly. The Boolean fuse of
+  // (L-shell) ∪ (parallel-but-opposite-panel) returns an EMPTY compound
+  // (0 solids, 0 shells, 0 children) because the bodies share only an
+  // edge of B, which is insufficient contact.
+  //
+  // The pre-fix behaviour silently passed this through to fillet, which
+  // produced a confusing downstream error. The new explicit
+  // GE_MERGE_FAILED ("Merge produced an empty result") is the correct
+  // signal — this geometry simply isn't fabricatable as one piece.
+
+  it('CASE 5b: chained merge A+B+C with parallel A/C correctly rejects empty fuse', async () => {
+    const { panels } = await splitTestcube();
+    const outer = outerPanels(panels);
+    expect(outer.length).toBe(6);
+
+    const byAxis = new Map<string, PanelInfo[]>();
+    for (const p of outer) {
+      const list = byAxis.get(p.thicknessAxis) ?? [];
+      list.push(p);
+      byAxis.set(p.thicknessAxis, list);
+    }
+    let pA: PanelInfo | undefined, pB: PanelInfo | undefined, pC: PanelInfo | undefined;
+    for (const [axis, list] of byAxis.entries()) {
+      if (list.length >= 2) {
+        pA = list[0]; pC = list[1];
+        for (const [otherAxis, others] of byAxis.entries()) {
+          if (otherAxis !== axis && others.length > 0) { pB = others[0]; break; }
+        }
+        break;
+      }
+    }
+    expect(pA).toBeDefined();
+    expect(pB).toBeDefined();
+    expect(pC).toBeDefined();
+
+    const txn: any = await dispatchTool('begin_transaction', { label: 'roundtrip_case5b' }, config);
+
+    const ab: any = await dispatchTool('merge_bodies_with_bend', {
+      part_a_id: pA!.id, part_b_id: pB!.id,
+      target_edges: ['all'], bend_radius: 0.3,
+      transaction_id: txn.transaction_id,
+    }, config);
+    expect(ab?.merged_shell_id).toBeDefined();
+
+    await expect(dispatchTool('merge_bodies_with_bend', {
+      part_a_id: ab.merged_shell_id, part_b_id: pC!.id,
+      target_edges: ['all'], bend_radius: 0.3,
+      transaction_id: txn.transaction_id,
+    }, config)).rejects.toMatchObject({ code: 'GE_MERGE_FAILED' });
+
+    await dispatchTool('rollback_transaction', { transaction_id: txn.transaction_id }, config);
+  }, 30_000);
 });

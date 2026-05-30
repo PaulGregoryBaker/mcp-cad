@@ -5689,6 +5689,24 @@ private:
             "Check for a gap at the shared edge and use close_gap to fix it.",
             false, "");
         }
+
+        // Empty-fuse guard: OCCT's BRepAlgoAPI_Fuse occasionally returns
+        // IsDone()==true with a non-null but EMPTY compound (0 solids, 0
+        // shells, 0 top-level children) when the inputs were touching only
+        // at a single edge or vertex that the operator couldn't reconcile.
+        // Without this check the empty compound silently flowed downstream
+        // into the fillet step, producing the "Fused result is not a single
+        // solid" error from a different (downstream) check — masking the
+        // real failure (the fuse itself).
+        if (solidCount == 0 && shellCount == 0 && topLevelCount == 0) {
+          throw GeometryError("GE_MERGE_FAILED",
+            "Merge produced an empty result. OCCT's Boolean fuse completed "
+            "but left no solid, shell, or top-level shape. The bodies likely "
+            "share only an edge or vertex (insufficient contact for a Boolean "
+            "fuse). Re-check that the panels overlap volumetrically or share "
+            "a face before merging.",
+            true, "rollback");
+        }
       }
 
       // Attempt fillet on matching edges. Any failure is FATAL — we throw a
@@ -5849,6 +5867,27 @@ private:
         msg << "GE_MERGE_FILLET_FAILED: OCCT exception while preparing fillet for merge: "
             << e.GetMessageString();
         throw GeometryError("GE_MERGE_FILLET_FAILED", msg.str(), true, "rollback");
+      }
+
+      // BRepFilletAPI_MakeFillet().Shape() can return a COMPOUND wrapping the
+      // solid (same OCCT habit as BRepAlgoAPI_Fuse). Storing a compound in
+      // shells_ poisons any downstream merge that tries to fuse this shell
+      // again: the chained-merge fuse of (COMPOUND, SOLID) produces 0 solids
+      // and the second merge throws. Unwrap to the bare solid so chained
+      // merges work cleanly.
+      if (result.ShapeType() != TopAbs_SOLID) {
+        TopoDS_Solid resultSolid;
+        int rsCount = 0;
+        for (TopExp_Explorer ex(result, TopAbs_SOLID); ex.More(); ex.Next()) {
+          resultSolid = TopoDS::Solid(ex.Current());
+          rsCount++;
+        }
+        if (rsCount == 1) {
+          result = resultSolid;
+        }
+        // If rsCount != 1 we leave `result` as-is — the merge succeeded
+        // structurally, but a downstream fuse on this shell may fail; we
+        // don't synthesise a fake solid to hide that.
       }
 
       ShellId mergedId = generateUUID();
