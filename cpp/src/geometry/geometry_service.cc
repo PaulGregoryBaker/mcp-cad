@@ -5691,120 +5691,164 @@ private:
         }
       }
 
-      // Attempt fillet on matching edges. Any OCCT failure is non-fatal — fall back to
-      // unfilleted fuse. The exception can be thrown from the constructor, Add(), or Build()
-      // depending on OCCT version and shape topology (e.g. ChFi3d_Builder:only 2 faces when
-      // the fused result is a shell rather than a solid).
+      // Attempt fillet on matching edges. Any failure is FATAL — we throw a
+      // structured error rather than silently returning an unfilleted fuse,
+      // because the caller asked for a bend and a flat-fuse result would
+      // misrepresent the intent (the UI shows a successful merge but with no
+      // bend, then unfold produces geometry that doesn't match the requested
+      // operation). Silent fallbacks were removed deliberately — the user
+      // should be told why the bend couldn't be applied (radius too large,
+      // no joint edges, OCCT failure) and decide what to do next.
       bool wantAll = std::find(targetEdges.begin(), targetEdges.end(), "all") != targetEdges.end();
-      TopoDS_Shape result = fused;  // default: unfilleted
-      try {
-        BRepFilletAPI_MakeFillet filletMaker(fused);
-        bool addedAny = false;
-        TopExp_Explorer edgeExp(fused, TopAbs_EDGE);
-        for (; edgeExp.More(); edgeExp.Next()) {
-          const TopoDS_Edge& e = TopoDS::Edge(edgeExp.Current());
-          bool shouldFillet = false;
-          if (wantAll) {
-            // Find edges that touch both original bodies inputA and inputB at both their start and end vertices.
-            // This isolates only the joint edges connecting the two parts.
-            TopoDS_Vertex vFirst, vLast;
-            TopExp_Explorer ve(e, TopAbs_VERTEX);
-            if (ve.More()) {
-              vFirst = TopoDS::Vertex(ve.Current());
-              ve.Next();
-            }
-            if (ve.More()) {
-              vLast = TopoDS::Vertex(ve.Current());
-            }
+      TopoDS_Shape result;
 
-            if (!vFirst.IsNull() && !vLast.IsNull()) {
-              BRepExtrema_DistShapeShape distFirstA(vFirst, inputA);
-              BRepExtrema_DistShapeShape distFirstB(vFirst, inputB);
-              BRepExtrema_DistShapeShape distLastA(vLast, inputA);
-              BRepExtrema_DistShapeShape distLastB(vLast, inputB);
-              if (distFirstA.IsDone() && distFirstB.IsDone() && distLastA.IsDone() && distLastB.IsDone()) {
-                double dF1 = distFirstA.Value();
-                double dF2 = distFirstB.Value();
-                double dL1 = distLastA.Value();
-                double dL2 = distLastB.Value();
-                if (dF1 < 0.1 && dF2 < 0.1 && dL1 < 0.1 && dL2 < 0.1) {
-                  double length = 0.0;
-                  GProp_GProps prop;
-                  BRepGProp::LinearProperties(e, prop);
-                  length = prop.Mass();
-                  if (length > 10.0) {
-                    shouldFillet = true;
-                  }
-                }
-              }
+      // BRepAlgoAPI_Fuse returns a COMPOUND wrapper even when the result is a
+      // single clean solid. BRepFilletAPI_MakeFillet rejects COMPOUND input
+      // ("There are no suitable edges for chamfer or fillet"), so unwrap to the
+      // bare solid here. We require exactly one solid + no stray free shells —
+      // the disconnected-bodies check above already rejected the multi-solid
+      // case, so this should hold; if it doesn't, throw rather than silently
+      // hand the fillet a body it can't process.
+      TopoDS_Shape filletInput = fused;
+      if (fused.ShapeType() != TopAbs_SOLID) {
+        TopoDS_Solid theSolid;
+        int solidCount = 0;
+        for (TopExp_Explorer ex(fused, TopAbs_SOLID); ex.More(); ex.Next()) {
+          theSolid = TopoDS::Solid(ex.Current());
+          solidCount++;
+        }
+        int freeShells = 0;
+        for (TopExp_Explorer ex(fused, TopAbs_SHELL, TopAbs_SOLID); ex.More(); ex.Next()) {
+          freeShells++;
+        }
+        if (solidCount != 1 || freeShells != 0) {
+          std::ostringstream msg;
+          msg << "GE_MERGE_FILLET_FAILED: Fused result is not a single solid "
+              << "(solids=" << solidCount << ", freeShells=" << freeShells
+              << "). Cannot fillet — the input bodies likely don't form a clean joint.";
+          throw GeometryError("GE_MERGE_FILLET_FAILED", msg.str(), true, "rollback");
+        }
+        filletInput = theSolid;
+      }
+
+      try {
+        BRepFilletAPI_MakeFillet filletMaker(filletInput);
+        bool addedAny = false;
+        int candidateEdges = 0;
+
+        // Pre-build edge -> adjacent faces map once.
+        TopTools_IndexedDataMapOfShapeListOfShape efMap;
+        TopExp::MapShapesAndAncestors(filletInput, TopAbs_EDGE, TopAbs_FACE, efMap);
+
+        if (wantAll) {
+          // SEAM SELECTION (target_edges == ["all"]):
+          //
+          // A "bend seam" is the external corner edge where the outer faces of
+          // the two merged bodies meet at a non-flat dihedral.  We pick the
+          // LONGEST single edge satisfying these criteria and fillet only that
+          // one — multiple parallel fragments in the corner overlap volume
+          // produce conflicting fillet ops that OCCT cannot resolve.
+          //
+          // History: the previous "vertex touches both inputs" filter picked
+          // up fuse-internal coplanar-face edges (dihedral = 0) and OCCT
+          // rejected them; a perpendicular-dihedral filter returned 24
+          // fragments (one true seam plus 23 corner-volume splinters) and
+          // OCCT failed to build all of them simultaneously.  Single-longest
+          // gives reliable behaviour and matches the physical reality of one
+          // bend per merge.
+          TopoDS_Edge bestEdge;
+          double bestLen = 0.0;
+
+          TopExp_Explorer edgeExp(filletInput, TopAbs_EDGE);
+          for (; edgeExp.More(); edgeExp.Next()) {
+            const TopoDS_Edge& e = TopoDS::Edge(edgeExp.Current());
+            if (!efMap.Contains(e)) continue;
+            const TopTools_ListOfShape& adj = efMap.FindFromKey(e);
+            if (adj.Extent() != 2) continue;
+
+            auto it = adj.cbegin();
+            TopoDS_Face fA = TopoDS::Face(*it++);
+            TopoDS_Face fB = TopoDS::Face(*it);
+            gp_Vec nA = faceOutwardNormal(fA);
+            gp_Vec nB = faceOutwardNormal(fB);
+            double c = std::max(-1.0, std::min(1.0, nA.Dot(nB)));
+            double dihedralDeg = std::acos(c) * 180.0 / M_PI;
+            if (dihedralDeg < 5.0 || dihedralDeg > 175.0) continue;
+
+            GProp_GProps prop;
+            BRepGProp::LinearProperties(e, prop);
+            double len = prop.Mass();
+            if (len < 10.0) continue;
+
+            BRepExtrema_DistShapeShape dEdgeA(e, inputA);
+            BRepExtrema_DistShapeShape dEdgeB(e, inputB);
+            if (!dEdgeA.IsDone() || !dEdgeB.IsDone()) continue;
+            if (dEdgeA.Value() > 0.1 || dEdgeB.Value() > 0.1) continue;
+
+            candidateEdges++;
+            if (len > bestLen) {
+              bestLen = len;
+              bestEdge = e;
             }
-          } else {
-            shouldFillet = (std::find(targetEdges.begin(), targetEdges.end(), shapeId(e)) != targetEdges.end());
           }
 
-          if (shouldFillet) {
-            filletMaker.Add(bendRadiusMm, e);
+          if (!bestEdge.IsNull()) {
+            filletMaker.Add(bendRadiusMm, bestEdge);
             addedAny = true;
           }
-        }
-        if (addedAny) {
-          bool ok = false;
-          try {
-            filletMaker.Build();
-            if (filletMaker.IsDone() && !filletMaker.Shape().IsNull()) {
-              result = filletMaker.Shape();
-              ok = true;
+        } else {
+          // Explicit edge IDs requested — fillet exactly those.
+          TopExp_Explorer edgeExp(filletInput, TopAbs_EDGE);
+          for (; edgeExp.More(); edgeExp.Next()) {
+            const TopoDS_Edge& e = TopoDS::Edge(edgeExp.Current());
+            if (std::find(targetEdges.begin(), targetEdges.end(), shapeId(e)) != targetEdges.end()) {
+              filletMaker.Add(bendRadiusMm, e);
+              addedAny = true;
+              candidateEdges++;
             }
-          } catch (const Standard_Failure&) {
-            ok = false;
           }
+        }
 
-          if (!ok && wantAll) {
-            // Fallback: if filleting all joint edges failed (e.g. radius conflict), try only the single longest joint edge.
-            TopoDS_Edge longestEdge;
-            double maxLength = 0.0;
-            TopExp_Explorer edgeExpFall(fused, TopAbs_EDGE);
-            for (; edgeExpFall.More(); edgeExpFall.Next()) {
-              const TopoDS_Edge& e = TopoDS::Edge(edgeExpFall.Current());
-              TopoDS_Vertex vFirst, vLast;
-              TopExp_Explorer ve(e, TopAbs_VERTEX);
-              if (ve.More()) { vFirst = TopoDS::Vertex(ve.Current()); ve.Next(); }
-              if (ve.More()) { vLast = TopoDS::Vertex(ve.Current()); }
-              if (!vFirst.IsNull() && !vLast.IsNull()) {
-                BRepExtrema_DistShapeShape distFirstA(vFirst, inputA);
-                BRepExtrema_DistShapeShape distFirstB(vFirst, inputB);
-                BRepExtrema_DistShapeShape distLastA(vLast, inputA);
-                BRepExtrema_DistShapeShape distLastB(vLast, inputB);
-                if (distFirstA.IsDone() && distFirstB.IsDone() && distLastA.IsDone() && distLastB.IsDone()) {
-                  if (distFirstA.Value() < 0.1 && distFirstB.Value() < 0.1 &&
-                      distLastA.Value() < 0.1 && distLastB.Value() < 0.1) {
-                    GProp_GProps prop;
-                    BRepGProp::LinearProperties(e, prop);
-                    double len = prop.Mass();
-                    if (len > maxLength) {
-                      maxLength = len;
-                      longestEdge = e;
-                    }
-                  }
-                }
-              }
-            }
-            if (maxLength > 10.0 && !longestEdge.IsNull()) {
-              BRepFilletAPI_MakeFillet fallbackMaker(fused);
-              fallbackMaker.Add(bendRadiusMm, longestEdge);
-              try {
-                fallbackMaker.Build();
-                if (fallbackMaker.IsDone() && !fallbackMaker.Shape().IsNull()) {
-                  result = fallbackMaker.Shape();
-                }
-              } catch (const Standard_Failure&) {
-              }
-            }
-          }
+        if (!addedAny) {
+          std::ostringstream msg;
+          msg << "GE_MERGE_NO_SEAM_EDGES: No joint edges found between the two bodies. "
+              << "The bodies appear touching but share no edge >= 10 mm at the merge boundary. "
+              << "Check whether the bodies actually meet at a seam or are only point-touching.";
+          throw GeometryError("GE_MERGE_NO_SEAM_EDGES", msg.str(), false, "");
         }
-      } catch (const Standard_Failure&) {
-        // Fillet not supported for this topology — proceed with unfilleted fuse.
-        result = fused;
+
+        // For wantAll we add only the single longest seam edge; explicit edge
+        // mode adds each requested edge. The diagnostic count below reflects
+        // what was actually passed to the fillet builder.
+        int filletedEdges = (wantAll ? (addedAny ? 1 : 0) : candidateEdges);
+
+        try {
+          filletMaker.Build();
+        } catch (const Standard_Failure& e) {
+          std::ostringstream msg;
+          msg << "GE_MERGE_FILLET_FAILED: OCCT fillet build threw on " << filletedEdges
+              << " seam edge(s) at radius " << bendRadiusMm << " mm: " << e.GetMessageString()
+              << ". Common causes: bend radius >= panel thickness, the seam has high curvature, "
+              << "or the bodies were already merged once (chained merges accumulate complex topology).";
+          throw GeometryError("GE_MERGE_FILLET_FAILED", msg.str(), true, "rollback");
+        }
+        if (!filletMaker.IsDone() || filletMaker.Shape().IsNull()) {
+          std::ostringstream msg;
+          msg << "GE_MERGE_FILLET_FAILED: OCCT fillet build did not complete on " << filletedEdges
+              << " seam edge(s) at radius " << bendRadiusMm
+              << " mm (IsDone=false or empty shape). The bend radius may be too large for "
+                 "the panel thickness (try radius < thickness), or the seam topology is "
+                 "unsuitable for filleting.";
+          throw GeometryError("GE_MERGE_FILLET_FAILED", msg.str(), true, "rollback");
+        }
+        result = filletMaker.Shape();
+      } catch (const GeometryError&) {
+        throw;  // re-throw structured errors verbatim
+      } catch (const Standard_Failure& e) {
+        std::ostringstream msg;
+        msg << "GE_MERGE_FILLET_FAILED: OCCT exception while preparing fillet for merge: "
+            << e.GetMessageString();
+        throw GeometryError("GE_MERGE_FILLET_FAILED", msg.str(), true, "rollback");
       }
 
       ShellId mergedId = generateUUID();

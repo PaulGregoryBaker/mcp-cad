@@ -1,14 +1,27 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import * as path from 'node:path';
 
 import { dispatchTool } from '../../src/mcp/tools';
 import { loadConfig } from '../../src/config/loader';
 import { getFixturePath } from '../helpers/fixtures';
 import { geometryBinding } from '../../src/geometry/binding';
+import { transactionRegistry } from '../../src/mcp/transactions';
 
 describe('Advanced Sheet Metal Unfolding Integration Tests', () => {
   const configPath = path.resolve(__dirname, '../../config/config.yaml');
   const config = loadConfig(configPath);
+
+  // Prevent transaction state leaking between tests when one fails before its
+  // explicit rollback (the singleton registry would otherwise poison the next
+  // test with TRANSACTION_ALREADY_ACTIVE).
+  afterEach(async () => {
+    const active = transactionRegistry.getActive();
+    if (active) {
+      try {
+        await dispatchTool('rollback_transaction', { transaction_id: active.id }, config);
+      } catch { /* best effort */ }
+    }
+  });
 
   it('validate_sheet_metal on solid box fails validation', async () => {
     const fixturePath = getFixturePath('simple_box.stp');
@@ -141,7 +154,8 @@ describe('Advanced Sheet Metal Unfolding Integration Tests', () => {
           part_a_id: panelA,
           part_b_id: outerPanelIds[i],
           target_edges: ['all'],
-          bend_radius: 2.0,
+          // testcube outer walls are ~1mm thick — fillet radius must be < thickness.
+          bend_radius: 0.3,
           transaction_id: txn.transaction_id,
         }, config);
         if (mergeResult && mergeResult.merged_shell_id) {

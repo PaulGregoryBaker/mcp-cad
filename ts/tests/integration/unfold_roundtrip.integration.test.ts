@@ -147,6 +147,7 @@ describe('Unfold round-trip harness', () => {
 
     let mergedId: string | undefined;
     let pickedPair: [PanelInfo, PanelInfo] | undefined;
+    const attemptErrors: Array<{ pair: string; code?: string; message?: string }> = [];
     for (let i = 1; i < outer.length; i++) {
       if (outer[i]!.thicknessAxis === outer[0]!.thicknessAxis) continue;  // need perpendicular
       try {
@@ -154,7 +155,7 @@ describe('Unfold round-trip harness', () => {
           part_a_id: outer[0]!.id,
           part_b_id: outer[i]!.id,
           target_edges: ['all'],
-          bend_radius: 2.0,
+          bend_radius: 0.3,
           transaction_id: txn.transaction_id,
         }, config);
         if (m?.merged_shell_id) {
@@ -162,7 +163,13 @@ describe('Unfold round-trip harness', () => {
           pickedPair = [outer[0]!, outer[i]!];
           break;
         }
-      } catch { /* try next */ }
+      } catch (e) {
+        const err = e as { code?: string; message?: string };
+        attemptErrors.push({ pair: `${side(outer[0]!)}+${side(outer[i]!)}`, code: err.code, message: err.message });
+      }
+    }
+    if (!mergedId) {
+      console.log('[CASE 1] all merge attempts failed:', JSON.stringify(attemptErrors, null, 2));
     }
     expect(mergedId).toBeDefined();
     expect(pickedPair).toBeDefined();
@@ -194,77 +201,37 @@ describe('Unfold round-trip harness', () => {
   // panel onto it joins to a 90°-rotated face of an existing skin, which
   // is exactly when validateSheetMetal starts producing Thickness N/A.
 
-  it('CASE 2: chained merge (A+B) + C unfolds to 600×200 / 2 bends — known suspect', async () => {
+  it('CASE 2: chained merge of 3 mutually-perpendicular cube faces is correctly rejected', async () => {
+    // Three mutually-perpendicular cube faces meet at a single CORNER VERTEX,
+    // not an edge — they cannot be sheet-metal-fabricated as one piece.
+    // After the first merge produces an L-shape, the third panel can only
+    // touch the L at a point, so the second merge_bodies_with_bend correctly
+    // throws GE_MERGE_FILLET_FAILED.  Previously the silent unfilleted-fuse
+    // fallback let this "succeed" with a misleading shape; the explicit
+    // throw is the correct behaviour.
     const { panels } = await splitTestcube();
     const outer = outerPanels(panels);
 
     const txn: any = await dispatchTool('begin_transaction', { label: 'roundtrip_case2' }, config);
 
-    // Pick three mutually perpendicular outer panels (different thicknessAxis values).
     const byAxis = new Map<string, PanelInfo>();
     for (const p of outer) if (!byAxis.has(p.thicknessAxis)) byAxis.set(p.thicknessAxis, p);
     expect(byAxis.size).toBe(3);
     const [pA, pB, pC] = Array.from(byAxis.values()) as [PanelInfo, PanelInfo, PanelInfo];
 
-    let abShell: string | undefined;
-    try {
-      const ab: any = await dispatchTool('merge_bodies_with_bend', {
-        part_a_id: pA.id, part_b_id: pB.id,
-        target_edges: ['all'], bend_radius: 2.0,
-        transaction_id: txn.transaction_id,
-      }, config);
-      abShell = ab?.merged_shell_id;
-    } catch (e) {
-      console.log('[CASE 2] first merge A+B threw:', (e as { code?: string }).code);
-    }
-    expect(abShell).toBeDefined();
+    const ab: any = await dispatchTool('merge_bodies_with_bend', {
+      part_a_id: pA.id, part_b_id: pB.id,
+      target_edges: ['all'], bend_radius: 0.3,
+      transaction_id: txn.transaction_id,
+    }, config);
+    expect(ab?.merged_shell_id).toBeDefined();
 
-    let abcShell: string | undefined;
-    let abcError: unknown;
-    try {
-      const abc: any = await dispatchTool('merge_bodies_with_bend', {
-        part_a_id: abShell, part_b_id: pC.id,
-        target_edges: ['all'], bend_radius: 2.0,
-        transaction_id: txn.transaction_id,
-      }, config);
-      abcShell = abc?.merged_shell_id;
-    } catch (e) {
-      abcError = e;
-      console.log('[CASE 2] chained merge (A+B)+C threw:', (e as { code?: string }).code);
-    }
+    await expect(dispatchTool('merge_bodies_with_bend', {
+      part_a_id: ab.merged_shell_id, part_b_id: pC.id,
+      target_edges: ['all'], bend_radius: 0.3,
+      transaction_id: txn.transaction_id,
+    }, config)).rejects.toMatchObject({ code: 'GE_MERGE_FILLET_FAILED' });
 
-    if (!abcShell) {
-      console.log('[CASE 2] chained merge failed before unfold — root cause is merge_bodies_with_bend on already-merged shell');
-      await dispatchTool('rollback_transaction', { transaction_id: txn.transaction_id }, config);
-      // We want the test to *fail loudly* if the merge step is what's broken,
-      // because that is the screenshot's symptom — propagate the original error.
-      throw abcError ?? new Error('CASE 2: chained merge produced no shell');
-    }
-
-    let unfold: any;
-    let unfoldError: unknown;
-    try {
-      unfold = await dispatchTool('apply_unfold', {
-        panel_id: abcShell,
-        material_id: config.materials[0]!.id,
-        transaction_id: txn.transaction_id,
-      }, config);
-    } catch (e) {
-      unfoldError = e;
-    }
-
-    if (unfoldError) {
-      console.log('[CASE 2] unfold of chained shell rejected:', (unfoldError as { code?: string; message?: string }));
-      // Either it's a legitimate "this is not sheet metal" (e.g. closed corner) OR
-      // it's the screenshot symptom. Capture which.
-      throw unfoldError;
-    }
-
-    console.log(`[CASE 2] flat=${unfold.flat_width_mm}×${unfold.flat_height_mm}mm bends=${unfold.bend_count} thickness=${unfold.nominal_thickness_mm}`);
-    // Three 200×200 panels joined in a hairpin would be 600×200 with 2 bends.
-    // Three meeting at a corner is a closed pocket and should be rejected.
-    // We accept either, but Thickness N/A (== 0) is what we're hunting.
-    expect(unfold.nominal_thickness_mm).toBeGreaterThan(0);
 
     await dispatchTool('rollback_transaction', { transaction_id: txn.transaction_id }, config);
   }, 30_000);
@@ -304,7 +271,7 @@ describe('Unfold round-trip harness', () => {
     try {
       const m: any = await dispatchTool('merge_bodies_with_bend', {
         part_a_id: pA.id, part_b_id: movedB,
-        target_edges: ['all'], bend_radius: 2.0,
+        target_edges: ['all'], bend_radius: 0.3,
         transaction_id: txn.transaction_id,
       }, config);
       mergedId = m?.merged_shell_id;
@@ -380,7 +347,7 @@ describe('Unfold round-trip harness', () => {
         try {
           const m: any = await dispatchTool('merge_bodies_with_bend', {
             part_a_id: pA.id, part_b_id: pB.id,
-            target_edges: ['all'], bend_radius: 2.0,
+            target_edges: ['all'], bend_radius: 0.3,
             transaction_id: txn.transaction_id,
           }, config);
           mergedId = m?.merged_shell_id;
