@@ -78,6 +78,9 @@
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
+#include <IntAna_QuadQuadGeo.hxx>
+#include <IntAna_ResultType.hxx>
+#include <Precision.hxx>
 #include <BRepOffset_Mode.hxx>
 #include <BRepBuilderAPI_MakeSolid.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
@@ -4994,8 +4997,18 @@ private:
       if (!boxMaker.IsDone()) continue;
       TopoDS_Solid boxSolid = boxMaker.Solid();
 
-      // Extract panel slab = remainder ∩ boxSolid
-      BRepAlgoAPI_Common extract(remainder, boxSolid);
+      // Extract panel slab = ORIGINAL_SOLID ∩ boxSolid (not remainder).
+      //
+      // Extracting from the remainder caused successive panels to be trimmed
+      // at the corners where earlier panels had already been cut out. The
+      // resulting panels only touched along an edge (no volumetric overlap),
+      // which broke merge_bodies_with_bend: the strict 0.1mm proximity
+      // seam-detection filter couldn't find the outer corner edge because
+      // it sat one wall-thickness away from the trimmed input. Panels that
+      // overlap at corners (as adjacent sheet metal walls physically do)
+      // give a clean fuse with the corner absorbed into the merged solid,
+      // and the seam edge sits right on both inputs.
+      BRepAlgoAPI_Common extract(solid, boxSolid);
       extract.Build();
       if (!extract.IsDone() || extract.Shape().IsNull()) continue;
 
@@ -5761,53 +5774,119 @@ private:
         if (wantAll) {
           // SEAM SELECTION (target_edges == ["all"]):
           //
-          // A "bend seam" is the external corner edge where the outer faces of
-          // the two merged bodies meet at a non-flat dihedral.  We pick the
-          // LONGEST single edge satisfying these criteria and fillet only that
-          // one — multiple parallel fragments in the corner overlap volume
-          // produce conflicting fillet ops that OCCT cannot resolve.
+          // The bend seam is the external corner edge where the two merged
+          // bodies' outer faces meet.  Two-pass strategy:
           //
-          // History: the previous "vertex touches both inputs" filter picked
-          // up fuse-internal coplanar-face edges (dihedral = 0) and OCCT
-          // rejected them; a perpendicular-dihedral filter returned 24
-          // fragments (one true seam plus 23 corner-volume splinters) and
-          // OCCT failed to build all of them simultaneously.  Single-longest
-          // gives reliable behaviour and matches the physical reality of one
-          // bend per merge.
-          TopoDS_Edge bestEdge;
-          double bestLen = 0.0;
+          //   PASS 1 — strict 0.1 mm proximity + normal-match.
+          //     Normal case: panels overlap volumetrically at the corner
+          //     (cube walls extracted by split_by_bends now preserve their
+          //     full extent — see the matching split fix).  The seam edge
+          //     sits right on both inputs, and we require the edge's
+          //     adjacent face normals to match the inputs' outward normals
+          //     so we don't accidentally pick an interior side edge of one
+          //     panel that happens to lie near both inputs.
+          //
+          //   PASS 2 — relaxed proximity (~2× wall thickness) + normal-match.
+          //     Fallback for inputs that aren't perfectly touching (e.g.
+          //     after close_gap left a sub-mm residual, or split-trimmed
+          //     panels from an older shell): the corner edge sits one wall
+          //     thickness from one input.  The normal-match guard prevents
+          //     picking a wrong side-edge.
 
-          TopExp_Explorer edgeExp(filletInput, TopAbs_EDGE);
-          for (; edgeExp.More(); edgeExp.Next()) {
-            const TopoDS_Edge& e = TopoDS::Edge(edgeExp.Current());
-            if (!efMap.Contains(e)) continue;
-            const TopTools_ListOfShape& adj = efMap.FindFromKey(e);
-            if (adj.Extent() != 2) continue;
+          // Pick each input's "outer" normal: the largest planar face whose
+          // centroid sits FARTHEST from the OTHER input's centroid.  This
+          // reliably picks the face facing away from the bend (away from the
+          // other panel) — necessary because thin slabs have two equal-area
+          // candidates (inner/outer) and which one OCCT visits first is not
+          // stable.  Inner-cube panels were getting their inner-facing face
+          // picked, which inverted the seam normal-match and selected an
+          // inside-corner edge instead of the outer bend corner.
+          GProp_GProps centA, centB;
+          BRepGProp::VolumeProperties(inputA, centA);
+          BRepGProp::VolumeProperties(inputB, centB);
+          gp_Pnt cA = centA.CentreOfMass();
+          gp_Pnt cB = centB.CentreOfMass();
 
-            auto it = adj.cbegin();
-            TopoDS_Face fA = TopoDS::Face(*it++);
-            TopoDS_Face fB = TopoDS::Face(*it);
-            gp_Vec nA = faceOutwardNormal(fA);
-            gp_Vec nB = faceOutwardNormal(fB);
-            double c = std::max(-1.0, std::min(1.0, nA.Dot(nB)));
-            double dihedralDeg = std::acos(c) * 180.0 / M_PI;
-            if (dihedralDeg < 5.0 || dihedralDeg > 175.0) continue;
-
-            GProp_GProps prop;
-            BRepGProp::LinearProperties(e, prop);
-            double len = prop.Mass();
-            if (len < 10.0) continue;
-
-            BRepExtrema_DistShapeShape dEdgeA(e, inputA);
-            BRepExtrema_DistShapeShape dEdgeB(e, inputB);
-            if (!dEdgeA.IsDone() || !dEdgeB.IsDone()) continue;
-            if (dEdgeA.Value() > 0.1 || dEdgeB.Value() > 0.1) continue;
-
-            candidateEdges++;
-            if (len > bestLen) {
-              bestLen = len;
-              bestEdge = e;
+          auto outerNormal = [&](const TopoDS_Shape& body, const gp_Pnt& otherCentroid) -> gp_Vec {
+            gp_Vec best(0,0,1);
+            double bestScore = -1.0;
+            for (TopExp_Explorer fx(body, TopAbs_FACE); fx.More(); fx.Next()) {
+              const TopoDS_Face& f = TopoDS::Face(fx.Current());
+              Handle(Geom_Surface) s = BRep_Tool::Surface(f);
+              if (s.IsNull() || !s->IsKind(STANDARD_TYPE(Geom_Plane))) continue;
+              GProp_GProps fp;
+              BRepGProp::SurfaceProperties(f, fp);
+              double area = fp.Mass();
+              gp_Pnt c = fp.CentreOfMass();
+              double dist = c.Distance(otherCentroid);
+              // Score = area weighted by distance from the other input
+              // (so we prefer large faces that face away).
+              double score = area * dist;
+              if (score > bestScore) {
+                bestScore = score;
+                best = faceOutwardNormal(f);
+              }
             }
+            return best;
+          };
+          gp_Vec nInA = outerNormal(inputA, cB);
+          gp_Vec nInB = outerNormal(inputB, cA);
+
+          double inputThickness = 0.0;
+          {
+            Bnd_Box bA, bB;
+            BRepBndLib::AddOptimal(inputA, bA);
+            BRepBndLib::AddOptimal(inputB, bB);
+            double xA1,yA1,zA1,xA2,yA2,zA2,xB1,yB1,zB1,xB2,yB2,zB2;
+            bA.Get(xA1,yA1,zA1,xA2,yA2,zA2);
+            bB.Get(xB1,yB1,zB1,xB2,yB2,zB2);
+            double minA = std::min({xA2-xA1, yA2-yA1, zA2-zA1});
+            double minB = std::min({xB2-xB1, yB2-yB1, zB2-zB1});
+            inputThickness = std::max(minA, minB);
+          }
+
+          auto findSeam = [&](double proxTol) -> TopoDS_Edge {
+            TopoDS_Edge best;
+            double bestLen = 0.0;
+            TopExp_Explorer ee(filletInput, TopAbs_EDGE);
+            for (; ee.More(); ee.Next()) {
+              const TopoDS_Edge& e = TopoDS::Edge(ee.Current());
+              if (!efMap.Contains(e)) continue;
+              const TopTools_ListOfShape& adj = efMap.FindFromKey(e);
+              if (adj.Extent() != 2) continue;
+              auto it = adj.cbegin();
+              TopoDS_Face fA = TopoDS::Face(*it++);
+              TopoDS_Face fB = TopoDS::Face(*it);
+              gp_Vec nFA = faceOutwardNormal(fA);
+              gp_Vec nFB = faceOutwardNormal(fB);
+              double cosD = std::max(-1.0, std::min(1.0, nFA.Dot(nFB)));
+              double dihedralDeg = std::acos(cosD) * 180.0 / M_PI;
+              if (dihedralDeg < 5.0 || dihedralDeg > 175.0) continue;
+
+              GProp_GProps prop;
+              BRepGProp::LinearProperties(e, prop);
+              double len = prop.Mass();
+              if (len < 10.0) continue;
+
+              BRepExtrema_DistShapeShape dA(e, inputA);
+              BRepExtrema_DistShapeShape dB(e, inputB);
+              if (!dA.IsDone() || !dB.IsDone()) continue;
+              if (dA.Value() > proxTol || dB.Value() > proxTol) continue;
+
+              double nm = std::max(
+                nFA.Dot(nInA) + nFB.Dot(nInB),
+                nFA.Dot(nInB) + nFB.Dot(nInA));
+              if (nm < 1.5) continue;
+
+              if (len > bestLen) { bestLen = len; best = e; candidateEdges++; }
+            }
+            return best;
+          };
+
+          TopoDS_Edge bestEdge = findSeam(0.1);
+          if (bestEdge.IsNull()) {
+            double relaxed = std::max(0.5, 2.0 * inputThickness);
+            bestEdge = findSeam(relaxed);
           }
 
           if (!bestEdge.IsNull()) {
