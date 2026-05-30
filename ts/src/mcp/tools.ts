@@ -131,7 +131,7 @@ export function getToolDefinitions(): object[] {
     },
     {
       name: 'apply_unfold',
-      description: 'Validates, heals minor gaps (up to 0.1 mm), and flattens a 3D sheet metal shell using analytical K-factor calculations. Produces flat blank dimensions and registers the unfold pattern. Mutating — requires transaction_id.',
+      description: 'Validates, heals minor gaps (up to 0.1 mm), and flattens a 3D sheet metal shell using analytical K-factor calculations. Produces flat blank dimensions, bend annotations, and a DXF engineering drawing (dxf_content) derived directly from the flat mesh geometry. Mutating — requires transaction_id.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -419,20 +419,28 @@ export function getToolDefinitions(): object[] {
     },
     {
       name: 'extend_face_to_target',
-      description: 'Extends a face of a shell body until it reaches a target geometry.',
+      description: 'Extends a face of a part to meet a target (part surface, specific face, or plane). The source face can be specified explicitly or auto-selected as the face closest to and most directly facing the target.',
       inputSchema: {
         type: 'object',
         properties: {
-          part_id: { type: 'string' },
-          face_id: { type: 'string' },
-          target_type: { type: 'string', enum: ['plane', 'face_id', 'part_surface'] },
+          part_id:        { type: 'string', description: 'The part whose face will be extended' },
+          face_id:        { type: 'string', description: 'Face ID to extend; omit to auto-select the closest face facing the target' },
+          target_type:    { type: 'string', enum: ['part_surface', 'face_id', 'plane'], description: 'How the target is specified (default: part_surface)' },
+          target_part_id: { type: 'string', description: 'Target part ID (required when target_type is part_surface or face_id)' },
+          target_face_id: { type: 'string', description: 'Specific face ID on the target part (only used when target_type is face_id)' },
           target: {
             type: 'object',
-            description: 'Target geometry: plane fields for plane target; part_id/face_id for face targets',
+            description: 'Nested target spec — alternative to flat target_part_id/target_face_id; also carries plane normal/origin',
+            properties: {
+              part_id: { type: 'string' },
+              face_id: { type: 'string' },
+              normal:  { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } } },
+              origin:  { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } } },
+            },
           },
           transaction_id: { type: 'string' },
         },
-        required: ['part_id', 'face_id', 'target_type', 'target'],
+        required: ['part_id'],
       },
     },
     {
@@ -656,6 +664,35 @@ export function getToolDefinitions(): object[] {
           transaction_id: { type: 'string' },
         },
         required: ['part_id'],
+      },
+    },
+    {
+      name: 'close_gap',
+      description:
+        'Translates part_b so its closest point touches part_a, closing any spatial gap between them. ' +
+        'Use this before merge_bodies_with_bend when the panels are further apart than the 0.1 mm sewing tolerance. ' +
+        'Non-destructive if the gap is already zero. Returns a rollback_token.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_a_id: { type: 'string', description: 'The stationary panel (anchor)' },
+          part_b_id: { type: 'string', description: 'The panel to translate (mover)' },
+        },
+        required: ['part_a_id', 'part_b_id'],
+      },
+    },
+    {
+      name: 'is_panel_valid',
+      description:
+        'Checks whether a shell body is a valid sheet-metal panel that can be flattened. ' +
+        'Returns structured validation errors with machine-readable codes (GE_PANEL_*) and human-readable messages. ' +
+        'Run this before apply_unfold to surface actionable errors early.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          panel_id: { type: 'string', description: 'Shell ID to validate' },
+        },
+        required: ['panel_id'],
       },
     },
     {
@@ -1150,6 +1187,12 @@ export async function dispatchTool(
       case 'merge_bodies_with_bend':
         return handleMergeBodiesWithBend(args);
 
+      case 'close_gap':
+        return handleCloseGap(args);
+
+      case 'is_panel_valid':
+        return handleIsPanelValid(args);
+
       case 'extend_face_to_target':
         return handleExtendFaceToTarget(args);
 
@@ -1223,6 +1266,7 @@ function handleCleanGeometry(args: Record<string, unknown>): unknown {
 
   const topology = getGeometryBinding().getTopology(finalSolidId);
 
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     solid_id: finalSolidId,
     is_manifold: true,
@@ -1230,6 +1274,7 @@ function handleCleanGeometry(args: Record<string, unknown>): unknown {
     issues_found: manifoldResult.issues.length,
     healed,
     rollback_token: rollbackToken,
+    mesh_url: `${meshBaseUrl}/mesh/${finalSolidId}.glb`,
   };
 }
 
@@ -1291,6 +1336,8 @@ function handleSynthesizeJoints(args: Record<string, unknown>, config: Manufactu
 
   const ctx = resolveTransactionContext(args);
 
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+
   if (jointType === 'tab_slot') {
     const result = getGeometryBinding().addTabSlot(panelIds[0]!, panelIds[1]!, clearanceMm);
     if (ctx.mode === 'join') {
@@ -1302,6 +1349,7 @@ function handleSynthesizeJoints(args: Record<string, unknown>, config: Manufactu
       kerf_offset_mm: result.kerfOffsetApplied,
       rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
       shape_history: result.shape_history ?? [],
+      mesh_urls: (result.modifiedShellIds as string[]).map((id) => `${meshBaseUrl}/mesh/${id}.glb`),
     };
   }
 
@@ -1316,6 +1364,7 @@ function handleSynthesizeJoints(args: Record<string, unknown>, config: Manufactu
       kerf_offset_mm: clearanceMm,
       rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
       shape_history: result.shape_history ?? [],
+      mesh_urls: [`${meshBaseUrl}/mesh/${result.modifiedShellId}.glb`],
     };
   }
 
@@ -1351,10 +1400,12 @@ function handleGenerateReliefs(args: Record<string, unknown>): unknown {
     rollbackToken = ctx.transactionId;
   }
 
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     modified_panel_id: panelId,
     relief_count: 4,  // placeholder; Phase C will use actual detection
     rollback_token: rollbackToken,
+    mesh_url: `${meshBaseUrl}/mesh/${panelId}.glb`,
   };
 }
 
@@ -1388,9 +1439,67 @@ function handleReconstructCurvedBends(args: Record<string, unknown>): unknown {
   };
 }
 
+/** Parse BEND_UP / BEND_DOWN LINE entities from DXF text and return each
+ *  as fractional coordinates {x1,y1,x2,y2} in the range [0,1] relative to
+ *  the flat-pattern bounding box.  Only straight-line entities on bend layers
+ *  are extracted; arcs and other entities are ignored. */
+function parseDxfBendLines(
+  dxf: string,
+  flatWidthMm: number,
+  flatHeightMm: number,
+): Array<{ x1: number; y1: number; x2: number; y2: number }> {
+  const lines: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
+  const tokens = dxf.split('\n').map((t) => t.trim());
+
+  let inLine = false;
+  let isBendLayer = false;
+  let x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+
+  for (let i = 0; i < tokens.length - 1; i++) {
+    const code = parseInt(tokens[i], 10);
+    const val = tokens[i + 1];
+
+    if (isNaN(code)) continue;
+
+    if (code === 0) {
+      // Flush completed LINE entity on a bend layer
+      if (inLine && isBendLayer) {
+        lines.push({
+          x1: x1 / flatWidthMm,
+          y1: y1 / flatHeightMm,
+          x2: x2 / flatWidthMm,
+          y2: y2 / flatHeightMm,
+        });
+      }
+      inLine = val === 'LINE';
+      isBendLayer = false;
+      x1 = y1 = x2 = y2 = 0;
+    } else if (inLine) {
+      if (code === 8) {
+        isBendLayer = val === 'BEND_UP' || val === 'BEND_DOWN';
+      } else if (code === 10) { x1 = parseFloat(val); }
+      else if (code === 20) { y1 = parseFloat(val); }
+      else if (code === 11) { x2 = parseFloat(val); }
+      else if (code === 21) { y2 = parseFloat(val); }
+    }
+    i++; // each group code consumes two tokens
+  }
+  return lines;
+}
+
 function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingConfig): unknown {
   const panelId = requireString(args, 'panel_id');
   const materialId = requireString(args, 'material_id');
+
+  const validation = getGeometryBinding().isPanelValid(panelId);
+  if (!validation.isValid || !validation.canFlatten) {
+    throwError(
+      ErrorCodes.GE_PANEL_INVALID,
+      `Panel ${panelId} is not a valid sheet-metal panel: ` +
+        validation.errors.map(e => `[${e.code}] ${e.message}`).join('; '),
+      false,
+    );
+  }
 
   const matStore = new MaterialStore(config.materials);
   if (!matStore.has(materialId)) {
@@ -1406,20 +1515,48 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
   const ctx = resolveTransactionContext(args);
   const result = getGeometryBinding().unfoldShell(panelId, kFactor);
   session.registerUnfold(result.unfoldId);
+  if (result.improvedPartId) {
+    session.registerShell(result.improvedPartId);
+  }
 
   if (ctx.mode === 'join') {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
-  return {
+  // Always export DXF: the content is returned to the caller for downstream
+  // use (CAM, laser cutting), and bend line positions are parsed from it for
+  // the UI preview.  The export is non-mutating and always available after
+  // a successful unfoldShell call.
+  let dxfContent = '';
+  let bendLines: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
+  try {
+    const dxf = getGeometryBinding().exportDxf(result.unfoldId);
+    dxfContent = dxf.dxfContent;
+    if (result.bendCount > 0) {
+      bendLines = parseDxfBendLines(dxfContent, result.flatWidthMm, result.flatHeightMm);
+    }
+  } catch {
+    // Non-fatal: preview will fall back to even-spaced hints
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  const response: Record<string, unknown> = {
     unfold_id: result.unfoldId,
     flat_width_mm: result.flatWidthMm,
     flat_height_mm: result.flatHeightMm,
     k_factor_used: result.kFactorUsed,
     bend_count: result.bendCount,
+    nominal_thickness_mm: result.detectedThickness ?? 0,
+    bend_lines: bendLines,
+    dxf_content: dxfContent,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
     shape_history: result.shape_history ?? [],
   };
+  if (result.improvedPartId) {
+    response['improved_part_id'] = result.improvedPartId;
+    response['improved_part_mesh_url'] = `${meshBaseUrl}/mesh/${result.improvedPartId}.glb`;
+  }
+  return response;
 }
 
 function handleEvaluateManufacturability(
@@ -1914,10 +2051,36 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
   };
 }
 
+function handleCloseGap(args: Record<string, unknown>): unknown {
+  const partAId = requireString(args, 'part_a_id');
+  const partBId = requireString(args, 'part_b_id');
+  const ctx = resolveTransactionContext(args);
+  const result = getGeometryBinding().closeGap(partAId, partBId);
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    part_b_id: result.partBId,
+    gap_closed_mm: result.gapClosedMm,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
+    mesh_url: `${meshBaseUrl}/mesh/${result.partBId}.glb`,
+  };
+}
+
+function handleIsPanelValid(args: Record<string, unknown>): unknown {
+  const panelId = requireString(args, 'panel_id');
+  const result = getGeometryBinding().isPanelValid(panelId);
+  return {
+    is_valid: result.isValid,
+    can_flatten: result.canFlatten,
+    nominal_thickness_mm: result.nominalThicknessMm,
+    errors: result.errors.map(e => ({ code: e.code, message: e.message })),
+  };
+}
+
 function handleExtendFaceToTarget(args: Record<string, unknown>): unknown {
   const partId     = requireString(args, 'part_id');
-  const faceId     = requireString(args, 'face_id');
-  const targetType = requireString(args, 'target_type');
+  const faceId     = typeof args['face_id'] === 'string' ? args['face_id'] as string : '';
+  const targetType = typeof args['target_type'] === 'string' ? args['target_type'] as string : 'part_surface';
 
   if (targetType !== 'plane' && targetType !== 'face_id' && targetType !== 'part_surface') {
     throwError(ErrorCodes.GE_EXTEND_FAILED,
@@ -1925,8 +2088,21 @@ function handleExtendFaceToTarget(args: Record<string, unknown>): unknown {
   }
 
   const target = (args['target'] ?? {}) as Record<string, unknown>;
-  const targetPartId = typeof target['part_id'] === 'string' ? target['part_id'] : '';
-  const targetFaceId = typeof target['face_id'] === 'string' ? target['face_id'] : '';
+
+  // Accept flat target_part_id/target_face_id or nested target.part_id/target.face_id
+  let targetPartId = '';
+  let targetFaceId = '';
+  if (typeof args['target_part_id'] === 'string') {
+    targetPartId = args['target_part_id'] as string;
+    targetFaceId = typeof args['target_face_id'] === 'string' ? args['target_face_id'] as string : '';
+  } else {
+    targetPartId = typeof target['part_id'] === 'string' ? target['part_id'] as string : '';
+    targetFaceId = typeof target['face_id'] === 'string' ? target['face_id'] as string : '';
+  }
+
+  if (!targetPartId && targetType !== 'plane') {
+    throwError(ErrorCodes.GE_EXTEND_FAILED, 'target_part_id is required', false);
+  }
 
   const normalObj = (target['normal'] ?? { x: 0, y: 0, z: 1 }) as { x: number; y: number; z: number };
   const originObj = (target['origin'] ?? { x: 0, y: 0, z: 0 }) as { x: number; y: number; z: number };

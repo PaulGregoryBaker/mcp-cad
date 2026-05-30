@@ -75,6 +75,7 @@ struct UnfoldResult {
   double                          detectedThickness = 0.0;
   SnapshotId                      rollbackToken;
   std::vector<ShapeHistoryRecord> shapeHistory;
+  ShellId                         improvedPartId;   // curved-bend rebuild; empty on failure
 };
 
 struct DxfExportResult {
@@ -225,6 +226,12 @@ struct MergeBodyResult {
   ShellId                         mergedShellId;
   SnapshotId                      rollbackToken;
   std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+struct CloseGapResult {
+  ShellId    partBId;       // updated shell ID (same ID, shape translated in-place)
+  double     gapClosedMm;   // how much gap was closed (0 if already touching)
+  SnapshotId rollbackToken;
 };
 
 struct BBox3D {
@@ -506,6 +513,10 @@ public:
       const ShellId&                  partBId,
       const std::vector<std::string>& targetEdges,
       double                          bendRadiusMm) = 0;
+
+  virtual CloseGapResult closeGap(
+      const ShellId& partAId,
+      const ShellId& partBId) = 0;
 
   // ── Extended direct modeling ───────────────────────────────────────────────
   virtual ExtendFaceResult extendFaceToTarget(

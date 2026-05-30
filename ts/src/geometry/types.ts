@@ -113,6 +113,7 @@ export interface UnfoldResult {
   detectedThickness?: number;
   rollbackToken: string;
   shape_history?: ShapeHistoryRecord[];
+  improvedPartId?: string;
 }
 
 export interface DxfExportResult {
@@ -218,6 +219,24 @@ export interface MergeBodyResult {
   mergedShellId: string;
   rollbackToken: string;
   shape_history?: ShapeHistoryRecord[];
+}
+
+export interface CloseGapResult {
+  partBId: string;
+  gapClosedMm: number;
+  rollbackToken: string;
+}
+
+export interface PanelValidationError {
+  code: string;     // e.g. "GE_PANEL_DISCONNECTED"
+  message: string;  // human-readable explanation
+}
+
+export interface PanelValidationResult {
+  isValid: boolean;
+  canFlatten: boolean;
+  nominalThicknessMm: number;
+  errors: PanelValidationError[];
 }
 
 // ── Assembly IDs ──────────────────────────────────────────────────────────────

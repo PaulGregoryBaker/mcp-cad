@@ -49,6 +49,8 @@ import type {
   ListAssemblyResult,
   SheetMetalValidationResult,
   CurvedRebuildResult,
+  CloseGapResult,
+  PanelValidationResult,
 } from './types';
 
 // ─── Addon interface ──────────────────────────────────────────────────────────
@@ -144,6 +146,8 @@ export interface GeometryAddon {
   trimBodyWithPlane(partId: string, plane: CuttingPlane, keepPositiveSide: boolean): TrimBodyResult;
   splitBodyByPlane(partId: string, plane: CuttingPlane): SplitBodyResult;
   mergeBodiesWithBend(partAId: string, partBId: string, targetEdges: string[], bendRadiusMm: number): MergeBodyResult;
+  closeGap(partAId: string, partBId: string): CloseGapResult;
+  isPanelValid(partId: string): PanelValidationResult;
   extendFaceToTarget(
     partId: string,
     faceId: string,
@@ -659,6 +663,34 @@ export class GeometryBinding {
   ): MergeBodyResult {
     try {
       return this.addon.mergeBodiesWithBend(partAId, partBId, targetEdges, bendRadiusMm);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  closeGap(partAId: string, partBId: string): CloseGapResult {
+    try {
+      return this.addon.closeGap(partAId, partBId);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  isPanelValid(partId: string): PanelValidationResult {
+    try {
+      const raw = this.addon.validateSheetMetal(partId) as SheetMetalValidationResult;
+      const errors = (raw.validation_errors ?? []).map((msg: string) => {
+        const colonIdx = msg.indexOf(':');
+        const code = colonIdx > 0 ? msg.substring(0, colonIdx).trim() : 'GE_PANEL_INVALID';
+        const message = colonIdx > 0 ? msg.substring(colonIdx + 1).trim() : msg;
+        return { code, message };
+      });
+      return {
+        isValid: raw.is_valid,
+        canFlatten: raw.can_flatten,
+        nominalThicknessMm: raw.nominal_thickness ?? 0,
+        errors,
+      };
     } catch (err) {
       throw toStructuredError(err);
     }

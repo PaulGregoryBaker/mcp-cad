@@ -88,6 +88,9 @@
 
 #include <BRepBuilderAPI_Transform.hxx>
 #include <ShapeUpgrade_UnifySameDomain.hxx>
+#include <ShapeAnalysis_FreeBounds.hxx>
+#include <TopTools_HSequenceOfShape.hxx>
+#include <BRepTools_WireExplorer.hxx>
 #include <BRepOffsetAPI_MakeOffsetShape.hxx>
 #include <TDocStd_Application.hxx>
 #include <TDocStd_Document.hxx>
@@ -109,6 +112,7 @@
 #include "shape_history.hpp"
 
 // ─── Standard library ────────────────────────────────────────────────────────
+#include <map>
 #include <unordered_map>
 #include <memory>
 #include <mutex>
@@ -173,6 +177,12 @@ struct ShellState {
   TopoDS_Shape shape;
 };
 
+struct FlatBendEdge {
+  TopoDS_Edge edge;     // edge in flat-plane coordinates (z ≈ 0)
+  double      angleDeg; // absolute bend angle
+  bool        isUp;     // true = BEND_UP, false = BEND_DOWN
+};
+
 struct UnfoldState {
   UnfoldId    id;
   ShellId     sourceShellId;
@@ -180,7 +190,13 @@ struct UnfoldState {
   double      flatHeightMm;
   double      kFactorUsed;
   int         bendCount;
-  std::string dxfContent;
+
+  // Flat geometry (built by unfoldShell, serialised by exportDxf)
+  std::vector<TopoDS_Shape>   flatPanelShapes; // one compound per panel (in XY plane)
+  std::vector<FlatBendEdge>   flatBendEdges;   // bend centerlines in flat coordinates
+  gp_Pnt2d                    origin2d;        // (uMin, vMin) offset used during build
+
+  ShellId     improvedPartId;  // new shell with curved bend radii; empty on failure
 };
 
 struct AssemblyState {
@@ -681,31 +697,36 @@ public:
         return std::abs(v1.Dot(v2)) >= 0.90;
       };
 
-      // Helper: check if two faces share an edge
-      auto findSharedEdge = [&](const TopoDS_Face& f1, const TopoDS_Face& f2, TopoDS_Edge& shared) -> bool {
-        TopExp_Explorer e1(f1, TopAbs_EDGE);
-        for (; e1.More(); e1.Next()) {
-          const TopoDS_Edge& edge1 = TopoDS::Edge(e1.Current());
-          Standard_Real first1, last1;
-          Handle(Geom_Curve) c1 = BRep_Tool::Curve(edge1, first1, last1);
-          gp_Pnt pMid1 = !c1.IsNull() ? c1->Value((first1 + last1) * 0.5) : gp_Pnt(0,0,0);
-
-          TopExp_Explorer e2(f2, TopAbs_EDGE);
-          for (; e2.More(); e2.Next()) {
-            const TopoDS_Edge& edge2 = TopoDS::Edge(e2.Current());
-            Standard_Real first2, last2;
-            Handle(Geom_Curve) c2 = BRep_Tool::Curve(edge2, first2, last2);
-            gp_Pnt pMid2 = !c2.IsNull() ? c2->Value((first2 + last2) * 0.5) : gp_Pnt(0,0,0);
-
-
-
-            if (edge1.IsSame(edge2) || edgesAreCoincident(edge1, edge2)) {
-              shared = edge1;
-              return true;
+      // Helper: check if any face in f1List shares an edge with any face in f2List.
+      // Must iterate ALL coplanar sub-faces — a single PlaneFaceInfo entry can
+      // wrap many sub-faces after Boolean fuse, and the bend seam edge may
+      // belong to any one of them.  Only checking the primary sub-face was the
+      // root cause of the bbox-fallback bug on certain merged L-shapes.
+      auto findSharedEdgeList = [&](const std::vector<TopoDS_Face>& f1List,
+                                    const std::vector<TopoDS_Face>& f2List,
+                                    TopoDS_Edge& shared) -> bool {
+        for (const auto& f1 : f1List) {
+          for (const auto& f2 : f2List) {
+            TopExp_Explorer e1(f1, TopAbs_EDGE);
+            for (; e1.More(); e1.Next()) {
+              const TopoDS_Edge& edge1 = TopoDS::Edge(e1.Current());
+              TopExp_Explorer e2(f2, TopAbs_EDGE);
+              for (; e2.More(); e2.Next()) {
+                const TopoDS_Edge& edge2 = TopoDS::Edge(e2.Current());
+                if (edge1.IsSame(edge2) || edgesAreCoincident(edge1, edge2)) {
+                  shared = edge1;
+                  return true;
+                }
+              }
             }
           }
         }
         return false;
+      };
+
+      // Backwards-compatible single-face wrapper.
+      auto findSharedEdge = [&](const TopoDS_Face& f1, const TopoDS_Face& f2, TopoDS_Edge& shared) -> bool {
+        return findSharedEdgeList({f1}, {f2}, shared);
       };
 
       // 1. Gather all planar faces and compute their areas
@@ -732,13 +753,18 @@ public:
         double flatW = xMax - xMin;
         double flatH = yMax - yMin;
         UnfoldId id = generateUUID();
-        unfolds_[id] = UnfoldState{id, shellId, flatW, flatH, kFactor, 0, ""};
+        unfolds_[id] = UnfoldState{id, shellId, flatW, flatH, kFactor, 0, {}, {}, gp_Pnt2d(0, 0)};
         return UnfoldResult{id, flatW, flatH, kFactor, 0, true, val.nominalThickness, token, {}};
       }
 
       // 2. Perform pairwise face matching to identify thin-sheet skins (panels)
       struct PlaneFaceInfo {
         TopoDS_Face face;
+        // All coplanar sub-faces that were merged into this entry.  Tracking these
+        // avoids the "24mm sliver" bug where a boolean op or extend_face splits a
+        // large skin face into two coplanar strips; only the first strip's vertices
+        // would be projected otherwise, producing a tiny flat-pattern height.
+        std::vector<TopoDS_Face> allFaces;
         double area;
         gp_Pnt center;
         gp_Vec normal;
@@ -756,6 +782,7 @@ public:
         }
         PlaneFaceInfo info;
         info.face = pair.first;
+        info.allFaces = {pair.first};
         info.area = pair.second;
         info.center = faceCenter(info.face);
         info.normal = faceOutwardNormal(info.face);
@@ -775,6 +802,9 @@ public:
               mInfo.center = gp_Pnt(
                   (mInfo.center.XYZ() * oldArea + info.center.XYZ() * info.area) / mInfo.area
               );
+              // Accumulate all sub-faces so vertex projection sees the full skin extent.
+              mInfo.allFaces.insert(mInfo.allFaces.end(),
+                                    info.allFaces.begin(), info.allFaces.end());
               found = true;
               break;
             }
@@ -864,7 +894,7 @@ public:
         double flatW = xMax - xMin;
         double flatH = yMax - yMin;
         UnfoldId id = generateUUID();
-        unfolds_[id] = UnfoldState{id, shellId, flatW, flatH, kFactor, 0, ""};
+        unfolds_[id] = UnfoldState{id, shellId, flatW, flatH, kFactor, 0, {}, {}, gp_Pnt2d(0, 0)};
         return UnfoldResult{id, flatW, flatH, kFactor, 0, true, val.nominalThickness, token, {}};
       }
 
@@ -922,8 +952,6 @@ public:
       for (int i = 0; i < P; ++i) {
         uniqueFaces[i] = planeInfos[panels[i].idxA].face;
       }
-      int M = P;
-
 
       // Helper to check panel connections
       auto findPanelConnection = [&](int p1, int p2, int& faceIdx1, int& faceIdx2, TopoDS_Edge& connEdge) -> bool {
@@ -935,14 +963,15 @@ public:
         };
 
         for (const auto& pair : pairs) {
-          if (findSharedEdge(planeInfos[pair.first].face, planeInfos[pair.second].face, connEdge)) {
+          if (findSharedEdgeList(planeInfos[pair.first].allFaces,
+                                 planeInfos[pair.second].allFaces, connEdge)) {
             faceIdx1 = pair.first;
             faceIdx2 = pair.second;
             return true;
           }
         }
 
-        // Try curved face connection
+        // Try curved face connection — iterate sub-faces on both sides.
         TopExp_Explorer faceExpAll(activeShape, TopAbs_FACE);
         for (; faceExpAll.More(); faceExpAll.Next()) {
           const TopoDS_Face& fCur = TopoDS::Face(faceExpAll.Current());
@@ -952,23 +981,31 @@ public:
           for (const auto& pair : pairs) {
             bool sharesI = false;
             TopoDS_Edge edgeI;
-            TopExp_Explorer eC1(fCur, TopAbs_EDGE);
-            for (; eC1.More(); eC1.Next()) {
-              const TopoDS_Edge& eCurved = TopoDS::Edge(eC1.Current());
-              TopExp_Explorer expI(planeInfos[pair.first].face, TopAbs_EDGE);
+            for (const auto& subA : planeInfos[pair.first].allFaces) {
+              TopExp_Explorer expI(subA, TopAbs_EDGE);
               for (; expI.More(); expI.Next()) {
-                if (eCurved.IsSame(expI.Current())) { sharesI = true; edgeI = eCurved; break; }
+                TopExp_Explorer eC1(fCur, TopAbs_EDGE);
+                for (; eC1.More(); eC1.Next()) {
+                  const TopoDS_Edge& eCurved = TopoDS::Edge(eC1.Current());
+                  if (eCurved.IsSame(expI.Current())) { sharesI = true; edgeI = eCurved; break; }
+                }
+                if (sharesI) break;
               }
+              if (sharesI) break;
             }
 
             bool sharesJ = false;
-            TopExp_Explorer eC2(fCur, TopAbs_EDGE);
-            for (; eC2.More(); eC2.Next()) {
-              const TopoDS_Edge& eCurved = TopoDS::Edge(eC2.Current());
-              TopExp_Explorer expJ(planeInfos[pair.second].face, TopAbs_EDGE);
+            for (const auto& subB : planeInfos[pair.second].allFaces) {
+              TopExp_Explorer expJ(subB, TopAbs_EDGE);
               for (; expJ.More(); expJ.Next()) {
-                if (eCurved.IsSame(expJ.Current())) { sharesJ = true; break; }
+                TopExp_Explorer eC2(fCur, TopAbs_EDGE);
+                for (; eC2.More(); eC2.Next()) {
+                  const TopoDS_Edge& eCurved = TopoDS::Edge(eC2.Current());
+                  if (eCurved.IsSame(expJ.Current())) { sharesJ = true; break; }
+                }
+                if (sharesJ) break;
               }
+              if (sharesJ) break;
             }
 
             if (sharesI && sharesJ) {
@@ -978,6 +1015,75 @@ public:
               return true;
             }
           }
+        }
+
+        // Geometric fallback: BRepAlgoAPI_Fuse can absorb junction edges so
+        // topological sharing tests above fail.  Find the pair of boundary
+        // edges (one from each face) that are closest AND parallel — the
+        // true junction edge runs the full length of both panels while a
+        // mere corner-vertex touch has perpendicular edge directions.
+        double geomTol = val.nominalThickness * 4.0 + 5.0;
+        double bestScore = -1.0;  // higher = better (shorter dist, more parallel)
+        TopoDS_Edge bestEdge;
+        int bestF1 = -1, bestF2 = -1;
+
+        for (const auto& pair : pairs) {
+          for (const auto& f1 : planeInfos[pair.first].allFaces) {
+            for (const auto& f2 : planeInfos[pair.second].allFaces) {
+              TopExp_Explorer eExp1(f1, TopAbs_EDGE);
+              for (; eExp1.More(); eExp1.Next()) {
+                const TopoDS_Edge& e1 = TopoDS::Edge(eExp1.Current());
+                GProp_GProps ep1;
+                BRepGProp::LinearProperties(e1, ep1);
+                if (ep1.Mass() < 1.0) continue;
+
+                Standard_Real f1p, l1p;
+                Handle(Geom_Curve) c1 = BRep_Tool::Curve(e1, f1p, l1p);
+                if (c1.IsNull() || !c1->IsKind(STANDARD_TYPE(Geom_Line))) continue;
+                gp_Pnt pa; gp_Vec d1;
+                c1->D1((f1p + l1p) * 0.5, pa, d1);
+                if (d1.Magnitude() < 1e-10) continue;
+                d1.Normalize();
+
+                TopExp_Explorer eExp2(f2, TopAbs_EDGE);
+                for (; eExp2.More(); eExp2.Next()) {
+                  const TopoDS_Edge& e2 = TopoDS::Edge(eExp2.Current());
+                  GProp_GProps ep2;
+                  BRepGProp::LinearProperties(e2, ep2);
+                  if (ep2.Mass() < 1.0) continue;
+
+                  Standard_Real f2p, l2p;
+                  Handle(Geom_Curve) c2 = BRep_Tool::Curve(e2, f2p, l2p);
+                  if (c2.IsNull() || !c2->IsKind(STANDARD_TYPE(Geom_Line))) continue;
+                  gp_Pnt pb; gp_Vec d2;
+                  c2->D1((f2p + l2p) * 0.5, pb, d2);
+                  if (d2.Magnitude() < 1e-10) continue;
+                  d2.Normalize();
+
+                  double parallelism = std::abs(d1.Dot(d2));
+                  if (parallelism < 0.9) continue;
+
+                  BRepExtrema_DistShapeShape dist(e1, e2);
+                  if (!dist.IsDone() || dist.Value() >= geomTol) continue;
+
+                  double score = parallelism / (1.0 + dist.Value()) * std::min(ep1.Mass(), ep2.Mass());
+                  if (score > bestScore) {
+                    bestScore = score;
+                    bestEdge = e1;
+                    bestF1 = pair.first;
+                    bestF2 = pair.second;
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        if (!bestEdge.IsNull()) {
+          faceIdx1 = bestF1;
+          faceIdx2 = bestF2;
+          connEdge = bestEdge;
+          return true;
         }
         return false;
       };
@@ -1008,6 +1114,14 @@ public:
       }
 
       // 4. BFS over Panel nodes
+      struct BendRecord {
+        int          panelCur;
+        int          faceIdxCur;  // planeInfos index for the cur-side face
+        TopoDS_Edge  originalEdge;
+        double       theta;       // flat-rotation angle (radians)
+      };
+      std::vector<BendRecord> bendRecords;
+
       std::vector<gp_Trsf> flatTransformsForFaces(N);
       std::vector<gp_Trsf> flatTransforms(P);
       std::vector<bool> visited(P, false);
@@ -1099,6 +1213,8 @@ public:
             flatTransformsForFaces[panels[nbr].idxB] = cumulative;
             flatTransforms[nbr] = cumulative;
 
+            bendRecords.push_back({cur, fCur, originalEdge, theta});
+
             q.push_back(nbr);
           }
         }
@@ -1112,22 +1228,67 @@ public:
       c0 = fp0.CentreOfMass();
       gp_Vec n0 = planeInfos[baseFace].normal;
 
+      // Prefer uAxis perpendicular to the first bend edge of panel 0 so the
+      // flat layout is consistently aligned regardless of OCCT edge ordering.
       gp_Vec uAxis;
       bool foundEdge = false;
-      TopExp_Explorer edgeExp(planeInfos[baseFace].face, TopAbs_EDGE);
-      for (; edgeExp.More(); edgeExp.Next()) {
-        const TopoDS_Edge& edge = TopoDS::Edge(edgeExp.Current());
+
+      if (!adj[0].empty()) {
+        const TopoDS_Edge& bendEdge = adj[0][0].second;
         Standard_Real first, last;
-        Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, first, last);
-        if (!curve.IsNull() && curve->IsKind(STANDARD_TYPE(Geom_Line))) {
-          gp_Pnt p1 = curve->Value(first);
-          gp_Pnt p2 = curve->Value(last);
-          gp_Vec edgeVec(p1, p2);
-          if (edgeVec.Magnitude() > 1e-6) {
-            uAxis = edgeVec;
+        Handle(Geom_Curve) curve = BRep_Tool::Curve(bendEdge, first, last);
+        if (!curve.IsNull()) {
+          gp_Pnt pa, pb;
+          gp_Vec dE;
+          curve->D1((first + last) * 0.5, pa, dE);
+          if (dE.Magnitude() > 1e-10) {
+            dE.Normalize();
+            uAxis = n0.Crossed(dE);
+            if (uAxis.Magnitude() > 1e-10) {
+              uAxis.Normalize();
+              foundEdge = true;
+            }
+          }
+        }
+      }
+
+      if (!foundEdge) {
+        // Fallback 1: use the face surface's own X-direction (from STEP/IGES coordinate system).
+        // This avoids picking diagonal edges from triangulated faces, which would tilt the
+        // flat layout 45 degrees (e.g. a 200x200mm face appears as 282x282mm = 200*sqrt(2)).
+        Handle(Geom_Surface) baseSurf = BRep_Tool::Surface(planeInfos[baseFace].face);
+        Handle(Geom_Plane) basePlane = Handle(Geom_Plane)::DownCast(baseSurf);
+        if (!basePlane.IsNull()) {
+          gp_Vec xDir(basePlane->Position().XDirection());
+          if (std::abs(xDir.Dot(n0)) < 0.9 && xDir.Magnitude() > 1e-10) {
+            uAxis = xDir;
             uAxis.Normalize();
             foundEdge = true;
-            break;
+          }
+        }
+      }
+
+      if (!foundEdge) {
+        // Fallback 2: shortest straight perimeter edge of the base face.
+        // Using shortest (not longest) avoids picking diagonal edges from
+        // triangulated rectangular faces, which are always longer than the sides.
+        double bestLen = 1e30;
+        TopExp_Explorer edgeExp(planeInfos[baseFace].face, TopAbs_EDGE);
+        for (; edgeExp.More(); edgeExp.Next()) {
+          const TopoDS_Edge& edge = TopoDS::Edge(edgeExp.Current());
+          Standard_Real first, last;
+          Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, first, last);
+          if (!curve.IsNull() && curve->IsKind(STANDARD_TYPE(Geom_Line))) {
+            gp_Pnt p1 = curve->Value(first);
+            gp_Pnt p2 = curve->Value(last);
+            gp_Vec edgeVec(p1, p2);
+            double len = edgeVec.Magnitude();
+            if (len > 1.0 && len < bestLen) {
+              bestLen = len;
+              uAxis = edgeVec;
+              uAxis.Normalize();
+              foundEdge = true;
+            }
           }
         }
       }
@@ -1144,26 +1305,56 @@ public:
       gp_Vec vAxis = n0.Crossed(uAxis);
       vAxis.Normalize();
 
+      // Helper: project a point into the flat (u,v) frame for panel `idx`.
+      auto flatUV = [&](const gp_Pnt& p, int idx) -> gp_Pnt2d {
+        gp_Pnt pt = p.Transformed(flatTransformsForFaces[idx]);
+        gp_Vec toPt(c0, pt);
+        return gp_Pnt2d(toPt.Dot(uAxis), toPt.Dot(vAxis));
+      };
+
+      // Gather the COMPLETE flat skin for a panel directly from the plane
+      // equation, rather than trusting the coplanar-merge grouping (which can
+      // split a panel into separate planeInfos and leave idxA holding only one
+      // half).  We collect every planar face in the shell that faces the same
+      // direction as the panel skin and lies on the same plane.  This guarantees
+      // both halves of a split panel are present, so the seam between them is
+      // shared and gets cancelled — and the reported size spans the full panel.
+      auto gatherSkin = [&](int idx) -> std::vector<TopoDS_Face> {
+        gp_Pnt c = planeInfos[idx].center;
+        gp_Vec n = planeInfos[idx].normal;
+        std::vector<TopoDS_Face> out;
+        for (TopExp_Explorer fe(activeShape, TopAbs_FACE); fe.More(); fe.Next()) {
+          const TopoDS_Face& f = TopoDS::Face(fe.Current());
+          Handle(Geom_Surface) s = BRep_Tool::Surface(f);
+          if (s.IsNull() || !s->IsKind(STANDARD_TYPE(Geom_Plane))) continue;
+          gp_Vec fn = faceOutwardNormal(f);
+          if (n.Dot(fn) < 0.95) continue;                       // same direction only
+          GProp_GProps fp; BRepGProp::SurfaceProperties(f, fp);
+          if (std::abs(gp_Vec(c, fp.CentreOfMass()).Dot(n)) > 0.5) continue;  // same plane
+          out.push_back(f);
+        }
+        if (out.empty()) out = planeInfos[idx].allFaces;        // fallback
+        return out;
+      };
+
+      // Precompute each panel's full skin; reused for the bounding box and the
+      // outline so the reported dimensions always match the drawn geometry.
+      std::vector<std::vector<TopoDS_Face>> panelSkin(P);
+      for (int i = 0; i < P; ++i) {
+        if (!visited[i]) continue;
+        panelSkin[i] = gatherSkin(panels[i].idxA);
+      }
+
       double uMin = 1e30, uMax = -1e30;
       double vMin = 1e30, vMax = -1e30;
 
       for (int i = 0; i < P; ++i) {
         if (!visited[i]) continue;
-        int idxA = panels[i].idxA;
-        int idxB = panels[i].idxB;
-
-        for (int idx : {idxA, idxB}) {
-          TopExp_Explorer vertexExp(planeInfos[idx].face, TopAbs_VERTEX);
-          for (; vertexExp.More(); vertexExp.Next()) {
-            const TopoDS_Vertex& v = TopoDS::Vertex(vertexExp.Current());
-            gp_Pnt p = BRep_Tool::Pnt(v);
-            gp_Pnt pTransformed = p.Transformed(flatTransformsForFaces[idx]);
-
-            gp_Vec toPt(c0, pTransformed);
-            double uVal = toPt.Dot(uAxis);
-            double vVal = toPt.Dot(vAxis);
-            uMin = std::min(uMin, uVal); uMax = std::max(uMax, uVal);
-            vMin = std::min(vMin, vVal); vMax = std::max(vMax, vVal);
+        for (const TopoDS_Face& subFace : panelSkin[i]) {
+          for (TopExp_Explorer ve(subFace, TopAbs_VERTEX); ve.More(); ve.Next()) {
+            gp_Pnt2d uv = flatUV(BRep_Tool::Pnt(TopoDS::Vertex(ve.Current())), panels[i].idxA);
+            uMin = std::min(uMin, uv.X()); uMax = std::max(uMax, uv.X());
+            vMin = std::min(vMin, uv.Y()); vMax = std::max(vMax, uv.Y());
           }
         }
       }
@@ -1175,214 +1366,251 @@ public:
       if (flatW < 1e-5) flatW = 1.0;
       if (flatH < 1e-5) flatH = 1.0;
 
-      // Generate DXF content
-      std::ostringstream dxf;
-      dxf << "  0\nSECTION\n  2\nHEADER\n  0\nENDSEC\n"
-          << "  0\nSECTION\n  2\nTABLES\n"
-          << "  0\nTABLE\n  2\nLTYPE\n 70\n1\n"
-          << "  0\nLTYPE\n  2\nCONTINUOUS\n 70\n0\n  3\nSolid line\n 72\n65\n 73\n0\n 40\n0.0\n"
-          << "  0\nLTYPE\n  2\nDASHED\n 70\n0\n  3\nDashed line __ __ __ __ __\n 72\n65\n 73\n2\n 40\n6.35\n 49\n3.175\n 49\n-3.175\n"
-          << "  0\nENDTAB\n"
-          << "  0\nTABLE\n  2\nLAYER\n 70\n4\n"
-          << "  0\nLAYER\n  2\n0\n 70\n0\n 62\n7\n  6\nCONTINUOUS\n"
-          << "  0\nLAYER\n  2\nCUT\n 70\n0\n 62\n1\n  6\nCONTINUOUS\n"
-          << "  0\nLAYER\n  2\nBEND_UP\n 70\n0\n 62\n3\n  6\nDASHED\n"
-          << "  0\nLAYER\n  2\nBEND_DOWN\n 70\n0\n 62\n4\n  6\nDASHED\n"
-          << "  0\nENDTAB\n"
-          << "  0\nENDSEC\n"
-          << "  0\nSECTION\n  2\nENTITIES\n";
+      // 5b. Build flat-plane coordinate transform.
+      // face0CS maps the face-0 local frame (c0, uAxis, vAxis) → standard XY.
+      // planeToXY * flatTransformsForFaces[idx] brings any face in the BFS tree
+      // into the same flat XY plane with the origin at (uMin, vMin).
+      gp_Ax3 face0CS(c0,
+                     gp_Dir(n0.X(), n0.Y(), n0.Z()),
+                     gp_Dir(uAxis.X(), uAxis.Y(), uAxis.Z()));
+      gp_Trsf tToXY;
+      tToXY.SetTransformation(face0CS); // maps from face0CS → world XY
 
-      // Helper to project 3D point to 2D flat coordinates
-      auto projectTo2D = [&](const gp_Pnt& p) -> gp_Pnt2d {
-        gp_Vec toPt(c0, p);
-        return gp_Pnt2d(toPt.Dot(uAxis), toPt.Dot(vAxis));
-      };
+      gp_Trsf tOffset;
+      tOffset.SetTranslation(gp_Vec(-uMin, -vMin, 0.0));
 
-      // Collect bend edges to avoid drawing them on the CUT layer
-      std::vector<TopoDS_Edge> bendEdges;
-      for (const auto& adjList : adj) {
-        for (const auto& edgePair : adjList) {
-          bendEdges.push_back(edgePair.second);
-        }
-      }
+      // 6. Build flat panel shapes (clean cut profile).
+      //
+      // The panel skin is a single FLAT region that split_by_bends may have
+      // carved into many coplanar sub-faces; the protrusion-footprint side-effect
+      // adds inconsistently-subdivided (T-junctioned) internal seams that naive
+      // edge-pair cancellation can't fully remove.  We instead:
+      //   a) gather every sub-face edge (in flat coords) and drop edges that are
+      //      shared by two sub-faces (count==2 → genuine interior seam);
+      //   b) connect the surviving edges into closed wires;
+      //   c) keep only the wire enclosing the largest area — the true outer
+      //      silhouette — discarding internal artifact loops and any dangling
+      //      T-junction fragments that don't close into a loop.
+      // This yields the clean panel outline regardless of how messy the internal
+      // tessellation is.
+      auto qz = [](double v) -> long long { return std::llround(v * 100.0); };
 
-      auto isBendEdge = [&](const TopoDS_Edge& edge) -> bool {
-        for (const auto& be : bendEdges) {
-          if (edge.IsSame(be)) return true;
-        }
-        return false;
-      };
-
-      // 1. Draw outer boundaries and cutouts (non-bend edges) on the 'CUT' layer
-      for (int i = 0; i < M; ++i) {
+      std::vector<TopoDS_Shape> flatPanelShapes(P);
+      for (int i = 0; i < P; ++i) {
         if (!visited[i]) continue;
-        TopExp_Explorer edgeExpCut(uniqueFaces[i], TopAbs_EDGE);
-        for (; edgeExpCut.More(); edgeExpCut.Next()) {
-          const TopoDS_Edge& edge = TopoDS::Edge(edgeExpCut.Current());
-          if (isBendEdge(edge)) continue; // skip bend centerlines
+        const std::vector<TopoDS_Face>& skin = panelSkin[i];
+        if (skin.empty()) continue;
 
-          Standard_Real first, last;
-          Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, first, last);
-          if (!curve.IsNull()) {
-            if (curve->IsKind(STANDARD_TYPE(Geom_Line))) {
-              TopoDS_Vertex v1, v2;
-              TopExp::Vertices(edge, v1, v2);
-              gp_Pnt pStart = BRep_Tool::Pnt(v1).Transformed(flatTransforms[i]);
-              gp_Pnt pEnd = BRep_Tool::Pnt(v2).Transformed(flatTransforms[i]);
-              gp_Pnt2d p1 = projectTo2D(pStart);
-              gp_Pnt2d p2 = projectTo2D(pEnd);
+        gp_Trsf toFlat = tOffset * tToXY * flatTransformsForFaces[panels[i].idxA];
 
-              dxf << "  0\nLINE\n  8\nCUT\n 10\n" << p1.X() << "\n 20\n" << p1.Y() << "\n 30\n0.0\n"
-                  << " 11\n" << p2.X() << "\n 21\n" << p2.Y() << "\n 31\n0.0\n";
-            } else {
-              // Discretize curved edges (e.g. holes, fillets)
-              int numSegments = 30;
-              gp_Pnt2d prevPt;
-              for (int s = 0; s <= numSegments; ++s) {
-                double tParam = first + (last - first) * s / numSegments;
-                gp_Pnt pPt = curve->Value(tParam).Transformed(flatTransforms[i]);
-                gp_Pnt2d currPt = projectTo2D(pPt);
-                if (s > 0) {
-                  dxf << "  0\nLINE\n  8\nCUT\n 10\n" << prevPt.X() << "\n 20\n" << prevPt.Y() << "\n 30\n0.0\n"
-                      << " 11\n" << currPt.X() << "\n 21\n" << currPt.Y() << "\n 31\n0.0\n";
-                }
-                prevPt = currPt;
+        // (a) Sew the flattened sub-faces.  With the COMPLETE skin present, the
+        // seam between abutting pieces is shared (non-free) and the sewer's FREE
+        // edges are the true boundary (outer profile + holes).
+        BRepBuilderAPI_Sewing sewer;
+        sewer.SetTolerance(0.3);
+        bool anySewn = false;
+        for (const TopoDS_Face& f : skin) {
+          try {
+            BRepBuilderAPI_Transform xfm(f, toFlat, /*copy=*/true);
+            if (xfm.IsDone()) { sewer.Add(xfm.Shape()); anySewn = true; }
+          } catch (...) {}
+        }
+        if (!anySewn) continue;
+        sewer.Perform();
+
+        Handle(TopTools_HSequenceOfShape) freeEdges = new TopTools_HSequenceOfShape();
+        for (Standard_Integer fe = 1, n = sewer.NbFreeEdges(); fe <= n; ++fe)
+          freeEdges->Append(sewer.FreeEdge(fe));
+        if (freeEdges->IsEmpty()) {
+          // Sewer found no free edges (overlapping faces or sew failure): do
+          // geometric occurrence-counting directly on the flattened face edges
+          // so that shared seams between overlapping/abutting faces still cancel.
+          typedef std::tuple<long long,long long,long long,long long,long long,long long> GKey;
+          std::map<GKey, std::pair<TopoDS_Edge,int>> edgeCnt;
+          for (const TopoDS_Face& f : skin) {
+            try {
+              BRepBuilderAPI_Transform xfm(f, toFlat, /*copy=*/true);
+              if (!xfm.IsDone()) continue;
+              for (TopExp_Explorer eEx(xfm.Shape(), TopAbs_EDGE); eEx.More(); eEx.Next()) {
+                const TopoDS_Edge& e = TopoDS::Edge(eEx.Current());
+                Standard_Real ef, el;
+                Handle(Geom_Curve) ec = BRep_Tool::Curve(e, ef, el);
+                if (ec.IsNull() || std::abs(el - ef) < 1e-12) continue;
+                gp_Pnt mid = ec->Value((ef + el) * 0.5);
+                gp_Vec dir; gp_Pnt tmp; ec->D1((ef + el) * 0.5, tmp, dir);
+                if (dir.Magnitude() > 1e-10) dir.Normalize();
+                if (dir.X() < -1e-9 ||
+                    (std::abs(dir.X()) < 1e-9 && dir.Y() < -1e-9) ||
+                    (std::abs(dir.X()) < 1e-9 && std::abs(dir.Y()) < 1e-9 && dir.Z() < 0))
+                  dir.Reverse();
+                GKey key(qz(mid.X()), qz(mid.Y()), qz(mid.Z()), qz(dir.X()), qz(dir.Y()), qz(dir.Z()));
+                auto it2 = edgeCnt.find(key);
+                if (it2 == edgeCnt.end()) edgeCnt[key] = {e, 1};
+                else it2->second.second++;
               }
+            } catch (...) {}
+          }
+          for (auto it2 = edgeCnt.begin(); it2 != edgeCnt.end(); ++it2)
+            if (it2->second.second == 1) freeEdges->Append(it2->second.first);
+        }
+        if (freeEdges->IsEmpty()) continue;
+
+        // (a2) Drop chord edges.  An edge that splits the panel into two abutting
+        // regions (e.g. a flat-seam side-effect that survived as a single free
+        // edge between two faces the sewer could not reconcile) has BOTH
+        // endpoints lying on the perimeter — so both endpoints are degree ≥ 3 in
+        // the boundary graph (two perimeter neighbours plus the chord).  A real
+        // outward tab differs: its base vertex is degree-3 but its tip vertex is
+        // degree-2, so the tab edge is preserved.
+        {
+          typedef std::tuple<long long,long long,long long> VKey;
+          auto vkeyOf = [&](const gp_Pnt& p) { return VKey(qz(p.X()), qz(p.Y()), qz(p.Z())); };
+
+          std::vector<std::pair<gp_Pnt, gp_Pnt>> ends(freeEdges->Length());
+          std::map<VKey, int> degree;
+          for (int e = 1; e <= freeEdges->Length(); ++e) {
+            const TopoDS_Edge& ed = TopoDS::Edge(freeEdges->Value(e));
+            Standard_Real ef, el;
+            Handle(Geom_Curve) ec = BRep_Tool::Curve(ed, ef, el);
+            if (ec.IsNull()) { ends[e-1] = {gp_Pnt(), gp_Pnt()}; continue; }
+            gp_Pnt p1 = ec->Value(ef), p2 = ec->Value(el);
+            ends[e-1] = {p1, p2};
+            degree[vkeyOf(p1)]++;
+            degree[vkeyOf(p2)]++;
+          }
+
+          Handle(TopTools_HSequenceOfShape) keep = new TopTools_HSequenceOfShape();
+          for (int e = 1; e <= freeEdges->Length(); ++e) {
+            int d1 = degree[vkeyOf(ends[e-1].first)];
+            int d2 = degree[vkeyOf(ends[e-1].second)];
+            if (d1 >= 3 && d2 >= 3) continue;   // chord — drop
+            keep->Append(freeEdges->Value(e));
+          }
+          if (!keep->IsEmpty()) freeEdges = keep;
+        }
+
+        // (b) Connect the boundary edges into closed wires.  A tight tolerance
+        // (0.1 mm) keeps the perimeter's small sub-millimetre sliver vertices
+        // connected, but leaves a chord that ends on a perimeter line — like the
+        // y=1 protrusion-attachment seam — as its own separate 2-vertex open
+        // wire, which the wire processing then discards.
+        Handle(TopTools_HSequenceOfShape) wires;
+        ShapeAnalysis_FreeBounds::ConnectEdgesToWires(freeEdges, 0.1, Standard_False, wires);
+
+        // Simplify a closed point loop: drop each vertex whose perpendicular
+        // distance from the segment joining its neighbours is below tol.  This
+        // collapses collinear runs and the sub-millimetre sliver steps that
+        // split_by_bends leaves at the protrusion seam, recovering clean corners.
+        auto simplifyLoop = [](std::vector<gp_Pnt>& p, double tol) {
+          bool changed = true;
+          while (changed && p.size() > 3) {
+            changed = false;
+            for (size_t k = 0; k < p.size() && p.size() > 3; ) {
+              const gp_Pnt& a = p[(k + p.size() - 1) % p.size()];
+              const gp_Pnt& b = p[k];
+              const gp_Pnt& c = p[(k + 1) % p.size()];
+              gp_Vec ac(a, c); double L = ac.Magnitude();
+              double d = (L < 1e-9) ? gp_Vec(a, b).Magnitude()
+                                    : gp_Vec(a, b).Crossed(ac).Magnitude() / L;
+              if (d < tol) { p.erase(p.begin() + k); changed = true; }
+              else ++k;
             }
           }
-        }
-      }
+        };
 
-      // 2. Draw bend centerlines on BEND_UP / BEND_DOWN layers, and inject text annotations
-      struct ProcessedBend {
-        int u;
-        int v;
-      };
-      std::vector<ProcessedBend> processedBends;
+        BRep_Builder bb;
+        TopoDS_Compound cmp;
+        bb.MakeCompound(cmp);
+        bool anyAdded = false;
+        std::map<std::tuple<long long,long long,long long>, TopoDS_Edge> outEdges;
 
-      auto hasBeenProcessed = [&](int u, int v) -> bool {
-        for (const auto& pb : processedBends) {
-          if ((pb.u == u && pb.v == v) || (pb.u == v && pb.v == u)) return true;
-        }
-        return false;
-      };
+        if (!wires.IsNull() && wires->Length() > 0) {
+          for (int w = 1; w <= wires->Length(); ++w) {
+            TopoDS_Wire wire = TopoDS::Wire(wires->Value(w));
 
-      // Traverse adjacency list and draw each bend centerline once
-      for (int cur = 0; cur < M; ++cur) {
-        if (!visited[cur]) continue;
-        for (const auto& edgePair : adj[cur]) {
-          int nbr = edgePair.first;
-          const TopoDS_Edge& originalEdge = edgePair.second;
-          if (hasBeenProcessed(cur, nbr)) continue;
-          processedBends.push_back({cur, nbr});
+            // Ordered vertices of the wire.
+            std::vector<gp_Pnt> pts;
+            for (BRepTools_WireExplorer we(wire); we.More(); we.Next())
+              pts.push_back(BRep_Tool::Pnt(we.CurrentVertex()));
+            if (pts.size() < 3) continue;
 
-          // Compute angle/direction to match BFS bend calculation
-          GProp_GProps fpCur, fpNbr;
-          BRepGProp::SurfaceProperties(uniqueFaces[cur], fpCur);
-          BRepGProp::SurfaceProperties(uniqueFaces[nbr], fpNbr);
-          gp_Pnt cCur = fpCur.CentreOfMass();
-          gp_Pnt cNbr = fpNbr.CentreOfMass();
+            simplifyLoop(pts, 0.2);
+            if (pts.size() < 3) continue;
 
-          Standard_Real firstParam, lastParam;
-          Handle(Geom_Curve) curve = BRep_Tool::Curve(originalEdge, firstParam, lastParam);
-          gp_Pnt pMid;
-          gp_Vec dE;
-          gp_Pnt pStart, pEnd;
-          if (!curve.IsNull()) {
-            double midParam = (firstParam + lastParam) * 0.5;
-            gp_Pnt p;
-            gp_Vec v;
-            curve->D1(midParam, p, v);
-            pMid = p;
-            dE = v;
-            TopoDS_Vertex v1, v2;
-            TopExp::Vertices(originalEdge, v1, v2);
-            pStart = BRep_Tool::Pnt(v1);
-            pEnd = BRep_Tool::Pnt(v2);
-          } else {
-            TopExp_Explorer ve(originalEdge, TopAbs_VERTEX);
-            if (ve.More()) {
-              pMid = BRep_Tool::Pnt(TopoDS::Vertex(ve.Current()));
-              pStart = pMid;
-              ve.Next();
-              if (ve.More()) {
-                pEnd = BRep_Tool::Pnt(TopoDS::Vertex(ve.Current()));
-              } else {
-                pEnd = pStart;
-              }
-            } else {
-              pMid = gp_Pnt(0, 0, 0);
-              pStart = pMid;
-              pEnd = pMid;
+            // Drop tiny sliver loops (artefacts), keep outer profile + real holes.
+            double area = 0.0;
+            for (size_t k = 0; k < pts.size(); ++k) {
+              const gp_Pnt& a = pts[k];
+              const gp_Pnt& b = pts[(k + 1) % pts.size()];
+              area += a.X() * b.Y() - b.X() * a.Y();
             }
-            dE = gp_Vec(0, 0, 1);
+            if (std::abs(area) * 0.5 < 1.0) continue;   // < 1 mm²
+
+            // Emit clean line edges between consecutive simplified vertices.
+            for (size_t k = 0; k < pts.size(); ++k) {
+              const gp_Pnt& a = pts[k];
+              const gp_Pnt& b = pts[(k + 1) % pts.size()];
+              if (a.Distance(b) < 1e-7) continue;
+              try {
+                TopoDS_Edge e = BRepBuilderAPI_MakeEdge(a, b).Edge();
+                gp_Pnt mid((a.X()+b.X())*0.5, (a.Y()+b.Y())*0.5, 0.0);
+                outEdges.emplace(std::make_tuple(qz(mid.X()), qz(mid.Y()), qz(mid.Z())), e);
+              } catch (...) {}
+            }
           }
-          if (dE.Magnitude() > 1e-10) dE.Normalize();
-          else dE = gp_Vec(0, 0, 1);
-
-          gp_Vec nCur = faceOutwardNormal(uniqueFaces[cur]);
-          gp_Vec nNbr = faceOutwardNormal(uniqueFaces[nbr]);
-          gp_Vec wCur(pMid, cCur);
-          gp_Vec wNbr(pMid, cNbr);
-          gp_Vec vCur = wCur - gp_Vec(nCur) * wCur.Dot(nCur);
-          gp_Vec vNbr = wNbr - gp_Vec(nNbr) * wNbr.Dot(nNbr);
-          if (vCur.Magnitude() > 1e-10) vCur.Normalize();
-          if (vNbr.Magnitude() > 1e-10) vNbr.Normalize();
-
-          gp_Vec xAx = vCur;
-          gp_Vec yAx = dE.Crossed(vCur);
-          if (yAx.Magnitude() > 1e-10) yAx.Normalize();
-
-          double xVal = vNbr.Dot(xAx);
-          double yVal = vNbr.Dot(yAx);
-          double phi = std::atan2(yVal, xVal);
-          double theta = M_PI - phi;
-
-          // Project endpoints to 2D
-          gp_Pnt pStartTransformed = pStart.Transformed(flatTransforms[cur]);
-          gp_Pnt pEndTransformed = pEnd.Transformed(flatTransforms[cur]);
-          gp_Pnt2d p1 = projectTo2D(pStartTransformed);
-          gp_Pnt2d p2 = projectTo2D(pEndTransformed);
-
-          double angleDeg = std::abs(theta) * 180.0 / M_PI;
-          bool isUp = (theta >= 0.0);
-          std::string layerName = isUp ? "BEND_UP" : "BEND_DOWN";
-          std::string labelText = (std::ostringstream() << std::fixed << std::setprecision(1) << angleDeg << "%%d " << (isUp ? "UP" : "DOWN")).str();
-
-          // Draw bend centerline
-          dxf << "  0\nLINE\n  8\n" << layerName << "\n 10\n" << p1.X() << "\n 20\n" << p1.Y() << "\n 30\n0.0\n"
-              << " 11\n" << p2.X() << "\n 21\n" << p2.Y() << "\n 31\n0.0\n";
-
-          // Calculate offset position for TEXT annotation
-          double mx = (p1.X() + p2.X()) * 0.5;
-          double my = (p1.Y() + p2.Y()) * 0.5;
-          double dx = p2.X() - p1.X();
-          double dy = p2.Y() - p1.Y();
-          double len = std::sqrt(dx*dx + dy*dy);
-          if (len > 1e-5) {
-            dx /= len;
-            dy /= len;
-          } else {
-            dx = 1.0;
-            dy = 0.0;
+          for (auto it2 = outEdges.begin(); it2 != outEdges.end(); ++it2) {
+            bb.Add(cmp, it2->second);
+            anyAdded = true;
           }
-          // Offset perpendicular by 3.0 mm
-          double tx = mx - dy * 3.0;
-          double ty = my + dx * 3.0;
-
-          // Draw TEXT entity
-          dxf << "  0\nTEXT\n  8\n" << layerName << "\n 10\n" << tx << "\n 20\n" << ty << "\n 30\n0.0\n"
-              << " 40\n2.5\n  1\n" << labelText << "\n";
         }
+
+        // Fallback: wire connection failed — emit the raw free edges.
+        if (!anyAdded) {
+          for (int e = 1; e <= freeEdges->Length(); ++e) { bb.Add(cmp, freeEdges->Value(e)); anyAdded = true; }
+        }
+        if (anyAdded) flatPanelShapes[i] = cmp;
       }
 
-      dxf << "  0\nENDSEC\n  0\nEOF\n";
+      // 7. Build flat bend edges from the BFS bend records.
+      //    Each bend edge is transformed using the cur-panel's flat transform so
+      //    it lands in the same XY plane as the flat panel shapes.
+      std::vector<FlatBendEdge> flatBendEdges;
+      for (const auto& rec : bendRecords) {
+        gp_Trsf toFlat = tOffset * tToXY * flatTransformsForFaces[rec.faceIdxCur];
+        try {
+          BRepBuilderAPI_Transform xfm(rec.originalEdge, toFlat, /*copy=*/true);
+          if (xfm.IsDone()) {
+            FlatBendEdge fbe;
+            fbe.edge     = TopoDS::Edge(xfm.Shape());
+            fbe.angleDeg = std::abs(rec.theta) * 180.0 / M_PI;
+            fbe.isUp     = (rec.theta >= 0.0);
+            flatBendEdges.push_back(std::move(fbe));
+          }
+        } catch (...) {}
+      }
+
+      // Attempt non-destructive curved-bend reconstruction for preview.
+      // Failure here is non-fatal: improvedPartId stays empty.
+      std::string improvedId;
+      try {
+        improvedId = buildImprovedFoldedLocked(shellId, val.nominalThickness);
+      } catch (...) {}
 
       UnfoldId id = generateUUID();
-      UnfoldState state{id, shellId, flatW, flatH, kFactor, bendCount, dxf.str()};
-      unfolds_[id] = state;
+      UnfoldState state;
+      state.id              = id;
+      state.sourceShellId   = shellId;
+      state.flatWidthMm     = flatW;
+      state.flatHeightMm    = flatH;
+      state.kFactorUsed     = kFactor;
+      state.bendCount       = bendCount;
+      state.flatPanelShapes = std::move(flatPanelShapes);
+      state.flatBendEdges   = std::move(flatBendEdges);
+      state.origin2d        = gp_Pnt2d(uMin, vMin);
+      state.improvedPartId  = improvedId;
+      unfolds_[id]          = std::move(state);
 
-      return UnfoldResult{id, flatW, flatH, kFactor, bendCount, true, val.nominalThickness, token, {}};
+      return UnfoldResult{id, flatW, flatH, kFactor, bendCount, true, val.nominalThickness, token, {}, improvedId};
 
     } catch (const Standard_Failure& e) {
       throw GeometryError("GE_UNFOLD_FAILED",
@@ -1392,6 +1620,12 @@ public:
   }
 
   // ── DXF export ───────────────────────────────────────────────────────────
+  //
+  // Serialises the flat panel shapes and bend edges stored by unfoldShell into
+  // DXF R12 ASCII.  Edges are emitted as LINE / ARC / CIRCLE entities so that
+  // holes and fillets round-trip analytically rather than as polylines.
+  // Flat panel face wires are iterated directly from the stored TopoDS_Face
+  // objects; no coordinate-projection heuristics are needed.
 
   DxfExportResult exportDxf(const UnfoldId& unfoldId) override {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1404,19 +1638,204 @@ public:
 
     const UnfoldState& state = it->second;
 
+    // ── DXF header ─────────────────────────────────────────────────────────
+    std::ostringstream dxf;
+    dxf << "  0\nSECTION\n  2\nHEADER\n  0\nENDSEC\n"
+        << "  0\nSECTION\n  2\nTABLES\n"
+        << "  0\nTABLE\n  2\nLTYPE\n 70\n1\n"
+        << "  0\nLTYPE\n  2\nCONTINUOUS\n 70\n0\n  3\nSolid line\n"
+        <<   " 72\n65\n 73\n0\n 40\n0.0\n"
+        << "  0\nLTYPE\n  2\nDASHED\n 70\n0\n"
+        <<   "  3\nDashed line __ __ __ __ __\n 72\n65\n 73\n2\n 40\n6.35\n"
+        <<   " 49\n3.175\n 49\n-3.175\n"
+        << "  0\nENDTAB\n"
+        << "  0\nTABLE\n  2\nLAYER\n 70\n4\n"
+        << "  0\nLAYER\n  2\n0\n 70\n0\n 62\n7\n  6\nCONTINUOUS\n"
+        << "  0\nLAYER\n  2\nCUT\n 70\n0\n 62\n1\n  6\nCONTINUOUS\n"
+        << "  0\nLAYER\n  2\nBEND_UP\n 70\n0\n 62\n3\n  6\nDASHED\n"
+        << "  0\nLAYER\n  2\nBEND_DOWN\n 70\n0\n 62\n4\n  6\nDASHED\n"
+        << "  0\nENDTAB\n"
+        << "  0\nENDSEC\n"
+        << "  0\nSECTION\n  2\nENTITIES\n";
+
     int entityCount = 0;
-    size_t pos = 0;
-    while ((pos = state.dxfContent.find("  0\nLINE", pos)) != std::string::npos) {
-      entityCount++;
-      pos += 7;
-    }
-    pos = 0;
-    while ((pos = state.dxfContent.find("  0\nTEXT", pos)) != std::string::npos) {
-      entityCount++;
-      pos += 7;
+
+    // ── Helpers ─────────────────────────────────────────────────────────────
+
+    // Emit one edge on the given layer.  Lines and circles are native DXF
+    // entities; everything else is discretised to 64-segment polylines.
+    auto emitEdge = [&](const TopoDS_Edge& edge, const std::string& layer) {
+      Standard_Real first, last;
+      Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, first, last);
+      if (curve.IsNull() || std::abs(last - first) < 1e-12) return;
+
+      if (curve->IsKind(STANDARD_TYPE(Geom_Line))) {
+        gp_Pnt p1 = curve->Value(first);
+        gp_Pnt p2 = curve->Value(last);
+        dxf << "  0\nLINE\n  8\n" << layer << "\n"
+            << " 10\n" << p1.X() << "\n 20\n" << p1.Y() << "\n 30\n0.0\n"
+            << " 11\n" << p2.X() << "\n 21\n" << p2.Y() << "\n 31\n0.0\n";
+        ++entityCount;
+
+      } else if (curve->IsKind(STANDARD_TYPE(Geom_Circle))) {
+        Handle(Geom_Circle) circ = Handle(Geom_Circle)::DownCast(curve);
+        gp_Pnt   center = circ->Location();
+        double   radius = circ->Radius();
+        double   span   = std::abs(last - first);
+        bool     full   = (span >= 2.0 * M_PI - 1e-6);
+
+        if (full) {
+          dxf << "  0\nCIRCLE\n  8\n" << layer << "\n"
+              << " 10\n" << center.X() << "\n 20\n" << center.Y() << "\n 30\n0.0\n"
+              << " 40\n" << radius << "\n";
+          ++entityCount;
+        } else {
+          // ARC angles in DXF are degrees CCW from world +X.
+          // Geom_Circle params are measured from the circle's own X-axis.
+          gp_Dir xDir = circ->Circ().XAxis().Direction();
+          double phiX = std::atan2(xDir.Y(), xDir.X()) * 180.0 / M_PI;
+          double sa   = phiX + first * 180.0 / M_PI;
+          double ea   = phiX + last  * 180.0 / M_PI;
+          // Normalise to [0, 360)
+          auto norm360 = [](double a) {
+            while (a <   0.0) a += 360.0;
+            while (a >= 360.0) a -= 360.0;
+            return a;
+          };
+          sa = norm360(sa); ea = norm360(ea);
+          dxf << "  0\nARC\n  8\n" << layer << "\n"
+              << " 10\n" << center.X() << "\n 20\n" << center.Y() << "\n 30\n0.0\n"
+              << " 40\n" << radius << "\n 50\n" << sa << "\n 51\n" << ea << "\n";
+          ++entityCount;
+        }
+
+      } else {
+        // Discretise other curve types (ellipse, B-spline, …)
+        const int kSeg = 64;
+        gp_Pnt2d prev;
+        for (int s = 0; s <= kSeg; ++s) {
+          double   t = first + (last - first) * s / kSeg;
+          gp_Pnt   p = curve->Value(t);
+          if (s > 0) {
+            dxf << "  0\nLINE\n  8\n" << layer << "\n"
+                << " 10\n" << prev.X() << "\n 20\n" << prev.Y() << "\n 30\n0.0\n"
+                << " 11\n" << p.X()    << "\n 21\n" << p.Y()    << "\n 31\n0.0\n";
+            ++entityCount;
+          }
+          prev = gp_Pnt2d(p.X(), p.Y());
+        }
+      }
+    };
+
+    // Collect bend line segments for CUT-layer filtering.
+    // An edge is classified as a bend edge when its midpoint lies on the infinite
+    // LINE defined by a stored flat bend edge (perpendicular distance < 0.15 mm)
+    // AND its midpoint projects within the extent of that bend segment (with a
+    // small margin).  Checking proximity to the bend MIDPOINT alone fails when
+    // the tessellation splits a bend edge into shorter segments whose midpoints
+    // are near the ends of the bend line rather than its centre.
+    struct BendLine { gp_Pnt start; gp_Pnt end; gp_Vec dir; double len; };
+    std::vector<BendLine> bendLines;
+    for (const auto& fbe : state.flatBendEdges) {
+      Standard_Real bf, bl;
+      Handle(Geom_Curve) bc = BRep_Tool::Curve(fbe.edge, bf, bl);
+      if (bc.IsNull()) continue;
+      gp_Pnt bStart = bc->Value(bf);
+      gp_Pnt bEnd   = bc->Value(bl);
+      gp_Vec bDir(bStart, bEnd);
+      double bLen = bDir.Magnitude();
+      if (bLen < 1e-10) continue;
+      bDir /= bLen;
+      bendLines.push_back({bStart, bEnd, bDir, bLen});
     }
 
-    return DxfExportResult{state.dxfContent, entityCount,
+    auto isBendEdge = [&](const TopoDS_Edge& e) -> bool {
+      Standard_Real ef, el;
+      Handle(Geom_Curve) ec = BRep_Tool::Curve(e, ef, el);
+      if (ec.IsNull()) return false;
+      gp_Pnt mid = ec->Value((ef + el) * 0.5);
+      for (const auto& bl : bendLines) {
+        gp_Vec toMid(bl.start, mid);
+        double proj = toMid.Dot(bl.dir);
+        // Must project within the bend segment extent (±0.15 mm margin at each end)
+        if (proj < -0.15 || proj > bl.len + 0.15) continue;
+        // Perpendicular distance from the bend line must be within tolerance
+        gp_Vec perp = toMid - bl.dir * proj;
+        if (perp.Magnitude() < 0.15) return true;
+      }
+      return false;
+    };
+
+    // ── CUT layer ──────────────────────────────────────────────────────────
+    //
+    // flatPanelShapes now stores pre-computed outer-boundary edge compounds
+    // (computed at unfold time using topological TShape identity, not geometric
+    // midpoints).  Simply iterate and filter bend-line edges.
+    {
+      for (const auto& panelShape : state.flatPanelShapes) {
+        if (panelShape.IsNull()) continue;
+        TopExp_Explorer eExp(panelShape, TopAbs_EDGE);
+        for (; eExp.More(); eExp.Next()) {
+          const TopoDS_Edge& edge = TopoDS::Edge(eExp.Current());
+          if (isBendEdge(edge)) continue;
+          emitEdge(edge, "CUT");
+        }
+      }
+    }
+
+    // ── BEND_UP / BEND_DOWN layers ─────────────────────────────────────────
+    //
+    // Each FlatBendEdge has already been transformed into the flat XY plane.
+    // Deduplicate by midpoint in case a bend appears in both adj directions.
+    {
+      auto quantize = [](double v) -> int { return static_cast<int>(std::round(v * 100.0)); };
+      std::set<std::tuple<int,int,int>> emittedBends;
+
+      for (const auto& fbe : state.flatBendEdges) {
+        Standard_Real bf, bl;
+        Handle(Geom_Curve) bc = BRep_Tool::Curve(fbe.edge, bf, bl);
+        if (bc.IsNull()) continue;
+
+        gp_Pnt pS = bc->Value(bf);
+        gp_Pnt pE = bc->Value(bl);
+
+        double mx = (pS.X() + pE.X()) * 0.5;
+        double my = (pS.Y() + pE.Y()) * 0.5;
+        auto   key = std::make_tuple(
+            static_cast<int>(std::round(mx * 100.0)),
+            static_cast<int>(std::round(my * 100.0)), 0);
+        if (!emittedBends.insert(key).second) continue;
+
+        const std::string& layer = fbe.isUp ? "BEND_UP" : "BEND_DOWN";
+
+        // Bend centerline
+        dxf << "  0\nLINE\n  8\n" << layer << "\n"
+            << " 10\n" << pS.X() << "\n 20\n" << pS.Y() << "\n 30\n0.0\n"
+            << " 11\n" << pE.X() << "\n 21\n" << pE.Y() << "\n 31\n0.0\n";
+        ++entityCount;
+
+        // Annotation text, offset 3 mm perpendicular to the bend line
+        double dx  = pE.X() - pS.X();
+        double dy  = pE.Y() - pS.Y();
+        double len = std::hypot(dx, dy);
+        if (len > 1e-5) { dx /= len; dy /= len; } else { dx = 1.0; dy = 0.0; }
+        double tx = mx - dy * 3.0;
+        double ty = my + dx * 3.0;
+
+        std::string label = (std::ostringstream()
+            << std::fixed << std::setprecision(1)
+            << fbe.angleDeg << "%%d " << (fbe.isUp ? "UP" : "DOWN")).str();
+
+        dxf << "  0\nTEXT\n  8\n" << layer << "\n"
+            << " 10\n" << tx << "\n 20\n" << ty << "\n 30\n0.0\n"
+            << " 40\n2.5\n  1\n" << label << "\n";
+        ++entityCount;
+      }
+    }
+
+    dxf << "  0\nENDSEC\n  0\nEOF\n";
+
+    return DxfExportResult{dxf.str(), entityCount,
                            state.flatWidthMm, state.flatHeightMm};
   }
 
@@ -2021,12 +2440,53 @@ public:
       toolShapes.push_back(it->second.shape);
     }
 
+    // Pre-fuse gap check: every consecutive pair must be within sewing tolerance.
+    // A gap > kMergeTolerance means the bodies are not topologically adjacent and
+    // the fuse would produce a disconnected compound masquerading as one body.
+    {
+      const double kMergeTolerance = 0.1; // mm
+      for (size_t i = 0; i + 1 < toolShapes.size(); ++i) {
+        const TopoDS_Shape& sA = toolShapes[i];
+        const TopoDS_Shape& sB = toolShapes[i + 1];
+
+        Bnd_Box boxA, boxB;
+        BRepBndLib::AddOptimal(sA, boxA);
+        BRepBndLib::AddOptimal(sB, boxB);
+
+        Bnd_Box boxAExpanded = boxA;
+        boxAExpanded.Enlarge(kMergeTolerance);
+        const bool boxesClearlyApart =
+            !boxA.IsVoid() && !boxB.IsVoid() && boxAExpanded.IsOut(boxB);
+
+        if (boxesClearlyApart) {
+          BRepExtrema_DistShapeShape gapCheck;
+          gapCheck.LoadS1(sA);
+          gapCheck.LoadS2(sB);
+          gapCheck.Perform();
+
+          double gap = kMergeTolerance + 1.0; // conservative default if measurement fails
+          if (gapCheck.IsDone()) {
+            gap = gapCheck.Value();
+          }
+
+          if (gap > kMergeTolerance) {
+            std::ostringstream msg;
+            msg << std::fixed << std::setprecision(3)
+                << "GE_MERGE_GAP: Bodies " << (i) << " and " << (i + 1)
+                << " are " << gap << " mm apart. "
+                << "Maximum allowed gap is " << kMergeTolerance << " mm. "
+                << "Use close_gap to snap them together before fusing.";
+            throw GeometryError("GE_MERGE_GAP", msg.str(), false, "");
+          }
+        }
+      }
+    }
+
     SnapshotId token = createSnapshotLocked("before fuseBodies");
 
     try {
       TopoDS_Shape currentShape = toolShapes[0];
       std::vector<ShapeHistoryRecord> history;
-      bool disjoint = false;
 
       for (size_t i = 1; i < toolShapes.size(); ++i) {
         BRepAlgoAPI_Fuse fuser(currentShape, toolShapes[i]);
@@ -2044,8 +2504,25 @@ public:
           throw GeometryError("GE_BOOLEAN_FAILURE", "Boolean fuse result is invalid", true, "rollback");
         }
 
-        if (nextShape.ShapeType() == TopAbs_COMPOUND) {
-          disjoint = true;
+        // Post-fuse connectivity check: reject disconnected compounds.
+        {
+          int solidCount = 0;
+          for (TopExp_Explorer ex(nextShape, TopAbs_SOLID); ex.More(); ex.Next()) solidCount++;
+          int shellCount = 0;
+          for (TopExp_Explorer ex(nextShape, TopAbs_SHELL, TopAbs_SOLID); ex.More(); ex.Next()) shellCount++;
+          int topLevelCount = 0;
+          if (solidCount == 0 && shellCount == 0 && nextShape.ShapeType() == TopAbs_COMPOUND) {
+            for (TopoDS_Iterator it(nextShape); it.More(); it.Next()) topLevelCount++;
+          }
+          const bool disconnected = (solidCount > 1)
+              || (solidCount == 0 && shellCount > 1)
+              || (solidCount == 0 && shellCount == 0 && topLevelCount > 1);
+          if (disconnected) {
+            throw GeometryError("GE_MERGE_DISCONNECTED",
+              "Fuse produced disconnected bodies — the shapes are not topologically joined. "
+              "Check for a gap and use close_gap to fix it.",
+              false, "");
+          }
         }
 
         auto h1 = captureHistory(fuser, currentShape, [](const TopoDS_Shape& s) { return shapeId(s); }, "fuse_bodies");
@@ -2063,7 +2540,7 @@ public:
       ShellId resultId = generateUUID();
       shells_[resultId] = ShellState{resultId, "", currentShape};
 
-      return FuseResult{resultId, disjoint, token, std::move(history)};
+      return FuseResult{resultId, false, token, std::move(history)};
 
     } catch (const GeometryError&) {
       throw;
@@ -5130,6 +5607,48 @@ private:
       throw GeometryError("GE_MERGE_FAILED", "targetEdges must not be empty", false, "");
     }
 
+    // Pre-merge gap check: measure minimum distance between the two shells.
+    // Gaps <= kMergeTolerance are bridged by OCCT's fuzzy Boolean; larger gaps
+    // produce disconnected compound bodies that look like one part but aren't.
+    {
+      const double kMergeTolerance = 0.1; // mm — matches unfoldShell sewing tolerance
+
+      // Step 1: bounding-box quick-check.
+      // Expand boxA by the tolerance; if boxB is still outside the expanded box,
+      // the shapes are definitely more than kMergeTolerance apart — run extrema.
+      // If the boxes overlap (shapes are nearby or touching), skip the check.
+      Bnd_Box boxA, boxB;
+      BRepBndLib::AddOptimal(itA->second.shape, boxA);
+      BRepBndLib::AddOptimal(itB->second.shape, boxB);
+
+      Bnd_Box boxAExpanded = boxA;
+      boxAExpanded.Enlarge(kMergeTolerance);
+      const bool boxesClearlyApart =
+          !boxA.IsVoid() && !boxB.IsVoid() && boxAExpanded.IsOut(boxB);
+
+      if (boxesClearlyApart) {
+        // Step 2: precise extrema distance (explicit Perform() for robustness).
+        BRepExtrema_DistShapeShape gapCheck;
+        gapCheck.LoadS1(itA->second.shape);
+        gapCheck.LoadS2(itB->second.shape);
+        gapCheck.Perform();
+
+        double gap = kMergeTolerance + 1.0; // conservative default if measurement fails
+        if (gapCheck.IsDone()) {
+          gap = gapCheck.Value();
+        }
+
+        if (gap > kMergeTolerance) {
+          std::ostringstream msg;
+          msg << std::fixed << std::setprecision(3)
+              << "GE_MERGE_GAP: Panels are " << gap << " mm apart. "
+              << "Maximum allowed gap is " << kMergeTolerance << " mm. "
+              << "Use close_gap to snap them together before merging.";
+          throw GeometryError("GE_MERGE_GAP", msg.str(), false, "");
+        }
+      }
+    }
+
     SnapshotId token = createSnapshotLocked("before mergeBodiesWithBend on " +
                                             partAId + "+" + partBId);
 
@@ -5142,6 +5661,35 @@ private:
         throw GeometryError("GE_MERGE_FAILED", "Boolean fuse failed", true, "rollback");
       }
       TopoDS_Shape fused = fuse.Shape();
+
+      // Post-merge connectivity check: a properly fused pair of touching bodies
+      // produces one solid or one shell. A compound with multiple solids/shells
+      // means the bodies didn't actually share topology — the gap was present.
+      {
+        // Count solids (any nesting depth) and free shells (not inside a solid).
+        int solidCount = 0;
+        for (TopExp_Explorer ex(fused, TopAbs_SOLID); ex.More(); ex.Next()) solidCount++;
+        int shellCount = 0;
+        for (TopExp_Explorer ex(fused, TopAbs_SHELL, TopAbs_SOLID); ex.More(); ex.Next()) shellCount++;
+
+        // Also count direct top-level children of a COMPOUND when there are no
+        // solids or shells — this catches face-only compounds from surface models.
+        int topLevelCount = 0;
+        if (solidCount == 0 && shellCount == 0 && fused.ShapeType() == TopAbs_COMPOUND) {
+          for (TopoDS_Iterator it(fused); it.More(); it.Next()) topLevelCount++;
+        }
+
+        const bool disconnected = (solidCount > 1)
+            || (solidCount == 0 && shellCount > 1)
+            || (solidCount == 0 && shellCount == 0 && topLevelCount > 1);
+
+        if (disconnected) {
+          throw GeometryError("GE_MERGE_DISCONNECTED",
+            "Merge produced disconnected bodies — the panels are not topologically joined. "
+            "Check for a gap at the shared edge and use close_gap to fix it.",
+            false, "");
+        }
+      }
 
       // Attempt fillet on matching edges. Any OCCT failure is non-fatal — fall back to
       // unfilleted fuse. The exception can be thrown from the constructor, Add(), or Build()
@@ -5277,6 +5825,48 @@ private:
     }
   }
 
+  // ── Close gap between two shells ─────────────────────────────────────────
+
+  CloseGapResult closeGap(const ShellId& partAId, const ShellId& partBId) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto itA = shells_.find(partAId);
+    if (itA == shells_.end())
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell not found: " + partAId, false, "");
+    auto itB = shells_.find(partBId);
+    if (itB == shells_.end())
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell not found: " + partBId, false, "");
+
+    const TopoDS_Shape& shapeA = itA->second.shape;
+    const TopoDS_Shape& shapeB = itB->second.shape;
+
+    BRepExtrema_DistShapeShape distCalc(shapeA, shapeB);
+    if (!distCalc.IsDone())
+      throw GeometryError("GE_CLOSE_GAP_FAILED", "Could not compute gap distance.", false, "");
+
+    double gap = distCalc.Value();
+    if (gap < 1e-6) {
+      // Already touching — nothing to do; return part B unchanged.
+      SnapshotId token = createSnapshotLocked("closeGap (no-op) on " + partBId);
+      return CloseGapResult{partBId, 0.0, token};
+    }
+
+    // Find the closest point on A and the closest point on B.
+    gp_Pnt pA = distCalc.PointOnShape1(1);
+    gp_Pnt pB = distCalc.PointOnShape2(1);
+
+    // Translate part B so its closest point lands exactly on A's closest point.
+    gp_Vec translation(pB, pA);
+
+    gp_Trsf move;
+    move.SetTranslation(translation);
+    BRepBuilderAPI_Transform xform(shapeB, move, /*copy=*/true);
+    TopoDS_Shape movedB = xform.Shape();
+
+    SnapshotId token = createSnapshotLocked("before closeGap on " + partBId);
+    itB->second.shape = movedB;
+    return CloseGapResult{partBId, gap, token};
+  }
+
   // ── Extend face to target ────────────────────────────────────────────────
 
   ExtendFaceResult extendFaceToTarget(const ShellId&      partId,
@@ -5294,22 +5884,109 @@ private:
     SnapshotId token = createSnapshotLocked("before extendFaceToTarget on " + partId);
 
     try {
-      // Locate the face
-      TopoDS_Face face;
-      bool found = false;
-      TopExp_Explorer fExp(it->second.shape, TopAbs_FACE);
-      for (; fExp.More(); fExp.Next()) {
-        if (shapeId(fExp.Current()) == faceId) {
-          face = TopoDS::Face(fExp.Current());
-          found = true;
-          break;
+      // ── Resolve target shape early (needed for auto face-finding) ──────────
+      TopoDS_Shape targetShape;
+      if (targetType == "face_id" || targetType == "part_surface") {
+        auto tIt = shells_.find(targetPartId);
+        if (tIt == shells_.end()) {
+          throw GeometryError("GE_SHELL_NOT_FOUND",
+                              "Target part not found: " + targetPartId, false, "");
+        }
+        targetShape = tIt->second.shape;
+        if (!targetFaceId.empty()) {
+          for (TopExp_Explorer tExp(tIt->second.shape, TopAbs_FACE);
+               tExp.More(); tExp.Next()) {
+            if (shapeId(tExp.Current()) == targetFaceId) {
+              targetShape = tExp.Current();
+              break;
+            }
+          }
         }
       }
-      if (!found) {
-        throw GeometryError("GE_EXTEND_FAILED", "Face not found: " + faceId, false, "");
+
+      // ── Find the face to extend ────────────────────────────────────────────
+      TopoDS_Face face;
+      if (faceId.empty()) {
+        // Auto-select: the face closest to and most directly facing the target.
+        if (targetShape.IsNull()) {
+          throw GeometryError("GE_EXTEND_FAILED",
+              "face_id is required when target_type is 'plane'", false, "");
+        }
+        Bnd_Box tBBox;
+        BRepBndLib::AddOptimal(targetShape, tBBox);
+        gp_Pnt targetCenter(0.0, 0.0, 0.0);
+        if (!tBBox.IsVoid()) {
+          Standard_Real txMin, txMax, tyMin, tyMax, tzMin, tzMax;
+          tBBox.Get(txMin, tyMin, tzMin, txMax, tyMax, tzMax);
+          targetCenter = gp_Pnt((txMin + txMax) * 0.5,
+                                (tyMin + tyMax) * 0.5,
+                                (tzMin + tzMax) * 0.5);
+        }
+
+        double bestScore = std::numeric_limits<double>::max();
+        for (TopExp_Explorer fExp(it->second.shape, TopAbs_FACE);
+             fExp.More(); fExp.Next()) {
+          TopoDS_Face candidate = TopoDS::Face(fExp.Current());
+          Handle(Geom_Surface) s = BRep_Tool::Surface(candidate);
+          if (s.IsNull()) continue;
+          Standard_Real cu1, cu2, cv1, cv2;
+          BRepTools::UVBounds(candidate, cu1, cu2, cv1, cv2);
+          gp_Pnt cCenter;
+          gp_Vec cdu, cdv;
+          s->D1((cu1 + cu2) * 0.5, (cv1 + cv2) * 0.5, cCenter, cdu, cdv);
+          gp_Vec cNorm = cdu.Crossed(cdv);
+          if (cNorm.Magnitude() < 1e-10) continue;
+          cNorm.Normalize();
+          // Respect face orientation — a REVERSED face has its outward normal
+          // opposite to the surface parametrization direction.
+          if (candidate.Orientation() == TopAbs_REVERSED) cNorm.Reverse();
+
+          gp_Vec toTarget(cCenter, targetCenter);
+          double toTargetMag = toTarget.Magnitude();
+          if (toTargetMag < 1e-10) continue;
+          toTarget /= toTargetMag;
+
+          // Skip faces not pointing toward the target
+          double dotScore = cNorm.Dot(toTarget);
+          if (dotScore < 0.1) continue;
+
+          BRepExtrema_DistShapeShape d;
+          d.LoadS1(candidate);
+          d.LoadS2(targetShape);
+          d.Perform();
+          if (!d.IsDone()) continue;
+          // Skip faces already in contact with the target — their score would
+          // be 0 and they would always beat the actual gap face.
+          if (d.Value() < 1e-4) continue;
+
+          // Score: dist / dotScore — favour near faces that face the target
+          double score = d.Value() / dotScore;
+          if (score < bestScore) {
+            bestScore = score;
+            face = candidate;
+          }
+        }
+        if (face.IsNull()) {
+          throw GeometryError("GE_EXTEND_FAILED",
+              "No face on source part is facing the target", false, "");
+        }
+      } else {
+        // Manual: locate face by ID
+        bool found = false;
+        for (TopExp_Explorer fExp(it->second.shape, TopAbs_FACE);
+             fExp.More(); fExp.Next()) {
+          if (shapeId(fExp.Current()) == faceId) {
+            face = TopoDS::Face(fExp.Current());
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          throw GeometryError("GE_EXTEND_FAILED", "Face not found: " + faceId, false, "");
+        }
       }
 
-      // Compute face normal at centroid
+      // ── Compute face normal at centroid ────────────────────────────────────
       Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
       if (surf.IsNull()) {
         throw GeometryError("GE_EXTEND_FAILED", "Face has null surface", false, "");
@@ -5324,8 +6001,10 @@ private:
         throw GeometryError("GE_EXTEND_FAILED", "Cannot compute face normal", false, "");
       }
       faceNormal.Normalize();
+      // Apply orientation so the normal points outward from the shell.
+      if (face.Orientation() == TopAbs_REVERSED) faceNormal.Reverse();
 
-      // Compute extension distance
+      // ── Compute extension distance ─────────────────────────────────────────
       double extDist = 0.0;
       if (targetType == "plane") {
         gp_Vec tNorm(targetPlane.normalX, targetPlane.normalY, targetPlane.normalZ);
@@ -5342,27 +6021,22 @@ private:
         }
         extDist = toPlane.Dot(tNorm) / denom;
       } else if (targetType == "face_id" || targetType == "part_surface") {
-        auto tIt = shells_.find(targetPartId);
-        if (tIt == shells_.end()) {
-          throw GeometryError("GE_SHELL_NOT_FOUND",
-                              "Target part not found: " + targetPartId, false, "");
-        }
-        TopoDS_Shape targetShape = tIt->second.shape;
-        if (!targetFaceId.empty()) {
-          TopExp_Explorer tExp(tIt->second.shape, TopAbs_FACE);
-          for (; tExp.More(); tExp.Next()) {
-            if (shapeId(tExp.Current()) == targetFaceId) {
-              targetShape = tExp.Current();
-              break;
-            }
-          }
-        }
-        BRepExtrema_DistShapeShape dist(face, targetShape);
+        BRepExtrema_DistShapeShape dist;
+        dist.LoadS1(face);
+        dist.LoadS2(targetShape);
         dist.Perform();
         if (!dist.IsDone()) {
           throw GeometryError("GE_EXTEND_FAILED", "Cannot compute distance to target", false, "");
         }
-        extDist = dist.Value();
+        // Project the closest point on the target onto the face normal direction.
+        // Using raw dist.Value() can give zero when shapes share a corner or edge
+        // even if the gap along the face normal is non-zero.
+        if (dist.Value() > 1e-4) {
+          extDist = dist.Value();
+        } else {
+          gp_Pnt closestPt = dist.PointOnShape2(1);
+          extDist = gp_Vec(faceCenter, closestPt).Dot(faceNormal);
+        }
       } else {
         throw GeometryError("GE_EXTEND_FAILED",
                             "Unknown targetType: " + targetType, false, "");
@@ -6102,6 +6776,22 @@ private:
     };
 
     try {
+      // 0. Disconnected-body check: a valid panel is one connected solid/shell.
+      //    Multiple disconnected components are caught here before any face matching.
+      {
+        int solidCount = 0;
+        for (TopExp_Explorer ex(shape, TopAbs_SOLID); ex.More(); ex.Next()) solidCount++;
+        int shellCount = 0;
+        for (TopExp_Explorer ex(shape, TopAbs_SHELL, TopAbs_SOLID); ex.More(); ex.Next()) shellCount++;
+        int components = solidCount > 0 ? solidCount : shellCount;
+        if (components > 1) {
+          result.validationErrors.push_back(
+            "GE_PANEL_DISCONNECTED: Shape contains " + std::to_string(components) +
+            " disconnected bodies. A valid panel must be a single connected solid.");
+          return result;
+        }
+      }
+
       // 1. Gather all faces and compute total surface area
       double totalArea = 0.0;
       std::vector<std::pair<TopoDS_Face, double>> planarFacesWithArea;
@@ -6125,7 +6815,7 @@ private:
       }
 
       if (totalFaceCount == 0 || planarFacesWithArea.empty()) {
-        result.validationErrors.push_back("Shape has no planar faces or is empty.");
+        result.validationErrors.push_back("GE_PANEL_NO_FLAT_FACES: Shape has no planar faces — cannot be a sheet metal panel.");
         return result;
       }
 
@@ -6256,7 +6946,7 @@ private:
                     << ", matched=" << (planeInfos[i].matched ? "true" : "false") 
                     << ", partnerIdx=" << planeInfos[i].partnerIdx << std::endl;
         }
-        result.validationErrors.push_back("Bulky or non-sheet-metal geometry detected. Area ratio of parallel skins is below limit.");
+        result.validationErrors.push_back("GE_PANEL_NOT_SHEET_METAL: Bulky or non-sheet-metal geometry — area ratio of parallel skins is below limit.");
         return result;
       }
 
@@ -6268,7 +6958,7 @@ private:
           double dist = std::abs(diff.Dot(planeInfos[i].normal));
           double dev = std::abs(dist - nominalThickness) / nominalThickness;
           if (dev > 0.15) { // 15% tolerance
-            result.validationErrors.push_back("Non-uniform wall thickness detected. Wall thickness varies from nominal.");
+            result.validationErrors.push_back("GE_PANEL_NON_UNIFORM_THICKNESS: Wall thickness varies from nominal by more than 15%.");
             return result;
           }
         }
@@ -6454,6 +7144,176 @@ private:
     return validateSheetMetalLocked(partId);
   }
 
+  // Non-destructive: applies fillet-based bend reconstruction to a COPY of
+  // `sourceId`, stores the result as a new shell, and returns the new ID.
+  // Called from within unfoldShell (mutex already held).  Throws on failure.
+  ShellId buildImprovedFoldedLocked(const ShellId& sourceId, double t) {
+    TopoDS_Shape originalShape;
+    if (auto sit = shells_.find(sourceId); sit != shells_.end()) {
+      originalShape = sit->second.shape;
+    } else if (auto it = solids_.find(sourceId); it != solids_.end()) {
+      originalShape = it->second.shape;
+    } else {
+      throw GeometryError("GE_SOLID_NOT_FOUND", "Source not found: " + sourceId, false, "");
+    }
+
+    auto faceCenter = [](const TopoDS_Face& f) -> gp_Pnt {
+      GProp_GProps fp;
+      BRepGProp::SurfaceProperties(f, fp);
+      return fp.CentreOfMass();
+    };
+
+    auto edgesAreParallel = [](const TopoDS_Edge& e1, const TopoDS_Edge& e2) -> bool {
+      Standard_Real f1, l1, f2, l2;
+      Handle(Geom_Curve) c1 = BRep_Tool::Curve(e1, f1, l1);
+      Handle(Geom_Curve) c2 = BRep_Tool::Curve(e2, f2, l2);
+      if (!c1.IsNull() && !c2.IsNull()) {
+        gp_Pnt p1, p2; gp_Vec v1, v2;
+        c1->D1((f1+l1)*0.5, p1, v1);
+        c2->D1((f2+l2)*0.5, p2, v2);
+        if (v1.Magnitude() > 1e-10) v1.Normalize();
+        if (v2.Magnitude() > 1e-10) v2.Normalize();
+        return std::abs(v1.Dot(v2)) >= 0.95;
+      }
+      return true;
+    };
+
+    auto edgeMidpoint = [](const TopoDS_Edge& edge) -> gp_Pnt {
+      Standard_Real f, l;
+      Handle(Geom_Curve) c = BRep_Tool::Curve(edge, f, l);
+      if (!c.IsNull()) return c->Value((f + l) * 0.5);
+      TopExp_Explorer ve(edge, TopAbs_VERTEX);
+      if (ve.More()) return BRep_Tool::Pnt(TopoDS::Vertex(ve.Current()));
+      return gp_Pnt(0, 0, 0);
+    };
+
+    auto averageNormal = [](const TopoDS_Face& f1, const TopoDS_Face& f2) -> gp_Vec {
+      gp_Vec n1 = faceOutwardNormal(f1);
+      gp_Vec n2 = faceOutwardNormal(f2);
+      gp_Vec nSum = n1 + n2;
+      if (nSum.Magnitude() > 1e-10) nSum.Normalize();
+      return nSum;
+    };
+
+    // Collect matched planar face pairs (same logic as reconstructCurvedBends)
+    std::vector<std::pair<TopoDS_Face, double>> planarFacesWithArea;
+    TopExp_Explorer faceExp(originalShape, TopAbs_FACE);
+    for (; faceExp.More(); faceExp.Next()) {
+      const TopoDS_Face& face = TopoDS::Face(faceExp.Current());
+      Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
+      if (!surf.IsNull() && surf->IsKind(STANDARD_TYPE(Geom_Plane))) {
+        GProp_GProps fp;
+        BRepGProp::SurfaceProperties(face, fp);
+        planarFacesWithArea.push_back({face, fp.Mass()});
+      }
+    }
+
+    struct PFI { TopoDS_Face face; gp_Pnt center; gp_Vec normal; bool matched = false; };
+    std::vector<PFI> pfis;
+    for (const auto& pair : planarFacesWithArea) {
+      pfis.push_back({pair.first, faceCenter(pair.first), faceOutwardNormal(pair.first), false});
+    }
+
+    int N = static_cast<int>(pfis.size());
+    for (int i = 0; i < N; ++i) {
+      if (pfis[i].matched) continue;
+      int bestJ = -1; double minDist = 1e30;
+      for (int j = i + 1; j < N; ++j) {
+        if (pfis[j].matched) continue;
+        if (pfis[i].normal.Dot(pfis[j].normal) >= -0.95) continue;
+        gp_Vec diff(pfis[i].center, pfis[j].center);
+        double d = std::abs(diff.Dot(pfis[i].normal));
+        double projDist = (diff - pfis[i].normal * diff.Dot(pfis[i].normal)).Magnitude();
+        if (d >= 0.7 * t && d <= 1.3 * t && projDist < minDist) {
+          minDist = projDist; bestJ = j;
+        }
+      }
+      if (bestJ != -1) { pfis[i].matched = true; pfis[bestJ].matched = true; }
+    }
+
+    auto minLocalDim = [](const TopoDS_Face& f, double thickness) -> bool {
+      Handle(Geom_Surface) surf = BRep_Tool::Surface(f);
+      if (surf.IsNull() || !surf->IsKind(STANDARD_TYPE(Geom_Plane))) return false;
+      Handle(Geom_Plane) plane = Handle(Geom_Plane)::DownCast(surf);
+      gp_Ax3 pos = plane->Pln().Position();
+      gp_Dir dX = pos.XDirection(), dY = pos.YDirection();
+      double uMin=1e30, uMax=-1e30, vMin=1e30, vMax=-1e30; bool any=false;
+      for (TopExp_Explorer ex(f, TopAbs_VERTEX); ex.More(); ex.Next()) {
+        gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(ex.Current()));
+        gp_Vec v(pos.Location(), p);
+        double u = v.Dot(gp_Vec(dX)), vv = v.Dot(gp_Vec(dY));
+        uMin=std::min(uMin,u); uMax=std::max(uMax,u);
+        vMin=std::min(vMin,vv); vMax=std::max(vMax,vv); any=true;
+      }
+      return any && std::min(uMax-uMin, vMax-vMin) >= 2.5 * thickness;
+    };
+
+    std::set<std::string> matchedIds;
+    for (const auto& p : pfis)
+      if (p.matched && minLocalDim(p.face, t)) matchedIds.insert(shapeId(p.face));
+
+    struct SharpEdge { TopoDS_Edge edge; gp_Pnt mid; gp_Vec avgNormal; TopoDS_Face f1, f2; };
+    std::vector<SharpEdge> sharpEdges;
+    TopTools_IndexedDataMapOfShapeListOfShape efMap;
+    TopExp::MapShapesAndAncestors(originalShape, TopAbs_EDGE, TopAbs_FACE, efMap);
+    for (int i = 1; i <= efMap.Extent(); ++i) {
+      const TopoDS_Edge& edge = TopoDS::Edge(efMap.FindKey(i));
+      const TopTools_ListOfShape& faces = efMap(i);
+      if (faces.Extent() != 2) continue;
+      TopoDS_Face f1 = TopoDS::Face(faces.First()), f2 = TopoDS::Face(faces.Last());
+      if (!matchedIds.count(shapeId(f1)) || !matchedIds.count(shapeId(f2))) continue;
+      Handle(Geom_Surface) s1 = BRep_Tool::Surface(f1), s2 = BRep_Tool::Surface(f2);
+      if (s1.IsNull() || !s1->IsKind(STANDARD_TYPE(Geom_Plane))) continue;
+      if (s2.IsNull() || !s2->IsKind(STANDARD_TYPE(Geom_Plane))) continue;
+      gp_Vec n1 = faceOutwardNormal(f1), n2 = faceOutwardNormal(f2);
+      double angle = std::acos(std::clamp(n1.Dot(n2), -1.0, 1.0)) * 180.0 / M_PI;
+      if (angle >= 30.0 && angle <= 150.0) {
+        sharpEdges.push_back({edge, edgeMidpoint(edge), averageNormal(f1, f2), f1, f2});
+      }
+    }
+
+    int S = static_cast<int>(sharpEdges.size());
+    std::vector<bool> matched(S, false);
+    std::vector<std::pair<int,int>> pairs;
+    for (int i = 0; i < S; ++i) {
+      if (matched[i]) continue;
+      for (int j = i+1; j < S; ++j) {
+        if (matched[j]) continue;
+        double d = sharpEdges[i].mid.Distance(sharpEdges[j].mid);
+        if (d >= 0.7*t && d <= 1.3*t && edgesAreParallel(sharpEdges[i].edge, sharpEdges[j].edge)) {
+          pairs.push_back({i, j}); matched[i] = true; matched[j] = true; break;
+        }
+      }
+    }
+
+    if (pairs.empty())
+      throw GeometryError("GE_NO_BENDS", "No bend pairs found — no improved part needed", false, "");
+
+    BRepFilletAPI_MakeFillet filletMaker(originalShape);
+    for (const auto& pr : pairs) {
+      int idxI = pr.first, idxE = pr.second;
+      gp_Vec diff(sharpEdges[idxI].mid, sharpEdges[idxE].mid);
+      if (diff.Dot(sharpEdges[idxI].avgNormal) <= 0) std::swap(idxI, idxE);
+      filletMaker.Add(t,       sharpEdges[idxI].edge);
+      filletMaker.Add(2.0 * t, sharpEdges[idxE].edge);
+    }
+
+    filletMaker.Build();
+    if (!filletMaker.IsDone())
+      throw GeometryError("GE_UNFOLD_REBUILD_FAILED", "Fillet failed for improved part", true, "");
+
+    TopoDS_Shape result = filletMaker.Shape();
+    BRepCheck_Analyzer checker(result);
+    if (!checker.IsValid())
+      throw GeometryError("GE_UNFOLD_REBUILD_FAILED", "Fillet output invalid for improved part", true, "");
+
+    // Use a deterministic ID so the improved part keeps a stable, recognisable
+    // name across repeated unfolds of the same source shell.
+    ShellId newId = sourceId + "_improved";
+    shells_[newId] = ShellState{newId, "", result};
+    return newId;
+  }
+
   CurvedRebuildResult reconstructCurvedBends(const ShellId& partId) override {
     std::lock_guard<std::mutex> lock(mutex_);
     TopoDS_Shape originalShape;
@@ -6540,6 +7400,13 @@ private:
 
       struct PlaneFaceInfo {
         TopoDS_Face face;
+        // Coplanar sub-faces produced by a prior Boolean fuse all live in the
+        // same panel skin.  Tracking them here is the same fix applied in
+        // unfoldShell::findPanelConnection — without it, the matchedFaceIds
+        // set below would only contain the primary sub-face per skin and
+        // sharp edges bordering the other sub-faces would be missed.
+        std::vector<TopoDS_Face> allFaces;
+        double area;
         gp_Pnt center;
         gp_Vec normal;
         bool matched = false;
@@ -6549,9 +7416,36 @@ private:
       for (const auto& pair : planarFacesWithArea) {
         PlaneFaceInfo info;
         info.face = pair.first;
+        info.allFaces = {pair.first};
+        info.area = pair.second;
         info.center = faceCenter(info.face);
         info.normal = faceOutwardNormal(info.face);
         planeInfos.push_back(info);
+      }
+
+      // Merge coplanar face entries (same normal, < 0.1 mm apart along normal).
+      {
+        std::vector<PlaneFaceInfo> mergedInfos;
+        for (const auto& info : planeInfos) {
+          bool found = false;
+          for (auto& mInfo : mergedInfos) {
+            if (info.normal.Dot(mInfo.normal) > 0.95) {
+              double dist = std::abs(gp_Vec(info.center, mInfo.center).Dot(info.normal));
+              if (dist < 0.1) {
+                double oldArea = mInfo.area;
+                mInfo.area += info.area;
+                mInfo.center = gp_Pnt(
+                    (mInfo.center.XYZ() * oldArea + info.center.XYZ() * info.area) / mInfo.area);
+                mInfo.allFaces.insert(mInfo.allFaces.end(),
+                                      info.allFaces.begin(), info.allFaces.end());
+                found = true;
+                break;
+              }
+            }
+          }
+          if (!found) mergedInfos.push_back(info);
+        }
+        planeInfos = std::move(mergedInfos);
       }
 
       // Pair them up using the same thickness logic to identify matched skins
@@ -6616,7 +7510,11 @@ private:
           if (minDim < 2.5 * t) {
             continue;
           }
-          matchedFaceIds.insert(shapeId(info.face));
+          // Insert IDs for ALL coplanar sub-faces — sharp edges may border any
+          // of them, not just the primary face that survived initial filtering.
+          for (const auto& sub : info.allFaces) {
+            matchedFaceIds.insert(shapeId(sub));
+          }
         }
       }
 

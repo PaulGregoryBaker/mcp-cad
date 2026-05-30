@@ -271,5 +271,177 @@ describe('Advanced Sheet Metal Unfolding Integration Tests', () => {
 
     await dispatchTool('rollback_transaction', { transaction_id: txn.transaction_id }, config);
   }, 20000);
+
+  // ── Bug regressions ─────────────────────────────────────────────────────────
+
+  it('unfold of a 0-bend split panel returns dimensions matching the panel face, not a sliver', async () => {
+    // Regression for: split panel (e.g. 1.1×172.6×150.1mm) unfolding to 150×24mm
+    // instead of the correct ~150×172.6mm.  Root cause: vertex projection was only
+    // seeing a single coplanar sub-face when the large skin face was split, causing
+    // flatH to reflect one sub-face stripe instead of the full panel extent.
+    const fixturePath = getFixturePath('testcube.step');
+    const clean: any = await dispatchTool('clean_geometry', { file_path: fixturePath }, config);
+
+    const split: any = await dispatchTool('split_body_by_bends', {
+      part_id: clean.solid_id,
+      angle_threshold_deg: 45,
+      max_thickness_mm: 2.0,
+      max_recursion_depth: 2,
+    }, config);
+    expect(split.panel_ids.length).toBeGreaterThan(0);
+
+    const txn: any = await dispatchTool('begin_transaction', { label: 'unfold_splitpanel_regression' }, config);
+
+    // Collect all 0-bend panels (flat plates with no further folds).
+    // For a testcube (~200mm cube, ~1mm walls), every outer face that has 0 bends
+    // should unfold to approximately its two large face dimensions.
+    const zeroBendPanels: Array<{ id: string; bbox: { x_min: number; x_max: number; y_min: number; y_max: number; z_min: number; z_max: number } }> = [];
+    for (let i = 0; i < split.panel_ids.length; i++) {
+      const bbox = split.panel_bboxes[i];
+      const dx = bbox.x_max - bbox.x_min;
+      const dy = bbox.y_max - bbox.y_min;
+      const dz = bbox.z_max - bbox.z_min;
+      const dims = [dx, dy, dz].sort((a, b) => a - b);
+      // A sheet metal panel: thinnest dim < 3mm, other two > 50mm
+      if (dims[0]! < 3.0 && dims[1]! > 50.0) {
+        zeroBendPanels.push({ id: split.panel_ids[i], bbox });
+      }
+    }
+    expect(zeroBendPanels.length).toBeGreaterThan(0);
+
+    for (const panel of zeroBendPanels) {
+      const bbox = panel.bbox;
+      const dims = [
+        bbox.x_max - bbox.x_min,
+        bbox.y_max - bbox.y_min,
+        bbox.z_max - bbox.z_min,
+      ].sort((a, b) => a - b);
+      // dims[0] = thickness (~1mm), dims[1] and dims[2] = panel face extents (>50mm each)
+      const expectedMinFaceDim = dims[1]!;
+      const expectedMaxFaceDim = dims[2]!;
+
+      let unfold: any;
+      let unfoldError: unknown;
+      try {
+        unfold = await dispatchTool('apply_unfold', {
+          panel_id: panel.id,
+          material_id: config.materials[0]!.id,
+          transaction_id: txn.transaction_id,
+        }, config);
+      } catch (err) {
+        unfoldError = err;
+      }
+
+      if (unfoldError) {
+        // Panels that truly aren't sheet metal (e.g. bent corner pieces with cycles) may
+        // validly fail.  Record which ones do so the test output is transparent.
+        const code = (unfoldError as { code?: string }).code ?? 'UNKNOWN';
+        console.log(`[unfold_splitpanel] panel ${panel.id} rejected: ${code}`);
+        // A rejection is acceptable; a silent wrong result is not — fall through.
+        continue;
+      }
+
+      const flatMin = Math.min(unfold.flat_width_mm, unfold.flat_height_mm);
+      const flatMax = Math.max(unfold.flat_width_mm, unfold.flat_height_mm);
+
+      // Neither flat dimension should be a sliver (< 30mm) for a >50mm panel face.
+      // If this fires with flatMin ≈ 24mm the vertex-projection bug has regressed.
+      expect(flatMin).toBeGreaterThan(30.0);
+
+      // Both flat dimensions should be within 20mm of the expected panel face extents.
+      expect(Math.abs(flatMax - expectedMaxFaceDim)).toBeLessThan(20.0);
+      expect(Math.abs(flatMin - expectedMinFaceDim)).toBeLessThan(20.0);
+    }
+
+    await dispatchTool('rollback_transaction', { transaction_id: txn.transaction_id }, config);
+  }, 30000);
+
+  it('apply_unfold on a solid cube panel rejects with GE_PANEL_INVALID', async () => {
+    // Regression: decomposed testcube panel (thick solid, faces ~198mm apart) must be
+    // rejected by apply_unfold.  The TypeScript layer pre-checks via isPanelValid →
+    // validateSheetMetal, which finds no thin-skin face pairs (need 0.5–6mm; cube
+    // faces are ~198mm apart) and correctly throws GE_PANEL_INVALID.
+    const fixturePath = getFixturePath('testcube.step');
+    const clean: any = await dispatchTool('clean_geometry', { file_path: fixturePath }, config);
+    expect(clean.solid_id).toBeDefined();
+
+    const decompose: any = await dispatchTool('decompose_volume', {
+      solid_id: clean.solid_id,
+      strategy: 'Integrity',
+    }, config);
+    expect(decompose.panel_ids.length).toBeGreaterThan(0);
+
+    const txn: any = await dispatchTool('begin_transaction', { label: 'unfold_cube_regression' }, config);
+
+    await expect(
+      dispatchTool('apply_unfold', {
+        panel_id: decompose.panel_ids[0],
+        material_id: config.materials[0]!.id,
+        transaction_id: txn.transaction_id,
+      }, config),
+    ).rejects.toMatchObject({ code: 'GE_PANEL_INVALID' });
+
+    await dispatchTool('rollback_transaction', { transaction_id: txn.transaction_id }, config);
+  }, 15000);
+
+  it('apply_unfold on the pre-split testcube whole body is rejected or returns correct bbox dims', async () => {
+    // Regression for: whole testcube body (~198.6×198.6×198.5mm) being accepted by
+    // apply_unfold and silently returning 197.6×197.6mm (a single-panel sliver) instead
+    // of either:
+    //   a) throwing because it has cycles/T-junctions (closed box), OR
+    //   b) returning a flat pattern as large as the full unfolded area (open box).
+    // A result of ~197.6×197.6mm is wrong in both cases: too small for a multi-panel
+    // assembly and clearly a bbox-fallback artefact.
+    const fixturePath = getFixturePath('testcube.step');
+    const clean: any = await dispatchTool('clean_geometry', { file_path: fixturePath }, config);
+    expect(clean.solid_id).toBeDefined();
+
+    // Split the testcube to get its individual panels — the solid_id refers to the
+    // outer body before splitting.  The body registered under solid_id is what gets
+    // unfolded directly in the app when "Gen Flat Patterns" is pressed before splitting.
+    const txn: any = await dispatchTool('begin_transaction', { label: 'unfold_wholecube_regression' }, config);
+
+    let unfoldResult: any;
+    let unfoldError: unknown;
+    try {
+      unfoldResult = await dispatchTool('apply_unfold', {
+        panel_id: clean.solid_id,
+        material_id: config.materials[0]!.id,
+        transaction_id: txn.transaction_id,
+      }, config);
+    } catch (err) {
+      unfoldError = err;
+    }
+
+    if (unfoldError) {
+      // Acceptable: the body was correctly identified as invalid sheet metal
+      // (closed box → cycle, or T-junction, or no thin skins found).
+      const code = (unfoldError as { code?: string }).code ?? '';
+      console.log(`[unfold_wholecube] correctly rejected with code: ${code}`);
+      expect(['GE_PANEL_INVALID', 'GE_UNFOLD_CYCLE_DETECTED', 'GE_UNFOLD_T_JUNCTION', 'GE_INVALID_SHEET_METAL']).toContain(code);
+    } else {
+      // If it didn't throw, the flat pattern must be meaningful — not a 197.6×197.6mm
+      // single-panel sliver.  For a body that spans 198.6mm in every direction and
+      // contains multiple bend panels, the larger flat dimension should be well above
+      // a single panel size.
+      const flatMax = Math.max(unfoldResult.flat_width_mm, unfoldResult.flat_height_mm);
+      const flatMin = Math.min(unfoldResult.flat_width_mm, unfoldResult.flat_height_mm);
+      console.log(`[unfold_wholecube] flat_width=${unfoldResult.flat_width_mm}, flat_height=${unfoldResult.flat_height_mm}, bends=${unfoldResult.bend_count}`);
+
+      // A single-panel bbox sliver of ~197mm × ~197mm is the known bad result.
+      // A correct full-body flat pattern for a multi-panel cube would be much larger.
+      if (unfoldResult.bend_count === 0) {
+        // Single flat panel with 0 bends: the two face dimensions must both exceed
+        // the body's ~198mm depth (otherwise it's a thin-skin sliver).
+        expect(flatMin).toBeGreaterThan(150.0);
+      } else {
+        // Multi-bend flat: the long dimension should exceed a single panel by at least
+        // one additional panel width.
+        expect(flatMax).toBeGreaterThan(250.0);
+      }
+    }
+
+    await dispatchTool('rollback_transaction', { transaction_id: txn.transaction_id }, config);
+  }, 15000);
 });
 

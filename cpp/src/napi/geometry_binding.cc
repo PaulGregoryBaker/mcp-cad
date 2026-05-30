@@ -320,6 +320,7 @@ Napi::Value UnfoldShell(const Napi::CallbackInfo& info) {
     result.Set("validated",    Napi::Boolean::New(env, res.validated));
     result.Set("detectedThickness", Napi::Number::New(env, res.detectedThickness));
     result.Set("rollbackToken", Napi::String::New(env, res.rollbackToken));
+    result.Set("improvedPartId", Napi::String::New(env, res.improvedPartId));
     Napi::Array histArr = Napi::Array::New(env, res.shapeHistory.size());
     for (size_t i = 0; i < res.shapeHistory.size(); ++i) {
       Napi::Object rec = Napi::Object::New(env);
@@ -527,6 +528,27 @@ Napi::Value MergeBodiesWithBend(const Napi::CallbackInfo& info) {
       histArr.Set(static_cast<uint32_t>(i), rec);
     }
     result.Set("shape_history", histArr);
+    return result;
+  })
+  return env.Undefined();
+}
+
+// ─── Close gap ───────────────────────────────────────────────────────────────
+
+Napi::Value CloseGap(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 2) {
+    Napi::TypeError::New(env, "closeGap(partAId, partBId)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string partAId = info[0].As<Napi::String>();
+  std::string partBId = info[1].As<Napi::String>();
+  TRY_GEOMETRY(env, {
+    CloseGapResult res = svc().closeGap(partAId, partBId);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("partBId",       Napi::String::New(env, res.partBId));
+    result.Set("gapClosedMm",   Napi::Number::New(env, res.gapClosedMm));
+    result.Set("rollbackToken", Napi::String::New(env, res.rollbackToken));
     return result;
   })
   return env.Undefined();
@@ -1771,6 +1793,7 @@ void RegisterGeometryMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("trimBodyWithPlane",     Napi::Function::New(env, TrimBodyWithPlane));
   exports.Set("splitBodyByPlane",      Napi::Function::New(env, SplitBodyByPlane));
   exports.Set("mergeBodiesWithBend",   Napi::Function::New(env, MergeBodiesWithBend));
+  exports.Set("closeGap",             Napi::Function::New(env, CloseGap));
   exports.Set("extendFaceToTarget",    Napi::Function::New(env, ExtendFaceToTarget));
   exports.Set("offsetFace",            Napi::Function::New(env, OffsetFace));
   exports.Set("addFlange",             Napi::Function::New(env, AddFlange));
