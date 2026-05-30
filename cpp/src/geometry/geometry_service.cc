@@ -81,6 +81,9 @@
 #include <IntAna_QuadQuadGeo.hxx>
 #include <IntAna_ResultType.hxx>
 #include <Precision.hxx>
+#include <gp_Circ.hxx>
+#include <GC_MakeArcOfCircle.hxx>
+#include <Geom_TrimmedCurve.hxx>
 #include <BRepOffset_Mode.hxx>
 #include <BRepBuilderAPI_MakeSolid.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
@@ -5793,7 +5796,7 @@ private:
           //     thickness from one input.  The normal-match guard prevents
           //     picking a wrong side-edge.
 
-          // Pick each input's "outer" normal: the largest planar face whose
+          // Pick each input's "outer" face: the largest planar face whose
           // centroid sits FARTHEST from the OTHER input's centroid.  This
           // reliably picks the face facing away from the bend (away from the
           // other panel) — necessary because thin slabs have two equal-area
@@ -5801,15 +5804,22 @@ private:
           // stable.  Inner-cube panels were getting their inner-facing face
           // picked, which inverted the seam normal-match and selected an
           // inside-corner edge instead of the outer bend corner.
+          //
+          // We capture BOTH the outward normal AND the face's plane — the
+          // plane lets us compute the intended bend axis analytically (it's
+          // the intersection line of the two inputs' outer planes), which
+          // gives a far more reliable edge selection than searching by
+          // distance/dihedral/normal heuristics alone.
           GProp_GProps centA, centB;
           BRepGProp::VolumeProperties(inputA, centA);
           BRepGProp::VolumeProperties(inputB, centB);
           gp_Pnt cA = centA.CentreOfMass();
           gp_Pnt cB = centB.CentreOfMass();
 
-          auto outerNormal = [&](const TopoDS_Shape& body, const gp_Pnt& otherCentroid) -> gp_Vec {
-            gp_Vec best(0,0,1);
+          auto outerFace = [&](const TopoDS_Shape& body, const gp_Pnt& otherCentroid,
+                               gp_Vec& nOut, gp_Pln& planeOut) -> bool {
             double bestScore = -1.0;
+            bool ok = false;
             for (TopExp_Explorer fx(body, TopAbs_FACE); fx.More(); fx.Next()) {
               const TopoDS_Face& f = TopoDS::Face(fx.Current());
               Handle(Geom_Surface) s = BRep_Tool::Surface(f);
@@ -5819,18 +5829,37 @@ private:
               double area = fp.Mass();
               gp_Pnt c = fp.CentreOfMass();
               double dist = c.Distance(otherCentroid);
-              // Score = area weighted by distance from the other input
-              // (so we prefer large faces that face away).
               double score = area * dist;
               if (score > bestScore) {
                 bestScore = score;
-                best = faceOutwardNormal(f);
+                nOut = faceOutwardNormal(f);
+                planeOut = Handle(Geom_Plane)::DownCast(s)->Pln();
+                ok = true;
               }
             }
-            return best;
+            return ok;
           };
-          gp_Vec nInA = outerNormal(inputA, cB);
-          gp_Vec nInB = outerNormal(inputB, cA);
+          gp_Vec nInA, nInB;
+          gp_Pln planeA, planeB;
+          bool gotA = outerFace(inputA, cB, nInA, planeA);
+          bool gotB = outerFace(inputB, cA, nInB, planeB);
+
+          // Compute the intended bend axis: intersection line of the two
+          // inputs' outer-face planes. For perpendicular panels this gives a
+          // single unambiguous line. The correct seam edge is the one closest
+          // to this line — far more reliable than length-based tiebreaks.
+          gp_Lin bendAxis;
+          bool haveBendAxis = false;
+          if (gotA && gotB) {
+            if (std::abs(nInA.Dot(nInB)) < 0.95) {
+              IntAna_QuadQuadGeo planeInt(planeA, planeB,
+                                          Precision::Angular(), Precision::Confusion());
+              if (planeInt.IsDone() && planeInt.TypeInter() == IntAna_Line) {
+                bendAxis = planeInt.Line(1);
+                haveBendAxis = true;
+              }
+            }
+          }
 
           double inputThickness = 0.0;
           {
@@ -5847,7 +5876,7 @@ private:
 
           auto findSeam = [&](double proxTol) -> TopoDS_Edge {
             TopoDS_Edge best;
-            double bestLen = 0.0;
+            double bestScore = 1e30;  // lower is better
             TopExp_Explorer ee(filletInput, TopAbs_EDGE);
             for (; ee.More(); ee.Next()) {
               const TopoDS_Edge& e = TopoDS::Edge(ee.Current());
@@ -5878,7 +5907,21 @@ private:
                 nFA.Dot(nInB) + nFB.Dot(nInA));
               if (nm < 1.5) continue;
 
-              if (len > bestLen) { bestLen = len; best = e; candidateEdges++; }
+              // Score = distance from edge midpoint to the analytical bend
+              // axis (lower = better, ie. closer to the intended bend line).
+              // Fall back to inverse length when no bend axis is available.
+              double score;
+              if (haveBendAxis) {
+                Standard_Real fp, lp;
+                Handle(Geom_Curve) cc = BRep_Tool::Curve(e, fp, lp);
+                if (cc.IsNull()) continue;
+                gp_Pnt mid = cc->Value((fp + lp) * 0.5);
+                score = bendAxis.Distance(mid);
+              } else {
+                score = 1.0 / std::max(1.0, len);
+              }
+
+              if (score < bestScore) { bestScore = score; best = e; candidateEdges++; }
             }
             return best;
           };
