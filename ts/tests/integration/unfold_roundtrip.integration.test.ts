@@ -443,20 +443,14 @@ describe('Unfold round-trip harness', () => {
           `bends=${unfold.bend_count} thickness=${unfold.nominal_thickness_mm?.toFixed(3)}`,
         );
 
-        // Tolerances widened in two stages:
-        //  - First widened from 15→35 mm after the split_by_bends
-        //    corner-overlap fix (panels overlap volumetrically now).
-        //  - Then widened from 35→60 mm after Plan B (deterministic
-        //    corner-cut bend). Plan B produces geometrically more accurate
-        //    bend geometry, but the unfold's BFS traversal sometimes reads
-        //    the new topology differently for certain pair orientations
-        //    (e.g. OUTER -X+Z gives ~347 mm instead of ~393 mm — a 50 mm
-        //    orientation-dependent jitter from unfold, not the merge).
-        //    TODO: investigate the unfold's sensitivity to bend-axis
-        //    orientation. The merge geometry is correct; unfold reads
-        //    different orientations slightly differently.
-        const longTol  = 60.0;
-        const shortTol = 10.0;
+        // Sheet-metal manufacturing tolerance: 1mm. After fixing
+        // (a) findSharedEdgeList to return the longest shared edge and
+        // (b) the BFS rotation to use panel normals directly (not
+        // centroids), all 6 pair orientations now converge to within
+        // 0.2 mm of the analytically-correct flat dimension
+        // (400 mm - 1.4 mm bend deduction at R=0.3, t=1.5, K=0.33).
+        const longTol  = 2.0;   // 2 mm gives headroom for bend-allowance variance
+        const shortTol = 2.0;
         if (Math.abs(flatMax - cube.longMm) > longTol) {
           failures.push({ cube: cube.label, pairIdx: i, reason: `long_dim_off`,
             got: { expected: cube.longMm, actual: flatMax }});

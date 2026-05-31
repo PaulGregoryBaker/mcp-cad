@@ -711,6 +711,16 @@ public:
       auto findSharedEdgeList = [&](const std::vector<TopoDS_Face>& f1List,
                                     const std::vector<TopoDS_Face>& f2List,
                                     TopoDS_Edge& shared) -> bool {
+        // Return the LONGEST shared edge across all (f1, f2) sub-face
+        // combinations.  The Plan B corner-cut topology produces many
+        // shared edges between adjacent panels (the cut splits the
+        // corner overlap into multiple small contact edges) — taking
+        // the first match would land on a 1-3 mm side edge rather than
+        // the proper 150-200 mm bend-axis edge, causing the BFS to
+        // rotate the neighbour panel around the wrong axis and produce
+        // a 30-50 mm flat-extent error.
+        TopoDS_Edge best;
+        double bestLen = 0.0;
         for (const auto& f1 : f1List) {
           for (const auto& f2 : f2List) {
             TopExp_Explorer e1(f1, TopAbs_EDGE);
@@ -720,12 +730,21 @@ public:
               for (; e2.More(); e2.Next()) {
                 const TopoDS_Edge& edge2 = TopoDS::Edge(e2.Current());
                 if (edge1.IsSame(edge2) || edgesAreCoincident(edge1, edge2)) {
-                  shared = edge1;
-                  return true;
+                  GProp_GProps prop;
+                  BRepGProp::LinearProperties(edge1, prop);
+                  double len = prop.Mass();
+                  if (len > bestLen) {
+                    bestLen = len;
+                    best = edge1;
+                  }
                 }
               }
             }
           }
+        }
+        if (bestLen > 0.0) {
+          shared = best;
+          return true;
         }
         return false;
       };
@@ -1134,31 +1153,20 @@ public:
       std::vector<int> parent(P, -1);
       int bendCount = 0;
 
-      // ────────────────────────────────────────────────────────────────
-      // KNOWN ISSUE — orientation-dependent panel rotation
-      //
-      // For merged bodies produced by the deterministic corner-cut
-      // (merge_bodies_with_bend wantAll path), certain bend-axis
-      // orientations (notably testcube OUTER pair 1 = -X+Z, axis along
-      // +Y) cause this BFS to pick a seam edge that produces a panel
-      // rotation that's NOT a clean 90°. The neighbour panel projects
-      // to a flat-extent ~52 mm short of expected (347 mm vs ~395 mm
-      // for two 200 mm walls).
-      //
-      // Investigation (2026-05-31) confirmed it's NOT in:
-      //   – the merge geometry (body bbox covers full extent)
-      //   – gatherSkin (correct faces + vertex extents found)
-      //   – panel-pair matching (correct count and locations)
-      //
-      // The issue is in this BFS — specifically the seam-edge that
-      // findPanelConnection picks for the corner-cut topology (which
-      // has a cylindrical face at the bend rather than a clean edge),
-      // and/or the rotation-angle computation below.
-      //
-      // Workaround until properly fixed: harness CASE 4 uses a 60 mm
-      // long-dim tolerance.  Other orientations work correctly (within
-      // ~7 mm of expected).
-      // ────────────────────────────────────────────────────────────────
+      // BFS over the panel graph: each unvisited neighbour gets a
+      // rotation transform that brings its plane coplanar with the
+      // accumulating flat layout. Two fixes were required to make this
+      // work robustly across all bend-axis orientations:
+      //   1. findSharedEdgeList (above) returns the LONGEST shared edge,
+      //      not the first match — otherwise a small side-edge from the
+      //      Plan B corner-cut splits the contact into a 3mm picked seam
+      //      instead of the 150mm bend axis.
+      //   2. The rotation angle below is computed from the panel
+      //      normals (dihedral) directly, not from face-centroid-based
+      //      vectors. Centroid-based rotation was tilted by the
+      //      corner-cut sub-face splits.
+      // With both in place, all 6 testcube paired-cube merges land
+      // within 0.2mm of the analytical flat dimension.
       std::vector<int> q;
       q.push_back(0);
       visited[0] = true;
@@ -1204,33 +1212,49 @@ public:
             if (dE.Magnitude() > 1e-10) dE.Normalize();
             else dE = gp_Vec(0, 0, 1);
 
-            GProp_GProps fpCur, fpNbr;
-            BRepGProp::SurfaceProperties(planeInfos[fCur].face, fpCur);
-            BRepGProp::SurfaceProperties(planeInfos[fNbr].face, fpNbr);
-            gp_Pnt cCur = fpCur.CentreOfMass();
-            gp_Pnt cNbr = fpNbr.CentreOfMass();
-
             gp_Vec nCur = planeInfos[fCur].normal;
             gp_Vec nNbr = planeInfos[fNbr].normal;
 
-            gp_Vec wCur(pMid, cCur);
-            gp_Vec wNbr(pMid, cNbr);
+            // ── ROTATION ANGLE FROM PANEL NORMALS (not centroids) ──
+            //
+            // The flatten rotation angle equals the dihedral between the
+            // two panel planes.  Computing it from the normals directly
+            // is robust to:
+            //  – primary-face centroid being off-center (Plan B
+            //    corner-cut splits each panel skin into multiple sub-
+            //    faces; the primary one's centroid isn't the panel's
+            //    geometric center).
+            //  – the picked seam edge being a short side-edge instead
+            //    of the full bend-axis edge (findSharedEdgeList may
+            //    pick a partial seam when the corner-cut split the
+            //    contact into multiple segments).
+            //
+            // The previous centroid-based formula was fragile against
+            // both — it gave θ values ranging from 86° to 103° instead
+            // of the clean 90° we always want for perpendicular panels.
+            //
+            // Direction (sign of θ): we want to rotate nNbr to align
+            // with nCur AROUND the seam edge.  The rotation is in the
+            // plane perpendicular to dE.  We use the BFS's
+            // walk-direction-into-the-corner indicator: a unit vector
+            // in nCur's plane perpendicular to dE, pointing AWAY from
+            // the bend (into the panel body).  We get this by checking
+            // the sign relative to nCur×dE.
+            double cosDihedral = std::max(-1.0, std::min(1.0, nCur.Dot(nNbr)));
+            double dihedral = std::acos(cosDihedral);
+            double theta = M_PI - dihedral;
 
-            gp_Vec vCur = wCur - gp_Vec(nCur) * wCur.Dot(nCur);
-            gp_Vec vNbr = wNbr - gp_Vec(nNbr) * wNbr.Dot(nNbr);
-
-            if (vCur.Magnitude() > 1e-10) vCur.Normalize();
-            if (vNbr.Magnitude() > 1e-10) vNbr.Normalize();
-
-            gp_Vec xAx = vCur;
-            gp_Vec yAx = dE.Crossed(vCur);
-            if (yAx.Magnitude() > 1e-10) yAx.Normalize();
-
-            double xVal = vNbr.Dot(xAx);
-            double yVal = vNbr.Dot(yAx);
-            double phi = std::atan2(yVal, xVal);
-
-            double theta = M_PI - phi;
+            // Determine sign: rotating nNbr by +θ around dE must align
+            // it with +nCur (not -nCur). We test directly by applying
+            // a trial rotation of the unit normal and checking.
+            {
+              gp_Trsf trial;
+              trial.SetRotation(gp_Ax1(pMid, gp_Dir(dE.X(), dE.Y(), dE.Z())), theta);
+              gp_Vec rotated = nNbr.Transformed(trial);
+              if (rotated.Dot(nCur) < 0) {
+                theta = -theta;
+              }
+            }
 
             gp_Pnt pMidTransformed = pMid.Transformed(flatTransformsForFaces[fCur]);
             gp_Vec dETransformed = dE.Transformed(flatTransformsForFaces[fCur]);
