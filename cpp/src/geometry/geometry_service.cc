@@ -1134,6 +1134,31 @@ public:
       std::vector<int> parent(P, -1);
       int bendCount = 0;
 
+      // ────────────────────────────────────────────────────────────────
+      // KNOWN ISSUE — orientation-dependent panel rotation
+      //
+      // For merged bodies produced by the deterministic corner-cut
+      // (merge_bodies_with_bend wantAll path), certain bend-axis
+      // orientations (notably testcube OUTER pair 1 = -X+Z, axis along
+      // +Y) cause this BFS to pick a seam edge that produces a panel
+      // rotation that's NOT a clean 90°. The neighbour panel projects
+      // to a flat-extent ~52 mm short of expected (347 mm vs ~395 mm
+      // for two 200 mm walls).
+      //
+      // Investigation (2026-05-31) confirmed it's NOT in:
+      //   – the merge geometry (body bbox covers full extent)
+      //   – gatherSkin (correct faces + vertex extents found)
+      //   – panel-pair matching (correct count and locations)
+      //
+      // The issue is in this BFS — specifically the seam-edge that
+      // findPanelConnection picks for the corner-cut topology (which
+      // has a cylindrical face at the bend rather than a clean edge),
+      // and/or the rotation-angle computation below.
+      //
+      // Workaround until properly fixed: harness CASE 4 uses a 60 mm
+      // long-dim tolerance.  Other orientations work correctly (within
+      // ~7 mm of expected).
+      // ────────────────────────────────────────────────────────────────
       std::vector<int> q;
       q.push_back(0);
       visited[0] = true;
