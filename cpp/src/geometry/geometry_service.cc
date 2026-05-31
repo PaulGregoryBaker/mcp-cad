@@ -5765,51 +5765,37 @@ private:
         filletInput = theSolid;
       }
 
+      // ── PLAN B: DETERMINISTIC CORNER-CUT BEND ─────────────────────────
+      //
+      // Instead of searching the fused topology for an edge to fillet
+      // (fragile; OCCT MakeFillet has many failure modes for borderline
+      // thickness/radius ratios, skewed inputs, and chained merges),
+      // construct the bend analytically:
+      //
+      //   1. Find each input's "outer" planar face = the largest face whose
+      //      centroid sits farthest from the other input's centroid. This
+      //      reliably picks the face facing AWAY from the bend, regardless
+      //      of orientation.
+      //   2. Compute the bend axis = intersection line of the two outer
+      //      planes. Well-defined for perpendicular panels.
+      //   3. Compute the bend extent = overlap of the two inputs projected
+      //      onto the axis.
+      //   4. Build a corner-cut solid: a (R × R × extent) box positioned at
+      //      the outside corner along the bend axis, MINUS a cylinder of
+      //      radius R tangent to both outer planes. This is exactly the
+      //      material a fillet would remove.
+      //   5. Subtract the corner-cut from the fused body.
+      //
+      // Result: sharp inside corner (panels meet flush at the inner edge),
+      // rounded outside corner of radius R — matching standard sheet metal
+      // bend geometry.
+      //
+      // For explicit edge IDs (target_edges != ["all"]) we still use the
+      // legacy MakeFillet path for back-compat with callers that know
+      // which edges they want filleted.
       try {
-        BRepFilletAPI_MakeFillet filletMaker(filletInput);
-        bool addedAny = false;
-        int candidateEdges = 0;
-
-        // Pre-build edge -> adjacent faces map once.
-        TopTools_IndexedDataMapOfShapeListOfShape efMap;
-        TopExp::MapShapesAndAncestors(filletInput, TopAbs_EDGE, TopAbs_FACE, efMap);
-
         if (wantAll) {
-          // SEAM SELECTION (target_edges == ["all"]):
-          //
-          // The bend seam is the external corner edge where the two merged
-          // bodies' outer faces meet.  Two-pass strategy:
-          //
-          //   PASS 1 — strict 0.1 mm proximity + normal-match.
-          //     Normal case: panels overlap volumetrically at the corner
-          //     (cube walls extracted by split_by_bends now preserve their
-          //     full extent — see the matching split fix).  The seam edge
-          //     sits right on both inputs, and we require the edge's
-          //     adjacent face normals to match the inputs' outward normals
-          //     so we don't accidentally pick an interior side edge of one
-          //     panel that happens to lie near both inputs.
-          //
-          //   PASS 2 — relaxed proximity (~2× wall thickness) + normal-match.
-          //     Fallback for inputs that aren't perfectly touching (e.g.
-          //     after close_gap left a sub-mm residual, or split-trimmed
-          //     panels from an older shell): the corner edge sits one wall
-          //     thickness from one input.  The normal-match guard prevents
-          //     picking a wrong side-edge.
-
-          // Pick each input's "outer" face: the largest planar face whose
-          // centroid sits FARTHEST from the OTHER input's centroid.  This
-          // reliably picks the face facing away from the bend (away from the
-          // other panel) — necessary because thin slabs have two equal-area
-          // candidates (inner/outer) and which one OCCT visits first is not
-          // stable.  Inner-cube panels were getting their inner-facing face
-          // picked, which inverted the seam normal-match and selected an
-          // inside-corner edge instead of the outer bend corner.
-          //
-          // We capture BOTH the outward normal AND the face's plane — the
-          // plane lets us compute the intended bend axis analytically (it's
-          // the intersection line of the two inputs' outer planes), which
-          // gives a far more reliable edge selection than searching by
-          // distance/dihedral/normal heuristics alone.
+          // ── 1. Outer faces of each input ──
           GProp_GProps centA, centB;
           BRepGProp::VolumeProperties(inputA, centA);
           BRepGProp::VolumeProperties(inputB, centB);
@@ -5839,105 +5825,183 @@ private:
             }
             return ok;
           };
+
           gp_Vec nInA, nInB;
           gp_Pln planeA, planeB;
-          bool gotA = outerFace(inputA, cB, nInA, planeA);
-          bool gotB = outerFace(inputB, cA, nInB, planeB);
-
-          // Compute the intended bend axis: intersection line of the two
-          // inputs' outer-face planes. For perpendicular panels this gives a
-          // single unambiguous line. The correct seam edge is the one closest
-          // to this line — far more reliable than length-based tiebreaks.
-          gp_Lin bendAxis;
-          bool haveBendAxis = false;
-          if (gotA && gotB) {
-            if (std::abs(nInA.Dot(nInB)) < 0.95) {
-              IntAna_QuadQuadGeo planeInt(planeA, planeB,
-                                          Precision::Angular(), Precision::Confusion());
-              if (planeInt.IsDone() && planeInt.TypeInter() == IntAna_Line) {
-                bendAxis = planeInt.Line(1);
-                haveBendAxis = true;
-              }
-            }
+          if (!outerFace(inputA, cB, nInA, planeA) || !outerFace(inputB, cA, nInB, planeB)) {
+            throw GeometryError("GE_MERGE_BEND_AXIS_AMBIGUOUS",
+              "Could not find outer planar faces on both inputs. Each input must "
+              "have at least one planar face to act as the panel skin.",
+              false, "");
           }
 
-          double inputThickness = 0.0;
-          {
-            Bnd_Box bA, bB;
-            BRepBndLib::AddOptimal(inputA, bA);
-            BRepBndLib::AddOptimal(inputB, bB);
-            double xA1,yA1,zA1,xA2,yA2,zA2,xB1,yB1,zB1,xB2,yB2,zB2;
-            bA.Get(xA1,yA1,zA1,xA2,yA2,zA2);
-            bB.Get(xB1,yB1,zB1,xB2,yB2,zB2);
-            double minA = std::min({xA2-xA1, yA2-yA1, zA2-zA1});
-            double minB = std::min({xB2-xB1, yB2-yB1, zB2-zB1});
-            inputThickness = std::max(minA, minB);
+          // ── 2. Bend axis = intersection of outer planes ──
+          if (std::abs(nInA.Dot(nInB)) > 0.95) {
+            throw GeometryError("GE_MERGE_BEND_AXIS_AMBIGUOUS",
+              "Outer faces of the two inputs are parallel (within 18°). The panels "
+              "must meet at a non-zero angle so a bend axis can be defined.",
+              false, "");
           }
+          IntAna_QuadQuadGeo planeInt(planeA, planeB,
+                                      Precision::Angular(), Precision::Confusion());
+          if (!planeInt.IsDone() || planeInt.TypeInter() != IntAna_Line) {
+            throw GeometryError("GE_MERGE_BEND_AXIS_AMBIGUOUS",
+              "Failed to intersect the inputs' outer planes — bend axis could not "
+              "be determined.",
+              false, "");
+          }
+          gp_Lin bendAxis = planeInt.Line(1);
 
-          auto findSeam = [&](double proxTol) -> TopoDS_Edge {
-            TopoDS_Edge best;
-            double bestScore = 1e30;  // lower is better
-            TopExp_Explorer ee(filletInput, TopAbs_EDGE);
-            for (; ee.More(); ee.Next()) {
-              const TopoDS_Edge& e = TopoDS::Edge(ee.Current());
-              if (!efMap.Contains(e)) continue;
-              const TopTools_ListOfShape& adj = efMap.FindFromKey(e);
-              if (adj.Extent() != 2) continue;
-              auto it = adj.cbegin();
-              TopoDS_Face fA = TopoDS::Face(*it++);
-              TopoDS_Face fB = TopoDS::Face(*it);
-              gp_Vec nFA = faceOutwardNormal(fA);
-              gp_Vec nFB = faceOutwardNormal(fB);
-              double cosD = std::max(-1.0, std::min(1.0, nFA.Dot(nFB)));
-              double dihedralDeg = std::acos(cosD) * 180.0 / M_PI;
-              if (dihedralDeg < 5.0 || dihedralDeg > 175.0) continue;
+          // ── 3. Bend extent = overlap of inputs projected onto axis ──
+          gp_Vec axisDir(bendAxis.Direction());
+          gp_Pnt axisOrigin = bendAxis.Location();
 
-              GProp_GProps prop;
-              BRepGProp::LinearProperties(e, prop);
-              double len = prop.Mass();
-              if (len < 10.0) continue;
-
-              BRepExtrema_DistShapeShape dA(e, inputA);
-              BRepExtrema_DistShapeShape dB(e, inputB);
-              if (!dA.IsDone() || !dB.IsDone()) continue;
-              if (dA.Value() > proxTol || dB.Value() > proxTol) continue;
-
-              double nm = std::max(
-                nFA.Dot(nInA) + nFB.Dot(nInB),
-                nFA.Dot(nInB) + nFB.Dot(nInA));
-              if (nm < 1.5) continue;
-
-              // Score = distance from edge midpoint to the analytical bend
-              // axis (lower = better, ie. closer to the intended bend line).
-              // Fall back to inverse length when no bend axis is available.
-              double score;
-              if (haveBendAxis) {
-                Standard_Real fp, lp;
-                Handle(Geom_Curve) cc = BRep_Tool::Curve(e, fp, lp);
-                if (cc.IsNull()) continue;
-                gp_Pnt mid = cc->Value((fp + lp) * 0.5);
-                score = bendAxis.Distance(mid);
-              } else {
-                score = 1.0 / std::max(1.0, len);
-              }
-
-              if (score < bestScore) { bestScore = score; best = e; candidateEdges++; }
+          auto axisRange = [&](const TopoDS_Shape& body) -> std::pair<double, double> {
+            double lo = 1e30, hi = -1e30;
+            for (TopExp_Explorer vx(body, TopAbs_VERTEX); vx.More(); vx.Next()) {
+              gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(vx.Current()));
+              double t = gp_Vec(axisOrigin, p).Dot(axisDir);
+              lo = std::min(lo, t);
+              hi = std::max(hi, t);
             }
-            return best;
+            return {lo, hi};
           };
+          auto rangeA = axisRange(inputA);
+          auto rangeB = axisRange(inputB);
+          double extentLo = std::max(rangeA.first, rangeB.first);
+          double extentHi = std::min(rangeA.second, rangeB.second);
+          double extent = extentHi - extentLo;
 
-          TopoDS_Edge bestEdge = findSeam(0.1);
-          if (bestEdge.IsNull()) {
-            double relaxed = std::max(0.5, 2.0 * inputThickness);
-            bestEdge = findSeam(relaxed);
+          if (extent < 5.0) {
+            std::ostringstream msg;
+            msg << "GE_MERGE_BEND_EXTENT_TOO_SHORT: Panels overlap only "
+                << std::fixed << std::setprecision(2) << extent
+                << " mm along the bend axis (need at least 5 mm). "
+                << "The panels touch only at a corner or short edge segment.";
+            throw GeometryError("GE_MERGE_BEND_EXTENT_TOO_SHORT", msg.str(), false, "");
           }
 
-          if (!bestEdge.IsNull()) {
-            filletMaker.Add(bendRadiusMm, bestEdge);
-            addedAny = true;
+          // ── 3a. Panel thickness check ──
+          // User policy: imported geometry may have slightly mismatched
+          // thicknesses; correct silently if mismatch is within ~3 mm,
+          // throw if it's beyond that (different stock can't be bent
+          // cleanly as one piece).
+          auto panelThickness = [](const TopoDS_Shape& body) -> double {
+            Bnd_Box bb;
+            BRepBndLib::AddOptimal(body, bb);
+            double x1,y1,z1,x2,y2,z2;
+            bb.Get(x1,y1,z1,x2,y2,z2);
+            return std::min({x2-x1, y2-y1, z2-z1});
+          };
+          double tA = panelThickness(inputA);
+          double tB = panelThickness(inputB);
+          if (std::abs(tA - tB) > 3.0) {
+            std::ostringstream msg;
+            msg << "GE_MERGE_THICKNESS_MISMATCH: Panel thicknesses differ by "
+                << std::fixed << std::setprecision(2) << std::abs(tA - tB)
+                << " mm (panelA=" << tA << " mm, panelB=" << tB << " mm). "
+                << "Max 3 mm mismatch tolerated for clean bend construction.";
+            throw GeometryError("GE_MERGE_THICKNESS_MISMATCH", msg.str(), false, "");
           }
+          double effectiveThickness = std::max(tA, tB);
+
+          // Bend radius must fit within the panel thickness so the corner
+          // cut doesn't slice through to the inside surface. Allow a small
+          // overshoot (5%) for floating-point slop.
+          if (bendRadiusMm > effectiveThickness * 1.05) {
+            std::ostringstream msg;
+            msg << "GE_MERGE_RADIUS_TOO_LARGE: Bend radius " << bendRadiusMm
+                << " mm exceeds panel thickness " << effectiveThickness
+                << " mm. The corner cut would slice through to the panel interior. "
+                << "Try a smaller bend radius (<= thickness).";
+            throw GeometryError("GE_MERGE_RADIUS_TOO_LARGE", msg.str(), false, "");
+          }
+
+          // ── 4. Build local frame and corner-cut solid ──
+          // dirA / dirB = unit vectors from the bend axis into each panel
+          gp_Vec dirA = -nInA;
+          gp_Vec dirB = -nInB;
+
+          // Align axisDir so that axisDir × dirA = dirB (right-handed local
+          // frame). The intersection line direction is arbitrary; we pick
+          // the orientation that makes the local box axes consistent.
+          gp_Vec computedDirB = axisDir.Crossed(dirA);
+          if (computedDirB.Dot(dirB) < 0) {
+            axisDir = -axisDir;
+          }
+
+          // Origin: start of the bend extent on the axis. Box extends from
+          // this origin INTO the corner overlap (R into each panel) and
+          // ALONG the axis (over the full bend extent).
+          gp_Pnt cornerOrigin = axisOrigin.Translated(axisDir * extentLo);
+
+          // Box: BRepPrimAPI_MakeBox(ax, dx, dy, dz) builds the box with
+          //   dx along ax.XDirection(), dy along ax.YDirection(), dz along ax.Direction().
+          // We set ax = (cornerOrigin, axisDir, dirA) so:
+          //   ax X-direction = dirA  → box dx=R goes into panel A
+          //   ax Y-direction = axisDir × dirA = dirB → box dy=R goes into panel B
+          //   ax Z-direction = axisDir → box dz=extent goes along bend axis
+          gp_Ax2 boxAxes(cornerOrigin,
+                         gp_Dir(axisDir),
+                         gp_Dir(dirA));
+          TopoDS_Solid box;
+          try {
+            box = BRepPrimAPI_MakeBox(boxAxes, bendRadiusMm, bendRadiusMm, extent).Solid();
+          } catch (const Standard_Failure& e) {
+            std::ostringstream msg;
+            msg << "GE_MERGE_WEDGE_FAILED: failed to construct corner-cut box at "
+                << "radius=" << bendRadiusMm << " extent=" << extent
+                << ": " << e.GetMessageString();
+            throw GeometryError("GE_MERGE_WEDGE_FAILED", msg.str(), true, "rollback");
+          }
+
+          // Cylinder centered at (R, R, 0) in local coords (inside the box,
+          // tangent to both planes at (R, 0) and (0, R)). Sweep along axis
+          // for the full bend extent.
+          gp_Pnt cylBase = cornerOrigin
+              .Translated(dirA * bendRadiusMm)
+              .Translated(dirB * bendRadiusMm);
+          gp_Ax2 cylAxes(cylBase, gp_Dir(axisDir));
+          TopoDS_Solid cyl;
+          try {
+            cyl = BRepPrimAPI_MakeCylinder(cylAxes, bendRadiusMm, extent).Solid();
+          } catch (const Standard_Failure& e) {
+            std::ostringstream msg;
+            msg << "GE_MERGE_WEDGE_FAILED: failed to construct corner-cut cylinder: "
+                << e.GetMessageString();
+            throw GeometryError("GE_MERGE_WEDGE_FAILED", msg.str(), true, "rollback");
+          }
+
+          // Corner-cut material = box - cyl (the small region near the
+          // outside corner that should NOT be in the final body).
+          BRepAlgoAPI_Cut cornerCutOp(box, cyl);
+          cornerCutOp.Build();
+          if (!cornerCutOp.IsDone() || cornerCutOp.Shape().IsNull()) {
+            throw GeometryError("GE_MERGE_WEDGE_FAILED",
+              "Failed to compute corner-cut geometry (box - cylinder). The bend "
+              "radius or panel geometry may be degenerate.",
+              true, "rollback");
+          }
+          TopoDS_Shape cornerCut = cornerCutOp.Shape();
+
+          // ── 5. Apply the corner cut to the fused body ──
+          BRepAlgoAPI_Cut applyOp(filletInput, cornerCut);
+          applyOp.Build();
+          if (!applyOp.IsDone() || applyOp.Shape().IsNull()) {
+            throw GeometryError("GE_MERGE_FAILED",
+              "Failed to subtract corner-cut from the fused body. The fused body "
+              "may have non-manifold topology at the bend region.",
+              true, "rollback");
+          }
+          result = applyOp.Shape();
         } else {
-          // Explicit edge IDs requested — fillet exactly those.
+          // ── EXPLICIT EDGES PATH (back-compat) ──
+          // Caller supplied specific edge IDs; use OCCT MakeFillet to fillet
+          // exactly those. Less robust than the deterministic path, but the
+          // caller has specified which edges they want.
+          BRepFilletAPI_MakeFillet filletMaker(filletInput);
+          bool addedAny = false;
+          int candidateEdges = 0;
           TopExp_Explorer edgeExp(filletInput, TopAbs_EDGE);
           for (; edgeExp.More(); edgeExp.Next()) {
             const TopoDS_Edge& e = TopoDS::Edge(edgeExp.Current());
@@ -5947,48 +6011,34 @@ private:
               candidateEdges++;
             }
           }
+          if (!addedAny) {
+            throw GeometryError("GE_MERGE_NO_SEAM_EDGES",
+              "None of the specified target_edges were found in the fused body.",
+              false, "");
+          }
+          try {
+            filletMaker.Build();
+          } catch (const Standard_Failure& e) {
+            std::ostringstream msg;
+            msg << "GE_MERGE_FILLET_FAILED: OCCT fillet build threw on " << candidateEdges
+                << " edge(s) at radius " << bendRadiusMm << " mm: " << e.GetMessageString();
+            throw GeometryError("GE_MERGE_FILLET_FAILED", msg.str(), true, "rollback");
+          }
+          if (!filletMaker.IsDone() || filletMaker.Shape().IsNull()) {
+            std::ostringstream msg;
+            msg << "GE_MERGE_FILLET_FAILED: OCCT fillet build did not complete on "
+                << candidateEdges << " edge(s) at radius " << bendRadiusMm << " mm.";
+            throw GeometryError("GE_MERGE_FILLET_FAILED", msg.str(), true, "rollback");
+          }
+          result = filletMaker.Shape();
         }
-
-        if (!addedAny) {
-          std::ostringstream msg;
-          msg << "GE_MERGE_NO_SEAM_EDGES: No joint edges found between the two bodies. "
-              << "The bodies appear touching but share no edge >= 10 mm at the merge boundary. "
-              << "Check whether the bodies actually meet at a seam or are only point-touching.";
-          throw GeometryError("GE_MERGE_NO_SEAM_EDGES", msg.str(), false, "");
-        }
-
-        // For wantAll we add only the single longest seam edge; explicit edge
-        // mode adds each requested edge. The diagnostic count below reflects
-        // what was actually passed to the fillet builder.
-        int filletedEdges = (wantAll ? (addedAny ? 1 : 0) : candidateEdges);
-
-        try {
-          filletMaker.Build();
-        } catch (const Standard_Failure& e) {
-          std::ostringstream msg;
-          msg << "GE_MERGE_FILLET_FAILED: OCCT fillet build threw on " << filletedEdges
-              << " seam edge(s) at radius " << bendRadiusMm << " mm: " << e.GetMessageString()
-              << ". Common causes: bend radius >= panel thickness, the seam has high curvature, "
-              << "or the bodies were already merged once (chained merges accumulate complex topology).";
-          throw GeometryError("GE_MERGE_FILLET_FAILED", msg.str(), true, "rollback");
-        }
-        if (!filletMaker.IsDone() || filletMaker.Shape().IsNull()) {
-          std::ostringstream msg;
-          msg << "GE_MERGE_FILLET_FAILED: OCCT fillet build did not complete on " << filletedEdges
-              << " seam edge(s) at radius " << bendRadiusMm
-              << " mm (IsDone=false or empty shape). The bend radius may be too large for "
-                 "the panel thickness (try radius < thickness), or the seam topology is "
-                 "unsuitable for filleting.";
-          throw GeometryError("GE_MERGE_FILLET_FAILED", msg.str(), true, "rollback");
-        }
-        result = filletMaker.Shape();
       } catch (const GeometryError&) {
-        throw;  // re-throw structured errors verbatim
+        throw;
       } catch (const Standard_Failure& e) {
         std::ostringstream msg;
-        msg << "GE_MERGE_FILLET_FAILED: OCCT exception while preparing fillet for merge: "
+        msg << "GE_MERGE_FAILED: OCCT exception during bend construction: "
             << e.GetMessageString();
-        throw GeometryError("GE_MERGE_FILLET_FAILED", msg.str(), true, "rollback");
+        throw GeometryError("GE_MERGE_FAILED", msg.str(), true, "rollback");
       }
 
       // BRepFilletAPI_MakeFillet().Shape() can return a COMPOUND wrapping the
