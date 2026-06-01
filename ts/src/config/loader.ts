@@ -15,11 +15,20 @@ import type { EnvironmentalContext } from '../manufacturing/environmental';
 
 // ─── Config aggregate type ──────────────────────────────────────────────────
 
+export interface PersistenceConfig {
+  driver: 'dolt';
+  host: string;
+  port: number;
+  database: string;
+  data_dir: string;
+}
+
 export interface ManufacturingConfig {
   materials: MaterialSpec[];
   tooling: ToolingCapability;
   logistics: LogisticsConstraints;
   environmental: EnvironmentalContext;
+  persistence?: PersistenceConfig;
 }
 
 // ─── Zod schemas ─────────────────────────────────────────────────────────────
@@ -80,11 +89,20 @@ const EnvironmentalSchema = z.object({
   high_vibration: z.boolean(),
 });
 
+const PersistenceSchema = z.object({
+  driver: z.literal('dolt'),
+  host: z.string().min(1).default('127.0.0.1'),
+  port: z.number().int().positive().default(3306),
+  database: z.string().min(1),
+  data_dir: z.string().min(1).default('./state/dolt'),
+});
+
 const ConfigSchema = z.object({
   materials: z.array(MaterialSchema).min(1),
   tooling: ToolingSchema,
   logistics: LogisticsSchema,
   environmental: EnvironmentalSchema,
+  persistence: PersistenceSchema.optional(),
 });
 
 // ─── Config validation error ──────────────────────────────────────────────────
@@ -160,6 +178,18 @@ function mapEnvironmental(raw: z.infer<typeof EnvironmentalSchema>): Environment
   };
 }
 
+function mapPersistence(
+  raw: z.infer<typeof PersistenceSchema>,
+): PersistenceConfig {
+  return {
+    driver: raw.driver,
+    host: raw.host,
+    port: raw.port,
+    database: raw.database,
+    data_dir: raw.data_dir,
+  };
+}
+
 /**
  * Loads and validates config.yaml.
  * Throws ConfigValidationError if the schema is invalid.
@@ -179,5 +209,6 @@ export function loadConfig(configPath: string): ManufacturingConfig {
     tooling: mapTooling(data.tooling),
     logistics: mapLogistics(data.logistics),
     environmental: mapEnvironmental(data.environmental),
+    persistence: data.persistence ? mapPersistence(data.persistence) : undefined,
   };
 }

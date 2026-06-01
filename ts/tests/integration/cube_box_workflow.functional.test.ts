@@ -580,7 +580,7 @@ describe('Cube Box Sheet Metal Workflow', () => {
     expect(result.detected_mode).toBe('thin_solid');
     expect(result.rollback_token).toMatch(/^snap-\d+$/);
     expect(result.mesh_urls[0]).toMatch(/\/mesh\/cube-solid-panel-1\.glb$/);
-    expect(mock.splitBodyByBends).toHaveBeenCalledWith('cube-solid', 1.0, 5.0, 1.0, 0);
+    expect(mock.splitBodyByBends).toHaveBeenCalledWith('cube-solid', 1.0, 5.0, 1.0, 1);
   });
 
   // ── split_body_by_bends: surface mode returns detected_mode 'surface' ─────────
@@ -617,7 +617,7 @@ describe('Cube Box Sheet Metal Workflow', () => {
     expect(result.rollback_token).toBe('snap-surface');
     expect(result.mesh_urls[0]).toMatch(/\/mesh\/surface-solid-panel-1\.glb$/);
     // Verify defaultThicknessMm was forwarded to the binding
-    expect(mock.splitBodyByBends).toHaveBeenCalledWith('surface-solid', 1.0, 5.0, 2.0, 0);
+    expect(mock.splitBodyByBends).toHaveBeenCalledWith('surface-solid', 1.0, 5.0, 2.0, 1);
   });
 
   // ── split_body_by_bends: protrusions returned separately ─────────────────────

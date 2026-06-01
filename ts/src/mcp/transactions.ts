@@ -11,6 +11,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { ErrorCodes, throwError } from './errors';
+import type { SemanticPersistencePort } from '../semantic/port';
 
 export type TransactionId = string; // `transaction://<uuid-v4>`
 export type SnapshotId = string;
@@ -38,8 +39,19 @@ export interface Transaction {
 export class TransactionRegistry {
   private transactions: Map<TransactionId, Transaction> = new Map();
   private activeId: TransactionId | undefined;
+  private port: SemanticPersistencePort | null = null;
 
-  begin(label: string, snapshotId: SnapshotId, product?: string): Transaction {
+  /** Wire in a Dolt port once session.ts has initialised it (T026). */
+  setPort(port: SemanticPersistencePort): void {
+    this.port = port;
+  }
+
+  /** Dolt branch name for a transaction id (strips the URI scheme prefix). */
+  private branchName(id: TransactionId): string {
+    return `txn/${id.replace('transaction://', '')}`;
+  }
+
+  async begin(label: string, snapshotId: SnapshotId, product?: string): Promise<Transaction> {
     if (this.activeId !== undefined) {
       const active = this.transactions.get(this.activeId);
       throwError(
@@ -63,22 +75,76 @@ export class TransactionRegistry {
     };
     this.transactions.set(id, txn);
     this.activeId = id;
+
+    if (this.port) {
+      try {
+        await this.port.checkoutBranch(this.branchName(id), true);
+        await this.port.insertTransaction({
+          id,
+          label,
+          product: product ?? '',
+          state: 'active',
+          started_at: new Date(),
+        });
+      } catch (err) {
+        this.transactions.delete(id);
+        this.activeId = undefined;
+        throwError(
+          ErrorCodes.PERSISTENCE_UNAVAILABLE,
+          `Failed to create Dolt branch for transaction ${id}: ${String(err)}`,
+          true,
+          'begin_transaction',
+        );
+      }
+    }
+
     return txn;
   }
 
-  commit(id: TransactionId): Transaction {
+  async commit(id: TransactionId): Promise<Transaction> {
     const txn = this.requireActive(id);
     txn.state = 'committed';
     txn.endedAt = Date.now();
     this.activeId = undefined;
+
+    if (this.port) {
+      try {
+        await this.port.updateTransactionState(id, 'committed', new Date(txn.endedAt!));
+        await this.port.mergeBranch(this.branchName(id));
+        await this.port.deleteBranch(this.branchName(id));
+      } catch (err) {
+        throwError(
+          ErrorCodes.PERSISTENCE_COMMIT_FAILED,
+          `Dolt commit failed for transaction ${id}: ${String(err)}`,
+          true,
+          'commit_transaction',
+        );
+      }
+    }
+
     return txn;
   }
 
-  rollback(id: TransactionId): Transaction {
+  async rollback(id: TransactionId): Promise<Transaction> {
     const txn = this.requireActive(id);
     txn.state = 'rolled_back';
     txn.endedAt = Date.now();
     this.activeId = undefined;
+
+    if (this.port) {
+      try {
+        await this.port.updateTransactionState(id, 'rolled_back', new Date(txn.endedAt!));
+        await this.port.deleteBranch(this.branchName(id), true);
+      } catch (err) {
+        throwError(
+          ErrorCodes.PERSISTENCE_UNAVAILABLE,
+          `Dolt rollback failed for transaction ${id}: ${String(err)}`,
+          true,
+          'rollback_transaction',
+        );
+      }
+    }
+
     return txn;
   }
 

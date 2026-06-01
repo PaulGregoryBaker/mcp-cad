@@ -15,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <array>
 
 #include "topology_graph.hpp"
 #include "snapshot.hpp"
@@ -70,8 +71,11 @@ struct UnfoldResult {
   double                          flatHeightMm;
   double                          kFactorUsed;
   int                             bendCount;
+  bool                            validated = false;
+  double                          detectedThickness = 0.0;
   SnapshotId                      rollbackToken;
   std::vector<ShapeHistoryRecord> shapeHistory;
+  ShellId                         improvedPartId;   // curved-bend rebuild; empty on failure
 };
 
 struct DxfExportResult {
@@ -79,6 +83,28 @@ struct DxfExportResult {
   int         wireCount;
   double      bboxWidthMm;
   double      bboxHeightMm;
+};
+
+struct SheetMetalValidationResult {
+  bool                     isValid          = false;
+  double                   nominalThickness = 0.0;
+  bool                     canFlatten       = false;
+  std::vector<std::string> validationErrors;
+};
+
+struct GapSewResult {
+  ShellId                         solidId;
+  bool                            sewComplete      = false;
+  double                          maxGapFound      = 0.0;
+  SnapshotId                      rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+struct CurvedRebuildResult {
+  ShellId                         solidId;
+  int                             bendsReplaced    = 0;
+  SnapshotId                      rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
 };
 
 struct NestPlacement {
@@ -202,19 +228,173 @@ struct MergeBodyResult {
   std::vector<ShapeHistoryRecord> shapeHistory;
 };
 
+struct CloseGapResult {
+  ShellId    partBId;       // updated shell ID (same ID, shape translated in-place)
+  double     gapClosedMm;   // how much gap was closed (0 if already touching)
+  SnapshotId rollbackToken;
+};
+
 struct BBox3D {
   double xMin, yMin, zMin;
   double xMax, yMax, zMax;
 };
 
+// Tracks which panel each protrusion was cut from.
+// parentPanelId is empty for protrusions extracted before any panel cut (pre-cut pass).
+struct ProtrusionParent {
+  ShellId protrusionId;
+  ShellId parentPanelId;  // empty string → no parent panel (pre-cut extraction)
+};
+
 struct DecomposedByBendsResult {
-  std::vector<ShellId>          panelIds;        // flat solid panels
-  std::vector<BBox3D>           panelBboxes;     // AABB for each panel (parallel to panelIds)
-  std::vector<ShellId>          protrusionIds;   // flanges / tabs extracted before splitting
-  std::vector<BBox3D>           protrusionBboxes; // AABB for each protrusion
+  std::vector<ShellId>          panelIds;           // flat solid panels
+  std::vector<BBox3D>           panelBboxes;        // AABB for each panel (parallel to panelIds)
+  std::vector<ShellId>          protrusionIds;      // flanges / tabs extracted from the solid
+  std::vector<BBox3D>           protrusionBboxes;   // AABB for each protrusion
+  std::vector<ProtrusionParent> protrusionParents;  // parent panel for each protrusion
   SnapshotId                    rollbackToken;
-  std::string                   detectedMode;    // "surface" | "thin_solid"
-  std::vector<ShapeHistoryRecord> shapeHistory;  // face-level lineage records
+  std::string                   detectedMode;       // "surface" | "thin_solid"
+  std::vector<ShapeHistoryRecord> shapeHistory;     // face-level lineage records
+};
+
+struct RemoveProtrusionsResult {
+  ShellId              cleanedPartId;   // same ID as input, geometry updated in-place
+  std::vector<ShellId> protrusionIds;  // each extracted protrusion as a new shell
+  std::vector<BBox3D>  protrusionBboxes;
+  SnapshotId           rollbackToken;
+};
+
+// ── Assembly IDs ──────────────────────────────────────────────────────────────
+using AssemblyId  = std::string;
+using ComponentId = std::string;
+
+// ── Boolean results ───────────────────────────────────────────────────────────
+struct FuseResult {
+  ShellId solidId;
+  bool disjoint;
+  SnapshotId rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+struct CutResult {
+  ShellId solidId;
+  SnapshotId rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+struct IntersectResult {
+  ShellId solidId;
+  SnapshotId rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+// ── Interrogation results ─────────────────────────────────────────────────────
+struct BoundingBoxResult {
+  double xMin, yMin, zMin;
+  double xMax, yMax, zMax;
+};
+
+struct MassPropertiesResult {
+  std::optional<double> volume;
+  std::optional<double> surfaceArea;
+  std::optional<std::array<double,3>> centroid;
+  std::optional<std::array<double,9>> inertiaTensor;
+};
+
+struct MeasureResult {
+  double value;
+  std::string measurementType;
+};
+
+struct ExploreResult {
+  std::vector<std::string> entityIds;
+};
+
+// ── Transform result ──────────────────────────────────────────────────────────
+struct TransformResult {
+  ShellId solidId;
+  SnapshotId rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+// ── Direct edit results ───────────────────────────────────────────────────────
+struct FilletResult {
+  ShellId solidId;
+  SnapshotId rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+struct ChamferResult {
+  ShellId solidId;
+  SnapshotId rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+struct SimplifyResult {
+  ShellId solidId;
+  SnapshotId rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+struct HealExResult {
+  ShellId solidId;
+  bool healComplete;
+  std::vector<std::string> remainingIssues;
+  SnapshotId rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+struct OffsetShapeResult {
+  ShellId solidId;
+  SnapshotId rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+struct DeleteFaceResult {
+  std::vector<ShellId> solidIds;
+  SnapshotId rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+// ── Sewing result ─────────────────────────────────────────────────────────────
+struct SewResult {
+  ShellId solidId;
+  bool sewComplete;
+  std::vector<std::string> freeEdges;
+  SnapshotId rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+// ── Assembly results ──────────────────────────────────────────────────────────
+struct CreateAssemblyResult {
+  AssemblyId assemblyId;
+};
+
+struct AddInstanceResult {
+  ComponentId componentId;
+  SnapshotId rollbackToken;
+};
+
+struct LocationMatrix {
+  std::array<double,16> m;
+};
+
+struct MateRigidResult {
+  ComponentId componentId;
+  LocationMatrix locationMatrix;
+  SnapshotId rollbackToken;
+};
+
+struct AssemblyNode {
+  ComponentId componentId;
+  std::string shapeId;
+  LocationMatrix locationMatrix;
+  std::vector<AssemblyNode> children;
+};
+
+struct ListAssemblyResult {
+  AssemblyId assemblyId;
+  AssemblyNode root;
 };
 
 // ─── Error code constants (Feature 003-split-by-bends-enhanced) ─────────────
@@ -223,6 +403,24 @@ constexpr const char* GE_DECOMPOSE_THICKNESS_MISMATCH     = "GE_DECOMPOSE_THICKN
 constexpr const char* GE_DECOMPOSE_EXTRUDE_FAILED         = "GE_DECOMPOSE_EXTRUDE_FAILED";
 constexpr const char* GE_DECOMPOSE_CUT_FAILED             = "GE_DECOMPOSE_CUT_FAILED";
 constexpr const char* GE_DECOMPOSE_PROTRUSION_EXTRACT_FAILED = "GE_DECOMPOSE_PROTRUSION_EXTRACT_FAILED";
+
+// ─── Error codes — Feature 006-geometry-primitives ────────────────────────────
+constexpr const char* GE_BOOLEAN_EMPTY_RESULT      = "GE_BOOLEAN_EMPTY_RESULT";
+constexpr const char* GE_ALIGN_UNSUPPORTED         = "GE_ALIGN_UNSUPPORTED";
+constexpr const char* GE_SCALE_NON_UNIFORM         = "GE_SCALE_NON_UNIFORM";
+constexpr const char* GE_FILLET_TOO_LARGE          = "GE_FILLET_TOO_LARGE";
+constexpr const char* GE_CHAMFER_TOO_LARGE         = "GE_CHAMFER_TOO_LARGE";
+constexpr const char* GE_HEAL_INCOMPLETE           = "GE_HEAL_INCOMPLETE";
+constexpr const char* GE_SEW_INCOMPLETE            = "GE_SEW_INCOMPLETE";
+constexpr const char* GE_ASSEMBLY_MATE_UNSUPPORTED = "GE_ASSEMBLY_MATE_UNSUPPORTED";
+constexpr const char* GE_ASSEMBLY_CROSS_DOCUMENT   = "GE_ASSEMBLY_CROSS_DOCUMENT";
+
+// ─── Error codes — Feature 007-sheet-metal-unfolding ──────────────────────────
+constexpr const char* GE_INVALID_SHEET_METAL      = "GE_INVALID_SHEET_METAL";
+constexpr const char* GE_UNFOLD_CYCLE_DETECTED    = "GE_UNFOLD_CYCLE_DETECTED";
+constexpr const char* GE_UNFOLD_T_JUNCTION        = "GE_UNFOLD_T_JUNCTION";
+constexpr const char* GE_UNFOLD_SEWING_FAILED      = "GE_UNFOLD_SEWING_FAILED";
+constexpr const char* GE_UNFOLD_REBUILD_FAILED     = "GE_UNFOLD_REBUILD_FAILED";
 
 // ─── GeometryService interface ───────────────────────────────────────────────
 
@@ -316,6 +514,10 @@ public:
       const std::vector<std::string>& targetEdges,
       double                          bendRadiusMm) = 0;
 
+  virtual CloseGapResult closeGap(
+      const ShellId& partAId,
+      const ShellId& partBId) = 0;
+
   // ── Extended direct modeling ───────────────────────────────────────────────
   virtual ExtendFaceResult extendFaceToTarget(
       const ShellId&      partId,
@@ -345,18 +547,65 @@ public:
   // Decomposes a shell into planar panels by splitting at every bend edge.
   // Mode is auto-detected: thin-solid (wall ≤ maxThicknessMm) uses cutting planes
   // to preserve original wall thickness; surface/thick models extrude each face
-  // group by defaultThicknessMm. Protrusions are returned separately.
+  // group by defaultThicknessMm. Protrusions are returned separately with parent tracking.
   virtual DecomposedByBendsResult splitBodyByBends(
       const ShellId& partId,
       double         angleThresholdDeg,
       double         maxThicknessMm    = 5.0,
       double         defaultThicknessMm = 1.0,
-      int            maxRecursionDepth  = 0) = 0;
+      int            maxRecursionDepth  = 1) = 0;
+
+  // Detects and extracts all protrusions/flanges from a shell without splitting
+  // into panels. The shell geometry is updated in-place (cleaned); extracted
+  // protrusions are returned as new shells. Mutating — creates a rollback token.
+  virtual RemoveProtrusionsResult removeProtrusions(
+      const ShellId& partId,
+      double         angleThresholdDeg = 30.0,
+      double         maxThicknessMm    = 5.0) = 0;
 
   // ── Snapshot / rollback ────────────────────────────────────────────────────
   virtual SnapshotId    createSnapshot(const std::string& label)            = 0;
   virtual RestoreResult restoreSnapshot(const SnapshotId& snapshotId)       = 0;
   virtual void          clearSnapshots()                                     = 0;
+
+  // ── Feature 006-geometry-primitives US2 (Interrogation) ────────────────────
+  virtual BoundingBoxResult    computeBoundingBox(const std::string& entityId) = 0;
+  virtual MassPropertiesResult computeMassProperties(const std::string& entityId, const std::vector<std::string>& properties) = 0;
+  virtual MeasureResult        measureDistance(const std::string& entityA, const std::string& entityB, const std::string& measurementType) = 0;
+  virtual ExploreResult        exploreTopology(const std::string& entityId, const std::string& returnType) = 0;
+
+  // ── Feature 006-geometry-primitives US1 (Boolean Operations) ────────────────
+  virtual FuseResult           fuseBodies(const std::vector<ShellId>& tools, double fuzzyTolerance) = 0;
+  virtual CutResult            cutBodies(const ShellId& blank, const std::vector<ShellId>& tools, bool keepTools) = 0;
+  virtual IntersectResult      intersectBodies(const ShellId& a, const ShellId& b) = 0;
+
+  // ── Feature 006-geometry-primitives US3 (Geometric Transformations) ─────────
+  virtual TransformResult      translateBody(const ShellId& solidId, double dx, double dy, double dz, bool keepOriginal) = 0;
+  virtual TransformResult      rotateBody(const ShellId& solidId, double axOriginX, double axOriginY, double axOriginZ, double axDirX, double axDirY, double axDirZ, double angleDeg, bool keepOriginal) = 0;
+  virtual TransformResult      mirrorBody(const ShellId& solidId, double plOriginX, double plOriginY, double plOriginZ, double plNormX, double plNormY, double plNormZ, bool keepOriginal) = 0;
+  virtual TransformResult      scaleBody(const ShellId& solidId, double originX, double originY, double originZ, double scaleFactor, bool keepOriginal) = 0;
+  virtual TransformResult      alignToFace(const std::string& sourceFaceId, const std::string& destFaceId, bool flipNormal, bool keepOriginal) = 0;
+
+  // ── Feature 006-geometry-primitives US4 (Direct Edit Operations) ────────────
+  virtual FilletResult         filletEdges(const ShellId& partId, const std::vector<std::string>& edgeIds, double radiusMm) = 0;
+  virtual ChamferResult        chamferEdges(const ShellId& partId, const std::vector<std::string>& edgeIds, double distanceMm) = 0;
+  virtual SimplifyResult       simplifyBody(const ShellId& partId, bool unifyFaces, bool unifyEdges) = 0;
+  virtual HealExResult         healGeometryEx(const ShellId& partId, bool fixTolerances, bool fixWires) = 0;
+  virtual OffsetShapeResult    offsetShape(const ShellId& partId, double offsetValue, double tolerance) = 0;
+  virtual DeleteFaceResult     deleteFace(const ShellId& partId, const std::vector<std::string>& faceIds, bool healRemaining) = 0;
+
+  // ── Feature 006-geometry-primitives US5 (Sewing) ────────────────────────────
+  virtual SewResult            sewFaces(const std::vector<std::string>& entityIds, double tolerance, bool makeSolid) = 0;
+
+  // ── Feature 006-geometry-primitives US6 (Assembly) ──────────────────────────
+  virtual CreateAssemblyResult createAssemblyDocument() = 0;
+  virtual AddInstanceResult    addAssemblyInstance(const AssemblyId& assemblyId, const std::string& shapeId, double tx, double ty, double tz, double qw, double qx, double qy, double qz) = 0;
+  virtual MateRigidResult      mateRigid(const AssemblyId& assemblyId, const std::string& srcEntityId, const std::string& dstEntityId, bool flipAlignment) = 0;
+  virtual ListAssemblyResult   listAssemblyTree(const AssemblyId& assemblyId) = 0;
+
+  // ── Feature 007-sheet-metal-unfolding ───────────────────────────────────────
+  virtual SheetMetalValidationResult validateSheetMetal(const ShellId& partId) = 0;
+  virtual CurvedRebuildResult        reconstructCurvedBends(const ShellId& partId) = 0;
 };
 
 }  // namespace mcp_cad

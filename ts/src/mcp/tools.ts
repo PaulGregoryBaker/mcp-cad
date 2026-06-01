@@ -19,6 +19,26 @@ import { session } from '../geometry/session';
 import { jobQueue } from '../geometry/jobs';
 import { toStructuredError, throwError, ErrorCodes } from './errors';
 import { transactionRegistry } from './transactions';
+import type { SemanticStore } from '../semantic/semantic_store';
+import { SemanticStoreError } from '../semantic/semantic_store';
+import { MappingLayer } from '../semantic/mapping_layer';
+
+let _semanticStore: SemanticStore | null = null;
+
+export function setSemanticStore(store: SemanticStore): void {
+  _semanticStore = store;
+}
+
+function getSemanticStore(): SemanticStore {
+  if (!_semanticStore) {
+    throwError(
+      ErrorCodes.PERSISTENCE_UNAVAILABLE,
+      'Semantic store is not initialised. Ensure persistence.driver is configured.',
+      false,
+    );
+  }
+  return _semanticStore;
+}
 import type { ManufacturingConfig } from '../config/loader';
 import { MaterialStore } from '../manufacturing/material';
 import { isJointTypeAllowed } from '../manufacturing/rules';
@@ -87,17 +107,41 @@ export function getToolDefinitions(): object[] {
       },
     },
     {
-      name: 'apply_unfold',
-      description: 'Generates 2D flat pattern with bend compensation.',
+      name: 'validate_sheet_metal',
+      description: 'Inspects a 3D solid/shell and validates if it conforms to standard sheet metal constraints: uniform thickness and unfoldability (no T-junctions, no closed cycles). Non-mutating.',
       inputSchema: {
         type: 'object',
         properties: {
-          panel_id: { type: 'string' },
-          material_id: { type: 'string' },
-          k_factor: { type: 'number', minimum: 0, maximum: 1 },
-          transaction_id: { type: 'string' },
+          part_id: { type: 'string', description: 'ID of the body/shell to validate' }
         },
-        required: ['panel_id', 'material_id'],
+        required: ['part_id']
+      }
+    },
+    {
+      name: 'reconstruct_curved_bends',
+      description: 'Replaces infinitely sharp joint edges in a 3D CAD model with realistic rounded cylindrical bends based on material thickness (inner radius = t, outer radius = 2t). Returns a new replacement solid ID. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_id: { type: 'string', description: 'ID of the sharp-edge part to reconstruct' },
+          transaction_id: { type: 'string', description: 'Active transaction ID' }
+        },
+        required: ['part_id', 'transaction_id']
+      }
+    },
+    {
+      name: 'apply_unfold',
+      description: 'Validates, heals minor gaps (up to 0.1 mm), and flattens a 3D sheet metal shell using analytical K-factor calculations. Produces flat blank dimensions, bend annotations, and a DXF engineering drawing (dxf_content) derived directly from the flat mesh geometry. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          panel_id: { type: 'string', description: 'ID of the sheet metal body to unfold' },
+          material_id: { type: 'string', description: 'Material ID from configuration' },
+          k_factor: { type: 'number', minimum: 0.25, maximum: 0.50, description: 'Optional K-factor override. Sourced from material DB if omitted.' },
+          auto_heal_tolerance: { type: 'number', default: 0.1, maximum: 0.1, description: 'Maximum gap tolerance (mm) for automatic sewing repair.' },
+          transaction_id: { type: 'string', description: 'Active transaction ID' }
+        },
+        required: ['panel_id', 'material_id', 'transaction_id'],
       },
     },
     {
@@ -375,20 +419,28 @@ export function getToolDefinitions(): object[] {
     },
     {
       name: 'extend_face_to_target',
-      description: 'Extends a face of a shell body until it reaches a target geometry.',
+      description: 'Extends a face of a part to meet a target (part surface, specific face, or plane). The source face can be specified explicitly or auto-selected as the face closest to and most directly facing the target.',
       inputSchema: {
         type: 'object',
         properties: {
-          part_id: { type: 'string' },
-          face_id: { type: 'string' },
-          target_type: { type: 'string', enum: ['plane', 'face_id', 'part_surface'] },
+          part_id:        { type: 'string', description: 'The part whose face will be extended' },
+          face_id:        { type: 'string', description: 'Face ID to extend; omit to auto-select the closest face facing the target' },
+          target_type:    { type: 'string', enum: ['part_surface', 'face_id', 'plane'], description: 'How the target is specified (default: part_surface)' },
+          target_part_id: { type: 'string', description: 'Target part ID (required when target_type is part_surface or face_id)' },
+          target_face_id: { type: 'string', description: 'Specific face ID on the target part (only used when target_type is face_id)' },
           target: {
             type: 'object',
-            description: 'Target geometry: plane fields for plane target; part_id/face_id for face targets',
+            description: 'Nested target spec — alternative to flat target_part_id/target_face_id; also carries plane normal/origin',
+            properties: {
+              part_id: { type: 'string' },
+              face_id: { type: 'string' },
+              normal:  { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } } },
+              origin:  { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } } },
+            },
           },
           transaction_id: { type: 'string' },
         },
-        required: ['part_id', 'face_id', 'target_type', 'target'],
+        required: ['part_id'],
       },
     },
     {
@@ -451,6 +503,109 @@ export function getToolDefinitions(): object[] {
       },
     },
     {
+      name: 'declare_semantic_entity',
+      description:
+        'Declares a named semantic entity (panel, joint_interface, etc.) within a transaction. The entity is identified by a URI of the form semantic://<product>/<slug>.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'semantic://<product>/<slug>' },
+          type: {
+            type: 'string',
+            enum: ['panel', 'panel_group', 'joint_interface', 'functional_system', 'spatial_region'],
+          },
+          purpose: { type: 'array', items: { type: 'string' } },
+          relationships: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                relationship: {
+                  type: 'string',
+                  enum: ['contains', 'bounded_by', 'connected_to', 'manufactured_as', 'joined_by', 'bent_along'],
+                },
+                target: { type: 'string' },
+              },
+              required: ['relationship', 'target'],
+            },
+          },
+          transaction_id: { type: 'string' },
+        },
+        required: ['id', 'type', 'transaction_id'],
+      },
+    },
+    {
+      name: 'bind_semantic_entity',
+      description:
+        'Binds a semantic entity to geometry. Supports face_group (explicit face IDs), body (a shell body ID), or spatial_region (between two named entities — resolved at query time).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          semantic_id: { type: 'string' },
+          binding: {
+            oneOf: [
+              {
+                type: 'object',
+                properties: {
+                  kind: { type: 'string', enum: ['face_group'] },
+                  face_ids: { type: 'array', items: { type: 'string' }, minItems: 1 },
+                },
+                required: ['kind', 'face_ids'],
+              },
+              {
+                type: 'object',
+                properties: {
+                  kind: { type: 'string', enum: ['body'] },
+                  body_id: { type: 'string' },
+                },
+                required: ['kind', 'body_id'],
+              },
+              {
+                type: 'object',
+                properties: {
+                  kind: { type: 'string', enum: ['spatial_region'] },
+                  between: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    minItems: 2,
+                    maxItems: 2,
+                  },
+                },
+                required: ['kind', 'between'],
+              },
+            ],
+          },
+          transaction_id: { type: 'string' },
+        },
+        required: ['semantic_id', 'binding', 'transaction_id'],
+      },
+    },
+    {
+      name: 'resolve_geometry',
+      description:
+        'Returns the geometry binding for a semantic entity. Pass at_revision to query point-in-time state via Dolt AS OF.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          semantic_id: { type: 'string' },
+          at_revision: { type: 'integer', description: 'Topology revision number for time-travel queries' },
+        },
+        required: ['semantic_id'],
+      },
+    },
+    {
+      name: 'semantic_lineage',
+      description:
+        'Returns the full history of geometry bindings for a semantic entity, in topology revision order. Each row shows which transaction caused the binding and the remap_reason (if remapped by the mapping layer).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          semantic_id: { type: 'string' },
+        },
+        required: ['semantic_id'],
+      },
+    },
+    {
       name: 'split_body_by_bends',
       description:
         'Decomposes a shell body into planar panels by splitting at every bend. Auto-detects mode: thin-solid (wall ≤ max_thickness_mm) cuts solid into panels preserving original wall thickness; surface/conceptual mode extrudes each panel face by default_thickness_mm. Returns separate panel_ids and protrusion_ids for flanges/tabs. Mutating — creates a rollback token.',
@@ -481,13 +636,416 @@ export function getToolDefinitions(): object[] {
             minimum: 0,
             maximum: 10,
             description:
-              'Maximum recursion depth for nested decomposition. 0 = single pass. When > 0 the remainder solid after each pass is recursively decomposed, accumulating all panels and protrusions. Default 0.',
+              'Maximum recursion depth for nested decomposition. 0 = single pass. When > 0 the remainder solid after each pass is recursively decomposed, accumulating all panels and protrusions. Default 1.',
           },
           transaction_id: { type: 'string' },
         },
         required: ['part_id'],
       },
     },
+    {
+      name: 'remove_protrusions',
+      description:
+        'Detects and extracts all protrusions (flanges, tabs, bosses) from a shell body without splitting it into panels. The part geometry is updated in-place (cleaned); each extracted protrusion is returned as a new shell. Useful as a pre-processing step before further operations, or as a standalone simplification. Mutating — creates a rollback token.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_id: { type: 'string', description: 'Shell to clean protrusions from' },
+          angle_threshold_deg: {
+            type: 'number',
+            minimum: 0,
+            description: 'Minimum dihedral deviation to classify a face group as primary panel. Default 30.0 degrees.',
+          },
+          max_thickness_mm: {
+            type: 'number',
+            minimum: 0,
+            description: 'Maximum protrusion thickness to detect. Geometry thicker than this is treated as a primary panel face. Default 5.0 mm.',
+          },
+          transaction_id: { type: 'string' },
+        },
+        required: ['part_id'],
+      },
+    },
+    {
+      name: 'close_gap',
+      description:
+        'Translates part_b so its closest point touches part_a, closing any spatial gap between them. ' +
+        'Use this before merge_bodies_with_bend when the panels are further apart than the 0.1 mm sewing tolerance. ' +
+        'Non-destructive if the gap is already zero. Returns a rollback_token.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_a_id: { type: 'string', description: 'The stationary panel (anchor)' },
+          part_b_id: { type: 'string', description: 'The panel to translate (mover)' },
+        },
+        required: ['part_a_id', 'part_b_id'],
+      },
+    },
+    {
+      name: 'is_panel_valid',
+      description:
+        'Checks whether a shell body is a valid sheet-metal panel that can be flattened. ' +
+        'Returns structured validation errors with machine-readable codes (GE_PANEL_*) and human-readable messages. ' +
+        'Run this before apply_unfold to surface actionable errors early.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          panel_id: { type: 'string', description: 'Shell ID to validate' },
+        },
+        required: ['panel_id'],
+      },
+    },
+    {
+      name: 'fuse_bodies',
+      description: 'Merges two or more solids/shells into a single continuous body using a Boolean union. Returns a new body id. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          tools: {
+            type: 'array',
+            items: { type: 'string' },
+            minItems: 2,
+            description: 'IDs of the bodies to fuse'
+          },
+          fuzzy_tolerance: {
+            type: 'number',
+            default: 1e-5,
+            description: 'Fuzzy tolerance for near-coincident geometry (mm)'
+          },
+          transaction_id: { type: 'string' }
+        },
+        required: ['tools', 'transaction_id']
+      }
+    },
+    {
+      name: 'cut_bodies',
+      description: 'Subtracts tool bodies from a blank body (Boolean difference). Returns the modified blank as a new body id. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          blank: { type: 'string', description: 'Body to cut into' },
+          tools: {
+            type: 'array',
+            items: { type: 'string' },
+            minItems: 1,
+            description: 'Cutter body IDs'
+          },
+          keep_tools: {
+            type: 'boolean',
+            default: false,
+            description: 'If false, tool bodies are removed from the session after the cut'
+          },
+          transaction_id: { type: 'string' }
+        },
+        required: ['blank', 'tools', 'transaction_id']
+      }
+    },
+    {
+      name: 'intersect_bodies',
+      description: 'Returns the shared volume between two overlapping bodies (Boolean intersection). Returns a new body id, or GE_BOOLEAN_EMPTY_RESULT if no overlap. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          target_a: { type: 'string', description: 'First body ID' },
+          target_b: { type: 'string', description: 'Second body ID' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['target_a', 'target_b', 'transaction_id']
+      }
+    },
+    {
+      name: 'bounding_box',
+      description: 'Returns the axis-aligned bounding box of a body, face, edge, or vertex. Non-mutating.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          target: { type: 'string', description: 'Entity ID (solid, shell, face, edge, or vertex)' }
+        },
+        required: ['target']
+      }
+    },
+    {
+      name: 'mass_properties',
+      description: 'Returns physical properties of a solid or shell: volume, surface area, centroid, and/or inertia tensor. Non-mutating.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          target:     { type: 'string', description: 'Body ID' },
+          properties: {
+            type: 'array',
+            items: { type: 'string', enum: ['volume', 'surface_area', 'centroid', 'inertia_tensor'] },
+            minItems: 1,
+            default: ['volume', 'surface_area', 'centroid', 'inertia_tensor']
+          }
+        },
+        required: ['target']
+      }
+    },
+    {
+      name: 'measure_distance',
+      description: 'Measures the minimum distance, maximum distance, or angle between two topological entities. Non-mutating.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          target_a:        { type: 'string', description: 'First entity ID (face, edge, vertex, or body)' },
+          target_b:        { type: 'string', description: 'Second entity ID' },
+          measurement_type: {
+            type: 'string',
+            enum: ['min_distance', 'max_distance', 'angle'],
+            default: 'min_distance',
+            description: 'angle is only supported between two planar faces'
+          }
+        },
+        required: ['target_a', 'target_b']
+      }
+    },
+    {
+      name: 'explore_topology',
+      description: 'Returns an ordered list of sub-entity IDs of the specified type within a body. Non-mutating. Order is deterministic for identical inputs.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          target:      { type: 'string', description: 'Body or shell ID to explore' },
+          return_type: {
+            type: 'string',
+            enum: ['solid', 'shell', 'face', 'edge', 'vertex'],
+            description: 'Sub-entity type to return'
+          }
+        },
+        required: ['target', 'return_type']
+      }
+    },
+    {
+      name: 'translate_body',
+      description: 'Moves one or more bodies along a 3D vector. Produces a new body id per target. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          targets:        { type: 'array', items: { type: 'string' }, minItems: 1, description: 'IDs of bodies to translate' },
+          vector:         { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[dx, dy, dz] translation vector in mm' },
+          keep_original:  { type: 'boolean', default: false, description: 'If true, keep the original body' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['targets', 'vector', 'transaction_id']
+      }
+    },
+    {
+      name: 'rotate_body',
+      description: 'Rotates one or more bodies around a defined axis. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          targets:          { type: 'array', items: { type: 'string' }, minItems: 1, description: 'IDs of bodies to rotate' },
+          axis_origin:      { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[x, y, z] of a point on the rotation axis (mm)' },
+          axis_direction:   { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[dx, dy, dz] direction vector of the axis' },
+          angle_degrees:    { type: 'number', description: 'Rotation angle in degrees (right-hand rule)' },
+          keep_original:    { type: 'boolean', default: false, description: 'If true, keep the original body' },
+          transaction_id:   { type: 'string' }
+        },
+        required: ['targets', 'axis_origin', 'axis_direction', 'angle_degrees', 'transaction_id']
+      }
+    },
+    {
+      name: 'mirror_body',
+      description: 'Mirrors one or more bodies across a defined plane. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          targets:        { type: 'array', items: { type: 'string' }, minItems: 1, description: 'IDs of bodies to mirror' },
+          plane_origin:   { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[x, y, z] of a point on the mirror plane (mm)' },
+          plane_normal:   { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[nx, ny, nz] plane normal' },
+          keep_original:  { type: 'boolean', default: false, description: 'If true, keep the original body' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['targets', 'plane_origin', 'plane_normal', 'transaction_id']
+      }
+    },
+    {
+      name: 'scale_body',
+      description: 'Uniformly scales one or more bodies relative to a fixed origin. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          targets:        { type: 'array', items: { type: 'string' }, minItems: 1, description: 'IDs of bodies to scale' },
+          origin:         { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[x, y, z] scale origin (mm)' },
+          scale_factor:   { type: 'number', minimum: 0.0001, description: 'Uniform scale factor (> 0)' },
+          keep_original:  { type: 'boolean', default: false, description: 'If true, keep the original body' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['targets', 'origin', 'scale_factor', 'transaction_id']
+      }
+    },
+    {
+      name: 'align_to_face',
+      description: 'Repositions the body containing source_face so that source_face is coincident with destination_face. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          source_face:    { type: 'string', description: 'Face ID on the body to move' },
+          destination_face: { type: 'string', description: 'Target face ID (this body does not move)' },
+          flip_normal:    { type: 'boolean', default: false, description: 'If true, source face normal is flipped before alignment' },
+          keep_original:  { type: 'boolean', default: false, description: 'If true, keep the original body' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['source_face', 'destination_face', 'transaction_id']
+      }
+    },
+    {
+      name: 'fillet_edges',
+      description: 'Applies a circular fillet of the given radius to the specified edges. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_id:        { type: 'string', description: 'Body/shell containing the edges' },
+          targets:        { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Edge IDs to fillet' },
+          radius:         { type: 'number', exclusiveMinimum: 0, description: 'Fillet radius in mm' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['part_id', 'targets', 'radius', 'transaction_id']
+      }
+    },
+    {
+      name: 'chamfer_edges',
+      description: 'Applies an angled chamfer of the given distance to the specified edges. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_id:        { type: 'string', description: 'Body/shell containing the edges' },
+          targets:        { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Edge IDs to chamfer' },
+          distance:       { type: 'number', exclusiveMinimum: 0, description: 'Chamfer offset distance in mm' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['part_id', 'targets', 'distance', 'transaction_id']
+      }
+    },
+    {
+      name: 'simplify_body',
+      description: 'Merges co-planar adjacent faces and collinear edges into single entities (ShapeUpgrade_UnifySameDomain). Reduces face count without changing geometry. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_id:        { type: 'string', description: 'Body/shell to simplify' },
+          unify_faces:    { type: 'boolean', default: true, description: 'Merge co-planar adjacent faces' },
+          unify_edges:    { type: 'boolean', default: true, description: 'Merge collinear adjacent edges' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['part_id', 'transaction_id']
+      }
+    },
+    {
+      name: 'heal_geometry_ex',
+      description: 'Repairs B-Rep validity issues (gaps, bad tolerances, invalid wires) using ShapeFix_Shape. Returns heal_complete: true if BRepCheck_Analyzer passes on the result. Non-destructive but mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_id:          { type: 'string', description: 'Body/shell to heal' },
+          fix_tolerances:   { type: 'boolean', default: true, description: 'Repair loose tolerancing issues' },
+          fix_wires:        { type: 'boolean', default: true, description: 'Heal open or incorrect wires' },
+          transaction_id:   { type: 'string' }
+        },
+        required: ['part_id', 'transaction_id']
+      }
+    },
+    {
+      name: 'offset_shape',
+      description: 'Offsets the boundary of a solid outward (positive) or inward (negative) by the given distance. Distinct from offset_face (which offsets a single face in 2D). Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_id:        { type: 'string', description: 'Body/shell to offset' },
+          offset_value:   { type: 'number', description: 'Offset distance in mm. Positive = outward (thicken), negative = inward (shrink).' },
+          tolerance:      { type: 'number', default: 1e-4, description: 'Shape tolerance (mm)' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['part_id', 'offset_value', 'transaction_id']
+      }
+    },
+    {
+      name: 'delete_face',
+      description: 'Removes specified faces and attempts to heal the surrounding topology. May produce multiple bodies if removal disconnects the shape. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_id:        { type: 'string', description: 'Body containing the faces' },
+          targets:        { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Face IDs to delete' },
+          heal_remaining: { type: 'boolean', default: true, description: 'If true, attempt to stitch/sew the remaining faces' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['part_id', 'targets', 'transaction_id']
+      }
+    },
+    {
+      name: 'sew_faces',
+      description: 'Stitches adjacent open faces or shells together into a single shell or solid. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          targets: { type: 'array', items: { type: 'string' }, minItems: 2, description: 'Face or shell IDs to sew together' },
+          tolerance: { type: 'number', default: 1e-3, description: 'Maximum sewing gap tolerance (mm)' },
+          make_solid: { type: 'boolean', default: false, description: 'If true and result is a closed shell, convert to a solid body' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['targets', 'transaction_id']
+      }
+    },
+    {
+      name: 'create_assembly_document',
+      description: 'Creates a new empty hierarchical assembly document inside an XCAF session. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          transaction_id: { type: 'string' }
+        },
+        required: ['transaction_id']
+      }
+    },
+    {
+      name: 'add_assembly_instance',
+      description: 'Adds a solid or shell as a component instance in an assembly document at an optional location. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          assembly_id: { type: 'string', description: 'Assembly document ID' },
+          target: { type: 'string', description: 'Solid or shell ID of the component to instance' },
+          location: {
+            type: 'object',
+            properties: {
+              translation: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[x, y, z] offset in mm' },
+              orientation: { type: 'array', items: { type: 'number' }, minItems: 4, maxItems: 4, description: '[qw, qx, qy, qz] quaternion' }
+            },
+            required: ['translation', 'orientation']
+          },
+          transaction_id: { type: 'string' }
+        },
+        required: ['assembly_id', 'target', 'transaction_id']
+      }
+    },
+    {
+      name: 'mate_rigid',
+      description: 'Repositions the source component so its face mates flatly against the destination component\'s face. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          assembly_id: { type: 'string', description: 'Assembly document ID' },
+          source_face: { type: 'string', description: 'Face ID on the source component instance to move' },
+          destination_face: { type: 'string', description: 'Target face ID on a static component instance' },
+          flip_alignment: { type: 'boolean', default: false, description: 'If true, reverse the mate normal direction' },
+          transaction_id: { type: 'string' }
+        },
+        required: ['assembly_id', 'source_face', 'destination_face', 'transaction_id']
+      }
+    },
+    {
+      name: 'list_assembly_tree',
+      description: 'Returns the hierarchical tree of all component instances, their parts, and relative location matrices. Non-mutating.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          assembly_id: { type: 'string', description: 'Assembly document ID' }
+        },
+        required: ['assembly_id']
+      }
+    }
   ];
 }
 
@@ -503,6 +1061,75 @@ export async function dispatchTool(
       case 'clean_geometry':
         return handleCleanGeometry(args);
 
+      case 'fuse_bodies':
+        return handleFuseBodies(args);
+
+      case 'cut_bodies':
+        return handleCutBodies(args);
+
+      case 'intersect_bodies':
+        return handleIntersectBodies(args);
+
+      case 'bounding_box':
+        return handleBoundingBox(args);
+
+      case 'mass_properties':
+        return handleMassProperties(args);
+
+      case 'measure_distance':
+        return handleMeasureDistance(args);
+
+      case 'explore_topology':
+        return handleExploreTopology(args);
+
+      case 'translate_body':
+        return handleTranslateBody(args);
+
+      case 'rotate_body':
+        return handleRotateBody(args);
+
+      case 'mirror_body':
+        return handleMirrorBody(args);
+
+      case 'scale_body':
+        return handleScaleBody(args);
+
+      case 'align_to_face':
+        return handleAlignToFace(args);
+
+      case 'fillet_edges':
+        return handleFilletEdges(args);
+
+      case 'chamfer_edges':
+        return handleChamferEdges(args);
+
+      case 'simplify_body':
+        return handleSimplifyBody(args);
+
+      case 'heal_geometry_ex':
+        return handleHealGeometryEx(args);
+
+      case 'offset_shape':
+        return handleOffsetShape(args);
+
+      case 'delete_face':
+        return handleDeleteFace(args);
+
+      case 'sew_faces':
+        return handleSewFaces(args);
+
+      case 'create_assembly_document':
+        return handleCreateAssemblyDocument(args);
+
+      case 'add_assembly_instance':
+        return handleAddAssemblyInstance(args);
+
+      case 'mate_rigid':
+        return handleMateRigid(args);
+
+      case 'list_assembly_tree':
+        return handleListAssemblyTree(args);
+
       case 'decompose_volume':
         return handleDecomposeVolume(args);
 
@@ -511,6 +1138,12 @@ export async function dispatchTool(
 
       case 'generate_reliefs':
         return handleGenerateReliefs(args);
+
+      case 'validate_sheet_metal':
+        return handleValidateSheetMetal(args);
+
+      case 'reconstruct_curved_bends':
+        return handleReconstructCurvedBends(args);
 
       case 'apply_unfold':
         return handleApplyUnfold(args, config);
@@ -537,13 +1170,13 @@ export async function dispatchTool(
         return handleRollback(args);
 
       case 'begin_transaction':
-        return handleBeginTransaction(args);
+        return await handleBeginTransaction(args);
 
       case 'commit_transaction':
-        return handleCommitTransaction(args);
+        return await handleCommitTransaction(args);
 
       case 'rollback_transaction':
-        return handleRollbackTransaction(args);
+        return await handleRollbackTransaction(args);
 
       case 'get_transaction_history':
         return handleGetTransactionHistory(args);
@@ -553,6 +1186,12 @@ export async function dispatchTool(
 
       case 'merge_bodies_with_bend':
         return handleMergeBodiesWithBend(args);
+
+      case 'close_gap':
+        return handleCloseGap(args);
+
+      case 'is_panel_valid':
+        return handleIsPanelValid(args);
 
       case 'extend_face_to_target':
         return handleExtendFaceToTarget(args);
@@ -580,6 +1219,21 @@ export async function dispatchTool(
 
       case 'split_body_by_bends':
         return handleSplitBodyByBends(args);
+
+      case 'remove_protrusions':
+        return handleRemoveProtrusions(args);
+
+      case 'declare_semantic_entity':
+        return await handleDeclareSemanticEntity(args);
+
+      case 'bind_semantic_entity':
+        return await handleBindSemanticEntity(args);
+
+      case 'resolve_geometry':
+        return await handleResolveGeometry(args);
+
+      case 'semantic_lineage':
+        return await handleSemanticLineage(args);
 
       default:
         throwError(ErrorCodes.INTERNAL_ERROR, `Unknown tool: ${toolName}`, false);
@@ -612,6 +1266,7 @@ function handleCleanGeometry(args: Record<string, unknown>): unknown {
 
   const topology = getGeometryBinding().getTopology(finalSolidId);
 
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     solid_id: finalSolidId,
     is_manifold: true,
@@ -619,6 +1274,7 @@ function handleCleanGeometry(args: Record<string, unknown>): unknown {
     issues_found: manifoldResult.issues.length,
     healed,
     rollback_token: rollbackToken,
+    mesh_url: `${meshBaseUrl}/mesh/${finalSolidId}.glb`,
   };
 }
 
@@ -680,6 +1336,8 @@ function handleSynthesizeJoints(args: Record<string, unknown>, config: Manufactu
 
   const ctx = resolveTransactionContext(args);
 
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+
   if (jointType === 'tab_slot') {
     const result = getGeometryBinding().addTabSlot(panelIds[0]!, panelIds[1]!, clearanceMm);
     if (ctx.mode === 'join') {
@@ -691,6 +1349,7 @@ function handleSynthesizeJoints(args: Record<string, unknown>, config: Manufactu
       kerf_offset_mm: result.kerfOffsetApplied,
       rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
       shape_history: result.shape_history ?? [],
+      mesh_urls: (result.modifiedShellIds as string[]).map((id) => `${meshBaseUrl}/mesh/${id}.glb`),
     };
   }
 
@@ -705,6 +1364,7 @@ function handleSynthesizeJoints(args: Record<string, unknown>, config: Manufactu
       kerf_offset_mm: clearanceMm,
       rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
       shape_history: result.shape_history ?? [],
+      mesh_urls: [`${meshBaseUrl}/mesh/${result.modifiedShellId}.glb`],
     };
   }
 
@@ -740,16 +1400,106 @@ function handleGenerateReliefs(args: Record<string, unknown>): unknown {
     rollbackToken = ctx.transactionId;
   }
 
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     modified_panel_id: panelId,
     relief_count: 4,  // placeholder; Phase C will use actual detection
     rollback_token: rollbackToken,
+    mesh_url: `${meshBaseUrl}/mesh/${panelId}.glb`,
   };
+}
+
+function handleValidateSheetMetal(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  const result = getGeometryBinding().validateSheetMetal(partId);
+  return {
+    is_valid: result.is_valid,
+    nominal_thickness: result.nominal_thickness,
+    can_flatten: result.can_flatten,
+    validation_errors: result.validation_errors,
+  };
+}
+
+function handleReconstructCurvedBends(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().reconstructCurvedBends(partId);
+  session.registerShell(result.solid_id);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  return {
+    solid_id: result.solid_id,
+    bends_replaced: result.bends_replaced,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    shape_history: result.shape_history ?? [],
+  };
+}
+
+/** Parse BEND_UP / BEND_DOWN LINE entities from DXF text and return each
+ *  as fractional coordinates {x1,y1,x2,y2} in the range [0,1] relative to
+ *  the flat-pattern bounding box.  Only straight-line entities on bend layers
+ *  are extracted; arcs and other entities are ignored. */
+function parseDxfBendLines(
+  dxf: string,
+  flatWidthMm: number,
+  flatHeightMm: number,
+): Array<{ x1: number; y1: number; x2: number; y2: number }> {
+  const lines: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
+  const tokens = dxf.split('\n').map((t) => t.trim());
+
+  let inLine = false;
+  let isBendLayer = false;
+  let x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+
+  for (let i = 0; i < tokens.length - 1; i++) {
+    const code = parseInt(tokens[i], 10);
+    const val = tokens[i + 1];
+
+    if (isNaN(code)) continue;
+
+    if (code === 0) {
+      // Flush completed LINE entity on a bend layer
+      if (inLine && isBendLayer) {
+        lines.push({
+          x1: x1 / flatWidthMm,
+          y1: y1 / flatHeightMm,
+          x2: x2 / flatWidthMm,
+          y2: y2 / flatHeightMm,
+        });
+      }
+      inLine = val === 'LINE';
+      isBendLayer = false;
+      x1 = y1 = x2 = y2 = 0;
+    } else if (inLine) {
+      if (code === 8) {
+        isBendLayer = val === 'BEND_UP' || val === 'BEND_DOWN';
+      } else if (code === 10) { x1 = parseFloat(val); }
+      else if (code === 20) { y1 = parseFloat(val); }
+      else if (code === 11) { x2 = parseFloat(val); }
+      else if (code === 21) { y2 = parseFloat(val); }
+    }
+    i++; // each group code consumes two tokens
+  }
+  return lines;
 }
 
 function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingConfig): unknown {
   const panelId = requireString(args, 'panel_id');
   const materialId = requireString(args, 'material_id');
+
+  const validation = getGeometryBinding().isPanelValid(panelId);
+  if (!validation.isValid || !validation.canFlatten) {
+    throwError(
+      ErrorCodes.GE_PANEL_INVALID,
+      `Panel ${panelId} is not a valid sheet-metal panel: ` +
+        validation.errors.map(e => `[${e.code}] ${e.message}`).join('; '),
+      false,
+    );
+  }
 
   const matStore = new MaterialStore(config.materials);
   if (!matStore.has(materialId)) {
@@ -765,20 +1515,48 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
   const ctx = resolveTransactionContext(args);
   const result = getGeometryBinding().unfoldShell(panelId, kFactor);
   session.registerUnfold(result.unfoldId);
+  if (result.improvedPartId) {
+    session.registerShell(result.improvedPartId);
+  }
 
   if (ctx.mode === 'join') {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
-  return {
+  // Always export DXF: the content is returned to the caller for downstream
+  // use (CAM, laser cutting), and bend line positions are parsed from it for
+  // the UI preview.  The export is non-mutating and always available after
+  // a successful unfoldShell call.
+  let dxfContent = '';
+  let bendLines: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
+  try {
+    const dxf = getGeometryBinding().exportDxf(result.unfoldId);
+    dxfContent = dxf.dxfContent;
+    if (result.bendCount > 0) {
+      bendLines = parseDxfBendLines(dxfContent, result.flatWidthMm, result.flatHeightMm);
+    }
+  } catch {
+    // Non-fatal: preview will fall back to even-spaced hints
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  const response: Record<string, unknown> = {
     unfold_id: result.unfoldId,
     flat_width_mm: result.flatWidthMm,
     flat_height_mm: result.flatHeightMm,
     k_factor_used: result.kFactorUsed,
     bend_count: result.bendCount,
+    nominal_thickness_mm: result.detectedThickness ?? 0,
+    bend_lines: bendLines,
+    dxf_content: dxfContent,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
     shape_history: result.shape_history ?? [],
   };
+  if (result.improvedPartId) {
+    response['improved_part_id'] = result.improvedPartId;
+    response['improved_part_mesh_url'] = `${meshBaseUrl}/mesh/${result.improvedPartId}.glb`;
+  }
+  return response;
 }
 
 function handleEvaluateManufacturability(
@@ -937,14 +1715,14 @@ function handleRollback(args: Record<string, unknown>): unknown {
 
 // ─── Transaction primitive handlers (Feature 004) ─────────────────────────────
 
-function handleBeginTransaction(args: Record<string, unknown>): unknown {
+async function handleBeginTransaction(args: Record<string, unknown>): Promise<unknown> {
   const label = requireString(args, 'label');
   const product = typeof args.product === 'string' ? args.product : undefined;
 
   // Capture the pre-transaction geometry state. The snapshot id doubles as the
   // rollback token: rolling back the transaction restores this snapshot.
   const snapshotId = getGeometryBinding().createSnapshot(label);
-  const txn = transactionRegistry.begin(label, snapshotId, product);
+  const txn = await transactionRegistry.begin(label, snapshotId, product);
 
   return {
     transaction_id: txn.id,
@@ -955,15 +1733,51 @@ function handleBeginTransaction(args: Record<string, unknown>): unknown {
   };
 }
 
-function handleCommitTransaction(args: Record<string, unknown>): unknown {
+async function handleCommitTransaction(args: Record<string, unknown>): Promise<unknown> {
   const transactionId = requireString(args, 'transaction_id');
 
-  const txn = transactionRegistry.commit(transactionId);
+  // Phase 3: run the mapping layer remap before merging the Dolt branch.
+  if (_semanticStore) {
+    const port = _semanticStore.getPort();
+    try {
+      // Insert a topology_revision placeholder (brep_file_path/sha will be
+      // filled in by a future geometry-export step; for Phase 3 we record a
+      // sentinel so the foreign key chain is consistent).
+      const revisionId = await port.insertTopologyRevision({
+        transaction_id: transactionId,
+        brep_file_path: '',
+        brep_sha256: '0'.repeat(64),
+      });
+
+      // Persist in-memory shape history from TransactionRegistry to Dolt.
+      const inMemoryHistory = transactionRegistry.getHistory(transactionId);
+      const shapeHistoryRows = inMemoryHistory.map((r) => ({
+        transaction_id: transactionId,
+        verdict: r.verdict as import('../semantic/types').ShapeVerdict,
+        original_id: r.original_id,
+        new_id: r.new_id ?? null,
+        operation_label: r.operation_label,
+      }));
+      await port.insertShapeHistory(shapeHistoryRows);
+
+      const mappingLayer = new MappingLayer(_semanticStore);
+      const affectedIds = await mappingLayer.applyShapeHistoryToBindings(transactionId, revisionId);
+      await mappingLayer.refreshDerivedBindings(transactionId, revisionId, affectedIds);
+    } catch (err) {
+      throwError(
+        ErrorCodes.PERSISTENCE_COMMIT_FAILED,
+        `Mapping layer remap failed: ${String(err)}`,
+        true,
+        'commit_transaction',
+      );
+    }
+  }
+
+  const txn = await transactionRegistry.commit(transactionId);
 
   // Drop the pre-transaction snapshot — committed changes are permanent.
   // Note: this clears all snapshots in the registry (no per-id clear primitive
   // exists yet). In MVP single-session there is at most one outer snapshot.
-  // Phase 2 (T016) adds a per-id clearSnapshot primitive.
   getGeometryBinding().clearSnapshots();
 
   return {
@@ -973,7 +1787,7 @@ function handleCommitTransaction(args: Record<string, unknown>): unknown {
   };
 }
 
-function handleRollbackTransaction(args: Record<string, unknown>): unknown {
+async function handleRollbackTransaction(args: Record<string, unknown>): Promise<unknown> {
   const transactionId = requireString(args, 'transaction_id');
 
   // Look up the transaction first so we know which snapshot to restore. The
@@ -991,7 +1805,7 @@ function handleRollbackTransaction(args: Record<string, unknown>): unknown {
   }
 
   const result = getGeometryBinding().restoreSnapshot(existing.snapshotId);
-  const txn = transactionRegistry.rollback(transactionId);
+  const txn = await transactionRegistry.rollback(transactionId);
 
   return {
     transaction_id: txn.id,
@@ -1000,6 +1814,114 @@ function handleRollbackTransaction(args: Record<string, unknown>): unknown {
     restored_solid_ids: result.restoredSolidIds,
     restored_shell_ids: result.restoredShellIds,
   };
+}
+
+// ─── Semantic Mapping Layer handlers (Feature 005) ────────────────────────────
+
+function mapSemanticStoreError(err: unknown): never {
+  if (err instanceof SemanticStoreError) {
+    throwError(err.code as (typeof ErrorCodes)[keyof typeof ErrorCodes], err.message, true);
+  }
+  throw err;
+}
+
+async function handleDeclareSemanticEntity(args: Record<string, unknown>): Promise<unknown> {
+  const id = requireString(args, 'id');
+  const type = requireString(args, 'type');
+  const transactionId = requireString(args, 'transaction_id');
+  const purpose = Array.isArray(args.purpose) ? (args.purpose as string[]) : undefined;
+  const relationships = Array.isArray(args.relationships)
+    ? (args.relationships as Array<{ relationship: string; target: string }>)
+    : undefined;
+
+  const store = getSemanticStore();
+  try {
+    const entity = await store.declareEntity({ id, type, purpose, relationships, transaction_id: transactionId });
+    return {
+      id: entity.id,
+      type: entity.type,
+      state: entity.state,
+      created_in_transaction: entity.created_in_transaction,
+    };
+  } catch (err) {
+    mapSemanticStoreError(err);
+  }
+}
+
+async function handleBindSemanticEntity(args: Record<string, unknown>): Promise<unknown> {
+  const semanticId = requireString(args, 'semantic_id');
+  const transactionId = requireString(args, 'transaction_id');
+  const bindingArg = args.binding;
+
+  if (!bindingArg || typeof bindingArg !== 'object' || !('kind' in bindingArg)) {
+    throwError(ErrorCodes.BINDING_KIND_NOT_SUPPORTED, 'binding must have a kind field', false);
+  }
+
+  const store = getSemanticStore();
+  try {
+    const mapping = await store.bindEntity({
+      semantic_id: semanticId,
+      binding: bindingArg as import('../semantic/types').Binding,
+      transaction_id: transactionId,
+    });
+    return {
+      revision_id: mapping.revision_id,
+      semantic_id: mapping.semantic_id,
+      binding_kind: mapping.binding_kind,
+      binding: mapping.binding,
+      topology_revision: mapping.topology_revision,
+    };
+  } catch (err) {
+    mapSemanticStoreError(err);
+  }
+}
+
+async function handleResolveGeometry(args: Record<string, unknown>): Promise<unknown> {
+  const semanticId = requireString(args, 'semantic_id');
+  const atRevision = typeof args.at_revision === 'number' ? args.at_revision : undefined;
+
+  const store = getSemanticStore();
+  try {
+    const mapping = atRevision !== undefined
+      ? await store.resolveAtRevision(semanticId, atRevision)
+      : await store.resolveCurrent({ semantic_id: semanticId });
+
+    return {
+      semantic_id: mapping.semantic_id,
+      binding_kind: mapping.binding_kind,
+      binding: mapping.binding,
+      topology_revision: mapping.topology_revision,
+      remap_reason: mapping.remap_reason,
+      ...((mapping as { materialised_face_ids?: string[] }).materialised_face_ids !== undefined
+        ? { materialised_face_ids: (mapping as { materialised_face_ids?: string[] }).materialised_face_ids }
+        : {}),
+    };
+  } catch (err) {
+    mapSemanticStoreError(err);
+  }
+}
+
+async function handleSemanticLineage(args: Record<string, unknown>): Promise<unknown> {
+  const semanticId = requireString(args, 'semantic_id');
+
+  const store = getSemanticStore();
+  try {
+    const lineage = await store.getMappingLineage(semanticId);
+    return {
+      semantic_id: semanticId,
+      lineage: lineage.map((m) => ({
+        revision_id: m.revision_id,
+        transaction_id: m.created_in_transaction,
+        binding_kind: m.binding_kind,
+        binding: m.binding,
+        topology_revision: m.topology_revision,
+        remap_reason: m.remap_reason,
+        created_at: m.created_at,
+      })),
+    };
+  } catch (err) {
+    mapSemanticStoreError(err);
+  }
 }
 
 function handleGetTransactionHistory(args: Record<string, unknown>): unknown {
@@ -1129,10 +2051,36 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
   };
 }
 
+function handleCloseGap(args: Record<string, unknown>): unknown {
+  const partAId = requireString(args, 'part_a_id');
+  const partBId = requireString(args, 'part_b_id');
+  const ctx = resolveTransactionContext(args);
+  const result = getGeometryBinding().closeGap(partAId, partBId);
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    part_b_id: result.partBId,
+    gap_closed_mm: result.gapClosedMm,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
+    mesh_url: `${meshBaseUrl}/mesh/${result.partBId}.glb`,
+  };
+}
+
+function handleIsPanelValid(args: Record<string, unknown>): unknown {
+  const panelId = requireString(args, 'panel_id');
+  const result = getGeometryBinding().isPanelValid(panelId);
+  return {
+    is_valid: result.isValid,
+    can_flatten: result.canFlatten,
+    nominal_thickness_mm: result.nominalThicknessMm,
+    errors: result.errors.map(e => ({ code: e.code, message: e.message })),
+  };
+}
+
 function handleExtendFaceToTarget(args: Record<string, unknown>): unknown {
   const partId     = requireString(args, 'part_id');
-  const faceId     = requireString(args, 'face_id');
-  const targetType = requireString(args, 'target_type');
+  const faceId     = typeof args['face_id'] === 'string' ? args['face_id'] as string : '';
+  const targetType = typeof args['target_type'] === 'string' ? args['target_type'] as string : 'part_surface';
 
   if (targetType !== 'plane' && targetType !== 'face_id' && targetType !== 'part_surface') {
     throwError(ErrorCodes.GE_EXTEND_FAILED,
@@ -1140,8 +2088,21 @@ function handleExtendFaceToTarget(args: Record<string, unknown>): unknown {
   }
 
   const target = (args['target'] ?? {}) as Record<string, unknown>;
-  const targetPartId = typeof target['part_id'] === 'string' ? target['part_id'] : '';
-  const targetFaceId = typeof target['face_id'] === 'string' ? target['face_id'] : '';
+
+  // Accept flat target_part_id/target_face_id or nested target.part_id/target.face_id
+  let targetPartId = '';
+  let targetFaceId = '';
+  if (typeof args['target_part_id'] === 'string') {
+    targetPartId = args['target_part_id'] as string;
+    targetFaceId = typeof args['target_face_id'] === 'string' ? args['target_face_id'] as string : '';
+  } else {
+    targetPartId = typeof target['part_id'] === 'string' ? target['part_id'] as string : '';
+    targetFaceId = typeof target['face_id'] === 'string' ? target['face_id'] as string : '';
+  }
+
+  if (!targetPartId && targetType !== 'plane') {
+    throwError(ErrorCodes.GE_EXTEND_FAILED, 'target_part_id is required', false);
+  }
 
   const normalObj = (target['normal'] ?? { x: 0, y: 0, z: 1 }) as { x: number; y: number; z: number };
   const originObj = (target['origin'] ?? { x: 0, y: 0, z: 0 }) as { x: number; y: number; z: number };
@@ -1156,10 +2117,12 @@ function handleExtendFaceToTarget(args: Record<string, unknown>): unknown {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     modified_shell_id: result.modifiedShellId,
     extension_distance_mm: result.extensionDistanceMm,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
+    mesh_url: `${meshBaseUrl}/mesh/${result.modifiedShellId}.glb`,
     shape_history: result.shape_history ?? [],
   };
 }
@@ -1179,9 +2142,11 @@ function handleOffsetFace(args: Record<string, unknown>): unknown {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     modified_shell_id: result.modifiedShellId,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
+    mesh_url: `${meshBaseUrl}/mesh/${result.modifiedShellId}.glb`,
     shape_history: result.shape_history ?? [],
   };
 }
@@ -1212,10 +2177,12 @@ function handleAddFlange(args: Record<string, unknown>): unknown {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     modified_shell_id: result.modifiedShellId,
     flange_feature_id: result.flangeFeatureId,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
+    mesh_url: `${meshBaseUrl}/mesh/${result.modifiedShellId}.glb`,
     shape_history: result.shape_history ?? [],
   };
 }
@@ -1231,9 +2198,11 @@ function handleRipEdge(args: Record<string, unknown>): unknown {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     modified_shell_id: result.modifiedShellId,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
+    mesh_url: `${meshBaseUrl}/mesh/${result.modifiedShellId}.glb`,
     shape_history: result.shape_history ?? [],
   };
 }
@@ -1288,6 +2257,113 @@ function handleComputeGaps(args: Record<string, unknown>): unknown {
       origin: report.gapBoundingBox.origin,
       dimensions: report.gapBoundingBox.dimensions,
     },
+  };
+}
+
+function handleBoundingBox(args: Record<string, unknown>): unknown {
+  const target = requireString(args, 'target');
+  const result = getGeometryBinding().computeBoundingBox(target);
+  return {
+    x_min: result.x_min,
+    y_min: result.y_min,
+    z_min: result.z_min,
+    x_max: result.x_max,
+    y_max: result.y_max,
+    z_max: result.z_max,
+  };
+}
+
+function handleMassProperties(args: Record<string, unknown>): unknown {
+  const target = requireString(args, 'target');
+  const properties = args['properties'] as string[] | undefined;
+  const result = getGeometryBinding().computeMassProperties(target, properties);
+  return {
+    volume: result.volume,
+    surface_area: result.surface_area,
+    centroid: result.centroid,
+    inertia_tensor: result.inertia_tensor,
+  };
+}
+
+function handleMeasureDistance(args: Record<string, unknown>): unknown {
+  const targetA = requireString(args, 'target_a');
+  const targetB = requireString(args, 'target_b');
+  const mType   = (args['measurement_type'] as string | undefined) ?? 'min_distance';
+  const result = getGeometryBinding().measureDistance(targetA, targetB, mType);
+  return {
+    value: result.value,
+    measurement_type: result.measurement_type,
+  };
+}
+
+function handleExploreTopology(args: Record<string, unknown>): unknown {
+  const target     = requireString(args, 'target');
+  const returnType = requireString(args, 'return_type');
+  const result = getGeometryBinding().exploreTopology(target, returnType);
+  return {
+    entity_ids: result.entity_ids,
+  };
+}
+
+function handleFuseBodies(args: Record<string, unknown>): unknown {
+  const tools = requireStringArray(args, 'tools');
+  const fuzzyTolerance = (args['fuzzy_tolerance'] as number | undefined) ?? 1e-5;
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().fuseBodies(tools, fuzzyTolerance);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: result.solid_id,
+    disjoint: result.disjoint,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    shape_history: result.shape_history ?? [],
+  };
+}
+
+function handleCutBodies(args: Record<string, unknown>): unknown {
+  const blank = requireString(args, 'blank');
+  const tools = requireStringArray(args, 'tools');
+  const keepTools = (args['keep_tools'] as boolean | undefined) ?? false;
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().cutBodies(blank, tools, keepTools);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: result.solid_id,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    shape_history: result.shape_history ?? [],
+  };
+}
+
+function handleIntersectBodies(args: Record<string, unknown>): unknown {
+  const targetA = requireString(args, 'target_a');
+  const targetB = requireString(args, 'target_b');
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().intersectBodies(targetA, targetB);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: result.solid_id,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    shape_history: result.shape_history ?? [],
   };
 }
 
@@ -1417,7 +2493,7 @@ function handleSplitBodyByBends(args: Record<string, unknown>): unknown {
     : 1.0;
   const maxRecursionDepth = typeof args['max_recursion_depth'] === 'number'
     ? Math.max(0, Math.round(args['max_recursion_depth']))
-    : 0;
+    : 1;
 
   if (threshold < 0) {
     throwError(ErrorCodes.GE_DECOMPOSE_BY_BENDS_FAILED, 'angle_threshold_deg must be non-negative', true);
@@ -1448,9 +2524,468 @@ function handleSplitBodyByBends(args: Record<string, unknown>): unknown {
     protrusion_ids: result.protrusion_ids,
     protrusion_count: result.protrusion_ids.length,
     protrusion_bboxes: result.protrusion_bboxes,
+    protrusion_parents: result.protrusion_parents,
     detected_mode: result.detected_mode,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
     mesh_urls: allIds.map(id => `${meshBaseUrl}/mesh/${id}.glb`),
     shape_history: result.shape_history ?? [],
+  };
+}
+
+function handleRemoveProtrusions(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  const angleThresholdDeg = typeof args['angle_threshold_deg'] === 'number'
+    ? args['angle_threshold_deg']
+    : 30.0;
+  const maxThicknessMm = typeof args['max_thickness_mm'] === 'number'
+    ? args['max_thickness_mm']
+    : 5.0;
+
+  const ctx = resolveTransactionContext(args);
+  const result = getGeometryBinding().removeProtrusions(partId, angleThresholdDeg, maxThicknessMm);
+
+  for (const shellId of result.protrusion_ids) {
+    session.registerShell(shellId);
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  const allIds = [result.cleaned_part_id, ...result.protrusion_ids];
+  return {
+    cleaned_part_id: result.cleaned_part_id,
+    protrusion_ids: result.protrusion_ids,
+    protrusion_count: result.protrusion_count,
+    protrusion_bboxes: result.protrusion_bboxes,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
+    mesh_urls: allIds.map(id => `${meshBaseUrl}/mesh/${id}.glb`),
+  };
+}
+
+function handleTranslateBody(args: Record<string, unknown>): unknown {
+  const targets = requireStringArray(args, 'targets');
+  const vec = args['vector'] as number[];
+  if (!Array.isArray(vec) || vec.length < 3) {
+    throwError(ErrorCodes.GE_BOOLEAN_FAILURE, 'vector must be an array of 3 numbers', false);
+  }
+  const keepOriginal = (args['keep_original'] as boolean | undefined) ?? false;
+  const ctx = resolveTransactionContext(args);
+
+  const results = [];
+  for (const target of targets) {
+    const res = getGeometryBinding().translateBody(target, vec[0], vec[1], vec[2], keepOriginal);
+    results.push(res);
+    session.registerShell(res.solid_id);
+    if (ctx.mode === 'join') {
+      transactionRegistry.appendHistory(ctx.transactionId, res.shape_history ?? []);
+    }
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: results.length === 1 ? results[0].solid_id : results[results.length - 1].solid_id,
+    solid_ids: results.map(r => r.solid_id),
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : results[0].rollback_token,
+    mesh_urls: results.map(r => `${meshBaseUrl}/mesh/${r.solid_id}.glb`),
+    shape_history: results.flatMap(r => r.shape_history ?? []),
+  };
+}
+
+function handleRotateBody(args: Record<string, unknown>): unknown {
+  const targets = requireStringArray(args, 'targets');
+  const axisOrigin = args['axis_origin'] as number[];
+  const axisDirection = args['axis_direction'] as number[];
+  const angleDeg = args['angle_degrees'] as number;
+  if (!Array.isArray(axisOrigin) || axisOrigin.length < 3) {
+    throwError(ErrorCodes.GE_BOOLEAN_FAILURE, 'axis_origin must be an array of 3 numbers', false);
+  }
+  if (!Array.isArray(axisDirection) || axisDirection.length < 3) {
+    throwError(ErrorCodes.GE_BOOLEAN_FAILURE, 'axis_direction must be an array of 3 numbers', false);
+  }
+  if (typeof angleDeg !== 'number') {
+    throwError(ErrorCodes.GE_BOOLEAN_FAILURE, 'angle_degrees must be a number', false);
+  }
+  const keepOriginal = (args['keep_original'] as boolean | undefined) ?? false;
+  const ctx = resolveTransactionContext(args);
+
+  const results = [];
+  for (const target of targets) {
+    const res = getGeometryBinding().rotateBody(
+      target,
+      axisOrigin[0],
+      axisOrigin[1],
+      axisOrigin[2],
+      axisDirection[0],
+      axisDirection[1],
+      axisDirection[2],
+      angleDeg,
+      keepOriginal,
+    );
+    results.push(res);
+    session.registerShell(res.solid_id);
+    if (ctx.mode === 'join') {
+      transactionRegistry.appendHistory(ctx.transactionId, res.shape_history ?? []);
+    }
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: results.length === 1 ? results[0].solid_id : results[results.length - 1].solid_id,
+    solid_ids: results.map(r => r.solid_id),
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : results[0].rollback_token,
+    mesh_urls: results.map(r => `${meshBaseUrl}/mesh/${r.solid_id}.glb`),
+    shape_history: results.flatMap(r => r.shape_history ?? []),
+  };
+}
+
+function handleMirrorBody(args: Record<string, unknown>): unknown {
+  const targets = requireStringArray(args, 'targets');
+  const planeOrigin = args['plane_origin'] as number[];
+  const planeNormal = args['plane_normal'] as number[];
+  if (!Array.isArray(planeOrigin) || planeOrigin.length < 3) {
+    throwError(ErrorCodes.GE_BOOLEAN_FAILURE, 'plane_origin must be an array of 3 numbers', false);
+  }
+  if (!Array.isArray(planeNormal) || planeNormal.length < 3) {
+    throwError(ErrorCodes.GE_BOOLEAN_FAILURE, 'plane_normal must be an array of 3 numbers', false);
+  }
+  const keepOriginal = (args['keep_original'] as boolean | undefined) ?? false;
+  const ctx = resolveTransactionContext(args);
+
+  const results = [];
+  for (const target of targets) {
+    const res = getGeometryBinding().mirrorBody(
+      target,
+      planeOrigin[0],
+      planeOrigin[1],
+      planeOrigin[2],
+      planeNormal[0],
+      planeNormal[1],
+      planeNormal[2],
+      keepOriginal,
+    );
+    results.push(res);
+    session.registerShell(res.solid_id);
+    if (ctx.mode === 'join') {
+      transactionRegistry.appendHistory(ctx.transactionId, res.shape_history ?? []);
+    }
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: results.length === 1 ? results[0].solid_id : results[results.length - 1].solid_id,
+    solid_ids: results.map(r => r.solid_id),
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : results[0].rollback_token,
+    mesh_urls: results.map(r => `${meshBaseUrl}/mesh/${r.solid_id}.glb`),
+    shape_history: results.flatMap(r => r.shape_history ?? []),
+  };
+}
+
+function handleScaleBody(args: Record<string, unknown>): unknown {
+  const targets = requireStringArray(args, 'targets');
+  const origin = args['origin'] as number[];
+  const scaleFactor = args['scale_factor'] as number;
+  if (!Array.isArray(origin) || origin.length < 3) {
+    throwError(ErrorCodes.GE_BOOLEAN_FAILURE, 'origin must be an array of 3 numbers', false);
+  }
+  if (typeof scaleFactor !== 'number' || scaleFactor <= 0) {
+    throwError(ErrorCodes.GE_SCALE_NON_UNIFORM, 'scale_factor must be a positive number', false);
+  }
+  const keepOriginal = (args['keep_original'] as boolean | undefined) ?? false;
+  const ctx = resolveTransactionContext(args);
+
+  const results = [];
+  for (const target of targets) {
+    const res = getGeometryBinding().scaleBody(
+      target,
+      origin[0],
+      origin[1],
+      origin[2],
+      scaleFactor,
+      keepOriginal,
+    );
+    results.push(res);
+    session.registerShell(res.solid_id);
+    if (ctx.mode === 'join') {
+      transactionRegistry.appendHistory(ctx.transactionId, res.shape_history ?? []);
+    }
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: results.length === 1 ? results[0].solid_id : results[results.length - 1].solid_id,
+    solid_ids: results.map(r => r.solid_id),
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : results[0].rollback_token,
+    mesh_urls: results.map(r => `${meshBaseUrl}/mesh/${r.solid_id}.glb`),
+    shape_history: results.flatMap(r => r.shape_history ?? []),
+  };
+}
+
+function handleAlignToFace(args: Record<string, unknown>): unknown {
+  const srcFace = requireString(args, 'source_face');
+  const dstFace = requireString(args, 'destination_face');
+  const flipNormal = (args['flip_normal'] as boolean | undefined) ?? false;
+  const keepOriginal = (args['keep_original'] as boolean | undefined) ?? false;
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().alignToFace(srcFace, dstFace, flipNormal, keepOriginal);
+  session.registerShell(result.solid_id);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: result.solid_id,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    shape_history: result.shape_history ?? [],
+  };
+}
+
+function handleFilletEdges(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  const targets = requireStringArray(args, 'targets');
+  const radius = args['radius'] as number;
+  if (typeof radius !== 'number' || radius <= 0) {
+    throwError(ErrorCodes.GE_FILLET_TOO_LARGE, 'radius must be a positive number', false);
+  }
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().filletEdges(partId, targets, radius);
+  session.registerShell(result.solid_id);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: result.solid_id,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    shape_history: result.shape_history ?? [],
+  };
+}
+
+function handleChamferEdges(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  const targets = requireStringArray(args, 'targets');
+  const distance = args['distance'] as number;
+  if (typeof distance !== 'number' || distance <= 0) {
+    throwError(ErrorCodes.GE_CHAMFER_TOO_LARGE, 'distance must be a positive number', false);
+  }
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().chamferEdges(partId, targets, distance);
+  session.registerShell(result.solid_id);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: result.solid_id,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    shape_history: result.shape_history ?? [],
+  };
+}
+
+function handleSimplifyBody(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  const unifyFaces = (args['unify_faces'] as boolean | undefined) ?? true;
+  const unifyEdges = (args['unify_edges'] as boolean | undefined) ?? true;
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().simplifyBody(partId, unifyFaces, unifyEdges);
+  session.registerShell(result.solid_id);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: result.solid_id,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    shape_history: result.shape_history ?? [],
+  };
+}
+
+function handleHealGeometryEx(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  const fixTolerances = (args['fix_tolerances'] as boolean | undefined) ?? true;
+  const fixWires = (args['fix_wires'] as boolean | undefined) ?? true;
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().healGeometryEx(partId, fixTolerances, fixWires);
+  session.registerShell(result.solid_id);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: result.solid_id,
+    heal_complete: result.heal_complete,
+    remaining_issues: result.remaining_issues,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    shape_history: result.shape_history ?? [],
+  };
+}
+
+function handleOffsetShape(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  const offsetValue = args['offset_value'] as number;
+  const tolerance = (args['tolerance'] as number | undefined) ?? 1e-4;
+  if (typeof offsetValue !== 'number') {
+    throwError(ErrorCodes.GE_BOOLEAN_FAILURE, 'offset_value must be a number', false);
+  }
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().offsetShape(partId, offsetValue, tolerance);
+  session.registerShell(result.solid_id);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: result.solid_id,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    shape_history: result.shape_history ?? [],
+  };
+}
+
+function handleDeleteFace(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  const targets = requireStringArray(args, 'targets');
+  const healRemaining = (args['heal_remaining'] as boolean | undefined) ?? true;
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().deleteFace(partId, targets, healRemaining);
+  for (const solidId of result.solid_ids) {
+    session.registerShell(solidId);
+  }
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_ids: result.solid_ids,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    mesh_urls: result.solid_ids.map(id => `${meshBaseUrl}/mesh/${id}.glb`),
+    shape_history: result.shape_history ?? [],
+  };
+}
+
+function handleSewFaces(args: Record<string, unknown>): unknown {
+  const targets = requireStringArray(args, 'targets');
+  const tolerance = (args['tolerance'] as number | undefined) ?? 1e-3;
+  const makeSolid = (args['make_solid'] as boolean | undefined) ?? false;
+  const ctx = resolveTransactionContext(args);
+
+  const result = getGeometryBinding().sewFaces(targets, tolerance, makeSolid);
+  session.registerShell(result.solid_id);
+
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    shell_id: result.solid_id,
+    sew_complete: result.sew_complete,
+    free_edges: result.free_edges,
+    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    shape_history: result.shape_history ?? [],
+  };
+}
+
+function handleCreateAssemblyDocument(args: Record<string, unknown>): unknown {
+  const ctx = resolveTransactionContext(args);
+  if (ctx.mode !== 'join') {
+    throwError(ErrorCodes.TRANSACTION_REQUIRED, 'create_assembly_document requires an active transaction', false);
+  }
+  const result = getGeometryBinding().createAssemblyDocument();
+  return {
+    assembly_id: result.assembly_id,
+    rollback_token: ctx.transactionId,
+  };
+}
+
+function handleAddAssemblyInstance(args: Record<string, unknown>): unknown {
+  const assemblyId = requireString(args, 'assembly_id');
+  const target = requireString(args, 'target');
+  const location = args['location'] as { translation: number[]; orientation: number[] } | undefined;
+  const ctx = resolveTransactionContext(args);
+  if (ctx.mode !== 'join') {
+    throwError(ErrorCodes.TRANSACTION_REQUIRED, 'add_assembly_instance requires an active transaction', false);
+  }
+
+  let tx = 0.0, ty = 0.0, tz = 0.0;
+  let qw = 1.0, qx = 0.0, qy = 0.0, qz = 0.0;
+
+  if (location) {
+    const { translation, orientation } = location;
+    if (Array.isArray(translation) && translation.length === 3) {
+      [tx, ty, tz] = translation;
+    }
+    if (Array.isArray(orientation) && orientation.length === 4) {
+      [qw, qx, qy, qz] = orientation;
+    }
+  }
+
+  const result = getGeometryBinding().addAssemblyInstance(
+    assemblyId,
+    target,
+    tx,
+    ty,
+    tz,
+    qw,
+    qx,
+    qy,
+    qz,
+  );
+
+  return {
+    component_id: result.component_id,
+    rollback_token: ctx.transactionId,
+  };
+}
+
+function handleMateRigid(args: Record<string, unknown>): unknown {
+  const assemblyId = requireString(args, 'assembly_id');
+  const srcFace = requireString(args, 'source_face');
+  const dstFace = requireString(args, 'destination_face');
+  const flipAlignment = (args['flip_alignment'] as boolean | undefined) ?? false;
+  const ctx = resolveTransactionContext(args);
+  if (ctx.mode !== 'join') {
+    throwError(ErrorCodes.TRANSACTION_REQUIRED, 'mate_rigid requires an active transaction', false);
+  }
+
+  const result = getGeometryBinding().mateRigid(assemblyId, srcFace, dstFace, flipAlignment);
+
+  return {
+    component_id: result.component_id,
+    location_matrix: result.location_matrix,
+    rollback_token: ctx.transactionId,
+  };
+}
+
+function handleListAssemblyTree(args: Record<string, unknown>): unknown {
+  const assemblyId = requireString(args, 'assembly_id');
+  const result = getGeometryBinding().listAssemblyTree(assemblyId);
+  return {
+    assembly_id: result.assembly_id,
+    root: result.root,
   };
 }

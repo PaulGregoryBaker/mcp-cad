@@ -27,11 +27,27 @@ export default defineConfig({
       },
       {
         // Integration tests: validate multi-component orchestration flows.
-        // pool:'forks' gives each file its own child process so the C++ addon's
-        // global g_service singleton is not shared between test files.
+        // pool:'forks' + singleFork:true runs all integration files sequentially
+        // in ONE forked child process. The C++ addon's g_service singleton is
+        // process-scoped and accumulates state (shells, snapshots) across calls;
+        // running files in parallel forks gives JS isolation but not native
+        // isolation, which caused intermittent GE_SHELL_NOT_FOUND failures when
+        // one test's clearSnapshots/restoreSnapshot wiped state mid-run for a
+        // sibling. Sequential execution removes that interference at the cost
+        // of run time — acceptable trade-off until we add a native reset API.
+        // 4 GB heap: OCCT boolean ops on multi-shell STEP files accumulate native
+        // memory across the full sequential run; without this the fork OOMs and
+        // the C++ unordered_map for shells can be left in a partial-insert state,
+        // causing GE_SHELL_NOT_FOUND on subsequently-allocated shell IDs.
         name: 'integration',
         include: ['tests/integration/**/*.integration.test.ts'],
         pool: 'forks',
+        poolOptions: {
+          forks: {
+            singleFork: true,
+            execArgv: ['--max-old-space-size=4096'],
+          },
+        },
       },
       {
         // E2E tests: validate MVP production path (INF-03 golden path)

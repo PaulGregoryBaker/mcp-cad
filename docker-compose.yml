@@ -13,6 +13,23 @@
 # Task: T111
 
 services:
+  dolt-sql-server:
+    image: dolthub/dolt-sql-server:latest
+    ports:
+      - "3306:3306"
+    environment:
+      - DOLT_ROOT_HOST=%
+      - DOLT_ROOT_PASSWORD=
+    volumes:
+      - dolt-data:/var/lib/dolt
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "--silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
   mcp-cad:
     build:
       context: .
@@ -26,6 +43,9 @@ services:
     volumes:
       - ./ts/config:/app/config:ro
       - ./ts/exports:/app/exports:rw
+    depends_on:
+      dolt-sql-server:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:8080/healthz', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
       interval: 30s
@@ -33,3 +53,6 @@ services:
       retries: 3
       start_period: 10s
     restart: unless-stopped
+
+volumes:
+  dolt-data:

@@ -69,6 +69,41 @@ describe('MCP Server: tool definitions', () => {
     expect(toolNames).toContain('rollback');
   });
 
+  it('defines all 22 expected Feature 006 geometry primitive tools', () => {
+    const defs = getToolDefinitions();
+    const toolNames = defs.map((t: Record<string, unknown>) => t.name);
+
+    const expectedNewTools = [
+      'fuse_bodies',
+      'cut_bodies',
+      'intersect_bodies',
+      'bounding_box',
+      'mass_properties',
+      'measure_distance',
+      'explore_topology',
+      'translate_body',
+      'rotate_body',
+      'mirror_body',
+      'scale_body',
+      'align_to_face',
+      'fillet_edges',
+      'chamfer_edges',
+      'simplify_body',
+      'heal_geometry_ex',
+      'offset_shape',
+      'delete_face',
+      'sew_faces',
+      'create_assembly_document',
+      'add_assembly_instance',
+      'mate_rigid',
+      'list_assembly_tree',
+    ];
+
+    for (const tool of expectedNewTools) {
+      expect(toolNames).toContain(tool);
+    }
+  });
+
   it('each tool has description and inputSchema', () => {
     const defs = getToolDefinitions();
     for (const tool of defs) {

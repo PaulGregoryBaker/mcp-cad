@@ -72,8 +72,6 @@ jobs:
     name: Merge CI (+ BC integration + sanitizer)
     runs-on: ubuntu-22.04
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: []
-
     steps:
       - uses: actions/checkout@v4
         with:
@@ -88,6 +86,59 @@ jobs:
 
       - name: Install TypeScript dependencies
         run: cd ts && npm ci
+
+      - name: Install Dolt
+        run: |
+          curl -L https://github.com/dolthub/dolt/releases/latest/download/install.sh | sudo bash
+          dolt version
+
+      - name: Cache Dolt data directory
+        uses: actions/cache@v3
+        with:
+          path: /tmp/dolt
+          key: dolt-data-${{ hashFiles('ts/src/semantic/migrations/**') }}
+          restore-keys: dolt-data-
+
+      - name: Start Dolt SQL server
+        run: |
+          dolt config --global --add user.email "ci@mcp-cad.test"
+          dolt config --global --add user.name "MCP-CAD CI"
+          mkdir -p /tmp/dolt/semantic_braai
+          if [ ! -f /tmp/dolt/semantic_braai/.dolt/config.json ]; then
+            cd /tmp/dolt/semantic_braai && dolt init
+          fi
+          dolt sql-server --host=127.0.0.1 --port=3306 --user=root --password="" \
+            --data-dir=/tmp/dolt &
+          echo $! > /tmp/dolt/dolt.pid
+          for i in $(seq 1 30); do
+            if dolt sql --host=127.0.0.1 --port=3306 --user=root \
+                --password="" -q "SELECT 1" 2>/dev/null; then
+              echo "Dolt ready after ${i}s"; break
+            fi
+            sleep 1
+          done
+
+      - name: Apply Dolt migrations
+        run: |
+          cd ts && node -e "
+            const { createConnection } = require('mysql2/promise');
+            const fs = require('fs');
+            const path = require('path');
+            (async () => {
+              const conn = await createConnection({host:'127.0.0.1',port:3306,user:'root',password:'',database:'semantic_braai',multipleStatements:true});
+              const dir = path.join(__dirname,'src/semantic/migrations');
+              if (!fs.existsSync(dir)) { conn.end(); return; }
+              const files = fs.readdirSync(dir).filter(f=>f.endsWith('.sql')).sort();
+              for (const f of files) {
+                await conn.query(fs.readFileSync(path.join(dir,f),'utf8'));
+                console.log('Applied:', f);
+              }
+              await conn.end();
+            })().catch(e=>{console.error(e);process.exit(1)});
+          "
+        env:
+          DOLT_HOST: 127.0.0.1
+          DOLT_PORT: 3306
 
       - name: Install vcpkg + C++ deps
         run: |
@@ -106,6 +157,16 @@ jobs:
 
       - name: Run all TypeScript tests
         run: cd ts && npm test
+        env:
+          DOLT_HOST: 127.0.0.1
+          DOLT_PORT: 3306
+
+      - name: Stop Dolt SQL server
+        if: always()
+        run: |
+          if [ -f /tmp/dolt/dolt.pid ]; then
+            kill "$(cat /tmp/dolt/dolt.pid)" 2>/dev/null || true
+          fi
 
       - name: Run C++ tests under AddressSanitizer
         run: |
@@ -143,6 +204,59 @@ jobs:
       - name: Install TypeScript dependencies
         run: cd ts && npm ci
 
+      - name: Install Dolt
+        run: |
+          curl -L https://github.com/dolthub/dolt/releases/latest/download/install.sh | sudo bash
+          dolt version
+
+      - name: Cache Dolt data directory
+        uses: actions/cache@v3
+        with:
+          path: /tmp/dolt
+          key: dolt-data-${{ hashFiles('ts/src/semantic/migrations/**') }}
+          restore-keys: dolt-data-
+
+      - name: Start Dolt SQL server
+        run: |
+          dolt config --global --add user.email "ci@mcp-cad.test"
+          dolt config --global --add user.name "MCP-CAD CI"
+          mkdir -p /tmp/dolt/semantic_braai
+          if [ ! -f /tmp/dolt/semantic_braai/.dolt/config.json ]; then
+            cd /tmp/dolt/semantic_braai && dolt init
+          fi
+          dolt sql-server --host=127.0.0.1 --port=3306 --user=root --password="" \
+            --data-dir=/tmp/dolt &
+          echo $! > /tmp/dolt/dolt.pid
+          for i in $(seq 1 30); do
+            if dolt sql --host=127.0.0.1 --port=3306 --user=root \
+                --password="" -q "SELECT 1" 2>/dev/null; then
+              echo "Dolt ready after ${i}s"; break
+            fi
+            sleep 1
+          done
+
+      - name: Apply Dolt migrations
+        run: |
+          cd ts && node -e "
+            const { createConnection } = require('mysql2/promise');
+            const fs = require('fs');
+            const path = require('path');
+            (async () => {
+              const conn = await createConnection({host:'127.0.0.1',port:3306,user:'root',password:'',database:'semantic_braai',multipleStatements:true});
+              const dir = path.join(__dirname,'src/semantic/migrations');
+              if (!fs.existsSync(dir)) { conn.end(); return; }
+              const files = fs.readdirSync(dir).filter(f=>f.endsWith('.sql')).sort();
+              for (const f of files) {
+                await conn.query(fs.readFileSync(path.join(dir,f),'utf8'));
+                console.log('Applied:', f);
+              }
+              await conn.end();
+            })().catch(e=>{console.error(e);process.exit(1)});
+          "
+        env:
+          DOLT_HOST: 127.0.0.1
+          DOLT_PORT: 3306
+
       - name: Install vcpkg + C++ deps
         run: |
           git clone https://github.com/microsoft/vcpkg.git $VCPKG_ROOT
@@ -159,6 +273,16 @@ jobs:
 
       - name: Run full TypeScript test suite with coverage
         run: cd ts && npm run test:coverage
+        env:
+          DOLT_HOST: 127.0.0.1
+          DOLT_PORT: 3306
+
+      - name: Stop Dolt SQL server
+        if: always()
+        run: |
+          if [ -f /tmp/dolt/dolt.pid ]; then
+            kill "$(cat /tmp/dolt/dolt.pid)" 2>/dev/null || true
+          fi
 
       - name: Run all C++ tests
         run: cd cpp/build && ctest --output-on-failure

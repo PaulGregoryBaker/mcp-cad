@@ -7,8 +7,16 @@ ts/dist/
 ts/coverage/
 
 # ─── Dependencies ────────────────────────────────────────────────────────────
+node_modules/
 ts/node_modules/
 /opt/vcpkg/
+
+# ─── Runtime state ───────────────────────────────────────────────────────────
+state/
+
+# ─── Tool caches ─────────────────────────────────────────────────────────────
+.claude/
+cpp/tests/fixtures/.formaition/
 
 # ─── C++ artifacts ───────────────────────────────────────────────────────────
 *.o
