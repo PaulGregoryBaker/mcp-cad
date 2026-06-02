@@ -9,6 +9,9 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { toStructuredError, throwError, ErrorCodes } from '../mcp/errors';
 import type {
+  AlignmentResult,
+  SplitBodyByBendsResult,
+  RemoveProtrusionsResult,
   TopologyGraph,
   ManifoldResult,
   BooleanCutResult,
@@ -159,6 +162,18 @@ export interface GeometryAddon {
   offsetFace(partId: string, faceId: string, distanceMm: number): OffsetFaceResult;
   addFlange(partId: string, edgeId: string, lengthMm: number, angleDeg: number, bendRadiusMm: number): AddFlangeResult;
   ripEdge(partId: string, edgeId: string): RipEdgeResult;
+  centerAndAlignBody(partId: string, transactionId: string): {
+    solid_id: string;
+    centroid: [number, number, number];
+    rotation_matrix: [number, number, number, number, number, number, number, number, number];
+    rollbackToken: string;
+    shape_history?: Array<{
+      verdict: 'modified' | 'generated' | 'deleted';
+      original_id: string;
+      new_id: string;
+      operation_label: string;
+    }>;
+  };
   splitBodyByBends(
     partId: string,
     angleThresholdDeg: number,
@@ -184,12 +199,19 @@ export interface GeometryAddon {
     partId: string,
     angleThresholdDeg?: number,
     maxThicknessMm?: number,
+    algorithm?: string,
   ): {
     cleaned_part_id: string;
     protrusion_ids: string[];
     protrusion_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>;
     protrusion_count: number;
     rollbackToken: string;
+    shape_history?: Array<{
+      verdict: 'modified' | 'generated' | 'deleted';
+      original_id: string;
+      new_id: string;
+      operation_label: string;
+    }>;
   };
   sewFaces(entityIds: string[], tolerance: number, makeSolid: boolean): SewResult;
   createAssemblyDocument(): CreateAssemblyResult;
@@ -743,17 +765,46 @@ export class GeometryBinding {
     }
   }
 
+  centerAndAlignBody(partId: string, transactionId: string): AlignmentResult & { rollbackToken: string } {
+    try {
+      const res = this.addon.centerAndAlignBody(partId, transactionId);
+      return {
+        solid_id: res.solid_id,
+        centroid: res.centroid,
+        rotation_matrix: res.rotation_matrix,
+        rollback_token: res.rollbackToken,
+        rollbackToken: res.rollbackToken,
+        shape_history: res.shape_history,
+      };
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
   splitBodyByBends(
     partId: string,
     angleThresholdDeg: number,
     maxThicknessMm?: number,
     defaultThicknessMm?: number,
     maxRecursionDepth?: number,
-  ): ReturnType<GeometryAddon['splitBodyByBends']> {
+  ): SplitBodyByBendsResult & { rollbackToken: string } {
     try {
-      return this.addon.splitBodyByBends(
+      const res = this.addon.splitBodyByBends(
         partId, angleThresholdDeg, maxThicknessMm, defaultThicknessMm, maxRecursionDepth,
       );
+      return {
+        panel_ids: res.panel_ids,
+        panel_count: res.panel_ids.length,
+        panel_bboxes: res.panel_bboxes,
+        protrusion_ids: res.protrusion_ids,
+        protrusion_count: res.protrusion_ids.length,
+        protrusion_bboxes: res.protrusion_bboxes,
+        protrusion_parents: res.protrusion_parents,
+        detected_mode: res.detected_mode,
+        rollback_token: res.rollbackToken,
+        rollbackToken: res.rollbackToken,
+        shape_history: res.shape_history,
+      };
     } catch (err) {
       throw toStructuredError(err);
     }
@@ -763,9 +814,19 @@ export class GeometryBinding {
     partId: string,
     angleThresholdDeg?: number,
     maxThicknessMm?: number,
-  ): ReturnType<GeometryAddon['removeProtrusions']> {
+    algorithm?: 'loop_traversal' | 'legacy_volumetric',
+  ): RemoveProtrusionsResult & { rollbackToken: string } {
     try {
-      return this.addon.removeProtrusions(partId, angleThresholdDeg, maxThicknessMm);
+      const res = this.addon.removeProtrusions(partId, angleThresholdDeg, maxThicknessMm, algorithm);
+      return {
+        cleaned_part_id: res.cleaned_part_id,
+        protrusion_ids: res.protrusion_ids,
+        protrusion_bboxes: res.protrusion_bboxes,
+        protrusion_count: res.protrusion_count,
+        rollback_token: res.rollbackToken,
+        rollbackToken: res.rollbackToken,
+        shape_history: res.shape_history,
+      };
     } catch (err) {
       throw toStructuredError(err);
     }

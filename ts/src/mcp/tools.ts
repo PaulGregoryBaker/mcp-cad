@@ -661,10 +661,28 @@ export function getToolDefinitions(): object[] {
             minimum: 0,
             description: 'Maximum protrusion thickness to detect. Geometry thicker than this is treated as a primary panel face. Default 5.0 mm.',
           },
+          algorithm: {
+            type: 'string',
+            enum: ['loop_traversal', 'legacy_volumetric'],
+            default: 'loop_traversal',
+            description: 'Algorithmic path. Defaults to loop_traversal for high speed; legacy_volumetric is kept for benchmarking.',
+          },
           transaction_id: { type: 'string' },
         },
         required: ['part_id'],
       },
+    },
+    {
+      name: 'center_and_align_body',
+      description: 'Calculates the Center of Mass (centroid) of a 3D solid/shell, translates it to [0,0,0], and rotates it so its dominant planar face normal aligns with the Z-axis. Mutating — requires transaction_id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_id: { type: 'string', description: 'ID of the shell body to re-orient' },
+          transaction_id: { type: 'string', description: 'Active transaction ID' }
+        },
+        required: ['part_id', 'transaction_id']
+      }
     },
     {
       name: 'close_gap',
@@ -1222,6 +1240,9 @@ export async function dispatchTool(
 
       case 'remove_protrusions':
         return handleRemoveProtrusions(args);
+
+      case 'center_and_align_body':
+        return handleCenterAndAlignBody(args);
 
       case 'declare_semantic_entity':
         return await handleDeclareSemanticEntity(args);
@@ -2540,10 +2561,15 @@ function handleRemoveProtrusions(args: Record<string, unknown>): unknown {
   const maxThicknessMm = typeof args['max_thickness_mm'] === 'number'
     ? args['max_thickness_mm']
     : 5.0;
+  const algorithm = typeof args['algorithm'] === 'string' &&
+    (args['algorithm'] === 'loop_traversal' || args['algorithm'] === 'legacy_volumetric')
+    ? args['algorithm']
+    : 'loop_traversal';
 
   const ctx = resolveTransactionContext(args);
-  const result = getGeometryBinding().removeProtrusions(partId, angleThresholdDeg, maxThicknessMm);
+  const result = getGeometryBinding().removeProtrusions(partId, angleThresholdDeg, maxThicknessMm, algorithm);
 
+  session.registerShell(result.cleaned_part_id);
   for (const shellId of result.protrusion_ids) {
     session.registerShell(shellId);
   }
@@ -2557,6 +2583,31 @@ function handleRemoveProtrusions(args: Record<string, unknown>): unknown {
     protrusion_bboxes: result.protrusion_bboxes,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
     mesh_urls: allIds.map(id => `${meshBaseUrl}/mesh/${id}.glb`),
+  };
+}
+
+function handleCenterAndAlignBody(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  const ctx = resolveTransactionContext(args);
+  if (ctx.mode !== 'join') {
+    throwError(ErrorCodes.TRANSACTION_REQUIRED, 'center_and_align_body requires an active transaction', false);
+  }
+
+  const result = getGeometryBinding().centerAndAlignBody(partId, ctx.transactionId);
+
+  session.registerShell(result.solid_id);
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
+  }
+
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return {
+    solid_id: result.solid_id,
+    centroid: result.centroid,
+    rotation_matrix: result.rotation_matrix,
+    rollback_token: ctx.transactionId,
+    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    shape_history: result.shape_history ?? [],
   };
 }
 

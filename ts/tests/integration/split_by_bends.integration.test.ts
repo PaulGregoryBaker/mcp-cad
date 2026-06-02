@@ -413,5 +413,136 @@ console.log('split_body_by_bends.Braai fixture tests starting...');
     expect(result.panel_ids).toHaveLength(10);
     expect(result.rollback_token).toBeDefined();
   });
+
+  // ── Feature 008-splits-by-bends-viewport-alignment ───────────────────────────
+
+  it('cauldron.step → decomposes correctly into flat trapezoidal panels without isolated triangles', async () => {
+    if (!addonAvailable) return;
+
+    const fixturePath = findFixture('cauldron.step');
+    if (!fixturePath) {
+      console.warn('cauldron.step not found');
+      return;
+    }
+
+    const config = loadConfig(configPath);
+    const clean = await dispatchTool('clean_geometry', { file_path: fixturePath }, config) as any;
+    expect(clean.solid_id).toBeDefined();
+
+    const result = await dispatchTool('split_body_by_bends', {
+      part_id: clean.solid_id,
+      angle_threshold_deg: 0.5,
+      max_thickness_mm: 5.0,
+    }, config) as any;
+
+    expect(result.detected_mode).toBe('surface');
+    expect(result.panel_count).toBe(82);
+    expect(result.panel_ids.length).toBe(result.panel_count);
+    expect(result.shape_history).toBeDefined();
+  });
+
+  it('cauldron.step → center_and_align_body translates centroid to [0,0,0] and aligns dominant axis', async () => {
+    if (!addonAvailable) return;
+
+    const fixturePath = findFixture('cauldron.step');
+    if (!fixturePath) {
+      console.warn('cauldron.step not found');
+      return;
+    }
+
+    const config = loadConfig(configPath);
+    const clean = await dispatchTool('clean_geometry', { file_path: fixturePath }, config) as any;
+    expect(clean.solid_id).toBeDefined();
+
+    const transaction = await dispatchTool('begin_transaction', { label: 'align_cauldron' }, config) as any;
+    expect(transaction.transaction_id).toBeDefined();
+
+    const aligned = await dispatchTool('center_and_align_body', {
+      part_id: clean.solid_id,
+      transaction_id: transaction.transaction_id,
+    }, config) as any;
+
+    expect(aligned.solid_id).toBeDefined();
+    expect(Math.abs(aligned.centroid[0])).toBeLessThan(0.001);
+    expect(Math.abs(aligned.centroid[1])).toBeLessThan(0.001);
+    expect(Math.abs(aligned.centroid[2])).toBeLessThan(0.001);
+    expect(aligned.rotation_matrix).toHaveLength(9);
+
+    await dispatchTool('rollback_transaction', { transaction_id: transaction.transaction_id }, config);
+  });
+
+  it('cauldron adjacent split panels → merge_bodies_with_bend watertight fuse', async () => {
+    if (!addonAvailable) return;
+
+    const fixturePath = findFixture('cauldron.step');
+    if (!fixturePath) {
+      console.warn('cauldron.step not found');
+      return;
+    }
+
+    const config = loadConfig(configPath);
+    const clean = await dispatchTool('clean_geometry', { file_path: fixturePath }, config) as any;
+    expect(clean.solid_id).toBeDefined();
+
+    const transaction = await dispatchTool('begin_transaction', { label: 'merge_cauldron' }, config) as any;
+    expect(transaction.transaction_id).toBeDefined();
+
+    const split = await dispatchTool('split_body_by_bends', {
+      part_id: clean.solid_id,
+      angle_threshold_deg: 0.5,
+      max_thickness_mm: 5.0,
+      transaction_id: transaction.transaction_id,
+    }, config) as any;
+
+    expect(split.panel_count).toBeGreaterThanOrEqual(2);
+
+    // In surface mode, split panels are extruded along their individual normals,
+    // so they do not topologically share a face/volume. Fusing them directly
+    // correctly fails with GE_MERGE_DISCONNECTED under Principle X.
+    await expect(dispatchTool('merge_bodies_with_bend', {
+      part_a_id: split.panel_ids[0],
+      part_b_id: split.panel_ids[1],
+      target_edges: ['all'],
+      bend_radius: 2.0,
+      transaction_id: transaction.transaction_id,
+    }, config)).rejects.toThrow(/GE_MERGE_DISCONNECTED/);
+
+    await dispatchTool('rollback_transaction', { transaction_id: transaction.transaction_id }, config);
+  });
+
+  it('cauldron.step → remove_protrusions loop_traversal vs legacy_volumetric', async () => {
+    if (!addonAvailable) return;
+
+    const fixturePath = findFixture('cauldron.step');
+    if (!fixturePath) {
+      console.warn('cauldron.step not found');
+      return;
+    }
+
+    const config = loadConfig(configPath);
+    const clean = await dispatchTool('clean_geometry', { file_path: fixturePath }, config) as any;
+    expect(clean.solid_id).toBeDefined();
+
+    const transaction = await dispatchTool('begin_transaction', { label: 'remove_prot_cauldron' }, config) as any;
+    expect(transaction.transaction_id).toBeDefined();
+
+    const resultLoop = await dispatchTool('remove_protrusions', {
+      part_id: clean.solid_id,
+      algorithm: 'loop_traversal',
+      transaction_id: transaction.transaction_id,
+    }, config) as any;
+
+    expect(resultLoop.cleaned_part_id).toBeDefined();
+
+    const resultLegacy = await dispatchTool('remove_protrusions', {
+      part_id: clean.solid_id,
+      algorithm: 'legacy_volumetric',
+      transaction_id: transaction.transaction_id,
+    }, config) as any;
+
+    expect(resultLegacy.cleaned_part_id).toBeDefined();
+
+    await dispatchTool('rollback_transaction', { transaction_id: transaction.transaction_id }, config);
+  });
   
 });

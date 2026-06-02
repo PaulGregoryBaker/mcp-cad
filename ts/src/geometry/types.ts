@@ -382,3 +382,34 @@ export interface CurvedRebuildResult {
   rollback_token: string;
   shape_history?: ShapeHistoryRecord[];
 }
+
+// ── Feature 008-splits-by-bends-viewport-alignment ───────────────────────────
+export interface AlignmentResult {
+  solid_id: string;
+  centroid: [number, number, number];
+  rotation_matrix: [number, number, number, number, number, number, number, number, number];
+  rollback_token: string;
+  shape_history?: ShapeHistoryRecord[];
+}
+
+export interface SplitBodyByBendsResult {
+  panel_ids: string[];
+  panel_count: number;
+  panel_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>;
+  protrusion_ids: string[];
+  protrusion_count: number;
+  protrusion_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>;
+  protrusion_parents: Array<{ protrusion_id: string; parent_panel_id: string | null }>;
+  detected_mode: string;
+  rollback_token: string;
+  shape_history?: ShapeHistoryRecord[];
+}
+
+export interface RemoveProtrusionsResult {
+  cleaned_part_id: string;
+  protrusion_ids: string[];
+  protrusion_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>;
+  protrusion_count: number;
+  rollback_token: string;
+  shape_history?: ShapeHistoryRecord[];
+}

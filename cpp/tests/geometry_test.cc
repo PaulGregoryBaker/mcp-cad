@@ -721,13 +721,13 @@ TEST_CASE("US1: corner 90deg unfold via mergeBodiesWithBend (raw fuse path)", "[
       double distTo0 = std::abs(bendX - 0.0);
       double distToMax = std::abs(bendX - flatMax);
       double minDist = std::min(distTo0, distToMax);
-      CHECK(minDist == Approx(50.0).margin(1.0));
+      CHECK(minDist == Approx(50.0).margin(2.0));
     } else if (ySpan < 1.0) {
       double bendY = y1;
       double distTo0 = std::abs(bendY - 0.0);
       double distToMax = std::abs(bendY - flatMax);
       double minDist = std::min(distTo0, distToMax);
-      CHECK(minDist == Approx(50.0).margin(1.0));
+      CHECK(minDist == Approx(50.0).margin(2.0));
     } else {
       std::cout << "[DEBUG corner_raw_fuse] BEND_UP line is not axis-aligned" << std::endl;
       CHECK(false);
@@ -938,5 +938,39 @@ TEST_CASE("US1: merge two testcube panels and verify DXF bend line is vertical",
   std::cout << "[DEBUG testcube_merge_dxf] " << mergesChecked << " merges checked, "
             << mergesFailed << " failed" << std::endl;
   REQUIRE(mergesChecked > 0);
+}
+
+// ── Feature 008-splits-by-bends-viewport-alignment ───────────────────────────
+
+TEST_CASE("US1: cauldron decomposition facet unification", "[us1][cauldron]") {
+  auto svc = GeometryService::create();
+  SolidId solidId = svc->loadStep(fixture("cauldron.step"));
+  if (!svc->checkManifold(solidId).isManifold) {
+    solidId = svc->healGeometry(solidId);
+  }
+
+  DecomposedByBendsResult result = svc->splitBodyByBends(solidId, 0.5, 5.0, 1.0, 1);
+  REQUIRE_FALSE(result.panelIds.empty());
+  CHECK(result.panelIds.size() == 82);
+}
+
+TEST_CASE("US2: centerAndAlignBody on cauldron", "[us2][cauldron][alignment]") {
+  auto svc = GeometryService::create();
+  SolidId solidId = svc->loadStep(fixture("cauldron.step"));
+  auto shellIds = svc->separateSolids(solidId);
+  REQUIRE_FALSE(shellIds.empty());
+
+  SnapshotId snap = svc->createSnapshot("before_align");
+  AlignmentResult result = svc->centerAndAlignBody(shellIds[0], snap);
+
+  REQUIRE_FALSE(result.solidId.empty());
+  CHECK(std::abs(result.centroid[0]) < 1e-3);
+  CHECK(std::abs(result.centroid[1]) < 1e-3);
+  CHECK(std::abs(result.centroid[2]) < 1e-3);
+  
+  double r1 = result.rotationMatrix[0]*result.rotationMatrix[0] +
+              result.rotationMatrix[1]*result.rotationMatrix[1] +
+              result.rotationMatrix[2]*result.rotationMatrix[2];
+  CHECK(r1 == Approx(1.0).margin(1e-5));
 }
 

@@ -1,3 +1,15 @@
+<!--
+SYNC IMPACT REPORT:
+- Version change: 1.2 -> 1.3
+- Added sections: X. Graceful Failure Over Silent Fallbacks (NON-NEGOTIABLE)
+- Removed sections: None
+- Templates requiring updates:
+  - plan.md: ✅ updated
+  - spec.md: ✅ updated
+  - tasks.md: ✅ updated
+- Follow-up TODOs: None
+-->
+
 # MCP-CAD Constitution
 
 ## Core Principles
@@ -31,6 +43,11 @@ Material inventory, tooling specifications, logistics constraints, and environme
 ### IX. Async Export Contract (NON-NEGOTIABLE)
 `export_production_pack` is asynchronous for MVP. The MCP Protocol Layer must return `job_id`, `status`, and `accepted_at` immediately, and must expose `get_export_job_status` and `get_export_job_result` as the only supported completion flow. Synchronous long-running export calls are not permitted.
 
+### X. Graceful Failure Over Silent Fallbacks (NON-NEGOTIABLE)
+The system MUST NOT silently apply fallback data or default values when an authoritative operation fails or returns incomplete results. Incomplete, corrupt, or missing outputs (such as a CAD operation failing to return a 3D visual mesh URL) MUST be treated as structural errors. The system MUST catch these errors gracefully, prevent corrupt state propagation, log a structured bug report, and notify the user with a descriptive typed error card.
+
+**Rationale**: Silent fallbacks (e.g., generating mock or guess data on the frontend when backend geometry operations fail) mask underlying system bugs, make diagnosing problems impossible, and risk putting inconsistent visual data in front of the user, compromising safety and auditability in production manufacturing.
+
 ## Technology Stack & Architectural Decisions
 
 **Resolved for MVP (from Engineering-Design.md §1):**
@@ -60,7 +77,7 @@ Material inventory, tooling specifications, logistics constraints, and environme
 
 **Testing requirements:**
 - All Manufacturing Domain rules (Epic 2) require unit tests — they are pure functions with no OCC dependency and must achieve full coverage.
-- Feature Extractor (Epic 3) requires unit tests using fixture geometry with known topology.
+- Feature Extractor (Epic 3) require unit tests using fixture geometry with known topology.
 - The golden-path integration test (`INF-03`: STEP → clean → decompose → tab-slot → unfold → nest → DXF) is the MVP acceptance gate.
 - OCC/CadQuery operations are tested via integration tests against real STEP fixtures, not mocked.
 
@@ -70,9 +87,9 @@ Material inventory, tooling specifications, logistics constraints, and environme
 
 This constitution supersedes all other practices, guidelines, and conventions in this repository. Any amendment requires: (1) documenting the rationale, (2) updating affected interface contracts in `Engineering-Design.md`, and (3) a migration plan for in-flight work.
 
-All implementation decisions must be verified against Principles I-IX before a story is marked complete. Complexity that cannot be justified against the MVP scope must be deferred. Use `Engineering-Design.md` as the authoritative reference for interface contracts, tool schemas, and the work breakdown structure.
+All implementation decisions must be verified against Principles I-X before a story is marked complete. Complexity that cannot be justified against the MVP scope must be deferred. Use `Engineering-Design.md` as the authoritative reference for interface contracts, tool schemas, and the work breakdown structure.
 
-**Version**: 1.2 | **Ratified**: 2026-05-13 | **Last Amended**: 2026-05-21
+**Version**: 1.3 | **Ratified**: 2026-05-13 | **Last Amended**: 2026-06-01
 
 ## Amendment History
 
@@ -81,3 +98,4 @@ All implementation decisions must be verified against Principles I-IX before a s
 | 1.0     | 2026-05-13 | Initial ratification.                                                                     |
 | 1.1     | 2026-05-13 | (See git history.)                                                                        |
 | 1.2     | 2026-05-21 | Added `D3-B` (Dolt-persisted semantic graph) for Semantic CAD Phase 1. `D3-A` remains in force for geometry. See [amendments/v1.2-semantic-persistence.md](amendments/v1.2-semantic-persistence.md). |
+| 1.3     | 2026-06-01 | Added Principle X: Graceful Failure Over Silent Fallbacks to prevent mask bugs and corrupt states. |

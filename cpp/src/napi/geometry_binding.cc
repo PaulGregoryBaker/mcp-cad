@@ -931,7 +931,7 @@ Napi::Value SplitBodyByBends(const Napi::CallbackInfo& info) {
 Napi::Value RemoveProtrusions(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   if (info.Length() < 1 || !info[0].IsString()) {
-    Napi::TypeError::New(env, "removeProtrusions(partId, angleThresholdDeg?, maxThicknessMm?)")
+    Napi::TypeError::New(env, "removeProtrusions(partId, angleThresholdDeg?, maxThicknessMm?, algorithm?)")
         .ThrowAsJavaScriptException();
     return env.Undefined();
   }
@@ -940,9 +940,18 @@ Napi::Value RemoveProtrusions(const Napi::CallbackInfo& info) {
                                     ? info[1].As<Napi::Number>().DoubleValue() : 30.0;
   double      maxThicknessMm   = info.Length() >= 3 && info[2].IsNumber()
                                     ? info[2].As<Napi::Number>().DoubleValue() : 5.0;
+  std::string algorithm = "loop_traversal";
+  if (info.Length() >= 4 && info[3].IsString()) {
+    algorithm = info[3].As<Napi::String>().Utf8Value();
+  }
 
   TRY_GEOMETRY(env, {
-    RemoveProtrusionsResult res = svc().removeProtrusions(partId, angleThresholdDeg, maxThicknessMm);
+    RemoveProtrusionsResult res;
+    if (algorithm == "legacy_volumetric") {
+      res = svc().removeProtrusionsLegacy(partId, angleThresholdDeg, maxThicknessMm);
+    } else {
+      res = svc().removeProtrusions(partId, angleThresholdDeg, maxThicknessMm);
+    }
     Napi::Object result = Napi::Object::New(env);
 
     Napi::Array protrusionArr = Napi::Array::New(env, res.protrusionIds.size());
@@ -961,11 +970,66 @@ Napi::Value RemoveProtrusions(const Napi::CallbackInfo& info) {
       bboxArr.Set(static_cast<uint32_t>(i), b);
     }
 
+    Napi::Array histArr = Napi::Array::New(env, res.shapeHistory.size());
+    for (size_t i = 0; i < res.shapeHistory.size(); ++i) {
+      Napi::Object rec = Napi::Object::New(env);
+      rec.Set("verdict",         Napi::String::New(env, res.shapeHistory[i].verdict));
+      rec.Set("original_id",     Napi::String::New(env, res.shapeHistory[i].originalId));
+      rec.Set("new_id",          Napi::String::New(env, res.shapeHistory[i].newId));
+      rec.Set("operation_label", Napi::String::New(env, res.shapeHistory[i].operationLabel));
+      histArr.Set(static_cast<uint32_t>(i), rec);
+    }
+
     result.Set("cleaned_part_id",    Napi::String::New(env, res.cleanedPartId));
     result.Set("protrusion_ids",     protrusionArr);
     result.Set("protrusion_bboxes",  bboxArr);
     result.Set("protrusion_count",   Napi::Number::New(env, static_cast<double>(res.protrusionIds.size())));
     result.Set("rollbackToken",      Napi::String::New(env, res.rollbackToken));
+    result.Set("shape_history",      histArr);
+    return result;
+  })
+  return env.Undefined();
+}
+
+Napi::Value CenterAndAlignBody(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 2 || !info[0].IsString() || !info[1].IsString()) {
+    Napi::TypeError::New(env, "centerAndAlignBody(partId: string, transactionId: string)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string partId        = info[0].As<Napi::String>().Utf8Value();
+  std::string transactionId = info[1].As<Napi::String>().Utf8Value();
+
+  TRY_GEOMETRY(env, {
+    AlignmentResult res = svc().centerAndAlignBody(partId, transactionId);
+    Napi::Object result = Napi::Object::New(env);
+
+    Napi::Array centroidArr = Napi::Array::New(env, 3);
+    for (int i = 0; i < 3; ++i) {
+      centroidArr.Set(i, Napi::Number::New(env, res.centroid[i]));
+    }
+
+    Napi::Array rotArr = Napi::Array::New(env, 9);
+    for (int i = 0; i < 9; ++i) {
+      rotArr.Set(i, Napi::Number::New(env, res.rotationMatrix[i]));
+    }
+
+    Napi::Array histArr = Napi::Array::New(env, res.shapeHistory.size());
+    for (size_t i = 0; i < res.shapeHistory.size(); ++i) {
+      Napi::Object rec = Napi::Object::New(env);
+      rec.Set("verdict",         Napi::String::New(env, res.shapeHistory[i].verdict));
+      rec.Set("original_id",     Napi::String::New(env, res.shapeHistory[i].originalId));
+      rec.Set("new_id",          Napi::String::New(env, res.shapeHistory[i].newId));
+      rec.Set("operation_label", Napi::String::New(env, res.shapeHistory[i].operationLabel));
+      histArr.Set(static_cast<uint32_t>(i), rec);
+    }
+
+    result.Set("solid_id",        Napi::String::New(env, res.solidId));
+    result.Set("centroid",        centroidArr);
+    result.Set("rotation_matrix", rotArr);
+    result.Set("rollbackToken",   Napi::String::New(env, res.rollbackToken));
+    result.Set("shape_history",   histArr);
     return result;
   })
   return env.Undefined();
@@ -1800,6 +1864,7 @@ void RegisterGeometryMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("ripEdge",               Napi::Function::New(env, RipEdge));
   exports.Set("splitBodyByBends",      Napi::Function::New(env, SplitBodyByBends));
   exports.Set("removeProtrusions",     Napi::Function::New(env, RemoveProtrusions));
+  exports.Set("centerAndAlignBody",    Napi::Function::New(env, CenterAndAlignBody));
 
   // Feature 006
   exports.Set("computeBoundingBox",    Napi::Function::New(env, ComputeBoundingBox));
