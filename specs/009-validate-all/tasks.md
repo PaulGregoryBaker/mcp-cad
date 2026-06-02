@@ -108,6 +108,7 @@
 
 - [ ] T019 [P] Clean up any compiler/linter warnings in C++ and TypeScript.
 - [ ] T020 Run final verification smoke test sequence defined in [specs/009-validate-all/quickstart.md](../../specs/009-validate-all/quickstart.md).
+- [ ] T021 [P] Write a comprehensive end-to-end integration test in [ts/tests/integration/validate_assembly.integration.test.ts](../../ts/tests/integration/validate_assembly.integration.test.ts) that loads a multi-error assembly, asserts that all error categories are reported, applies the recommended autofixes sequentially, and verifies the assembly resolves to a clean (valid) state.
 
 ---
 
