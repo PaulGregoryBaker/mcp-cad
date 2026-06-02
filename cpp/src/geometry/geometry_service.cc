@@ -2768,6 +2768,33 @@ public:
         currentShape = nextShape;
       }
 
+      // Merge coplanar face fragments left by BRepAlgoAPI_Fuse (unifyFaces=true,
+      // unifyEdges=false). Unifying faces removes the seam at the junction so
+      // downstream splitBodyByBends face-pair matching sees clean inner/outer
+      // wall pairs. unifyEdges must be false: merging C1-tangent arc-to-plane
+      // boundary edges creates phantom inner faces at the wrong depth (z=74
+      // instead of z=75), which defeats unfold cycle detection.
+      {
+        ShapeUpgrade_UnifySameDomain fuseUnifier(currentShape,
+            Standard_False,  // unifyEdges  = false
+            Standard_True,   // unifyFaces  = true
+            Standard_False); // concatBSplines
+        fuseUnifier.Build();
+        TopoDS_Shape unified = fuseUnifier.Shape();
+        if (!unified.IsNull()) {
+          if (unified.ShapeType() != TopAbs_SOLID) {
+            int uCount = 0;
+            TopoDS_Solid uSolid;
+            for (TopExp_Explorer ex(unified, TopAbs_SOLID); ex.More(); ex.Next()) {
+              uSolid = TopoDS::Solid(ex.Current());
+              uCount++;
+            }
+            if (uCount == 1) unified = uSolid;
+          }
+          currentShape = unified;
+        }
+      }
+
       for (const auto& id : tools) {
         shells_.erase(id);
       }
