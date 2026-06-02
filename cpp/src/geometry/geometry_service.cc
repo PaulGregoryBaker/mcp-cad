@@ -1,5 +1,5 @@
 /**
- * GeometryService implementation — OCCT wrapper.
+ * GeometryService implementation ÔÇö OCCT wrapper.
  *
  * This is the ONLY file in the project that includes OCCT headers.
  * All OCCT exceptions are caught here and re-thrown as GeometryError.
@@ -7,7 +7,7 @@
  * Tasks: T022, T024, T025, T090
  */
 
-// ─── OCCT includes (isolated to this translation unit) ───────────────────────
+// ÔöÇÔöÇÔöÇ OCCT includes (isolated to this translation unit) ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 #include <Standard_Failure.hxx>
 #include <Standard_ErrorHandler.hxx>
 
@@ -114,11 +114,11 @@
 #include <gp_Pln.hxx>
 #include <gp_Ax3.hxx>
 
-// ─── Project includes ────────────────────────────────────────────────────────
+// ÔöÇÔöÇÔöÇ Project includes ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 #include "geometry_service.hpp"
 #include "shape_history.hpp"
 
-// ─── Standard library ────────────────────────────────────────────────────────
+// ÔöÇÔöÇÔöÇ Standard library ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 #include <map>
 #include <unordered_map>
 #include <memory>
@@ -137,7 +137,7 @@
 
 namespace mcp_cad {
 
-// ─── UUID generator (simple, session-scoped) ─────────────────────────────────
+// ÔöÇÔöÇÔöÇ UUID generator (simple, session-scoped) ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
 static std::string generateUUID() {
   static std::random_device rd;
@@ -171,7 +171,7 @@ static std::string shapeId(const TopoDS_Shape& shape) {
   return std::to_string(std::hash<TopoDS_Shape>{}(shape));
 }
 
-// ─── State containers ────────────────────────────────────────────────────────
+// ÔöÇÔöÇÔöÇ State containers ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
 struct SolidState {
   SolidId     id;
@@ -185,7 +185,7 @@ struct ShellState {
 };
 
 struct FlatBendEdge {
-  TopoDS_Edge edge;     // edge in flat-plane coordinates (z ≈ 0)
+  TopoDS_Edge edge;     // edge in flat-plane coordinates (z Ôëê 0)
   double      angleDeg; // absolute bend angle
   bool        isUp;     // true = BEND_UP, false = BEND_DOWN
 };
@@ -214,7 +214,7 @@ struct AssemblyState {
   std::unordered_map<ComponentId, TDF_Label> components;
 };
 
-// ─── GeometryServiceImpl ─────────────────────────────────────────────────────
+// ÔöÇÔöÇÔöÇ GeometryServiceImpl ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
 class GeometryServiceImpl : public GeometryService {
 public:
@@ -224,7 +224,7 @@ public:
   }
   ~GeometryServiceImpl() override = default;
 
-  // ── STEP import ──────────────────────────────────────────────────────────
+  // ÔöÇÔöÇ STEP import ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   SolidId loadStep(const std::string& filePath) override {
     try {
@@ -265,7 +265,7 @@ public:
     }
   }
 
-  // ── Viewport orientation and alignment ───────────────────────────────────
+  // ÔöÇÔöÇ Viewport orientation and alignment ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   AlignmentResult centerAndAlignBody(
       const ShellId&    partId,
@@ -382,7 +382,7 @@ public:
     }
   }
 
-  // ── Topology extraction ──────────────────────────────────────────────────
+  // ÔöÇÔöÇ Topology extraction ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   TopologyGraph getTopology(const SolidId& solidId) override {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -410,7 +410,7 @@ public:
     return graph;
   }
 
-  // ── Manifold detection ───────────────────────────────────────────────────
+  // ÔöÇÔöÇ Manifold detection ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   ManifoldResult checkManifold(const SolidId& solidId) override {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -450,7 +450,7 @@ public:
     }
   }
 
-  // ── Shape healing ────────────────────────────────────────────────────────
+  // ÔöÇÔöÇ Shape healing ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   SolidId healGeometry(const SolidId& solidId) override {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -485,7 +485,7 @@ public:
     }
   }
 
-  // ── Compound decomposition ───────────────────────────────────────────────
+  // ÔöÇÔöÇ Compound decomposition ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   std::vector<ShellId> separateSolids(const SolidId& solidId) override {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -538,7 +538,7 @@ public:
     return shellIds;
   }
 
-  // ── Boolean cut (decomposition) ──────────────────────────────────────────
+  // ÔöÇÔöÇ Boolean cut (decomposition) ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   BooleanCutResult booleanCut(const SolidId& solidId,
                                double nx, double ny, double nz,
@@ -626,7 +626,7 @@ public:
     }
   }
 
-  // ── Tab-slot synthesis ───────────────────────────────────────────────────
+  // ÔöÇÔöÇ Tab-slot synthesis ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   TabSlotResult addTabSlot(const ShellId& shellIdA,
                             const ShellId& shellIdB,
@@ -672,7 +672,7 @@ public:
     }
   }
 
-  // ── Rivet hole ───────────────────────────────────────────────────────────
+  // ÔöÇÔöÇ Rivet hole ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   RivetHoleResult addRivetHole(const ShellId& shellId,
                                 const std::string& faceId,
@@ -698,7 +698,7 @@ public:
     }
   }
 
-  // ── Unfolding ────────────────────────────────────────────────────────────
+  // ÔöÇÔöÇ Unfolding ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   UnfoldResult unfoldShell(const ShellId& shellId, double kFactor) override {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -822,7 +822,7 @@ public:
       };
 
       // Helper: check if any face in f1List shares an edge with any face in f2List.
-      // Must iterate ALL coplanar sub-faces — a single PlaneFaceInfo entry can
+      // Must iterate ALL coplanar sub-faces ÔÇö a single PlaneFaceInfo entry can
       // wrap many sub-faces after Boolean fuse, and the bend seam edge may
       // belong to any one of them.  Only checking the primary sub-face was the
       // root cause of the bbox-fallback bug on certain merged L-shapes.
@@ -832,7 +832,7 @@ public:
         // Return the LONGEST shared edge across all (f1, f2) sub-face
         // combinations.  The Plan B corner-cut topology produces many
         // shared edges between adjacent panels (the cut splits the
-        // corner overlap into multiple small contact edges) — taking
+        // corner overlap into multiple small contact edges) ÔÇö taking
         // the first match would land on a 1-3 mm side edge rather than
         // the proper 150-200 mm bend-axis edge, causing the BFS to
         // rotate the neighbour panel around the wrong axis and produce
@@ -1114,7 +1114,7 @@ public:
           }
         }
 
-        // Try curved face connection — iterate sub-faces on both sides.
+        // Try curved face connection ÔÇö iterate sub-faces on both sides.
         TopExp_Explorer faceExpAll(activeShape, TopAbs_FACE);
         for (; faceExpAll.More(); faceExpAll.Next()) {
           const TopoDS_Face& fCur = TopoDS::Face(faceExpAll.Current());
@@ -1162,7 +1162,7 @@ public:
 
         // Geometric fallback: BRepAlgoAPI_Fuse can absorb junction edges so
         // topological sharing tests above fail.  Find the pair of boundary
-        // edges (one from each face) that are closest AND parallel — the
+        // edges (one from each face) that are closest AND parallel ÔÇö the
         // true junction edge runs the full length of both panels while a
         // mere corner-vertex touch has perpendicular edge directions.
         double geomTol = val.nominalThickness * 4.0 + 5.0;
@@ -1276,7 +1276,7 @@ public:
       // accumulating flat layout. Two fixes were required to make this
       // work robustly across all bend-axis orientations:
       //   1. findSharedEdgeList (above) returns the LONGEST shared edge,
-      //      not the first match — otherwise a small side-edge from the
+      //      not the first match ÔÇö otherwise a small side-edge from the
       //      Plan B corner-cut splits the contact into a 3mm picked seam
       //      instead of the 150mm bend axis.
       //   2. The rotation angle below is computed from the panel
@@ -1333,36 +1333,36 @@ public:
             gp_Vec nCur = planeInfos[fCur].normal;
             gp_Vec nNbr = planeInfos[fNbr].normal;
 
-            // ── ROTATION ANGLE FROM PANEL NORMALS (not centroids) ──
+            // ÔöÇÔöÇ ROTATION ANGLE FROM PANEL NORMALS (not centroids) ÔöÇÔöÇ
             //
             // The flatten rotation angle equals the dihedral between the
             // two panel planes.  Computing it from the normals directly
             // is robust to:
-            //  – primary-face centroid being off-center (Plan B
+            //  ÔÇô primary-face centroid being off-center (Plan B
             //    corner-cut splits each panel skin into multiple sub-
             //    faces; the primary one's centroid isn't the panel's
             //    geometric center).
-            //  – the picked seam edge being a short side-edge instead
+            //  ÔÇô the picked seam edge being a short side-edge instead
             //    of the full bend-axis edge (findSharedEdgeList may
             //    pick a partial seam when the corner-cut split the
             //    contact into multiple segments).
             //
             // The previous centroid-based formula was fragile against
-            // both — it gave θ values ranging from 86° to 103° instead
-            // of the clean 90° we always want for perpendicular panels.
+            // both ÔÇö it gave ╬© values ranging from 86┬░ to 103┬░ instead
+            // of the clean 90┬░ we always want for perpendicular panels.
             //
-            // Direction (sign of θ): we want to rotate nNbr to align
+            // Direction (sign of ╬©): we want to rotate nNbr to align
             // with nCur AROUND the seam edge.  The rotation is in the
             // plane perpendicular to dE.  We use the BFS's
             // walk-direction-into-the-corner indicator: a unit vector
             // in nCur's plane perpendicular to dE, pointing AWAY from
             // the bend (into the panel body).  We get this by checking
-            // the sign relative to nCur×dE.
+            // the sign relative to nCur├ùdE.
             double cosDihedral = std::max(-1.0, std::min(1.0, nCur.Dot(nNbr)));
             double dihedral = std::acos(cosDihedral);
             double theta = M_PI - dihedral;
 
-            // Determine sign: rotating nNbr by +θ around dE must align
+            // Determine sign: rotating nNbr by +╬© around dE must align
             // it with +nCur (not -nCur). We test directly by applying
             // a trial rotation of the unit normal and checking.
             {
@@ -1491,7 +1491,7 @@ public:
       // half).  We collect every planar face in the shell that faces the same
       // direction as the panel skin and lies on the same plane.  This guarantees
       // both halves of a split panel are present, so the seam between them is
-      // shared and gets cancelled — and the reported size spans the full panel.
+      // shared and gets cancelled ÔÇö and the reported size spans the full panel.
       auto gatherSkin = [&](int idx) -> std::vector<TopoDS_Face> {
         gp_Pnt c = planeInfos[idx].center;
         gp_Vec n = planeInfos[idx].normal;
@@ -1523,11 +1523,13 @@ public:
 
       for (int i = 0; i < P; ++i) {
         if (!visited[i]) continue;
+        double iuMin=1e30, iuMax=-1e30;
         for (const TopoDS_Face& subFace : panelSkin[i]) {
           for (TopExp_Explorer ve(subFace, TopAbs_VERTEX); ve.More(); ve.Next()) {
             gp_Pnt2d uv = flatUV(BRep_Tool::Pnt(TopoDS::Vertex(ve.Current())), panels[i].idxA);
             uMin = std::min(uMin, uv.X()); uMax = std::max(uMax, uv.X());
             vMin = std::min(vMin, uv.Y()); vMax = std::max(vMax, uv.Y());
+            iuMin = std::min(iuMin, uv.X()); iuMax = std::max(iuMax, uv.X());
           }
         }
       }
@@ -1540,14 +1542,14 @@ public:
       if (flatH < 1e-5) flatH = 1.0;
 
       // 5b. Build flat-plane coordinate transform.
-      // face0CS maps the face-0 local frame (c0, uAxis, vAxis) → standard XY.
+      // face0CS maps the face-0 local frame (c0, uAxis, vAxis) ÔåÆ standard XY.
       // planeToXY * flatTransformsForFaces[idx] brings any face in the BFS tree
       // into the same flat XY plane with the origin at (uMin, vMin).
       gp_Ax3 face0CS(c0,
                      gp_Dir(n0.X(), n0.Y(), n0.Z()),
                      gp_Dir(uAxis.X(), uAxis.Y(), uAxis.Z()));
       gp_Trsf tToXY;
-      tToXY.SetTransformation(face0CS); // maps from face0CS → world XY
+      tToXY.SetTransformation(face0CS); // maps from face0CS ÔåÆ world XY
 
       gp_Trsf tOffset;
       tOffset.SetTranslation(gp_Vec(-uMin, -vMin, 0.0));
@@ -1559,10 +1561,10 @@ public:
       // adds inconsistently-subdivided (T-junctioned) internal seams that naive
       // edge-pair cancellation can't fully remove.  We instead:
       //   a) gather every sub-face edge (in flat coords) and drop edges that are
-      //      shared by two sub-faces (count==2 → genuine interior seam);
+      //      shared by two sub-faces (count==2 ÔåÆ genuine interior seam);
       //   b) connect the surviving edges into closed wires;
-      //   c) keep only the wire enclosing the largest area — the true outer
-      //      silhouette — discarding internal artifact loops and any dangling
+      //   c) keep only the wire enclosing the largest area ÔÇö the true outer
+      //      silhouette ÔÇö discarding internal artifact loops and any dangling
       //      T-junction fragments that don't close into a loop.
       // This yields the clean panel outline regardless of how messy the internal
       // tessellation is.
@@ -1631,7 +1633,7 @@ public:
         // (a2) Drop chord edges.  An edge that splits the panel into two abutting
         // regions (e.g. a flat-seam side-effect that survived as a single free
         // edge between two faces the sewer could not reconcile) has BOTH
-        // endpoints lying on the perimeter — so both endpoints are degree ≥ 3 in
+        // endpoints lying on the perimeter ÔÇö so both endpoints are degree ÔëÑ 3 in
         // the boundary graph (two perimeter neighbours plus the chord).  A real
         // outward tab differs: its base vertex is degree-3 but its tip vertex is
         // degree-2, so the tab edge is preserved.
@@ -1656,7 +1658,7 @@ public:
           for (int e = 1; e <= freeEdges->Length(); ++e) {
             int d1 = degree[vkeyOf(ends[e-1].first)];
             int d2 = degree[vkeyOf(ends[e-1].second)];
-            if (d1 >= 3 && d2 >= 3) continue;   // chord — drop
+            if (d1 >= 3 && d2 >= 3) continue;   // chord ÔÇö drop
             keep->Append(freeEdges->Value(e));
           }
           if (!keep->IsEmpty()) freeEdges = keep;
@@ -1664,8 +1666,8 @@ public:
 
         // (b) Connect the boundary edges into closed wires.  A tight tolerance
         // (0.1 mm) keeps the perimeter's small sub-millimetre sliver vertices
-        // connected, but leaves a chord that ends on a perimeter line — like the
-        // y=1 protrusion-attachment seam — as its own separate 2-vertex open
+        // connected, but leaves a chord that ends on a perimeter line ÔÇö like the
+        // y=1 protrusion-attachment seam ÔÇö as its own separate 2-vertex open
         // wire, which the wire processing then discards.
         Handle(TopTools_HSequenceOfShape) wires;
         ShapeAnalysis_FreeBounds::ConnectEdgesToWires(freeEdges, 0.1, Standard_False, wires);
@@ -1717,7 +1719,7 @@ public:
               const gp_Pnt& b = pts[(k + 1) % pts.size()];
               area += a.X() * b.Y() - b.X() * a.Y();
             }
-            if (std::abs(area) * 0.5 < 1.0) continue;   // < 1 mm²
+            if (std::abs(area) * 0.5 < 1.0) continue;   // < 1 mm┬▓
 
             // Emit clean line edges between consecutive simplified vertices.
             for (size_t k = 0; k < pts.size(); ++k) {
@@ -1737,7 +1739,7 @@ public:
           }
         }
 
-        // Fallback: wire connection failed — emit the raw free edges.
+        // Fallback: wire connection failed ÔÇö emit the raw free edges.
         if (!anyAdded) {
           for (int e = 1; e <= freeEdges->Length(); ++e) { bb.Add(cmp, freeEdges->Value(e)); anyAdded = true; }
         }
@@ -1750,6 +1752,7 @@ public:
       std::vector<FlatBendEdge> flatBendEdges;
       for (const auto& rec : bendRecords) {
         gp_Trsf toFlat = tOffset * tToXY * flatTransformsForFaces[rec.faceIdxCur];
+        bool added = false;
         try {
           BRepBuilderAPI_Transform xfm(rec.originalEdge, toFlat, /*copy=*/true);
           if (xfm.IsDone()) {
@@ -1758,8 +1761,47 @@ public:
             fbe.angleDeg = std::abs(rec.theta) * 180.0 / M_PI;
             fbe.isUp     = (rec.theta >= 0.0);
             flatBendEdges.push_back(std::move(fbe));
+            added = true;
           }
         } catch (...) {}
+        if (!added) {
+          // Fallback: manually transform edge endpoints and build fresh line edge.
+          // BRepBuilderAPI_Transform can fail for degenerate or topology-only edges.
+          try {
+            Standard_Real first, last;
+            Handle(Geom_Curve) curve = BRep_Tool::Curve(rec.originalEdge, first, last);
+            if (!curve.IsNull()) {
+              gp_Pnt p1 = curve->Value(first).Transformed(toFlat);
+              gp_Pnt p2 = curve->Value(last).Transformed(toFlat);
+              if (p1.Distance(p2) > 1e-6) {
+                BRepBuilderAPI_MakeEdge edgeMaker(p1, p2);
+                if (edgeMaker.IsDone()) {
+                  FlatBendEdge fbe;
+                  fbe.edge     = edgeMaker.Edge();
+                  fbe.angleDeg = std::abs(rec.theta) * 180.0 / M_PI;
+                  fbe.isUp     = (rec.theta >= 0.0);
+                  flatBendEdges.push_back(std::move(fbe));
+                }
+              }
+            } else {
+              // No 3D curve: try vertex fallback
+              std::vector<gp_Pnt> verts;
+              for (TopExp_Explorer vx(rec.originalEdge, TopAbs_VERTEX); vx.More(); vx.Next()) {
+                verts.push_back(BRep_Tool::Pnt(TopoDS::Vertex(vx.Current())).Transformed(toFlat));
+              }
+              if (verts.size() >= 2 && verts[0].Distance(verts[1]) > 1e-6) {
+                BRepBuilderAPI_MakeEdge edgeMaker(verts[0], verts[1]);
+                if (edgeMaker.IsDone()) {
+                  FlatBendEdge fbe;
+                  fbe.edge     = edgeMaker.Edge();
+                  fbe.angleDeg = std::abs(rec.theta) * 180.0 / M_PI;
+                  fbe.isUp     = (rec.theta >= 0.0);
+                  flatBendEdges.push_back(std::move(fbe));
+                }
+              }
+            }
+          } catch (...) {}
+        }
       }
 
       // Attempt non-destructive curved-bend reconstruction for preview.
@@ -1792,7 +1834,7 @@ public:
     }
   }
 
-  // ── DXF export ───────────────────────────────────────────────────────────
+  // ÔöÇÔöÇ DXF export ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   //
   // Serialises the flat panel shapes and bend edges stored by unfoldShell into
   // DXF R12 ASCII.  Edges are emitted as LINE / ARC / CIRCLE entities so that
@@ -1811,7 +1853,7 @@ public:
 
     const UnfoldState& state = it->second;
 
-    // ── DXF header ─────────────────────────────────────────────────────────
+    // ÔöÇÔöÇ DXF header ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     std::ostringstream dxf;
     dxf << "  0\nSECTION\n  2\nHEADER\n  0\nENDSEC\n"
         << "  0\nSECTION\n  2\nTABLES\n"
@@ -1833,7 +1875,7 @@ public:
 
     int entityCount = 0;
 
-    // ── Helpers ─────────────────────────────────────────────────────────────
+    // ÔöÇÔöÇ Helpers ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
     // Emit one edge on the given layer.  Lines and circles are native DXF
     // entities; everything else is discretised to 64-segment polylines.
@@ -1883,7 +1925,7 @@ public:
         }
 
       } else {
-        // Discretise other curve types (ellipse, B-spline, …)
+        // Discretise other curve types (ellipse, B-spline, ÔÇª)
         const int kSeg = 64;
         gp_Pnt2d prev;
         for (int s = 0; s <= kSeg; ++s) {
@@ -1926,20 +1968,23 @@ public:
       Standard_Real ef, el;
       Handle(Geom_Curve) ec = BRep_Tool::Curve(e, ef, el);
       if (ec.IsNull()) return false;
-      gp_Pnt mid = ec->Value((ef + el) * 0.5);
+      gp_Pnt mid3d = ec->Value((ef + el) * 0.5);
+      // Project to the flat XY plane (Z=0).  Side-face edges of the plate
+      // have midpoints at Z≈T/2 in the transformed space, causing the 3D
+      // perpendicular distance to exceed the tolerance.  Since the DXF output
+      // is also 2D (X,Y only), using only XY distance is correct.
+      gp_Pnt mid(mid3d.X(), mid3d.Y(), 0.0);
       for (const auto& bl : bendLines) {
         gp_Vec toMid(bl.start, mid);
         double proj = toMid.Dot(bl.dir);
-        // Must project within the bend segment extent (±0.15 mm margin at each end)
-        if (proj < -0.15 || proj > bl.len + 0.15) continue;
-        // Perpendicular distance from the bend line must be within tolerance
+        if (proj < -1.0 || proj > bl.len + 1.0) continue;
         gp_Vec perp = toMid - bl.dir * proj;
-        if (perp.Magnitude() < 0.15) return true;
+        if (perp.Magnitude() < 1.0) return true;
       }
       return false;
     };
 
-    // ── CUT layer ──────────────────────────────────────────────────────────
+    // ÔöÇÔöÇ CUT layer ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     //
     // flatPanelShapes now stores pre-computed outer-boundary edge compounds
     // (computed at unfold time using topological TShape identity, not geometric
@@ -1956,7 +2001,7 @@ public:
       }
     }
 
-    // ── BEND_UP / BEND_DOWN layers ─────────────────────────────────────────
+    // ÔöÇÔöÇ BEND_UP / BEND_DOWN layers ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     //
     // Each FlatBendEdge has already been transformed into the flat XY plane.
     // Deduplicate by midpoint in case a bend appears in both adj directions.
@@ -2012,7 +2057,7 @@ public:
                            state.flatWidthMm, state.flatHeightMm};
   }
 
-  // ── Corner reliefs ───────────────────────────────────────────────────────
+  // ÔöÇÔöÇ Corner reliefs ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   ShellId addCornerRelief(const ShellId& shellId,
                            ReliefType reliefType,
@@ -2082,7 +2127,7 @@ public:
     }
   }
 
-  // ── Nesting ──────────────────────────────────────────────────────────────
+  // ÔöÇÔöÇ Nesting ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   NestResult nestShells(const std::vector<UnfoldId>& unfoldIds,
                          double sheetWidthMm,
@@ -2101,7 +2146,7 @@ public:
                           "Sheet dimensions must be positive", false, "");
     }
 
-    // ── Shelf-Next-Fit Decreasing (SNFD) rectangular bin packing ──────────
+    // ÔöÇÔöÇ Shelf-Next-Fit Decreasing (SNFD) rectangular bin packing ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     // Sort pieces by height descending, then width descending (ties).
     struct Piece {
       std::string id;
@@ -2165,10 +2210,10 @@ public:
     double utilisation = (totalPartArea / (sheetsRequired * sheetArea)) * 100.0;
     utilisation        = std::min(100.0, utilisation);
 
-    // ── SVG preview ────────────────────────────────────────────────────────
+    // ÔöÇÔöÇ SVG preview ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     // Generate a compact SVG visualising the placement on sheet 0.
     // Each panel is a coloured rectangle; the sheet outline is a grey frame.
-    const double svgScale = 0.2; // mm → SVG units (px)
+    const double svgScale = 0.2; // mm ÔåÆ SVG units (px)
     const int    svgW     = static_cast<int>(sheetWidthMm  * svgScale) + 4;
     const int    svgH     = static_cast<int>(sheetHeightMm * svgScale) + 4;
 
@@ -2241,7 +2286,7 @@ public:
     return NestResult{nestId, placements, utilisation, sheetsRequired, svg};
   }
 
-  // ── GLB mesh export ──────────────────────────────────────────────────────
+  // ÔöÇÔöÇ GLB mesh export ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   std::vector<uint8_t> exportGlb(const ShellId& shellId) override {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -2302,7 +2347,7 @@ public:
         double mag = faceNormal.Magnitude();
         if (mag > 1e-12) faceNormal /= mag;
 
-        // Emit 3 independent vertices (flat shading — no vertex sharing)
+        // Emit 3 independent vertices (flat shading ÔÇö no vertex sharing)
         auto addVertex = [&](const gp_Pnt& p) {
           // glTF uses metres; OCCT model uses mm
           float x = static_cast<float>(p.X() * 0.001);
@@ -2329,8 +2374,8 @@ public:
 
     int vertexCount = static_cast<int>(positions.size()) / 3;
 
-    // ── Build binary chunk ──────────────────────────────────────────────────
-    // Layout: [positions float32×3×N][normals float32×3×N], 4-byte padded
+    // ÔöÇÔöÇ Build binary chunk ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // Layout: [positions float32├ù3├ùN][normals float32├ù3├ùN], 4-byte padded
 
     auto floatsToBytes = [](const std::vector<float>& v) -> std::vector<uint8_t> {
       std::vector<uint8_t> b(v.size() * sizeof(float));
@@ -2353,7 +2398,7 @@ public:
     binChunk.insert(binChunk.end(), norBytes.begin(), norBytes.end());
     pad4(binChunk);
 
-    // ── Build JSON chunk ────────────────────────────────────────────────────
+    // ÔöÇÔöÇ Build JSON chunk ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
     std::ostringstream json;
     json << std::fixed << std::setprecision(8);
@@ -2387,7 +2432,7 @@ public:
     std::vector<uint8_t> jsonBytes(jsonStr.begin(), jsonStr.end());
     pad4(jsonBytes, 0x20);  // GLB spec: pad JSON chunk with spaces (0x20)
 
-    // ── Assemble GLB ────────────────────────────────────────────────────────
+    // ÔöÇÔöÇ Assemble GLB ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
     uint32_t totalLen = 12u
                       + 8u + static_cast<uint32_t>(jsonBytes.size())
@@ -2418,7 +2463,7 @@ public:
     return glb;
   }
 
-  // ── Snapshot / rollback ──────────────────────────────────────────────────
+  // ÔöÇÔöÇ Snapshot / rollback ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   SnapshotId createSnapshot(const std::string& label) override {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -2692,7 +2737,7 @@ public:
               || (solidCount == 0 && shellCount == 0 && topLevelCount > 1);
           if (disconnected) {
             throw GeometryError("GE_MERGE_DISCONNECTED",
-              "Fuse produced disconnected bodies — the shapes are not topologically joined. "
+              "Fuse produced disconnected bodies ÔÇö the shapes are not topologically joined. "
               "Check for a gap and use close_gap to fix it.",
               false, "");
           }
@@ -3686,7 +3731,7 @@ public:
   }
 
 private:
-  // ── State ────────────────────────────────────────────────────────────────
+  // ÔöÇÔöÇ State ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   mutable std::mutex mutex_;
   std::unordered_map<SolidId,   SolidState>   solids_;
   std::unordered_map<ShellId,   ShellState>   shells_;
@@ -3699,7 +3744,7 @@ private:
   std::unordered_map<SnapshotId, std::unordered_map<AssemblyId, AssemblyState>> snapshotAssemblies_;
   Handle(TDocStd_Application) app_;
 
-  // ── Private helpers ──────────────────────────────────────────────────────
+  // ÔöÇÔöÇ Private helpers ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   TopoDS_Shape lookupEntityLocked(const std::string& entityId) const {
     auto solidIt = solids_.find(entityId);
@@ -3859,7 +3904,7 @@ private:
   }
 
   void buildTopologyGraph(const TopoDS_Shape& shape, TopologyGraph& graph) {
-    // ── Index faces ─────────────────────────────────────────────────────
+    // ÔöÇÔöÇ Index faces ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     TopTools_IndexedMapOfShape faceMap;
     TopExp::MapShapes(shape, TopAbs_FACE, faceMap);
 
@@ -3895,7 +3940,7 @@ private:
       graph.faces.push_back(node);
     }
 
-    // ── Index edges ──────────────────────────────────────────────────────
+    // ÔöÇÔöÇ Index edges ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     TopTools_IndexedMapOfShape edgeMap;
     TopExp::MapShapes(shape, TopAbs_EDGE, edgeMap);
 
@@ -3912,7 +3957,7 @@ private:
       graph.edges.push_back(node);
     }
 
-    // ── Build face-face adjacency (dihedral angles) ───────────────────────
+    // ÔöÇÔöÇ Build face-face adjacency (dihedral angles) ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     TopTools_IndexedDataMapOfShapeListOfShape edgeToFaces;
     TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edgeToFaces);
 
@@ -3934,7 +3979,7 @@ private:
     }
   }
 
-  // ── Split body by plane ──────────────────────────────────────────────────
+  // ÔöÇÔöÇ Split body by plane ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   SplitBodyResult splitBodyByPlane(const ShellId& partId,
                                    const CuttingPlane& plane) override {
@@ -3984,13 +4029,13 @@ private:
       BRepGProp::VolumeProperties(cutPos.Shape(), props);
       if (props.Mass() < 1e-6) {
         throw GeometryError("GE_SPLIT_FAILED",
-                            "Positive side is empty — plane may not intersect the body",
+                            "Positive side is empty ÔÇö plane may not intersect the body",
                             true, "rollback");
       }
       BRepGProp::VolumeProperties(cutNeg.Shape(), props);
       if (props.Mass() < 1e-6) {
         throw GeometryError("GE_SPLIT_FAILED",
-                            "Negative side is empty — plane may not intersect the body",
+                            "Negative side is empty ÔÇö plane may not intersect the body",
                             true, "rollback");
       }
 
@@ -4015,9 +4060,9 @@ private:
     }
   }
 
-  // ── Split body by bends ──────────────────────────────────────────────────
+  // ÔöÇÔöÇ Split body by bends ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
-  // ── Helpers ─────────────────────────────────────────────────────────────
+  // ÔöÇÔöÇ Helpers ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   // Returns outward-pointing normal of a face at its UV centre.
   static gp_Vec faceOutwardNormal(const TopoDS_Face& f) {
@@ -4064,7 +4109,7 @@ private:
     gp_Vec  normal;
     gp_Pnt  centroid;
     double  area;
-    bool    isOuter;  // N · (centroid - solidCentroid) > 0
+    bool    isOuter;  // N ┬À (centroid - solidCentroid) > 0
   };
 
   static std::vector<FaceGroup> buildFaceGroups(
@@ -4137,7 +4182,7 @@ private:
     return groups;
   }
 
-  // ── Protrusion detection ─────────────────────────────────────────────────
+  // ÔöÇÔöÇ Protrusion detection ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   // A connected region of non-primary faces qualifying as a thin localised
   // feature (flange / tab) on a primary panel face.
@@ -4154,7 +4199,7 @@ private:
     // For Option-2 interior-host tabs: bounded box scoped to the cap's footprint.
     // When useBoundedTabBox=true, extractProtrusion ignores hasBackPlane and builds
     // a box in the (tabU, tabV, panelNormal) frame, sized to the cap's 2D footprint
-    // × tabHeight along panelNormal. This avoids the over-extraction that a half-space
+    // ├ù tabHeight along panelNormal. This avoids the over-extraction that a half-space
     // would cause when the host is interior to the solid.
     bool             useBoundedTabBox = false;
     gp_Vec           tabU;            // in-plane axis 1 (perpendicular to panelNormal)
@@ -4171,11 +4216,11 @@ private:
     double           tightBleed = -1.0;
   };
 
-  // T017 — Detect protrusion candidates before any panel cutting.
+  // T017 ÔÇö Detect protrusion candidates before any panel cutting.
   // Applies three tests per connected non-primary-face region:
   //   1. Extent   : attachment edge length < 50% of primary panel perimeter
-  //   2. Orientation: cap face normal · panel normal > 0.85
-  //   3. Thickness: min face-pair distance in the region ≤ maxThicknessMm
+  //   2. Orientation: cap face normal ┬À panel normal > 0.85
+  //   3. Thickness: min face-pair distance in the region Ôëñ maxThicknessMm
   static std::vector<ProtrusionCandidate> detectProtrusions(
       const TopoDS_Shape&              shape,
       const TopTools_IndexedMapOfShape& faceMap,
@@ -4192,10 +4237,10 @@ private:
         faceToGroup[idx] = g;
     }
 
-    // ── AABB + hull-ratio classification (used by both detection passes) ──
+    // ÔöÇÔöÇ AABB + hull-ratio classification (used by both detection passes) ÔöÇÔöÇ
     // Compute the solid's tight AABB and, for each face group, the fraction of
     // its vertices that touch the AABB boundary. Groups with low hullRatio are
-    // "interior" — sitting inside the solid rather than on its outer hull.
+    // "interior" ÔÇö sitting inside the solid rather than on its outer hull.
     // For interior hosts, half-space extraction over-extracts; bounded-box
     // extraction must be used instead.
     double sxMin = 1e30, syMin = 1e30, szMin = 1e30;
@@ -4206,7 +4251,7 @@ private:
       syMin = std::min(syMin, p.Y()); syMax = std::max(syMax, p.Y());
       szMin = std::min(szMin, p.Z()); szMax = std::max(szMax, p.Z());
     }
-    constexpr double kHullTol = 0.5;  // mm — vertex this close to AABB face = on hull
+    constexpr double kHullTol = 0.5;  // mm ÔÇö vertex this close to AABB face = on hull
     auto vertexOnHull = [&](const gp_Pnt& p) {
       return std::abs(p.X() - sxMin) <= kHullTol || std::abs(p.X() - sxMax) <= kHullTol
           || std::abs(p.Y() - syMin) <= kHullTol || std::abs(p.Y() - syMax) <= kHullTol
@@ -4316,7 +4361,7 @@ private:
       if (!groups[g].isOuter || groupAttach[g].empty()) continue;
       if (claimedPanelGroup[g]) continue;
 
-      // Map: non-primary face index → total attachment edge length from group g
+      // Map: non-primary face index ÔåÆ total attachment edge length from group g
       std::unordered_map<int, double> attachLen;
       std::set<int> seeds;
       for (const auto& ae : groupAttach[g]) {
@@ -4353,7 +4398,7 @@ private:
           }
         }
 
-        // Test 1: Extent — total attachment < 50% of primary panel perimeter
+        // Test 1: Extent ÔÇö total attachment < 50% of primary panel perimeter
         double totalAttach = 0.0;
         for (int fi : component) {
           auto it = attachLen.find(fi);
@@ -4362,7 +4407,7 @@ private:
         double extentRatio = groupPerimeter[g] > 1e-6 ? totalAttach / groupPerimeter[g] : 0.0;
         if (extentRatio >= 0.50) continue;
 
-        // Test 2: Orientation — cap face normal ∥ panel normal (dot > 0.85)
+        // Test 2: Orientation ÔÇö cap face normal ÔêÑ panel normal (dot > 0.85)
         int    capIdx = -1;
         double maxProj = -1e9;
         for (int fi : component) {
@@ -4373,11 +4418,11 @@ private:
         if (capIdx < 0) continue;
         gp_Vec capNorm = faceOutwardNormal(TopoDS::Face(faceMap(capIdx)));
 
-        // Test 3: Thickness — protrusion dimension along panel normal ≤ maxThicknessMm.
+        // Test 3: Thickness ÔÇö protrusion dimension along panel normal Ôëñ maxThicknessMm.
         // Strategy:
         //   (a) Anti-parallel pairs within the component (tab between two opposite faces)
-        //   (b) Cap face vs primary panel faces — parallel (tab) or anti-parallel (plate)
-        //   (c) Cap face vs any other outer group's faces — plate-style where the
+        //   (b) Cap face vs primary panel faces ÔÇö parallel (tab) or anti-parallel (plate)
+        //   (c) Cap face vs any other outer group's faces ÔÇö plate-style where the
         //       opposite wide face is in a different group than the entered edge face
         // For (b) and (c), record the matched panel group so the extraction step uses
         // the correct panel orientation (along the plate's thickness, not the edge).
@@ -4480,7 +4525,7 @@ private:
       }
     }
 
-    // ── Option-2 pass: detect tabs/bosses whose cap face is itself a primary
+    // ÔöÇÔöÇ Option-2 pass: detect tabs/bosses whose cap face is itself a primary
     // face group sitting on an interior host (missed by the BFS, which only
     // seeds from non-primary faces). Uses the AABB-derived hullRatio computed
     // at the top of this function.
@@ -4547,14 +4592,14 @@ private:
       claimedPanelGroup[bestHost] = true;
     }
 
-    // ── Option-3 pass: detect bridge/flange protrusions — anti-parallel
+    // ÔöÇÔöÇ Option-3 pass: detect bridge/flange protrusions ÔÇö anti-parallel
     // interior face groups that form a thin slab (e.g. connecting flanges
     // between two concentric hollow cubes). Neither BFS nor Option-2 can
     // detect these because both exposed faces are primary groups and they
     // are anti-parallel, not parallel. We pair them by:
     //   1. Both interior (hullRatio < kInteriorThreshold)
     //   2. Anti-parallel normals (dot < -0.85)
-    //   3. Normal-direction offset ≤ maxThicknessMm
+    //   3. Normal-direction offset Ôëñ maxThicknessMm
     //   4. Similar areas (within 3:1)
     //   5. Overlapping 2-D footprints (rules out false pairs at same Y but
     //      different X, e.g. flanges on opposite sides of the solid)
@@ -4562,7 +4607,7 @@ private:
     // to group g (same normal, same plane within 0.5 mm, and reachable via
     // shared edges between member faces). A meshed/triangulated flange face
     // is often emitted as two coplanar triangles that buildFaceGroups can't
-    // merge if their shared diagonal is treated as a non-coplanar edge —
+    // merge if their shared diagonal is treated as a non-coplanar edge ÔÇö
     // without this consolidation Option-3 would produce one candidate per
     // triangle. Topology (not just coplanarity) ensures we don't pull in
     // physically separate flanges that happen to lie on the same plane.
@@ -4691,12 +4736,12 @@ private:
     return candidates;
   }
 
-  // T018 — Extract one protrusion from the solid by cutting at the primary
+  // T018 ÔÇö Extract one protrusion from the solid by cutting at the primary
   // panel's outer face plane. Updates remainder (solid minus protrusion).
   // planeHalfSize: symmetric UV half-extent for the cutting planeFace.
   //   Must be large enough to span the entire solid cross-section at the cut plane.
   //   Computed once from the original solid's diagonal (vertex-iterated) so it is
-  //   geometrically correct without ballooning to the ±200 km values that
+  //   geometrically correct without ballooning to the ┬▒200 km values that
   //   BRepBndLib::Add can report for STEP-imported planar faces.
   static TopoDS_Shape extractProtrusion(
       const TopoDS_Shape&        solid,
@@ -4729,7 +4774,7 @@ private:
     TopoDS_Shape cutter;
     if (pc.useBoundedTabBox) {
       // Option-2 interior-host tab: build a box scoped to the cap's 2D
-      // footprint (precomputed in (tabU, tabV)) × tab height along panelNormal.
+      // footprint (precomputed in (tabU, tabV)) ├ù tab height along panelNormal.
       // The box brackets the tab volume exactly, so the boolean Common
       // captures only the tab and not the surrounding solid.
       const double pad   = (pc.tightPad   >= 0.0) ? pc.tightPad   : 0.5;
@@ -4846,7 +4891,7 @@ private:
 
   // Sanity check: a real protrusion (tab/boss/flange) is a localized feature,
   // small in at least two of three axes relative to the host solid. A "panel-
-  // sized" candidate spans > 80% of the solid in 2+ axes — that's a wall slab
+  // sized" candidate spans > 80% of the solid in 2+ axes ÔÇö that's a wall slab
   // misdetected as a protrusion (e.g. when nested-cube topology lets BFS
   // wrap a plate-style candidate around a full outer face). Reject those so
   // the geometry stays in workShape for splitMode2 to handle as a panel.
@@ -5222,7 +5267,7 @@ private:
       if (!boxMaker.IsDone()) continue;
       TopoDS_Solid boxSolid = boxMaker.Solid();
 
-      // Extract panel slab = ORIGINAL_SOLID ∩ boxSolid (not remainder).
+      // Extract panel slab = ORIGINAL_SOLID Ôê® boxSolid (not remainder).
       //
       // Extracting from the remainder caused successive panels to be trimmed
       // at the corners where earlier panels had already been cut out. The
@@ -5239,7 +5284,7 @@ private:
 
       GProp_GProps ep;
       BRepGProp::VolumeProperties(extract.Shape(), ep);
-      if (std::abs(ep.Mass()) < 1e-6) continue;  // empty slab — skip
+      if (std::abs(ep.Mass()) < 1e-6) continue;  // empty slab ÔÇö skip
 
       if (historyOut) {
         auto records = captureHistory(extract, remainder,
@@ -5270,7 +5315,7 @@ private:
     if (remainderOut) *remainderOut = remainder;
   }
 
-  // T022 — Recursive decomposition. Operates on an arbitrary solid shape
+  // T022 ÔÇö Recursive decomposition. Operates on an arbitrary solid shape
   // (not a registered shell), with the mutex already held by the caller.
   void recursiveDecompose(
       const TopoDS_Shape&  shape,
@@ -5287,7 +5332,7 @@ private:
 
     GProp_GProps rp;
     BRepGProp::VolumeProperties(shape, rp);
-    if (std::abs(rp.Mass()) < 1.0) return;  // < 1 mm³ — nothing meaningful left
+    if (std::abs(rp.Mass()) < 1.0) return;  // < 1 mm┬│ ÔÇö nothing meaningful left
 
     TopTools_IndexedMapOfShape faceMap;
     TopExp::MapShapes(shape, TopAbs_FACE, faceMap);
@@ -5311,7 +5356,7 @@ private:
     if (!hasPrimaryGroup) return;
 
     // Compute planeHalfSize from this component's vertex bounds (vertex iteration,
-    // not BRepBndLib::Add which can report ±200 km for STEP-imported planar faces).
+    // not BRepBndLib::Add which can report ┬▒200 km for STEP-imported planar faces).
     double localHalfSize = 1000.0;
     {
       double lxMin = 1e30, lxMax = -1e30;
@@ -5334,7 +5379,7 @@ private:
       TopoDS_Shape newRemainder;
       try {
         TopoDS_Shape ps = extractProtrusion(workShape, pc, newRemainder, localHalfSize);
-        if (isPanelSized(ps, workShape)) continue;  // false positive — leave for splitMode2
+        if (isPanelSized(ps, workShape)) continue;  // false positive ÔÇö leave for splitMode2
         ShellId pid = generateUUID();
         shells_[pid] = ShellState{pid, parentId, ps};
         protrusionIds.push_back(pid);
@@ -5390,7 +5435,7 @@ private:
     }
   }
 
-  // ── Main entry point ─────────────────────────────────────────────────────
+  // ÔöÇÔöÇ Main entry point ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   DecomposedByBendsResult splitBodyByBends(const ShellId& partId,
                                             double angleThresholdDeg,
@@ -5491,7 +5536,7 @@ private:
 
       // Compute the original solid's tight bounding box via vertex iteration.
       // BRepBndLib::Add is NOT used here: for STEP-imported shapes it samples the
-      // underlying surface's full UV domain and can report ±200 km for a planar face
+      // underlying surface's full UV domain and can report ┬▒200 km for a planar face
       // whose untrimmed surface extends far beyond the actual wire boundary.
       double bxMin = 1e30, bxMax = -1e30;
       double byMin = 1e30, byMax = -1e30;
@@ -5510,7 +5555,7 @@ private:
       // computeBboxes filters them out using bxMin/bxMax etc. + 1 mm tolerance.
       double planeHalfSize = (diagSq > 0 ? std::sqrt(diagSq) : 1000.0) * 1.1 + 10.0;
 
-      // T019 — Detect and extract protrusions before panel cutting.
+      // T019 ÔÇö Detect and extract protrusions before panel cutting.
       std::vector<ShellId>         panelIds;
       std::vector<ShellId>         protrusionIds;
       std::vector<ProtrusionParent> protrusionParents;
@@ -5537,12 +5582,12 @@ private:
 
       // If protrusion extraction disconnected workShape into multiple solids
       // (e.g., the four bridge flanges in testcube.step were the only links
-      // between the inner and outer hollow cubes — removing them leaves two
+      // between the inner and outer hollow cubes ÔÇö removing them leaves two
       // separate solids), splitMode2 run on the combined shape would pair
       // inner-cube and outer-cube outer faces across the void and produce
       // 25 mm-thick "panels" that wrap both walls plus the gap. OCCT may
       // keep the disconnected result as one Solid with multiple Shells, so
-      // TopAbs_SOLID iteration alone misses it — run a face-level BFS via
+      // TopAbs_SOLID iteration alone misses it ÔÇö run a face-level BFS via
       // shared edges to find connected components, then rebuild a Solid
       // per component using the original Shells inside it.
       auto splitConnectedComponents = [](const TopoDS_Shape& s) -> std::vector<TopoDS_Shape> {
@@ -5677,7 +5722,7 @@ private:
         // Each component is now a simple closed solid (a hollow cube after
         // flange extraction); a single splitMode2 pass produces the panels.
         // depth=1 ensures recursiveDecompose runs once but does not recurse
-        // on its own remainder — the bleed from protrusion extraction
+        // on its own remainder ÔÇö the bleed from protrusion extraction
         // leaves 0.05 mm-thick face slivers in the workShape that deeper
         // recursion would emit as spurious extra panels.
         for (const auto& comp : wsComponents) {
@@ -5691,6 +5736,10 @@ private:
       } else {
         splitMode1BFS(workShape, parentId, angleThresholdDeg, defaultThicknessMm, panelIds,
                       &shapeHistory);
+      }
+
+      // T022 ÔÇö Recursive decomposition into remainder solid(s)
+      if (maxRecursionDepth > 0 && !firstPassRemainder.IsNull()) {
         bool hadSolid = false;
         for (TopExp_Explorer ex(firstPassRemainder, TopAbs_SOLID); ex.More(); ex.Next()) {
           recursiveDecompose(ex.Current(), parentId, angleThresholdDeg, maxThicknessMm,
@@ -5714,7 +5763,7 @@ private:
       auto computeBboxes = [&](const std::vector<ShellId>& ids) {
         std::vector<BBox3D> bboxes;
         bboxes.reserve(ids.size());
-        constexpr double kTol = 1.0;  // mm — tolerance for on-boundary vertices
+        constexpr double kTol = 1.0;  // mm ÔÇö tolerance for on-boundary vertices
         for (const auto& id : ids) {
           auto it = shells_.find(id);
           if (it != shells_.end()) {
@@ -5783,7 +5832,7 @@ private:
     }
   }
 
-  // ── Remove protrusions ────────────────────────────────────────────────────
+  // ÔöÇÔöÇ Remove protrusions ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   RemoveProtrusionsResult removeProtrusions(
       const ShellId& partId,
@@ -6125,7 +6174,7 @@ private:
     }
   }
 
-  // ── Merge bodies with bend ───────────────────────────────────────────────
+  // ÔöÇÔöÇ Merge bodies with bend ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   MergeBodyResult mergeBodiesWithBend(const ShellId& partAId,
                                       const ShellId& partBId,
@@ -6151,11 +6200,11 @@ private:
     // Gaps <= kMergeTolerance are bridged by OCCT's fuzzy Boolean; larger gaps
     // produce disconnected compound bodies that look like one part but aren't.
     {
-      const double kMergeTolerance = 0.1; // mm — matches unfoldShell sewing tolerance
+      const double kMergeTolerance = 0.1; // mm ÔÇö matches unfoldShell sewing tolerance
 
       // Step 1: bounding-box quick-check.
       // Expand boxA by the tolerance; if boxB is still outside the expanded box,
-      // the shapes are definitely more than kMergeTolerance apart — run extrema.
+      // the shapes are definitely more than kMergeTolerance apart ÔÇö run extrema.
       // If the boxes overlap (shapes are nearby or touching), skip the check.
       Bnd_Box boxA, boxB;
       BRepBndLib::AddOptimal(itA->second.shape, boxA);
@@ -6205,7 +6254,7 @@ private:
 
       // Post-merge connectivity check: a properly fused pair of touching bodies
       // produces one solid or one shell. A compound with multiple solids/shells
-      // means the bodies didn't actually share topology — the gap was present.
+      // means the bodies didn't actually share topology ÔÇö the gap was present.
       {
         // Count solids (any nesting depth) and free shells (not inside a solid).
         int solidCount = 0;
@@ -6214,7 +6263,7 @@ private:
         for (TopExp_Explorer ex(fused, TopAbs_SHELL, TopAbs_SOLID); ex.More(); ex.Next()) shellCount++;
 
         // Also count direct top-level children of a COMPOUND when there are no
-        // solids or shells — this catches face-only compounds from surface models.
+        // solids or shells ÔÇö this catches face-only compounds from surface models.
         int topLevelCount = 0;
         if (solidCount == 0 && shellCount == 0 && fused.ShapeType() == TopAbs_COMPOUND) {
           for (TopoDS_Iterator it(fused); it.More(); it.Next()) topLevelCount++;
@@ -6226,7 +6275,7 @@ private:
 
         if (disconnected) {
           throw GeometryError("GE_MERGE_DISCONNECTED",
-            "Merge produced disconnected bodies — the panels are not topologically joined. "
+            "Merge produced disconnected bodies ÔÇö the panels are not topologically joined. "
             "Check for a gap at the shared edge and use close_gap to fix it.",
             false, "");
         }
@@ -6237,7 +6286,7 @@ private:
         // at a single edge or vertex that the operator couldn't reconcile.
         // Without this check the empty compound silently flowed downstream
         // into the fillet step, producing the "Fused result is not a single
-        // solid" error from a different (downstream) check — masking the
+        // solid" error from a different (downstream) check ÔÇö masking the
         // real failure (the fuse itself).
         if (solidCount == 0 && shellCount == 0 && topLevelCount == 0) {
           throw GeometryError("GE_MERGE_FAILED",
@@ -6250,12 +6299,12 @@ private:
         }
       }
 
-      // Attempt fillet on matching edges. Any failure is FATAL — we throw a
+      // Attempt fillet on matching edges. Any failure is FATAL ÔÇö we throw a
       // structured error rather than silently returning an unfilleted fuse,
       // because the caller asked for a bend and a flat-fuse result would
       // misrepresent the intent (the UI shows a successful merge but with no
       // bend, then unfold produces geometry that doesn't match the requested
-      // operation). Silent fallbacks were removed deliberately — the user
+      // operation). Silent fallbacks were removed deliberately ÔÇö the user
       // should be told why the bend couldn't be applied (radius too large,
       // no joint edges, OCCT failure) and decide what to do next.
       bool wantAll = std::find(targetEdges.begin(), targetEdges.end(), "all") != targetEdges.end();
@@ -6264,7 +6313,7 @@ private:
       // BRepAlgoAPI_Fuse returns a COMPOUND wrapper even when the result is a
       // single clean solid. BRepFilletAPI_MakeFillet rejects COMPOUND input
       // ("There are no suitable edges for chamfer or fillet"), so unwrap to the
-      // bare solid here. We require exactly one solid + no stray free shells —
+      // bare solid here. We require exactly one solid + no stray free shells ÔÇö
       // the disconnected-bodies check above already rejected the multi-solid
       // case, so this should hold; if it doesn't, throw rather than silently
       // hand the fillet a body it can't process.
@@ -6284,13 +6333,13 @@ private:
           std::ostringstream msg;
           msg << "GE_MERGE_FILLET_FAILED: Fused result is not a single solid "
               << "(solids=" << solidCount << ", freeShells=" << freeShells
-              << "). Cannot fillet — the input bodies likely don't form a clean joint.";
+              << "). Cannot fillet ÔÇö the input bodies likely don't form a clean joint.";
           throw GeometryError("GE_MERGE_FILLET_FAILED", msg.str(), true, "rollback");
         }
         filletInput = theSolid;
       }
 
-      // ── PLAN B: DETERMINISTIC CORNER-CUT BEND ─────────────────────────
+      // ÔöÇÔöÇ PLAN B: DETERMINISTIC CORNER-CUT BEND ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
       //
       // Instead of searching the fused topology for an edge to fillet
       // (fragile; OCCT MakeFillet has many failure modes for borderline
@@ -6305,14 +6354,14 @@ private:
       //      planes. Well-defined for perpendicular panels.
       //   3. Compute the bend extent = overlap of the two inputs projected
       //      onto the axis.
-      //   4. Build a corner-cut solid: a (R × R × extent) box positioned at
+      //   4. Build a corner-cut solid: a (R ├ù R ├ù extent) box positioned at
       //      the outside corner along the bend axis, MINUS a cylinder of
       //      radius R tangent to both outer planes. This is exactly the
       //      material a fillet would remove.
       //   5. Subtract the corner-cut from the fused body.
       //
       // Result: sharp inside corner (panels meet flush at the inner edge),
-      // rounded outside corner of radius R — matching standard sheet metal
+      // rounded outside corner of radius R ÔÇö matching standard sheet metal
       // bend geometry.
       //
       // For explicit edge IDs (target_edges != ["all"]) we still use the
@@ -6320,7 +6369,7 @@ private:
       // which edges they want filleted.
       try {
         if (wantAll) {
-          // ── 1. Outer faces of each input ──
+          // ÔöÇÔöÇ 1. Outer faces of each input ÔöÇÔöÇ
           GProp_GProps centA, centB;
           BRepGProp::VolumeProperties(inputA, centA);
           BRepGProp::VolumeProperties(inputB, centB);
@@ -6360,10 +6409,10 @@ private:
               false, "");
           }
 
-          // ── 2. Bend axis = intersection of outer planes ──
+          // ÔöÇÔöÇ 2. Bend axis = intersection of outer planes ÔöÇÔöÇ
           if (std::abs(nInA.Dot(nInB)) > 0.95) {
             throw GeometryError("GE_MERGE_BEND_AXIS_AMBIGUOUS",
-              "Outer faces of the two inputs are parallel (within 18°). The panels "
+              "Outer faces of the two inputs are parallel (within 18┬░). The panels "
               "must meet at a non-zero angle so a bend axis can be defined.",
               false, "");
           }
@@ -6371,13 +6420,13 @@ private:
                                       Precision::Angular(), Precision::Confusion());
           if (!planeInt.IsDone() || planeInt.TypeInter() != IntAna_Line) {
             throw GeometryError("GE_MERGE_BEND_AXIS_AMBIGUOUS",
-              "Failed to intersect the inputs' outer planes — bend axis could not "
+              "Failed to intersect the inputs' outer planes ÔÇö bend axis could not "
               "be determined.",
               false, "");
           }
           gp_Lin bendAxis = planeInt.Line(1);
 
-          // ── 3. Bend extent = overlap of inputs projected onto axis ──
+          // ÔöÇÔöÇ 3. Bend extent = overlap of inputs projected onto axis ÔöÇÔöÇ
           gp_Vec axisDir(bendAxis.Direction());
           gp_Pnt axisOrigin = bendAxis.Location();
 
@@ -6406,7 +6455,7 @@ private:
             throw GeometryError("GE_MERGE_BEND_EXTENT_TOO_SHORT", msg.str(), false, "");
           }
 
-          // ── 3a. Panel thickness check ──
+          // ÔöÇÔöÇ 3a. Panel thickness check ÔöÇÔöÇ
           // User policy: imported geometry may have slightly mismatched
           // thicknesses; correct silently if mismatch is within ~3 mm,
           // throw if it's beyond that (different stock can't be bent
@@ -6440,12 +6489,21 @@ private:
             throw GeometryError("GE_MERGE_RADIUS_TOO_LARGE", msg.str(), false, "");
           }
 
-          // ── 4. Build local frame and corner-cut solid ──
-          // dirA / dirB = unit vectors from the bend axis into each panel
+          // bendRadiusMm is the INNER (concave-side) radius — standard sheet-metal
+          // convention.  The outer (convex-side) radius = innerRadius + thickness.
+          const double innerRadius = bendRadiusMm;
+          const double outerRadius = innerRadius + effectiveThickness;
+
+          // ÔöÇÔöÇ 4. Build local frame and corner-cut solid ÔöÇÔöÇ
+          // dirA / dirB = unit vectors from the bend axis into each panel.
+          // Local 2D cross-section: dirA = +X, dirB = +Y.
+          //   Outer faces (X=0, Y=0) are on the convex side of the bend.
+          //   Inner faces (X=T, Y=T) are on the concave side.
+          //   Arc centre = (outerRadius, outerRadius) in local frame.
           gp_Vec dirA = -nInA;
           gp_Vec dirB = -nInB;
 
-          // Align axisDir so that axisDir × dirA = dirB (right-handed local
+          // Align axisDir so that axisDir ├ù dirA = dirB (right-handed local
           // frame). The intersection line direction is arbitrary; we pick
           // the orientation that makes the local box axes consistent.
           gp_Vec computedDirB = axisDir.Crossed(dirA);
@@ -6453,72 +6511,67 @@ private:
             axisDir = -axisDir;
           }
 
-          // Origin: start of the bend extent on the axis. Box extends from
-          // this origin INTO the corner overlap (R into each panel) and
-          // ALONG the axis (over the full bend extent).
+          // cornerOrigin: point on the bend axis at the start of the bend extent.
+          // Box axes: XDirection=dirA, YDirection=dirB, Direction=axisDir.
           gp_Pnt cornerOrigin = axisOrigin.Translated(axisDir * extentLo);
+          gp_Ax2 boxAxes(cornerOrigin, gp_Dir(axisDir), gp_Dir(dirA));
 
-          // Box: BRepPrimAPI_MakeBox(ax, dx, dy, dz) builds the box with
-          //   dx along ax.XDirection(), dy along ax.YDirection(), dz along ax.Direction().
-          // We set ax = (cornerOrigin, axisDir, dirA) so:
-          //   ax X-direction = dirA  → box dx=R goes into panel A
-          //   ax Y-direction = axisDir × dirA = dirB → box dy=R goes into panel B
-          //   ax Z-direction = axisDir → box dz=extent goes along bend axis
-          gp_Ax2 boxAxes(cornerOrigin,
-                         gp_Dir(axisDir),
-                         gp_Dir(dirA));
-          TopoDS_Solid box;
+          // Arc-centre location: outerRadius into each panel direction.
+          gp_Pnt arcCentre = cornerOrigin
+              .Translated(dirA * outerRadius)
+              .Translated(dirB * outerRadius);
+          gp_Ax2 arcAxes(arcCentre, gp_Dir(axisDir));
+
+          // -- 4b. Outer corner cut -------------------------------------------------
+          // Remove the crescent at the convex corner:
+          //   outerCut = box([0..boxExtent]^2) - outerCyl(radius=outerRadius)
+          // Subtracting this from the body rounds the outer (convex) bend surface
+          // to the correct outer radius while leaving the inner faces untouched.
+          //
+          // IMPORTANT: Cap the box extent to effectiveThickness so the box never
+          // extends past the inner corner faces (which sit at T from the outer
+          // corner). If outerRadius > T, the box would split those inner faces
+          // during the Boolean cut, creating phantom sub-faces that corrupt the
+          // unfold algorithm's face-area ordering and UV projection.
+          // The arc position (arcCentre) is still placed at outerRadius from the
+          // corner; only the box footprint is clamped so it stays inside the
+          // material region.
+          double boxExtent = std::min(outerRadius, effectiveThickness);
+          TopoDS_Solid outerBox;
           try {
-            box = BRepPrimAPI_MakeBox(boxAxes, bendRadiusMm, bendRadiusMm, extent).Solid();
+            outerBox = BRepPrimAPI_MakeBox(boxAxes, boxExtent, boxExtent, extent).Solid();
           } catch (const Standard_Failure& e) {
             std::ostringstream msg;
-            msg << "GE_MERGE_WEDGE_FAILED: failed to construct corner-cut box at "
-                << "radius=" << bendRadiusMm << " extent=" << extent
-                << ": " << e.GetMessageString();
-            throw GeometryError("GE_MERGE_WEDGE_FAILED", msg.str(), true, "rollback");
-          }
-
-          // Cylinder centered at (R, R, 0) in local coords (inside the box,
-          // tangent to both planes at (R, 0) and (0, R)). Sweep along axis
-          // for the full bend extent.
-          gp_Pnt cylBase = cornerOrigin
-              .Translated(dirA * bendRadiusMm)
-              .Translated(dirB * bendRadiusMm);
-          gp_Ax2 cylAxes(cylBase, gp_Dir(axisDir));
-          TopoDS_Solid cyl;
-          try {
-            cyl = BRepPrimAPI_MakeCylinder(cylAxes, bendRadiusMm, extent).Solid();
-          } catch (const Standard_Failure& e) {
-            std::ostringstream msg;
-            msg << "GE_MERGE_WEDGE_FAILED: failed to construct corner-cut cylinder: "
+            msg << "GE_MERGE_WEDGE_FAILED: failed to build outer-corner box: "
                 << e.GetMessageString();
             throw GeometryError("GE_MERGE_WEDGE_FAILED", msg.str(), true, "rollback");
           }
-
-          // Corner-cut material = box - cyl (the small region near the
-          // outside corner that should NOT be in the final body).
-          BRepAlgoAPI_Cut cornerCutOp(box, cyl);
-          cornerCutOp.Build();
-          if (!cornerCutOp.IsDone() || cornerCutOp.Shape().IsNull()) {
+          TopoDS_Solid outerCyl;
+          try {
+            outerCyl = BRepPrimAPI_MakeCylinder(arcAxes, outerRadius, extent).Solid();
+          } catch (const Standard_Failure& e) {
+            std::ostringstream msg;
+            msg << "GE_MERGE_WEDGE_FAILED: failed to build outer-corner cylinder: "
+                << e.GetMessageString();
+            throw GeometryError("GE_MERGE_WEDGE_FAILED", msg.str(), true, "rollback");
+          }
+          BRepAlgoAPI_Cut outerCutOp(outerBox, outerCyl);
+          outerCutOp.Build();
+          if (!outerCutOp.IsDone() || outerCutOp.Shape().IsNull()) {
             throw GeometryError("GE_MERGE_WEDGE_FAILED",
-              "Failed to compute corner-cut geometry (box - cylinder). The bend "
-              "radius or panel geometry may be degenerate.",
+              "Failed to compute outer corner-cut (outerBox - outerCyl).",
               true, "rollback");
           }
-          TopoDS_Shape cornerCut = cornerCutOp.Shape();
-
-          // ── 5. Apply the corner cut to the fused body ──
-          BRepAlgoAPI_Cut applyOp(filletInput, cornerCut);
-          applyOp.Build();
-          if (!applyOp.IsDone() || applyOp.Shape().IsNull()) {
+          BRepAlgoAPI_Cut applyOuterOp(filletInput, outerCutOp.Shape());
+          applyOuterOp.Build();
+          if (!applyOuterOp.IsDone() || applyOuterOp.Shape().IsNull()) {
             throw GeometryError("GE_MERGE_FAILED",
-              "Failed to subtract corner-cut from the fused body. The fused body "
-              "may have non-manifold topology at the bend region.",
+              "Failed to subtract outer corner-cut from body.",
               true, "rollback");
           }
-          result = applyOp.Shape();
+          result = applyOuterOp.Shape();
         } else {
-          // ── EXPLICIT EDGES PATH (back-compat) ──
+          // ÔöÇÔöÇ EXPLICIT EDGES PATH (back-compat) ÔöÇÔöÇ
           // Caller supplied specific edge IDs; use OCCT MakeFillet to fillet
           // exactly those. Less robust than the deterministic path, but the
           // caller has specified which edges they want.
@@ -6580,7 +6633,7 @@ private:
         if (rsCount == 1) {
           result = resultSolid;
         }
-        // If rsCount != 1 we leave `result` as-is — the merge succeeded
+        // If rsCount != 1 we leave `result` as-is ÔÇö the merge succeeded
         // structurally, but a downstream fuse on this shell may fail; we
         // don't synthesise a fake solid to hide that.
       }
@@ -6603,7 +6656,7 @@ private:
     }
   }
 
-  // ── Close gap between two shells ─────────────────────────────────────────
+  // ÔöÇÔöÇ Close gap between two shells ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   CloseGapResult closeGap(const ShellId& partAId, const ShellId& partBId) override {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -6623,7 +6676,7 @@ private:
 
     double gap = distCalc.Value();
     if (gap < 1e-6) {
-      // Already touching — nothing to do; return part B unchanged.
+      // Already touching ÔÇö nothing to do; return part B unchanged.
       SnapshotId token = createSnapshotLocked("closeGap (no-op) on " + partBId);
       return CloseGapResult{partBId, 0.0, token};
     }
@@ -6645,7 +6698,7 @@ private:
     return CloseGapResult{partBId, gap, token};
   }
 
-  // ── Extend face to target ────────────────────────────────────────────────
+  // ÔöÇÔöÇ Extend face to target ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   ExtendFaceResult extendFaceToTarget(const ShellId&      partId,
                                       const std::string&  faceId,
@@ -6662,7 +6715,7 @@ private:
     SnapshotId token = createSnapshotLocked("before extendFaceToTarget on " + partId);
 
     try {
-      // ── Resolve target shape early (needed for auto face-finding) ──────────
+      // ÔöÇÔöÇ Resolve target shape early (needed for auto face-finding) ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
       TopoDS_Shape targetShape;
       if (targetType == "face_id" || targetType == "part_surface") {
         auto tIt = shells_.find(targetPartId);
@@ -6682,7 +6735,7 @@ private:
         }
       }
 
-      // ── Find the face to extend ────────────────────────────────────────────
+      // ÔöÇÔöÇ Find the face to extend ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
       TopoDS_Face face;
       if (faceId.empty()) {
         // Auto-select: the face closest to and most directly facing the target.
@@ -6715,7 +6768,7 @@ private:
           gp_Vec cNorm = cdu.Crossed(cdv);
           if (cNorm.Magnitude() < 1e-10) continue;
           cNorm.Normalize();
-          // Respect face orientation — a REVERSED face has its outward normal
+          // Respect face orientation ÔÇö a REVERSED face has its outward normal
           // opposite to the surface parametrization direction.
           if (candidate.Orientation() == TopAbs_REVERSED) cNorm.Reverse();
 
@@ -6733,11 +6786,11 @@ private:
           d.LoadS2(targetShape);
           d.Perform();
           if (!d.IsDone()) continue;
-          // Skip faces already in contact with the target — their score would
+          // Skip faces already in contact with the target ÔÇö their score would
           // be 0 and they would always beat the actual gap face.
           if (d.Value() < 1e-4) continue;
 
-          // Score: dist / dotScore — favour near faces that face the target
+          // Score: dist / dotScore ÔÇö favour near faces that face the target
           double score = d.Value() / dotScore;
           if (score < bestScore) {
             bestScore = score;
@@ -6764,7 +6817,7 @@ private:
         }
       }
 
-      // ── Compute face normal at centroid ────────────────────────────────────
+      // ÔöÇÔöÇ Compute face normal at centroid ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
       Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
       if (surf.IsNull()) {
         throw GeometryError("GE_EXTEND_FAILED", "Face has null surface", false, "");
@@ -6782,7 +6835,7 @@ private:
       // Apply orientation so the normal points outward from the shell.
       if (face.Orientation() == TopAbs_REVERSED) faceNormal.Reverse();
 
-      // ── Compute extension distance ─────────────────────────────────────────
+      // ÔöÇÔöÇ Compute extension distance ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
       double extDist = 0.0;
       if (targetType == "plane") {
         gp_Vec tNorm(targetPlane.normalX, targetPlane.normalY, targetPlane.normalZ);
@@ -6854,7 +6907,7 @@ private:
     }
   }
 
-  // ── Offset face ──────────────────────────────────────────────────────────
+  // ÔöÇÔöÇ Offset face ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   OffsetFaceResult offsetFace(const ShellId&     partId,
                                const std::string& faceId,
@@ -6946,7 +6999,7 @@ private:
     }
   }
 
-  // ── Add flange ───────────────────────────────────────────────────────────
+  // ÔöÇÔöÇ Add flange ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   AddFlangeResult addFlange(const ShellId&     partId,
                              const std::string& edgeId,
@@ -7038,7 +7091,7 @@ private:
       outward.Normalize();
 
       // Flange direction: rotate face normal by (PI - angleDeg) around tangent axis
-      // At 90°: flange is perpendicular to face (standard flange)
+      // At 90┬░: flange is perpendicular to face (standard flange)
       double angleRad = angleDeg * M_PI / 180.0;
       double cosA = std::cos(M_PI - angleRad);
       double sinA = std::sin(M_PI - angleRad);
@@ -7082,7 +7135,7 @@ private:
     }
   }
 
-  // ── Rip edge ─────────────────────────────────────────────────────────────
+  // ÔöÇÔöÇ Rip edge ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   RipEdgeResult ripEdge(const ShellId&     partId,
                          const std::string& edgeId) override {
@@ -7188,7 +7241,7 @@ private:
     }
   }
 
-  // ── Clash detection ──────────────────────────────────────────────────────
+  // ÔöÇÔöÇ Clash detection ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   ClashReport computeIntersections(const std::vector<ShellId>& partIds) override {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -7276,7 +7329,7 @@ private:
     return report;
   }
 
-  // ── Gap detection ────────────────────────────────────────────────────────
+  // ÔöÇÔöÇ Gap detection ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   GapReport computeGaps(const ShellId& partAId,
                         const ShellId& partBId,
@@ -7309,7 +7362,7 @@ private:
                       report.minimumDistanceMm <= maxDistanceThresholdMm;
 
       if (distCalc.NbSolution() > 0) {
-        // Closest point pair — used to identify the faces involved
+        // Closest point pair ÔÇö used to identify the faces involved
         gp_Pnt pA = distCalc.PointOnShape1(1);
         gp_Pnt pB = distCalc.PointOnShape2(1);
 
@@ -7365,7 +7418,7 @@ private:
     }
   }
 
-  // ── Trim body with plane ─────────────────────────────────────────────────
+  // ÔöÇÔöÇ Trim body with plane ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   TrimBodyResult trimBodyWithPlane(const ShellId&      partId,
                                    const CuttingPlane& plane,
@@ -7400,8 +7453,8 @@ private:
       // Reference point on the side the tool occupies (opposite to keep side)
       gp_Vec n(normal);
       gp_Pnt refPt = keepPositiveSide
-          ? origin.Translated(n * -100.0)   // tool on negative side → keep positive
-          : origin.Translated(n * 100.0);   // tool on positive side → keep negative
+          ? origin.Translated(n * -100.0)   // tool on negative side ÔåÆ keep positive
+          : origin.Translated(n * 100.0);   // tool on positive side ÔåÆ keep negative
 
       BRepPrimAPI_MakeHalfSpace halfSpace(planeFace, refPt);
       TopoDS_Solid halfSpaceSolid = halfSpace.Solid();
@@ -7593,7 +7646,7 @@ private:
       }
 
       if (totalFaceCount == 0 || planarFacesWithArea.empty()) {
-        result.validationErrors.push_back("GE_PANEL_NO_FLAT_FACES: Shape has no planar faces — cannot be a sheet metal panel.");
+        result.validationErrors.push_back("GE_PANEL_NO_FLAT_FACES: Shape has no planar faces ÔÇö cannot be a sheet metal panel.");
         return result;
       }
 
@@ -7724,7 +7777,7 @@ private:
                     << ", matched=" << (planeInfos[i].matched ? "true" : "false") 
                     << ", partnerIdx=" << planeInfos[i].partnerIdx << std::endl;
         }
-        result.validationErrors.push_back("GE_PANEL_NOT_SHEET_METAL: Bulky or non-sheet-metal geometry — area ratio of parallel skins is below limit.");
+        result.validationErrors.push_back("GE_PANEL_NOT_SHEET_METAL: Bulky or non-sheet-metal geometry ÔÇö area ratio of parallel skins is below limit.");
         return result;
       }
 
@@ -8065,7 +8118,7 @@ private:
     }
 
     if (pairs.empty())
-      throw GeometryError("GE_NO_BENDS", "No bend pairs found — no improved part needed", false, "");
+      throw GeometryError("GE_NO_BENDS", "No bend pairs found ÔÇö no improved part needed", false, "");
 
     BRepFilletAPI_MakeFillet filletMaker(originalShape);
     for (const auto& pr : pairs) {
@@ -8180,7 +8233,7 @@ private:
         TopoDS_Face face;
         // Coplanar sub-faces produced by a prior Boolean fuse all live in the
         // same panel skin.  Tracking them here is the same fix applied in
-        // unfoldShell::findPanelConnection — without it, the matchedFaceIds
+        // unfoldShell::findPanelConnection ÔÇö without it, the matchedFaceIds
         // set below would only contain the primary sub-face per skin and
         // sharp edges bordering the other sub-faces would be missed.
         std::vector<TopoDS_Face> allFaces;
@@ -8288,7 +8341,7 @@ private:
           if (minDim < 2.5 * t) {
             continue;
           }
-          // Insert IDs for ALL coplanar sub-faces — sharp edges may border any
+          // Insert IDs for ALL coplanar sub-faces ÔÇö sharp edges may border any
           // of them, not just the primary face that survived initial filtering.
           for (const auto& sub : info.allFaces) {
             matchedFaceIds.insert(shapeId(sub));
@@ -8419,7 +8472,7 @@ private:
   }
 };
 
-// ─── Factory ──────────────────────────────────────────────────────────────────
+// ÔöÇÔöÇÔöÇ Factory ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
 std::unique_ptr<GeometryService> GeometryService::create() {
   return std::make_unique<GeometryServiceImpl>();

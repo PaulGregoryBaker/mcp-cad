@@ -30,3 +30,11 @@ target_compile_definitions(geometry_addon PRIVATE
   NAPI_VERSION=9
   NODE_ADDON_API_DISABLE_DEPRECATED
 )
+
+# ─── Auto-deploy to TypeScript server directory after build ──────────────────
+add_custom_command(TARGET geometry_addon POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    $<TARGET_FILE:geometry_addon>
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../ts/geometry_addon.node"
+  COMMENT "Deploying geometry_addon.node to ts/"
+)
