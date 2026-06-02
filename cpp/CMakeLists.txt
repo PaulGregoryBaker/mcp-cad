@@ -101,6 +101,7 @@ add_executable(geometry_tests
   tests/ge_decompose_integration_test.cc
   tests/determinism_test.cc
   tests/nesting_test.cc
+  tests/production_workflow_test.cc
 )
 
 target_include_directories(geometry_tests PRIVATE
