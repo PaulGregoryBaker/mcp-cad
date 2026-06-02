@@ -2768,28 +2768,6 @@ public:
         currentShape = nextShape;
       }
 
-      // Unify coplanar face fragments left by BRepAlgoAPI_Fuse so that seam
-      // faces at the join boundary don't propagate into downstream operations
-      // (they confuse the corner-cut Boolean in mergeBodiesWithBend, producing
-      // disconnected artifacts that break unfold cycle detection).
-      {
-        ShapeUpgrade_UnifySameDomain fuseUnifier(currentShape, Standard_True, Standard_True, Standard_True);
-        fuseUnifier.Build();
-        TopoDS_Shape unified = fuseUnifier.Shape();
-        if (!unified.IsNull()) {
-          if (unified.ShapeType() != TopAbs_SOLID) {
-            int uCount = 0;
-            TopoDS_Solid uSolid;
-            for (TopExp_Explorer ex(unified, TopAbs_SOLID); ex.More(); ex.Next()) {
-              uSolid = TopoDS::Solid(ex.Current());
-              uCount++;
-            }
-            if (uCount == 1) unified = uSolid;
-          }
-          currentShape = unified;
-        }
-      }
-
       for (const auto& id : tools) {
         shells_.erase(id);
       }
