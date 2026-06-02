@@ -54,6 +54,7 @@
 #include <ShapeFix_Shape.hxx>
 #include <ShapeFix_Edge.hxx>
 #include <ShapeFix_Face.hxx>
+#include <ShapeFix_Wire.hxx>
 
 #include <Geom_Surface.hxx>
 #include <Geom_Plane.hxx>
@@ -259,6 +260,123 @@ public:
 
     } catch (const Standard_Failure& e) {
       throw GeometryError("GE_IMPORT_FAILED",
+                          std::string("OCCT exception: ") + e.GetMessageString(),
+                          false, "");
+    }
+  }
+
+  // ── Viewport orientation and alignment ───────────────────────────────────
+
+  AlignmentResult centerAndAlignBody(
+      const ShellId&    partId,
+      const SnapshotId& transactionId) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    TopoDS_Shape shape;
+    {
+      auto shellIt = shells_.find(partId);
+      auto solidIt = solids_.find(partId);
+      if (shellIt != shells_.end()) {
+        shape = shellIt->second.shape;
+      } else if (solidIt != solids_.end()) {
+        shape = solidIt->second.shape;
+      } else {
+        throw GeometryError("GE_SHELL_NOT_FOUND", "Shell or solid not found: " + partId, false, "");
+      }
+    }
+
+    if (shape.IsNull()) {
+      throw GeometryError("GE_ALIGN_FAILED", "Null shape provided for alignment", false, "");
+    }
+
+    try {
+      // 1. Calculate Center of Mass Centroid
+      GProp_GProps vp;
+      BRepGProp::VolumeProperties(shape, vp);
+      gp_Pnt centroidPnt = vp.CentreOfMass();
+
+      // 2. Find the dominant planar face normal
+      gp_Vec dominantNormal(0.0, 0.0, 1.0);
+      double maxArea = -1.0;
+      for (TopExp_Explorer ex(shape, TopAbs_FACE); ex.More(); ex.Next()) {
+        const TopoDS_Face& f = TopoDS::Face(ex.Current());
+        Handle(Geom_Surface) surf = BRep_Tool::Surface(f);
+        if (!surf.IsNull() && surf->IsKind(STANDARD_TYPE(Geom_Plane))) {
+          GProp_GProps sp;
+          BRepGProp::SurfaceProperties(f, sp);
+          double area = sp.Mass();
+          if (area > maxArea) {
+            maxArea = area;
+            dominantNormal = faceOutwardNormal(f);
+          }
+        }
+      }
+
+      // If dominant normal is zero vector or invalid, default to Z axis
+      if (dominantNormal.SquareMagnitude() < 1e-10) {
+        dominantNormal = gp_Vec(0.0, 0.0, 1.0);
+      } else {
+        dominantNormal.Normalize();
+      }
+
+      // 3. Create rotation transformation to align dominant normal to global Z axis [0,0,1]
+      gp_Trsf rot;
+      gp_Vec zDir(0.0, 0.0, 1.0);
+      if (dominantNormal.Angle(zDir) > 1e-5) {
+        gp_Vec axis = dominantNormal.Crossed(zDir);
+        if (axis.SquareMagnitude() < 1e-10) {
+          // Dominant normal is opposite to Z axis: rotate 180 deg around global X
+          rot.SetRotation(gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(1.0, 0.0, 0.0)), M_PI);
+        } else {
+          rot.SetRotation(gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(axis)), dominantNormal.Angle(zDir));
+        }
+      }
+
+      // 4. Create translation transformation to move centroid to [0,0,0]
+      gp_Trsf trans;
+      trans.SetTranslation(gp_Vec(centroidPnt, gp_Pnt(0.0, 0.0, 0.0)));
+
+      // 5. Combine translation and rotation: first translate to origin, then rotate
+      gp_Trsf combined = rot * trans;
+
+      // 6. Transform the shape
+      BRepBuilderAPI_Transform xform(shape, combined, true);
+      TopoDS_Shape transformedShape = xform.Shape();
+      if (transformedShape.IsNull()) {
+        throw GeometryError("GE_ALIGN_FAILED", "Transformation produced null shape", false, "");
+      }
+
+      // Update shape in registry
+      auto shellIt = shells_.find(partId);
+      auto solidIt = solids_.find(partId);
+      if (shellIt != shells_.end()) {
+        shellIt->second.shape = transformedShape;
+      } else if (solidIt != solids_.end()) {
+        solidIt->second.shape = transformedShape;
+      }
+
+      AlignmentResult result;
+      result.solidId = partId;
+      result.centroid[0] = 0.0;
+      result.centroid[1] = 0.0;
+      result.centroid[2] = 0.0;
+      
+      // Store 3x3 rotation matrix from rot
+      result.rotationMatrix[0] = rot.Value(1, 1);
+      result.rotationMatrix[1] = rot.Value(1, 2);
+      result.rotationMatrix[2] = rot.Value(1, 3);
+      result.rotationMatrix[3] = rot.Value(2, 1);
+      result.rotationMatrix[4] = rot.Value(2, 2);
+      result.rotationMatrix[5] = rot.Value(2, 3);
+      result.rotationMatrix[6] = rot.Value(3, 1);
+      result.rotationMatrix[7] = rot.Value(3, 2);
+      result.rotationMatrix[8] = rot.Value(3, 3);
+      
+      result.rollbackToken = transactionId;
+
+      return result;
+
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_ALIGN_FAILED",
                           std::string("OCCT exception: ") + e.GetMessageString(),
                           false, "");
     }
@@ -3966,7 +4084,7 @@ private:
       const TopoDS_Face& fA = TopoDS::Face(fl.First());
       const TopoDS_Face& fB = TopoDS::Face(fl.Last());
       double angle = computeDihedralAngle(fA, fB, TopoDS::Edge(edgeToFaces.FindKey(i)));
-      if (std::abs(angle - 180.0) <= angleThresholdDeg) {
+      if (angle <= angleThresholdDeg) {
         int idxA = faceMap.FindIndex(fA);
         int idxB = faceMap.FindIndex(fB);
         if (idxA > 0 && idxB > 0) {
@@ -4826,9 +4944,64 @@ private:
         continue;
       }
 
-      // Build a planar face from the boundary wire
-      BRepBuilderAPI_MakeFace faceMaker(wireMaker.Wire(), /*onlyPlane=*/true);
-      if (!faceMaker.IsDone()) {
+      // Build a planar face from the boundary wire using the group's plane
+      gp_Pln grpPlane(grp.centroid, gp_Dir(grp.normal));
+      TopoDS_Wire rawWire = wireMaker.Wire();
+      TopoDS_Wire fixedWire = rawWire;
+
+      try {
+        Handle(ShapeFix_Wire) sfw = new ShapeFix_Wire();
+        sfw->Load(rawWire);
+        BRepBuilderAPI_MakeFace tempFaceMaker(grpPlane);
+        if (tempFaceMaker.IsDone()) {
+          sfw->SetFace(tempFaceMaker.Face());
+        }
+        sfw->SetPrecision(0.15); // fuzzy tolerance for wire healing
+        sfw->FixReorder();
+        sfw->FixConnected();
+        sfw->FixClosed();
+        fixedWire = sfw->Wire();
+      } catch (...) {
+        // Keep rawWire if ShapeFix_Wire fails
+      }
+
+      TopoDS_Face finalFace;
+      BRepBuilderAPI_MakeFace faceMaker(grpPlane, fixedWire, Standard_True);
+      if (faceMaker.IsDone()) {
+        finalFace = faceMaker.Face();
+      } else {
+        // If first attempt failed, try BRepBuilderAPI_Sewing to heal the edges!
+        try {
+          BRepBuilderAPI_Sewing sewer(0.15);
+          for (int i = 1; i <= edgeFaceMap.Extent(); ++i) {
+            if (edgeFaceMap(i).Size() == 1) {
+              const TopoDS_Edge& e = TopoDS::Edge(edgeFaceMap.FindKey(i));
+              sewer.Add(e);
+            }
+          }
+          sewer.Perform();
+          TopoDS_Shape sewed = sewer.SewedShape();
+          TopoDS_Wire sewedWire;
+          if (sewed.ShapeType() == TopAbs_WIRE) {
+            sewedWire = TopoDS::Wire(sewed);
+          } else {
+            TopExp_Explorer wireEx(sewed, TopAbs_WIRE);
+            if (wireEx.More()) {
+              sewedWire = TopoDS::Wire(wireEx.Current());
+            }
+          }
+          if (!sewedWire.IsNull()) {
+            BRepBuilderAPI_MakeFace faceMaker2(grpPlane, sewedWire, Standard_True);
+            if (faceMaker2.IsDone()) {
+              finalFace = faceMaker2.Face();
+            }
+          }
+        } catch (...) {
+          // Sewer failed
+        }
+      }
+
+      if (finalFace.IsNull()) {
         throw GeometryError(GE_DECOMPOSE_EXTRUDE_FAILED,
                             "Could not build planar face from boundary wire", true, "rollback");
       }
@@ -4837,7 +5010,7 @@ private:
       gp_Vec extVec(grp.normal.X() * defaultThicknessMm,
                     grp.normal.Y() * defaultThicknessMm,
                     grp.normal.Z() * defaultThicknessMm);
-      BRepPrimAPI_MakePrism prism(faceMaker.Face(), extVec);
+      BRepPrimAPI_MakePrism prism(finalFace, extVec);
       prism.Build();
       if (!prism.IsDone() || prism.Shape().IsNull()) {
         throw GeometryError(GE_DECOMPOSE_EXTRUDE_FAILED,
@@ -4853,7 +5026,7 @@ private:
       }
 
       if (historyOut) {
-        auto records = captureHistory(prism, faceMaker.Face(),
+        auto records = captureHistory(prism, finalFace,
                                       [](const TopoDS_Shape& s){ return shapeId(s); },
                                       "split_body_by_bends");
         historyOut->insert(historyOut->end(), records.begin(), records.end());
@@ -5254,7 +5427,56 @@ private:
       TopoDS_Shape shape    = inputShape;
       SolidId      parentId = inputParentId;
 
+      TopTools_IndexedMapOfShape faceMapInput;
+      TopExp::MapShapes(shape, TopAbs_FACE, faceMapInput);
+      std::cout << "[DEBUG decomposition] Face count BEFORE early unification: " << faceMapInput.Extent() << std::endl;
+
+      // US1: Facet Unification Pass - Merge adjacent coplanar/planar triangular facets
+      // of complex segmented models (like cauldron.step) before decomposition
+      try {
+        std::cout << "[DEBUG unifier] Running ShapeUpgrade_UnifySameDomain on input shape..." << std::endl;
+        ShapeUpgrade_UnifySameDomain unifier(shape, Standard_True, Standard_True, Standard_True);
+        double angTolRad = angleThresholdDeg * M_PI / 180.0;
+        if (angTolRad < 1e-6) angTolRad = 0.0087; // default 0.5 degrees
+        unifier.SetAngularTolerance(angTolRad);
+        unifier.SetLinearTolerance(0.05); // slightly looser linear tol to heal facets
+        unifier.Build();
+        TopoDS_Shape unifiedShape = unifier.Shape();
+        if (!unifiedShape.IsNull()) {
+          shape = unifiedShape;
+          std::cout << "[DEBUG unifier] Unification succeeded!" << std::endl;
+        } else {
+          std::cout << "[DEBUG unifier] Unification returned null shape!" << std::endl;
+        }
+      } catch (const Standard_Failure& e) {
+        std::cout << "[DEBUG unifier] Standard_Failure during early unification: " << e.GetMessageString() << std::endl;
+      } catch (const std::exception& e) {
+        std::cout << "[DEBUG unifier] std::exception during early unification: " << e.what() << std::endl;
+      } catch (...) {
+        std::cout << "[DEBUG unifier] Unknown exception during early unification" << std::endl;
+      }
+
       std::string mode = detectObjectMode(shape, maxThicknessMm);
+
+      TopTools_IndexedMapOfShape faceMapPre;
+      TopExp::MapShapes(shape, TopAbs_FACE, faceMapPre);
+      
+      int planeCount = 0;
+      int cylCount = 0;
+      int otherCount = 0;
+      for (int i = 1; i <= faceMapPre.Extent(); ++i) {
+        TopoDS_Face f = TopoDS::Face(faceMapPre(i));
+        Handle(Geom_Surface) surf = BRep_Tool::Surface(f);
+        if (!surf.IsNull()) {
+          if (surf->IsKind(STANDARD_TYPE(Geom_Plane))) planeCount++;
+          else if (surf->IsKind(STANDARD_TYPE(Geom_CylindricalSurface))) cylCount++;
+          else otherCount++;
+        }
+      }
+      
+      std::cout << "[DEBUG decomposition] Face count after early unification: " << faceMapPre.Extent() << std::endl;
+      std::cout << "[DEBUG decomposition] Face types: Planes=" << planeCount << ", Cylinders=" << cylCount << ", Others=" << otherCount << std::endl;
+      std::cout << "[DEBUG decomposition] Detected mode: " << mode << std::endl;
 
       // Build face groups now (needed for protrusion detection).
       // For surface mode isOuter classification is irrelevant; pass dummy centroid.
@@ -5264,9 +5486,8 @@ private:
         BRepGProp::VolumeProperties(shape, vp);
         solidCentroid = vp.CentreOfMass();
       }
-      TopTools_IndexedMapOfShape faceMapPre;
-      TopExp::MapShapes(shape, TopAbs_FACE, faceMapPre);
       auto faceGroupsPre = buildFaceGroups(shape, faceMapPre, angleThresholdDeg, solidCentroid);
+      std::cout << "[DEBUG decomposition] Number of face groups pre-decomposition: " << faceGroupsPre.size() << std::endl;
 
       // Compute the original solid's tight bounding box via vertex iteration.
       // BRepBndLib::Add is NOT used here: for STEP-imported shapes it samples the
@@ -5470,10 +5691,6 @@ private:
       } else {
         splitMode1BFS(workShape, parentId, angleThresholdDeg, defaultThicknessMm, panelIds,
                       &shapeHistory);
-      }
-
-      // T022 — Recursive decomposition into remainder solid(s)
-      if (maxRecursionDepth > 0 && !firstPassRemainder.IsNull()) {
         bool hadSolid = false;
         for (TopExp_Explorer ex(firstPassRemainder, TopAbs_SOLID); ex.More(); ex.Next()) {
           recursiveDecompose(ex.Current(), parentId, angleThresholdDeg, maxThicknessMm,
@@ -5526,6 +5743,28 @@ private:
         return bboxes;
       };
 
+      // US1: Facet Unification Pass - Merge adjacent coplanar/planar triangular facets
+      // of complex segmented models (like cauldron.step) into flat panels.
+      for (const auto& pid : panelIds) {
+        auto shellIt = shells_.find(pid);
+        if (shellIt != shells_.end() && !shellIt->second.shape.IsNull()) {
+          try {
+            ShapeUpgrade_UnifySameDomain unifier(shellIt->second.shape, Standard_True, Standard_True, Standard_True);
+            double angTolRad = angleThresholdDeg * M_PI / 180.0;
+            if (angTolRad < 1e-6) angTolRad = 0.0087; // default 0.5 degrees
+            unifier.SetAngularTolerance(angTolRad);
+            unifier.SetLinearTolerance(0.05); // slightly looser linear tol to heal facets
+            unifier.Build();
+            TopoDS_Shape unifiedShape = unifier.Shape();
+            if (!unifiedShape.IsNull()) {
+              shellIt->second.shape = unifiedShape;
+            }
+          } catch (...) {
+            // Keep original shape if unification fails
+          }
+        }
+      }
+
       auto panelBboxes      = computeBboxes(panelIds);
       auto protrusionBboxes = computeBboxes(protrusionIds);
 
@@ -5568,10 +5807,248 @@ private:
       }
     }
 
+    if (inputShape.IsNull()) {
+      throw GeometryError("GE_PROTRUSION_LOOP_FAILED", "Null shape provided for protrusion removal", false, "");
+    }
+
+    SnapshotId token = createSnapshotLocked("before removeProtrusions (loop_traversal) on " + partId);
+
+    try {
+      // 1. Compute Center of Mass & Face Groups
+      GProp_GProps vp;
+      BRepGProp::VolumeProperties(inputShape, vp);
+      gp_Pnt solidCentroid = vp.CentreOfMass();
+
+      TopTools_IndexedMapOfShape faceMap;
+      TopExp::MapShapes(inputShape, TopAbs_FACE, faceMap);
+      int nFaces = faceMap.Extent();
+
+      auto faceGroups = buildFaceGroups(inputShape, faceMap, angleThresholdDeg, solidCentroid);
+      auto candidates = detectProtrusions(inputShape, faceMap, faceGroups, maxThicknessMm);
+
+      std::vector<ShellId> protrusionIds;
+      std::vector<ShapeHistoryRecord> shapeHistory;
+      
+      // We will build the cleaned host shape by removing protrusion faces and capping the boundary loops.
+      std::vector<TopoDS_Face> hostFaces;
+      std::vector<bool> isRemovedFace(nFaces + 1, false);
+
+      for (const auto& pc : candidates) {
+        for (int idx : pc.faceIndices) {
+          if (idx > 0 && idx <= nFaces) {
+            isRemovedFace[idx] = true;
+          }
+        }
+      }
+
+      for (int i = 1; i <= nFaces; ++i) {
+        if (!isRemovedFace[i]) {
+          hostFaces.push_back(TopoDS::Face(faceMap(i)));
+        }
+      }
+
+      // Map edges to faces to find boundary edges
+      TopTools_IndexedDataMapOfShapeListOfShape edgeFaces;
+      TopExp::MapShapesAndAncestors(inputShape, TopAbs_EDGE, TopAbs_FACE, edgeFaces);
+
+      // Process each candidate protrusion
+      for (size_t cIdx = 0; cIdx < candidates.size(); ++cIdx) {
+        const auto& pc = candidates[cIdx];
+        std::vector<bool> isProtFace(nFaces + 1, false);
+        for (int idx : pc.faceIndices) {
+          isProtFace[idx] = true;
+        }
+
+        std::vector<TopoDS_Edge> boundaryEdges;
+        for (int e = 1; e <= edgeFaces.Extent(); ++e) {
+          const TopoDS_Edge& edge = TopoDS::Edge(edgeFaces.FindKey(e));
+          const TopTools_ListOfShape& fl = edgeFaces(e);
+          int protCount = 0;
+          int hostCount = 0;
+          for (TopTools_ListIteratorOfListOfShape it(fl); it.More(); it.Next()) {
+            int fIdx = faceMap.FindIndex(it.Value());
+            if (fIdx > 0) {
+              if (isProtFace[fIdx]) {
+                protCount++;
+              } else {
+                hostCount++;
+              }
+            }
+          }
+          if (protCount == 1 && hostCount >= 1) {
+            boundaryEdges.push_back(edge);
+          }
+        }
+
+        if (boundaryEdges.empty()) {
+          throw GeometryError("GE_PROTRUSION_LOOP_FAILED", "No boundary edges found for protrusion", false, "");
+        }
+
+        BRepBuilderAPI_MakeWire wireMaker;
+        for (const auto& edge : boundaryEdges) {
+          wireMaker.Add(edge);
+        }
+
+        if (!wireMaker.IsDone()) {
+          throw GeometryError("GE_PROTRUSION_LOOP_FAILED", "Failed to build closed seam wire for protrusion", false, "");
+        }
+
+        TopoDS_Wire wire = wireMaker.Wire();
+
+        // Build cap face on host plane
+        gp_Pln hostPlane(pc.panelCentroid, gp_Dir(pc.panelNormal));
+        BRepBuilderAPI_MakeFace faceMaker(hostPlane, wire, Standard_True);
+        if (!faceMaker.IsDone()) {
+          throw GeometryError("GE_PROTRUSION_LOOP_FAILED", "Failed to build planar cap face for protrusion wire", false, "");
+        }
+
+        TopoDS_Face capFace = faceMaker.Face();
+
+        // Build protrusion solid by sewing protrusion faces + cap face
+        BRepBuilderAPI_Sewing sewer;
+        sewer.Init();
+        sewer.SetTolerance(0.1);
+        for (int idx : pc.faceIndices) {
+          sewer.Add(faceMap(idx));
+        }
+        sewer.Add(capFace);
+        sewer.Perform();
+        
+        TopoDS_Shape sewedProtrusion = sewer.SewedShape();
+        if (sewedProtrusion.IsNull()) {
+          throw GeometryError("GE_PROTRUSION_LOOP_FAILED", "Sewing failed for protrusion", false, "");
+        }
+
+        TopoDS_Solid protrusionSolid;
+        BRepBuilderAPI_MakeSolid solidMaker;
+        TopExp_Explorer shellExp(sewedProtrusion, TopAbs_SHELL);
+        if (shellExp.More()) {
+          solidMaker.Add(TopoDS::Shell(shellExp.Current()));
+          if (solidMaker.Solid().IsNull() == Standard_False && solidMaker.IsDone()) {
+            protrusionSolid = solidMaker.Solid();
+          }
+        }
+        
+        TopoDS_Shape finalProtrusion = protrusionSolid.IsNull() ? sewedProtrusion : protrusionSolid;
+
+        ShellId pid = generateUUID();
+        shells_[pid] = ShellState{pid, inputParentId, finalProtrusion};
+        protrusionIds.push_back(pid);
+
+        TopoDS_Face reversedCap = TopoDS::Face(capFace.Reversed());
+        hostFaces.push_back(reversedCap);
+        
+        for (int idx : pc.faceIndices) {
+          shapeHistory.push_back({
+            "replace",
+            shapeId(faceMap(idx)),
+            pid,
+            "removeProtrusions"
+          });
+        }
+      }
+
+      BRepBuilderAPI_Sewing hostSewer;
+      hostSewer.Init();
+      hostSewer.SetTolerance(0.1);
+      for (const auto& f : hostFaces) {
+        hostSewer.Add(f);
+      }
+      hostSewer.Perform();
+      TopoDS_Shape sewedHost = hostSewer.SewedShape();
+      if (sewedHost.IsNull()) {
+        throw GeometryError("GE_PROTRUSION_LOOP_FAILED", "Sewing failed for cleaned host shape", false, "");
+      }
+
+      TopoDS_Solid hostSolid;
+      BRepBuilderAPI_MakeSolid solidMaker;
+      TopExp_Explorer shellExp(sewedHost, TopAbs_SHELL);
+      if (shellExp.More()) {
+        solidMaker.Add(TopoDS::Shell(shellExp.Current()));
+        if (solidMaker.Solid().IsNull() == Standard_False && solidMaker.IsDone()) {
+          hostSolid = solidMaker.Solid();
+        }
+      }
+      TopoDS_Shape finalHost = hostSolid.IsNull() ? sewedHost : hostSolid;
+
+      auto shellIt = shells_.find(partId);
+      auto solidIt = solids_.find(partId);
+      if (shellIt != shells_.end()) {
+        shellIt->second.shape = finalHost;
+      } else if (solidIt != solids_.end()) {
+        solidIt->second.shape = finalHost;
+      }
+
+      double bxMin = 1e30, bxMax = -1e30;
+      double byMin = 1e30, byMax = -1e30;
+      double bzMin = 1e30, bzMax = -1e30;
+      for (TopExp_Explorer ex(inputShape, TopAbs_VERTEX); ex.More(); ex.Next()) {
+        gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(ex.Current()));
+        bxMin = std::min(bxMin, p.X()); bxMax = std::max(bxMax, p.X());
+        byMin = std::min(byMin, p.Y()); byMax = std::max(byMax, p.Y());
+        bzMin = std::min(bzMin, p.Z()); bzMax = std::max(bzMax, p.Z());
+      }
+
+      constexpr double kTol = 1.0;
+      std::vector<BBox3D> protrusionBboxes;
+      protrusionBboxes.reserve(protrusionIds.size());
+      for (const auto& pid : protrusionIds) {
+        auto it = shells_.find(pid);
+        if (it == shells_.end()) { protrusionBboxes.push_back({0,0,0,0,0,0}); continue; }
+        Bnd_Box b;
+        for (TopExp_Explorer ex(it->second.shape, TopAbs_VERTEX); ex.More(); ex.Next()) {
+          gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(ex.Current()));
+          if (p.X() < bxMin - kTol || p.X() > bxMax + kTol) continue;
+          if (p.Y() < byMin - kTol || p.Y() > byMax + kTol) continue;
+          if (p.Z() < bzMin - kTol || p.Z() > bzMax + kTol) continue;
+          b.Add(p);
+        }
+        if (!b.IsVoid()) {
+          double xMin, yMin, zMin, xMax, yMax, zMax;
+          b.Get(xMin, yMin, zMin, xMax, yMax, zMax);
+          protrusionBboxes.push_back({xMin, yMin, zMin, xMax, yMax, zMax});
+        } else {
+          protrusionBboxes.push_back({0,0,0,0,0,0});
+        }
+      }
+
+      return RemoveProtrusionsResult{partId, std::move(protrusionIds),
+                                     std::move(protrusionBboxes), token, std::move(shapeHistory)};
+
+    } catch (const GeometryError&) {
+      throw;
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_PROTRUSION_LOOP_FAILED",
+                          std::string("OCCT exception during loop protrusion removal: ") + e.GetMessageString(),
+                          true, "");
+    }
+  }
+
+  RemoveProtrusionsResult removeProtrusionsLegacy(
+      const ShellId& partId,
+      double angleThresholdDeg = 30.0,
+      double maxThicknessMm   = 5.0) override {
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    TopoDS_Shape inputShape;
+    SolidId      inputParentId;
+    {
+      auto shellIt = shells_.find(partId);
+      auto solidIt = solids_.find(partId);
+      if (shellIt != shells_.end()) {
+        inputShape    = shellIt->second.shape;
+        inputParentId = shellIt->second.parentSolidId;
+      } else if (solidIt != solids_.end()) {
+        inputShape    = solidIt->second.shape;
+        inputParentId = partId;
+      } else {
+        throw GeometryError("GE_SHELL_NOT_FOUND", "Shell not found: " + partId, false, "");
+      }
+    }
+
     SnapshotId token = createSnapshotLocked("before removeProtrusions on " + partId);
 
     try {
-      // Compute planeHalfSize from vertex bounds (same approach as splitBodyByBends).
       double bxMin = 1e30, bxMax = -1e30;
       double byMin = 1e30, byMax = -1e30;
       double bzMin = 1e30, bzMax = -1e30;
@@ -5608,13 +6085,11 @@ private:
         } catch (const GeometryError&) {}
       }
 
-      // Update the original part's geometry in-place with the cleaned shape.
       auto shellIt = shells_.find(partId);
       if (shellIt != shells_.end()) {
         shellIt->second.shape = workShape;
       }
 
-      // Compute bboxes for extracted protrusions.
       constexpr double kTol = 1.0;
       std::vector<BBox3D> protrusionBboxes;
       protrusionBboxes.reserve(protrusionIds.size());
@@ -5721,6 +6196,7 @@ private:
       TopoDS_Shape inputA = itA->second.shape;
       TopoDS_Shape inputB = itB->second.shape;
       BRepAlgoAPI_Fuse fuse(inputA, inputB);
+      fuse.SetFuzzyValue(0.15); // Set fuzzy sewing tolerance to heal non-planar seams
       fuse.Build();
       if (!fuse.IsDone() || fuse.Shape().IsNull()) {
         throw GeometryError("GE_MERGE_FAILED", "Boolean fuse failed", true, "rollback");
@@ -5954,15 +6430,13 @@ private:
           }
           double effectiveThickness = std::max(tA, tB);
 
-          // Bend radius must fit within the panel thickness so the corner
-          // cut doesn't slice through to the inside surface. Allow a small
-          // overshoot (5%) for floating-point slop.
-          if (bendRadiusMm > effectiveThickness * 1.05) {
+          // Bend radius must be within a reasonable ratio of thickness.
+          if (bendRadiusMm > effectiveThickness * 5.0) {
             std::ostringstream msg;
             msg << "GE_MERGE_RADIUS_TOO_LARGE: Bend radius " << bendRadiusMm
-                << " mm exceeds panel thickness " << effectiveThickness
+                << " mm exceeds 5x panel thickness " << effectiveThickness
                 << " mm. The corner cut would slice through to the panel interior. "
-                << "Try a smaller bend radius (<= thickness).";
+                << "Try a smaller bend radius.";
             throw GeometryError("GE_MERGE_RADIUS_TOO_LARGE", msg.str(), false, "");
           }
 

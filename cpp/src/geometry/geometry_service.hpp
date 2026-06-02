@@ -262,6 +262,15 @@ struct RemoveProtrusionsResult {
   std::vector<ShellId> protrusionIds;  // each extracted protrusion as a new shell
   std::vector<BBox3D>  protrusionBboxes;
   SnapshotId           rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
+};
+
+struct AlignmentResult {
+  ShellId                         solidId;
+  double                          centroid[3];
+  double                          rotationMatrix[9];
+  SnapshotId                      rollbackToken;
+  std::vector<ShapeHistoryRecord> shapeHistory;
 };
 
 // ── Assembly IDs ──────────────────────────────────────────────────────────────
@@ -404,6 +413,11 @@ constexpr const char* GE_DECOMPOSE_EXTRUDE_FAILED         = "GE_DECOMPOSE_EXTRUD
 constexpr const char* GE_DECOMPOSE_CUT_FAILED             = "GE_DECOMPOSE_CUT_FAILED";
 constexpr const char* GE_DECOMPOSE_PROTRUSION_EXTRACT_FAILED = "GE_DECOMPOSE_PROTRUSION_EXTRACT_FAILED";
 
+// ─── Error codes — Feature 008-splits-by-bends-viewport-alignment ──────────────
+constexpr const char* GE_ALIGN_FAILED             = "GE_ALIGN_FAILED";
+constexpr const char* GE_MERGE_NON_MANIFOLD       = "GE_MERGE_NON_MANIFOLD";
+constexpr const char* GE_PROTRUSION_LOOP_FAILED   = "GE_PROTRUSION_LOOP_FAILED";
+
 // ─── Error codes — Feature 006-geometry-primitives ────────────────────────────
 constexpr const char* GE_BOOLEAN_EMPTY_RESULT      = "GE_BOOLEAN_EMPTY_RESULT";
 constexpr const char* GE_ALIGN_UNSUPPORTED         = "GE_ALIGN_UNSUPPORTED";
@@ -436,6 +450,11 @@ public:
 
   // ── STEP import ─────────────────────────────────────────────────────────
   virtual SolidId loadStep(const std::string& filePath) = 0;
+
+  // ── Viewport orientation and alignment ───────────────────────────────────
+  virtual AlignmentResult centerAndAlignBody(
+      const ShellId&    partId,
+      const SnapshotId& transactionId) = 0;
 
   // ── Topology ─────────────────────────────────────────────────────────────
   virtual TopologyGraph getTopology(const SolidId& solidId) = 0;
@@ -559,6 +578,11 @@ public:
   // into panels. The shell geometry is updated in-place (cleaned); extracted
   // protrusions are returned as new shells. Mutating — creates a rollback token.
   virtual RemoveProtrusionsResult removeProtrusions(
+      const ShellId& partId,
+      double         angleThresholdDeg = 30.0,
+      double         maxThicknessMm    = 5.0) = 0;
+
+  virtual RemoveProtrusionsResult removeProtrusionsLegacy(
       const ShellId& partId,
       double         angleThresholdDeg = 30.0,
       double         maxThicknessMm    = 5.0) = 0;
