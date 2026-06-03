@@ -2688,6 +2688,7 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
   const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     merged_shell_id: result.mergedShellId,
+    merged_part_id: mergedPartId, // New manufacturing graph part created for merged shell
     part_a_id: partAId,
     graphs_merged: true,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
