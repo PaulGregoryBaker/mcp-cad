@@ -628,6 +628,111 @@ TEST_CASE("Regression: testcube inner-panel with protrusion produces correct fla
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Regression: protrusion extending toward the bend produces correct flat.
+//
+// Models the actual app workflow using testcube geometry (1mm walls throughout).
+// From the SCAD source:
+//   inner cube: 150×150×150 minus 148×148×148  → 1mm walls at ±74 to ±75
+//   flange 3:   translate([0,75,-75]) cube([1,24,150])  → x=[0,1], y=[75,99]
+//
+// The user translates flange 3 to align with the right inner wall (panel7) and
+// fuses them.  The protrusion extends toward the bend (y>74, same side as
+// panel6), NOT away from it like the earlier testcube_workflow test.
+//
+// All geometry constructed directly to match the original 1mm nominal thickness.
+// (splitBodyByBends returns 1.45mm panels which is an error; bypass it here.)
+//
+// Expected flat: panelY_main + BA + panelY_arm ≈ 174 + 2.4 + 150 ≈ 326mm × 150mm
+// Buggy flat:  ≈ 151 × 174mm  (protrusion severed by corner cut, second arm lost)
+// ─────────────────────────────────────────────────────────────────────────────
+TEST_CASE("Regression: same-side protrusion produces correct flat",
+          "[prod][regression][protrusion][real_protrusion]") {
+  auto svc = GeometryService::create();
+
+  // Geometry matching the SCAD inner cube (1mm walls):
+  //   panel7: right inner wall  x=[74,75], y=[-75,75],  z=[-75,75]  (1×150×150mm)
+  //   panel6: top  inner wall   x=[-75,75], y=[74,75],  z=[-75,75]  (150×1×150mm)
+  //   protrusion: flange 3 translated to align with panel7's x range
+  //               x=[74,75],  y=[75,99],   z=[-75,75]  (1×24×150mm)
+  //               — extends TOWARD the bend at y≈74–75
+
+  const double T   = 1.0;   // nominal wall/flange thickness (mm)
+  const double HL  = 75.0;  // inner cube half-size (mm)
+  const double EXT = 24.0;  // flange extension length (mm)
+
+  auto makeStep = [&](TopoDS_Shape shape, const std::string& tag) -> SolidId {
+    auto path = (fs::temp_directory_path() / ("rp_" + tag + ".stp")).string();
+    STEPControl_Writer w;
+    REQUIRE(w.Transfer(shape, STEPControl_AsIs) == IFSelect_RetDone);
+    REQUIRE(w.Write(path.c_str()) == IFSelect_RetDone);
+    SolidId id = svc->loadStep(path);
+    fs::remove(path);
+    auto shells = svc->separateSolids(id);
+    REQUIRE_FALSE(shells.empty());
+    return shells[0];
+  };
+
+  // panel7: x=[74,75], y=[-75,75], z=[-75,75]
+  ShellId panel7 = makeStep(
+    BRepPrimAPI_MakeBox(gp_Pnt(HL - T, -HL, -HL), T, 2*HL, 2*HL).Shape(), "p7");
+
+  // panel6: x=[-75,75], y=[74,75], z=[-75,75]
+  ShellId panel6 = makeStep(
+    BRepPrimAPI_MakeBox(gp_Pnt(-HL, HL - T, -HL), 2*HL, T, 2*HL).Shape(), "p6");
+
+  // protrusion: x=[74,75], y=[75,99], z=[-75,75]  (same side as bend)
+  ShellId prot = makeStep(
+    BRepPrimAPI_MakeBox(gp_Pnt(HL - T, HL, -HL), T, EXT, 2*HL).Shape(), "pr");
+
+  auto bbP7 = svc->computeBoundingBox(panel7);
+  auto bbP6 = svc->computeBoundingBox(panel6);
+  auto bbPr = svc->computeBoundingBox(prot);
+  std::cout << "[REGRESSION real_protrusion] panel7 x=[" << bbP7.xMin << "," << bbP7.xMax
+            << "] y=[" << bbP7.yMin << "," << bbP7.yMax << "]\n";
+  std::cout << "[REGRESSION real_protrusion] panel6 y=[" << bbP6.yMin << "," << bbP6.yMax
+            << "] x=[" << bbP6.xMin << "," << bbP6.xMax << "]\n";
+  std::cout << "[REGRESSION real_protrusion] prot   x=[" << bbPr.xMin << "," << bbPr.xMax
+            << "] y=[" << bbPr.yMin << "," << bbPr.yMax << "]\n";
+
+  // fuse panel7 + protrusion → flat plate x=[74,75], y=[-75,99] (1×174×150mm)
+  FuseResult fused = svc->fuseBodies({panel7, prot}, 0.15);
+  REQUIRE_FALSE(fused.solidId.empty());
+
+  auto bbFused = svc->computeBoundingBox(fused.solidId);
+  std::cout << "[REGRESSION real_protrusion] fused bbox:"
+            << " x=[" << bbFused.xMin << "," << bbFused.xMax << "]"
+            << " y=[" << bbFused.yMin << "," << bbFused.yMax << "]"
+            << " z=[" << bbFused.zMin << "," << bbFused.zMax << "]\n";
+  REQUIRE(std::abs((bbFused.yMax - bbFused.yMin) - (2*HL + EXT)) < 1.0); // ≈174mm
+
+  // merge fused panel + panel6 at 90° with 1mm bend radius
+  MergeBodyResult merged = svc->mergeBodiesWithBend(fused.solidId, panel6, {"all"}, 1.0);
+  REQUIRE_FALSE(merged.mergedShellId.empty());
+
+  UnfoldResult unfold = svc->unfoldShell(merged.mergedShellId, 0.33);
+  REQUIRE_FALSE(unfold.unfoldId.empty());
+
+  double flatMax = std::max(unfold.flatWidthMm, unfold.flatHeightMm);
+  double flatMin = std::min(unfold.flatWidthMm, unfold.flatHeightMm);
+  std::cout << "[REGRESSION real_protrusion] flat=" << unfold.flatWidthMm
+            << "x" << unfold.flatHeightMm << "mm  bends=" << unfold.bendCount << "\n";
+
+  REQUIRE(unfold.bendCount == 1);
+
+  // Expected flat:
+  //   arm A total (panel + protrusion): 150 + 24 = 174mm
+  //   arm B (panel6): 150mm
+  //   bend allowance (R=1, t=1): (1 + 0.5) * π/2 ≈ 2.36mm
+  //   total long side ≈ 174 + 150 + 2.36 ≈ 326mm
+  double BA      = (1.0 + T / 2.0) * M_PI / 2.0;
+  double expLong = (2*HL + EXT) + 2*HL + BA;  // ≈326mm
+  const double tol = 10.0;
+
+  CHECK(std::abs(flatMax - expLong) < tol);
+  CHECK(std::abs(flatMin - 2*HL)   < tol);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Diagnostic: print bboxes of testcube split panels and protrusions
 // Tag [diag] so it can be run in isolation when needed; not part of CI.
 // ─────────────────────────────────────────────────────────────────────────────
