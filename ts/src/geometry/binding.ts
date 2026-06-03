@@ -22,6 +22,7 @@ import type {
   NestResult,
   RestoreResult,
   ClashReport,
+  ClashPair,
   GapReport,
   TrimBodyResult,
   SplitBodyResult,
@@ -145,6 +146,7 @@ export interface GeometryAddon {
   offsetShape(partId: string, offsetValue: number, tolerance: number): OffsetShapeResult;
   deleteFace(partId: string, faceIds: string[], healRemaining: boolean): DeleteFaceResult;
   computeIntersections(partIds: string[]): ClashReport;
+  checkAssemblyClashes(partIds: string[], adjacentPairs: [string, string][]): ClashPair[];
   computeGaps(partAId: string, partBId: string, maxDistanceThresholdMm: number): GapReport;
   trimBodyWithPlane(partId: string, plane: CuttingPlane, keepPositiveSide: boolean): TrimBodyResult;
   splitBodyByPlane(partId: string, plane: CuttingPlane): SplitBodyResult;
@@ -644,6 +646,14 @@ export class GeometryBinding {
   computeIntersections(partIds: string[]): ClashReport {
     try {
       return this.addon.computeIntersections(partIds);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  checkAssemblyClashes(partIds: string[], adjacentPairs: [string, string][]): ClashPair[] {
+    try {
+      return this.addon.checkAssemblyClashes(partIds, adjacentPairs);
     } catch (err) {
       throw toStructuredError(err);
     }

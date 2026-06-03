@@ -210,6 +210,12 @@ describe('SYS-JTBD-07 Braai STL (Post-MVP)', () => {
       rollbackToken: 'rb-bends',
       detected_mode: 'thin_solid',
     }),
+    validateSheetMetal: () => ({
+      is_valid: true,
+      nominal_thickness: 1.5,
+      can_flatten: true,
+      validation_errors: [],
+    }),
   };
 
   beforeEach(() => {

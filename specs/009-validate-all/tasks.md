@@ -22,8 +22,8 @@
 
 **Purpose**: Project initialization and basic structure.
 
-- [ ] T001 Register the new tool name schema in [specs/009-validate-all/contracts/validate_assembly.contract.json](../../specs/009-validate-all/contracts/validate_assembly.contract.json).
-- [ ] T002 Create the placeholder integration test file in [ts/tests/integration/validate_assembly.integration.test.ts](../../ts/tests/integration/validate_assembly.integration.test.ts).
+- [x] T001 Register the new tool name schema in [specs/009-validate-all/contracts/validate_assembly.contract.json](../../specs/009-validate-all/contracts/validate_assembly.contract.json).
+- [x] T002 Create the placeholder integration test file in [ts/tests/integration/validate_assembly.integration.test.ts](../../ts/tests/integration/validate_assembly.integration.test.ts).
 
 ---
 

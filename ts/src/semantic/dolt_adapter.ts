@@ -242,6 +242,19 @@ export class DoltAdapter implements SemanticPersistencePort {
     );
   }
 
+  async getRelationshipsByKind(rel: RelationshipType): Promise<Array<{ sourceId: string; targetId: string }>> {
+    const ref = this._asOfRef;
+    const sql = ref
+      ? 'SELECT source_id, target_id FROM semantic_relationship AS OF ? WHERE relationship = ?'
+      : 'SELECT source_id, target_id FROM semantic_relationship WHERE relationship = ?';
+    const params = ref ? [ref, rel] : [rel];
+    const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, params);
+    return (rows as mysql.RowDataPacket[]).map((r) => ({
+      sourceId: r.source_id,
+      targetId: r.target_id,
+    }));
+  }
+
   // ── semantic_mapping ──────────────────────────────────────────────────────
 
   async insertMapping(input: InsertMappingInput): Promise<number> {
@@ -448,6 +461,19 @@ class ConnectionScopedAdapter implements SemanticPersistencePort {
        VALUES (?, ?, ?, ?, NOW(3))`,
       [sourceId, rel, targetId, transactionId],
     );
+  }
+
+  async getRelationshipsByKind(rel: RelationshipType): Promise<Array<{ sourceId: string; targetId: string }>> {
+    const ref = this._asOfRef;
+    const sql = ref
+      ? 'SELECT source_id, target_id FROM semantic_relationship AS OF ? WHERE relationship = ?'
+      : 'SELECT source_id, target_id FROM semantic_relationship WHERE relationship = ?';
+    const params = ref ? [ref, rel] : [rel];
+    const [rows] = await this.conn.query<mysql.RowDataPacket[]>(sql, params);
+    return (rows as mysql.RowDataPacket[]).map((r) => ({
+      sourceId: r.source_id,
+      targetId: r.target_id,
+    }));
   }
 
   async insertMapping(input: InsertMappingInput): Promise<number> {

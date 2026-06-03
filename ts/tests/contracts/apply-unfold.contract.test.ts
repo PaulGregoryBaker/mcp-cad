@@ -52,6 +52,12 @@ const mockAddon: GeometryAddon = {
     flanges: [],
     reliefs: [],
   })),
+  validateSheetMetal: vi.fn(() => ({
+    is_valid: true,
+    nominal_thickness: 1.5,
+    can_flatten: true,
+    validation_errors: [],
+  })),
 };
 
 // ─── Test config ─────────────────────────────────────────────────────────────

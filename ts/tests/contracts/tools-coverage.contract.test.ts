@@ -76,6 +76,12 @@ function makeAddon(overrides: Partial<GeometryAddon> = {}): GeometryAddon {
     createSnapshot: vi.fn((label: string) => `snap-${label}`),
     restoreSnapshot: vi.fn((snapshotId: string) => ({ restoredSolidIds: ['solid-1'], restoredShellIds: ['shell-1'], snapshotId })),
     clearSnapshots: vi.fn(() => undefined),
+    validateSheetMetal: vi.fn(() => ({
+      is_valid: true,
+      nominal_thickness: 1.5,
+      can_flatten: true,
+      validation_errors: [],
+    })),
     ...overrides,
   };
 }

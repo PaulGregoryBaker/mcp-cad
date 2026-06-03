@@ -182,6 +182,12 @@ function buildMockAddon(): GeometryAddon {
       detected_mode:  'thin_solid',
       rollbackToken:  snap(),
     })),
+    validateSheetMetal: vi.fn(() => ({
+      is_valid: true,
+      nominal_thickness: 1.5,
+      can_flatten: true,
+      validation_errors: [],
+    })),
   };
 }
 

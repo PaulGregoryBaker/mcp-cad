@@ -110,6 +110,12 @@ function buildMockAddon(): GeometryAddon {
         { verdict: 'deleted',   original_id: 'f3', new_id: '',    operation_label: 'split_body_by_bends' },
       ],
     })),
+    validateSheetMetal: vi.fn(() => ({
+      is_valid: true,
+      nominal_thickness: 1.0,
+      can_flatten: true,
+      validation_errors: [],
+    })),
 
     // Expose `cleared` to tests so they can assert clearSnapshots was called.
     _wasCleared: () => cleared,

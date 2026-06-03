@@ -22,6 +22,7 @@ import { transactionRegistry } from './transactions';
 import type { SemanticStore } from '../semantic/semantic_store';
 import { SemanticStoreError } from '../semantic/semantic_store';
 import { MappingLayer } from '../semantic/mapping_layer';
+import { validationEngine } from '../validation/validator';
 
 let _semanticStore: SemanticStore | null = null;
 
@@ -1063,6 +1064,25 @@ export function getToolDefinitions(): object[] {
         },
         required: ['assembly_id']
       }
+    },
+    {
+      name: 'validate_assembly',
+      description: 'Performs comprehensive geometry and assembly verification, checking for sheet metal unfoldability and adjacent part overlaps, returning detailed errors and autofix tool recommendations.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_ids: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Optional list of part IDs to check. If omitted, checks all parts in the workspace.'
+          },
+          sheet_metal_flags: {
+            type: 'object',
+            additionalProperties: { type: 'boolean' },
+            description: 'Optional overrides to flag parts as sheet metal (true) or non-sheet-metal (false). Default is true for all parts.'
+          }
+        }
+      }
     }
   ];
 }
@@ -1078,6 +1098,9 @@ export async function dispatchTool(
     switch (toolName) {
       case 'clean_geometry':
         return handleCleanGeometry(args);
+
+      case 'validate_assembly':
+        return handleValidateAssembly(args);
 
       case 'fuse_bodies':
         return handleFuseBodies(args);
@@ -3039,4 +3062,16 @@ function handleListAssemblyTree(args: Record<string, unknown>): unknown {
     assembly_id: result.assembly_id,
     root: result.root,
   };
+}
+
+async function handleValidateAssembly(args: Record<string, unknown>): Promise<unknown> {
+  const part_ids = args.part_ids as string[] | undefined;
+  const sheet_metal_flags = args.sheet_metal_flags as Record<string, boolean> | undefined;
+
+  const report = await validationEngine.validate({
+    part_ids,
+    sheet_metal_flags,
+  });
+
+  return report;
 }
