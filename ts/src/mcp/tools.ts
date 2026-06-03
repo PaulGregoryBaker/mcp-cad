@@ -1977,31 +1977,22 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
 
   const graph = getManufacturingGraph(partId);
   
-  // Verify that the panel node exists in the graph
-  let panelNode: import('../manufacturing/graph/types').PanelNode | undefined;
+  // Verify that the panel node exists in the graph.
+  // Strict lookup: panel_id must be a stable graph NodeId, not a volatile shell UUID.
   const panelNodeId = panelId as import('../manufacturing/graph/types').NodeId;
-  const panelBodyId = panelId as import('../manufacturing/graph/types').BodyId;
-  // First pass: exact node-id match (preferred — panel_id is a stable graph identifier).
+  let panelNode: import('../manufacturing/graph/types').PanelNode | undefined;
   for (const node of graph.nodes.values()) {
     if (node.type === 'PanelNode' && node.id === panelNodeId) {
       panelNode = node as import('../manufacturing/graph/types').PanelNode;
       break;
     }
   }
-  // Second pass fallback: bodyId match (for callers that pass a raw shell UUID as panel_id).
-  if (!panelNode) {
-    for (const node of graph.nodes.values()) {
-      if (node.type === 'PanelNode' && node.bodyId === panelBodyId) {
-        panelNode = node as import('../manufacturing/graph/types').PanelNode;
-        break;
-      }
-    }
-  }
 
   if (!panelNode) {
     throwError(
       ErrorCodes.GRAPH_INTEGRITY_ERROR,
-      `Panel "${panelId}" not found in part "${partId}" manufacturing graph`,
+      `Panel "${panelId}" not found in part "${partId}" manufacturing graph. ` +
+        `panel_id must be a stable node ID from the manufacturing graph, not a volatile shell UUID.`,
       true,
       'query_graph',
     );
@@ -2636,48 +2627,99 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
   const graphB = getManufacturingGraph(partBId);
   const toBodyId = (s: string) => s as import('../manufacturing/graph/types').BodyId;
 
-  // Find the representative PanelNode in each graph using a two-pass lookup:
-  //   Pass 1: match by node.id === partId (finds the "output" node in a merged graph,
-  //           where nodeBId = partAId so that apply_unfold also locates it correctly)
-  //   Pass 2: match by bodyId === partId (handles single-panel split graphs)
-  //   Fallback: first PanelNode found
-  let panelNodeA: import('../manufacturing/graph/types').PanelNode | undefined;
+  // Find the representative PanelNode in each graph.
+  // Strict requirement: must find exactly one panel with an exact id match OR exactly one panel total.
+  // No fallbacks. If graph structure doesn't match expectations, error immediately.
+  const panelNodesA: import('../manufacturing/graph/types').PanelNode[] = [];
   for (const node of graphA.nodes.values()) {
-    if (node.type === 'PanelNode' && node.id === (partAId as import('../manufacturing/graph/types').NodeId)) {
-      panelNodeA = node as import('../manufacturing/graph/types').PanelNode;
-      break;
+    if (node.type === 'PanelNode') {
+      panelNodesA.push(node as import('../manufacturing/graph/types').PanelNode);
     }
   }
-  if (!panelNodeA) {
-    for (const node of graphA.nodes.values()) {
-      if (node.type === 'PanelNode') {
-        const pn = node as import('../manufacturing/graph/types').PanelNode;
-        if (pn.bodyId === toBodyId(partAId)) { panelNodeA = pn; break; }
-        if (!panelNodeA) panelNodeA = pn;
-      }
-    }
-  }
-  let panelNodeB: import('../manufacturing/graph/types').PanelNode | undefined;
-  for (const node of graphB.nodes.values()) {
-    if (node.type === 'PanelNode' && node.id === (partBId as import('../manufacturing/graph/types').NodeId)) {
-      panelNodeB = node as import('../manufacturing/graph/types').PanelNode;
-      break;
-    }
-  }
-  if (!panelNodeB) {
-    for (const node of graphB.nodes.values()) {
-      if (node.type === 'PanelNode') {
-        const pn = node as import('../manufacturing/graph/types').PanelNode;
-        if (pn.bodyId === toBodyId(partBId)) { panelNodeB = pn; break; }
-        if (!panelNodeB) panelNodeB = pn;
-      }
-    }
+  if (panelNodesA.length === 0) {
+    throwError(
+      ErrorCodes.GRAPH_INTEGRITY_ERROR,
+      `merge_bodies_with_bend part_a: Graph contains no PanelNode. Expected at least one panel.`,
+      true,
+    );
   }
 
-  // Use the actual current shell UUIDs for the C++ geometry call.
-  // After translate_body, panelNode.bodyId may differ from the part_id key in _parts.
-  const shellAId = panelNodeA?.bodyId ?? (partAId as import('../manufacturing/graph/types').BodyId);
-  const shellBId = panelNodeB?.bodyId ?? (partBId as import('../manufacturing/graph/types').BodyId);
+  let panelNodeA: import('../manufacturing/graph/types').PanelNode | undefined;
+  for (const pn of panelNodesA) {
+    if (pn.id === (partAId as import('../manufacturing/graph/types').NodeId)) {
+      panelNodeA = pn;
+      break;
+    }
+  }
+  if (!panelNodeA && panelNodesA.length === 1) {
+    panelNodeA = panelNodesA[0];
+  }
+  if (!panelNodeA) {
+    throwError(
+      ErrorCodes.GRAPH_INTEGRITY_ERROR,
+      `merge_bodies_with_bend part_a: No PanelNode with id === part_a_id ("${partAId}"). ` +
+        `Found ${panelNodesA.length} panel(s): ${panelNodesA.map(p => p.id).join(', ')}. ` +
+        `Provide part_a_id that matches a panel node id in the graph, or ensure exactly one panel exists.`,
+      true,
+    );
+  }
+
+  const panelNodesB: import('../manufacturing/graph/types').PanelNode[] = [];
+  for (const node of graphB.nodes.values()) {
+    if (node.type === 'PanelNode') {
+      panelNodesB.push(node as import('../manufacturing/graph/types').PanelNode);
+    }
+  }
+  if (panelNodesB.length === 0) {
+    throwError(
+      ErrorCodes.GRAPH_INTEGRITY_ERROR,
+      `merge_bodies_with_bend part_b: Graph contains no PanelNode. Expected at least one panel.`,
+      true,
+    );
+  }
+
+  let panelNodeB: import('../manufacturing/graph/types').PanelNode | undefined;
+  for (const pn of panelNodesB) {
+    if (pn.id === (partBId as import('../manufacturing/graph/types').NodeId)) {
+      panelNodeB = pn;
+      break;
+    }
+  }
+  if (!panelNodeB && panelNodesB.length === 1) {
+    panelNodeB = panelNodesB[0];
+  }
+  if (!panelNodeB) {
+    throwError(
+      ErrorCodes.GRAPH_INTEGRITY_ERROR,
+      `merge_bodies_with_bend part_b: No PanelNode with id === part_b_id ("${partBId}"). ` +
+        `Found ${panelNodesB.length} panel(s): ${panelNodesB.map(p => p.id).join(', ')}. ` +
+        `Provide part_b_id that matches a panel node id in the graph, or ensure exactly one panel exists.`,
+      true,
+    );
+  }
+
+  // Extract current shell UUIDs from panel nodes.
+  // panelNode.bodyId reflects the current C++ geometry reference after any mutations.
+  // If bodyId is null, that's a fatal error — the graph is in an invalid state.
+  if (panelNodeA.bodyId === null) {
+    throwError(
+      ErrorCodes.GRAPH_INTEGRITY_ERROR,
+      `merge_bodies_with_bend part_a: Panel has null bodyId. Graph not solved or corrupted.`,
+      true,
+      'solve_geometry',
+    );
+  }
+  if (panelNodeB.bodyId === null) {
+    throwError(
+      ErrorCodes.GRAPH_INTEGRITY_ERROR,
+      `merge_bodies_with_bend part_b: Panel has null bodyId. Graph not solved or corrupted.`,
+      true,
+      'solve_geometry',
+    );
+  }
+
+  const shellAId = panelNodeA.bodyId as import('../manufacturing/graph/types').BodyId;
+  const shellBId = panelNodeB.bodyId as import('../manufacturing/graph/types').BodyId;
 
   const ctx = resolveTransactionContext(args);
   const result = getGeometryBinding().mergeBodiesWithBend(shellAId as string, shellBId as string, targetEdges, bendRadius as number);
@@ -3453,20 +3495,24 @@ function handleTranslateBody(args: Record<string, unknown>): unknown {
     if (ctx.mode === 'join') {
       transactionRegistry.appendHistory(ctx.transactionId, res.shape_history ?? []);
     }
-    // Propagate manufacturing graph: if the source shell had a graph and we're not
-    // keeping the original, update the PanelNode's bodyId to the new shell UUID.
+    // Propagate manufacturing graph: update any PanelNode whose bodyId matches the translated shell.
     // The _parts key (part_id) stays stable — only the internal bodyId reference is updated.
-    if (!keepOriginal && _parts.has(target) && res.solid_id !== target) {
-      const graph = _parts.get(target)!;
+    // This must search ALL graphs, not just _parts[target], because the panel may be stored
+    // under a stable partId (from a previous merge), not the old shell UUID.
+    if (!keepOriginal && res.solid_id !== target) {
       const toBodyId2 = (s: string) => s as import('../manufacturing/graph/types').BodyId;
-      for (const node of graph.nodes.values()) {
-        if (node.type === 'PanelNode' &&
-            (node as import('../manufacturing/graph/types').PanelNode).bodyId === (target as import('../manufacturing/graph/types').BodyId)) {
-          (node as import('../manufacturing/graph/types').PanelNode).bodyId = toBodyId2(res.solid_id);
-          break;
+      const targetBodyId = target as import('../manufacturing/graph/types').BodyId;
+      for (const graph of _parts.values()) {
+        for (const node of graph.nodes.values()) {
+          if (node.type === 'PanelNode') {
+            const pn = node as import('../manufacturing/graph/types').PanelNode;
+            if (pn.bodyId === targetBodyId) {
+              pn.bodyId = toBodyId2(res.solid_id);
+              break;  // Found and updated the panel, move to next target
+            }
+          }
         }
       }
-      // Do NOT remap _parts key — part_id is stable across geometry mutations.
     }
   }
 
