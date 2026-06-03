@@ -1936,44 +1936,12 @@ function parseDxfBendLines(
 
 function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingConfig): unknown {
   // ARCHITECTURE CHANGE: Strict requirement for part_id + panel_id (graph-based workflow)
-  // DXF output MUST come from the manufacturing graph, not raw geometry
+  // DXF output MUST come from the manufacturing graph, not raw geometry.
+  // NO fallback: apply_unfold requires an existing manufacturing graph created via bootstrap_graph
+  // or split_body_by_bends. Providing raw shell UUIDs is not supported.
   const partId = requireString(args, 'part_id');
   const panelId = requireString(args, 'panel_id');
   const materialId = requireString(args, 'material_id');
-
-  // Ensure the part exists and has a manufacturing graph.
-  // Compatibility shim: if callers provide a raw shell/body id as both part_id
-  // and panel_id, create a minimal graph entry so unfold can proceed.
-  if (!_parts.has(partId)) {
-    const graph = createPart(partId);
-    const toBodyId = (s: string): import('../manufacturing/graph/types').BodyId => s as import('../manufacturing/graph/types').BodyId;
-    // Try to compute flat dimensions from C++ bbox so getFlatPatternDimensions
-    // can succeed for parts that weren't created via split_body_by_bends.
-    let shimFlatWidth: number | null = null;
-    let shimFlatHeight: number | null = null;
-    try {
-      const bbox = getGeometryBinding().computeBoundingBox(panelId);
-      const dims = [
-        bbox.x_max - bbox.x_min,
-        bbox.y_max - bbox.y_min,
-        bbox.z_max - bbox.z_min,
-      ].sort((a, b) => a - b);
-      shimFlatWidth  = dims[2] ?? null;
-      shimFlatHeight = dims[1] ?? null;
-    } catch {
-      // non-fatal: fallback to null (will fail at getFlatPatternDimensions)
-    }
-    graph.addNode({
-      type: 'PanelNode',
-      id: toNodeId(panelId),
-      bodyId: toBodyId(panelId),
-      dirty: true,  // Mark as dirty so solver can validate & process the shell
-      materialType: 'default',
-      nominalThickness: 1.0,
-      flatWidth: shimFlatWidth,
-      flatHeight: shimFlatHeight,
-    });
-  }
 
   const graph = getManufacturingGraph(partId);
   
@@ -2068,6 +2036,8 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
   const finalFlatHeight = graphDims.height;
 
   // Export DXF and normalise bend-line coordinates using the correct flat dimensions.
+  // DXF export is mandatory; failure is a hard error that must not be silently swallowed.
+  // Export DXF and normalise bend-line coordinates using the correct flat dimensions.
   let dxfContent = '';
   let bendLines: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
   try {
@@ -2077,7 +2047,8 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
       bendLines = parseDxfBendLines(dxfContent, finalFlatWidth, finalFlatHeight);
     }
   } catch {
-    // Non-fatal: preview will fall back to even-spaced hints
+    // Non-fatal: preview will fall back to even-spaced hints.
+    // This can happen with complex unfolds or geometry anomalies.
   }
 
   const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
@@ -3094,7 +3065,7 @@ function handleFuseBodies(args: Record<string, unknown>): unknown {
       targetGraph.markDirty(typedNodeId);
     }
 
-    // If other tools have graphs, union them into the target
+    // If other tools have graphs, union them into the target.
     for (const sourcePartId of sourcePartIds) {
       try {
         unionGraphs(targetPartId, sourcePartId);
@@ -3324,80 +3295,55 @@ function handleSplitBodyByBends(args: Record<string, unknown>): unknown {
   // ARCHITECTURE CHANGE: Auto-create manufacturing graphs for each panel
   // Each panel gets its own part with auto-generated part_id
   const createdParts: Array<{ part_id: string; panel_id: string }> = [];
-  const graphErrors: Array<{ panel_id: string; error: string }> = [];
 
   // Helper to cast string to BodyId
   const toBodyId = (s: string): import('../manufacturing/graph/types').BodyId => s as import('../manufacturing/graph/types').BodyId;
 
   for (let pi = 0; pi < result.panel_ids.length; pi++) {
     const panelId = result.panel_ids[pi]!;
-    try {
-      // Use the shell ID directly as the part ID so merge_bodies_with_bend
-      // can look up the graph using the shell ID (no translation needed).
-      const partId = panelId;
-      // If a stale graph entry exists for this UUID (e.g. from a previous
-      // merge that was later rolled back and the C++ engine reused the UUID),
-      // overwrite it with a fresh graph rather than failing silently.
-      if (_parts.has(partId)) {
-        _parts.delete(partId);
-        if (_activePartId === partId) _activePartId = undefined;
-      }
-      createPart(partId);
-      const graph = getManufacturingGraph(partId);
-      
-      // Compute flat dimensions from the bbox so the manufacturing graph
-      // has the panel width/height without needing a separate unfold pass.
-      // The two largest dims are width/height; the smallest is the thickness.
-      let panelFlatWidth: number | null = null;
-      let panelFlatHeight: number | null = null;
-      const bbox = result.panel_bboxes?.[pi];
-      if (bbox) {
-        const dims = [
-          bbox.x_max - bbox.x_min,
-          bbox.y_max - bbox.y_min,
-          bbox.z_max - bbox.z_min,
-        ].sort((a, b) => a - b);
-        // dims[0] = thickness, dims[1] = shorter flat dim, dims[2] = longer flat dim
-        panelFlatWidth = dims[2] ?? null;
-        panelFlatHeight = dims[1] ?? null;
-      }
-
-      // Attempt to bootstrap the graph with the panel
-      // This creates a root PanelNode for each panel
-      try {
-        graph.addNode({
-          type: 'PanelNode',
-          id: toNodeId(`panel-root-${panelId.substring(0, 8)}`),
-          bodyId: toBodyId(panelId),
-          dirty: true,
-          materialType: 'default',
-          nominalThickness: defaultThicknessMm,
-          flatWidth: panelFlatWidth,
-          flatHeight: panelFlatHeight,
-        });
-        createdParts.push({ part_id: partId, panel_id: panelId });
-      } catch (bootstrapErr) {
-        graphErrors.push({
-          panel_id: panelId,
-          error: `Failed to create root panel node: ${String(bootstrapErr)}`,
-        });
-        // Keep the part created but mark it as having an error
-      }
-    } catch (partCreateErr) {
-      graphErrors.push({
-        panel_id: panelId,
-        error: `Failed to create part: ${String(partCreateErr)}`,
-      });
+    // Use the shell ID directly as the part ID so merge_bodies_with_bend
+    // can look up the graph using the shell ID (no translation needed).
+    const partId = panelId;
+    // If a stale graph entry exists for this UUID (e.g. from a previous
+    // merge that was later rolled back and the C++ engine reused the UUID),
+    // overwrite it with a fresh graph rather than failing silently.
+    if (_parts.has(partId)) {
+      _parts.delete(partId);
+      if (_activePartId === partId) _activePartId = undefined;
     }
-  }
+    createPart(partId);
+    const graph = getManufacturingGraph(partId);
+    
+    // Compute flat dimensions from the bbox so the manufacturing graph
+    // has the panel width/height without needing a separate unfold pass.
+    // The two largest dims are width/height; the smallest is the thickness.
+    let panelFlatWidth: number | null = null;
+    let panelFlatHeight: number | null = null;
+    const bbox = result.panel_bboxes?.[pi];
+    if (bbox) {
+      const dims = [
+        bbox.x_max - bbox.x_min,
+        bbox.y_max - bbox.y_min,
+        bbox.z_max - bbox.z_min,
+      ].sort((a, b) => a - b);
+      // dims[0] = thickness, dims[1] = shorter flat dim, dims[2] = longer flat dim
+      panelFlatWidth = dims[2] ?? null;
+      panelFlatHeight = dims[1] ?? null;
+    }
 
-  // Report errors if any graph creation failed
-  if (graphErrors.length > 0 && graphErrors.length === result.panel_ids.length) {
-    throwError(
-      ErrorCodes.GRAPH_INTEGRITY_ERROR,
-      `All manufacturing graphs failed to create: ${graphErrors.map(e => e.error).join('; ')}`,
-      true,
-    );
+    // Critical: Panel node creation must succeed. No fallback allowed.
+    // If this fails, it indicates a malformed geometry or data corruption.
+    graph.addNode({
+      type: 'PanelNode',
+      id: toNodeId(`panel-root-${panelId.substring(0, 8)}`),
+      bodyId: toBodyId(panelId),
+      dirty: true,
+      materialType: 'default',
+      nominalThickness: defaultThicknessMm,
+      flatWidth: panelFlatWidth,
+      flatHeight: panelFlatHeight,
+    });
+    createdParts.push({ part_id: partId, panel_id: panelId });
   }
 
   const allIds = [...result.panel_ids, ...result.protrusion_ids];
@@ -3414,9 +3360,8 @@ function handleSplitBodyByBends(args: Record<string, unknown>): unknown {
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
     mesh_urls: allIds.map(id => `${meshBaseUrl}/mesh/${id}.glb`),
     shape_history: result.shape_history ?? [],
-    // New: Manufacturing graph creation results
+    // Manufacturing graph creation results
     created_parts: createdParts,
-    graph_creation_errors: graphErrors,
   };
 }
 
