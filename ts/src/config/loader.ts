@@ -23,12 +23,17 @@ export interface PersistenceConfig {
   data_dir: string;
 }
 
+export interface GraphConfig {
+  coplanarityThresholdDeg: number;
+}
+
 export interface ManufacturingConfig {
   materials: MaterialSpec[];
   tooling: ToolingCapability;
   logistics: LogisticsConstraints;
   environmental: EnvironmentalContext;
   persistence?: PersistenceConfig;
+  graph: GraphConfig;
 }
 
 // ─── Zod schemas ─────────────────────────────────────────────────────────────
@@ -97,12 +102,17 @@ const PersistenceSchema = z.object({
   data_dir: z.string().min(1).default('./state/dolt'),
 });
 
+const GraphSchema = z.object({
+  coplanarity_threshold_deg: z.number().positive().default(1.0),
+});
+
 const ConfigSchema = z.object({
   materials: z.array(MaterialSchema).min(1),
   tooling: ToolingSchema,
   logistics: LogisticsSchema,
   environmental: EnvironmentalSchema,
   persistence: PersistenceSchema.optional(),
+  graph: GraphSchema.default({ coplanarity_threshold_deg: 1.0 }),
 });
 
 // ─── Config validation error ──────────────────────────────────────────────────
@@ -210,5 +220,8 @@ export function loadConfig(configPath: string): ManufacturingConfig {
     logistics: mapLogistics(data.logistics),
     environmental: mapEnvironmental(data.environmental),
     persistence: data.persistence ? mapPersistence(data.persistence) : undefined,
+    graph: {
+      coplanarityThresholdDeg: data.graph.coplanarity_threshold_deg,
+    },
   };
 }

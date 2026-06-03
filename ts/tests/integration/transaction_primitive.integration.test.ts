@@ -39,6 +39,12 @@ function buildMockAddon(): GeometryAddon {
     checkManifold:   vi.fn(() => ({ isManifold: true, issues: [] })),
     healGeometry:    vi.fn((id: string) => id),
     separateSolids:  vi.fn((id: string) => [id]),
+    validateSheetMetal: vi.fn(() => ({
+      is_valid: true,
+      nominal_thickness: 1.5,
+      can_flatten: true,
+      validation_errors: [],
+    })),
 
     booleanCut: vi.fn((id: string) => ({
       shellIds: [`${id}-cut-a`, `${id}-cut-b`],
@@ -659,6 +665,7 @@ describe('Transaction primitive (Feature 004 Phase 4) — shape_history for all 
     const begin = (await dispatchTool('begin_transaction', { label: 'p4', product: 'x' }, config)) as { transaction_id: string };
     const res = (await dispatchTool('apply_unfold', {
       transaction_id: begin.transaction_id,
+      part_id: 'shell-1',
       panel_id: 'shell-1', material_id: 'mild_steel_1.5mm',
     }, config)) as { shape_history: unknown[] };
     expect(res.shape_history).toHaveLength(0);

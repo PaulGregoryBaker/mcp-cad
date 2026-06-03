@@ -53,6 +53,7 @@ describe('SYS-JTBD-04 Export Lifecycle Integration', () => {
     const unfoldIds = [];
     for (const panelId of decompose.panel_ids) {
         const unfold = await dispatchTool('apply_unfold', {
+        part_id: panelId,
             panel_id: panelId,
             material_id: config.materials[0]!.id,
         }, config) as any;
