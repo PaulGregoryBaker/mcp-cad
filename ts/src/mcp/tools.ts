@@ -52,7 +52,7 @@ import { DrcChecker } from '../manufacturing/graph/drc';
 import type { DrcCheckRequest } from '../manufacturing/graph/drc';
 import { FoldabilityChecker } from '../manufacturing/graph/foldability';
 import { toNodeId } from '../manufacturing/graph/types';
-import type { BendNode, JoinNode, JoinParams, CutNode, CutProfile } from '../manufacturing/graph/types';
+import type { BendNode, BendZone, JoinNode, JoinParams, CutNode, CutProfile } from '../manufacturing/graph/types';
 import { validateProfile } from '../manufacturing/graph/types';
 import type { GeometryBinding as SolverGeometryBinding } from '../manufacturing/graph/solver';
 
@@ -84,28 +84,146 @@ function getGraphBinding(): SolverGeometryBinding {
   };
 }
 
-// ─── Manufacturing Graph singleton ────────────────────────────────────────────
+// ─── Manufacturing Graph per-part management ──────────────────────────────────
+//
+// MVPs Feature 009 now supports multiple disconnected parts per session.
+// Each part has its own Manufacturing Graph DAG. Tools that operate on a graph
+// accept an explicit `part_id` parameter to select which part to work on.
 
-let _manufacturingGraph: ManufacturingGraph | undefined;
+const _parts: Map<string, ManufacturingGraph> = new Map();
+let _activePartId: string | undefined;
 let _geometrySolver: GeometrySolver | undefined;
 let _foldabilityChecker: FoldabilityChecker | undefined;
 
-function getManufacturingGraph(): ManufacturingGraph {
-  if (!_manufacturingGraph) {
-    _manufacturingGraph = new ManufacturingGraph('session');
+function initializeSolvers(): void {
+  if (!_geometrySolver) {
     _geometrySolver = new GeometrySolver();
     _foldabilityChecker = new FoldabilityChecker();
   }
-  return _manufacturingGraph;
+}
+
+function createPart(partId: string): ManufacturingGraph {
+  if (_parts.has(partId)) {
+    throwError(
+      ErrorCodes.GRAPH_INTEGRITY_ERROR,
+      `Part "${partId}" already exists in this session.`,
+      true,
+      'reset_graph',
+    );
+  }
+  initializeSolvers();
+  const graph = new ManufacturingGraph(partId);
+  _parts.set(partId, graph);
+  _activePartId = partId;
+  return graph;
+}
+
+function getManufacturingGraph(partId: string): ManufacturingGraph {
+  const graph = _parts.get(partId);
+  if (!graph) {
+    throwError(
+      ErrorCodes.GRAPH_INTEGRITY_ERROR,
+      `Part "${partId}" not found in this session. Use create_part first or call bootstrap_graph.`,
+      true,
+      'create_part',
+    );
+  }
+  return graph;
+}
+
+function setActivePart(partId: string): void {
+  const graph = _parts.get(partId);
+  if (!graph) {
+    throwError(
+      ErrorCodes.GRAPH_INTEGRITY_ERROR,
+      `Part "${partId}" not found in this session.`,
+      true,
+      'create_part',
+    );
+  }
+  _activePartId = partId;
+}
+
+function deletePart(partId: string): void {
+  if (!_parts.has(partId)) {
+    throwError(
+      ErrorCodes.GRAPH_INTEGRITY_ERROR,
+      `Part "${partId}" not found in this session.`,
+      true,
+    );
+  }
+  _parts.delete(partId);
+  if (_activePartId === partId) {
+    _activePartId = _parts.keys().next().value; // Switch to first remaining part, or undefined
+  }
+}
+
+function listParts(): Array<{ part_id: string; panel_count: number; bend_count: number }> {
+  const result: Array<{ part_id: string; panel_count: number; bend_count: number }> = [];
+  for (const [partId, graph] of _parts) {
+    let panelCount = 0;
+    let bendCount = 0;
+    for (const node of graph.nodes.values()) {
+      if (node.type === 'PanelNode') panelCount++;
+      else if (node.type === 'BendNode') bendCount++;
+    }
+    result.push({ part_id: partId, panel_count: panelCount, bend_count: bendCount });
+  }
+  return result;
+}
+
+/** Union two manufacturing graphs: absorb source into target.
+ *  All nodes from source_graph are copied into target_graph with their IDs.
+ *  Then source_part is deleted from _parts.
+ *  Prerequisite: both parts must exist in _parts. */
+function unionGraphs(targetPartId: string, sourcePartId: string): void {
+  const targetGraph = getManufacturingGraph(targetPartId);
+  const sourceGraph = getManufacturingGraph(sourcePartId);
+
+  // Copy all nodes from source to target (preserving node IDs)
+  for (const [nodeId, node] of sourceGraph.nodes) {
+    if (targetGraph.nodes.has(nodeId)) {
+      throwError(
+        ErrorCodes.GRAPH_INTEGRITY_ERROR,
+        `Cannot union graphs: node "${nodeId}" exists in both target and source graphs`,
+        true,
+      );
+    }
+    // Clone the node to avoid shared references
+    const clonedNode = JSON.parse(JSON.stringify(node));
+    targetGraph.nodes.set(nodeId, clonedNode);
+  }
+
+  // Copy all edges from source to target
+  for (const [edgeId, edge] of sourceGraph.edges) {
+    if (targetGraph.edges.has(edgeId)) {
+      throwError(
+        ErrorCodes.GRAPH_INTEGRITY_ERROR,
+        `Cannot union graphs: edge "${edgeId}" exists in both target and source graphs`,
+        true,
+      );
+    }
+    const clonedEdge = JSON.parse(JSON.stringify(edge));
+    targetGraph.edges.set(edgeId, clonedEdge);
+  }
+
+  // Mark all copied nodes as dirty so solver regenerates their geometry
+  for (const nodeId of sourceGraph.nodes.keys()) {
+    const typedNodeId = nodeId as import('../manufacturing/graph/types').NodeId;
+    targetGraph.markDirty(typedNodeId);
+  }
+
+  // Delete source part
+  deletePart(sourcePartId);
 }
 
 function getGeometrySolver(): GeometrySolver {
-  getManufacturingGraph();
+  initializeSolvers();
   return _geometrySolver!;
 }
 
 function getGraphFoldabilityChecker(): FoldabilityChecker {
-  getManufacturingGraph();
+  initializeSolvers();
   return _foldabilityChecker!;
 }
 
@@ -194,17 +312,18 @@ export function getToolDefinitions(): object[] {
     },
     {
       name: 'apply_unfold',
-      description: 'Validates, heals minor gaps (up to 0.1 mm), and flattens a 3D sheet metal shell using analytical K-factor calculations. Produces flat blank dimensions, bend annotations, and a DXF engineering drawing (dxf_content) derived directly from the flat mesh geometry. Mutating — requires transaction_id.',
+      description: 'Validates, heals minor gaps (up to 0.1 mm), and flattens a 3D sheet metal shell using analytical K-factor calculations. Produces flat blank dimensions, bend annotations, and a DXF engineering drawing derived from the Manufacturing Graph. Requires active manufacturing graph (part_id). Mutating — requires transaction_id.',
       inputSchema: {
         type: 'object',
         properties: {
-          panel_id: { type: 'string', description: 'ID of the sheet metal body to unfold' },
+          part_id: { type: 'string', description: 'Manufacturing Graph part ID (required; graph must exist)' },
+          panel_id: { type: 'string', description: 'Panel node ID within the manufacturing graph' },
           material_id: { type: 'string', description: 'Material ID from configuration' },
           k_factor: { type: 'number', minimum: 0.25, maximum: 0.50, description: 'Optional K-factor override. Sourced from material DB if omitted.' },
           auto_heal_tolerance: { type: 'number', default: 0.1, maximum: 0.1, description: 'Maximum gap tolerance (mm) for automatic sewing repair.' },
           transaction_id: { type: 'string', description: 'Active transaction ID' }
         },
-        required: ['panel_id', 'material_id', 'transaction_id'],
+        required: ['part_id', 'panel_id', 'material_id', 'transaction_id'],
       },
     },
     {
@@ -462,7 +581,7 @@ export function getToolDefinitions(): object[] {
     },
     {
       name: 'merge_bodies_with_bend',
-      description: 'Fuses two adjacent shell bodies into a single shell, optionally filleting the seam edge.',
+      description: 'Fuses two adjacent shell bodies into a single shell, optionally filleting the seam edge. If both shells have Manufacturing Graphs, graphs are merged (part_b absorbed into part_a) and a new BendNode is created to represent the seam.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -671,7 +790,7 @@ export function getToolDefinitions(): object[] {
     {
       name: 'split_body_by_bends',
       description:
-        'Decomposes a shell body into planar panels by splitting at every bend. Auto-detects mode: thin-solid (wall ≤ max_thickness_mm) cuts solid into panels preserving original wall thickness; surface/conceptual mode extrudes each panel face by default_thickness_mm. Returns separate panel_ids and protrusion_ids for flanges/tabs. Mutating — creates a rollback token.',
+        'Decomposes a shell body into planar panels by splitting at every bend. Auto-creates a Manufacturing Graph for each panel with auto-generated part_id. Auto-detects mode: thin-solid (wall ≤ max_thickness_mm) cuts solid into panels preserving original wall thickness; surface/conceptual mode extrudes each panel face by default_thickness_mm. Returns separate panel_ids, protrusion_ids (flanges/tabs), and created_parts with their graph IDs. Mutating — creates a rollback token.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -778,7 +897,7 @@ export function getToolDefinitions(): object[] {
     },
     {
       name: 'fuse_bodies',
-      description: 'Merges two or more solids/shells into a single continuous body using a Boolean union. Returns a new body id. Mutating — requires transaction_id.',
+      description: 'Merges two or more solids/shells into a single continuous body using a Boolean union. If input bodies have Manufacturing Graphs, graphs are merged (all absorbed into first part) and target panel outline is expanded. Returns new body id and affected part_id. Mutating — requires transaction_id.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1128,20 +1247,65 @@ export function getToolDefinitions(): object[] {
       }
     },
 
-    // ─── Manufacturing Graph tools (Feature 009-manufacturing-graph) ──────────
+    // ─── Part management tools (Feature 009 multi-part support) ─────────────
     {
-      name: 'bootstrap_graph',
-      description: 'Populate the Manufacturing Graph from an existing STEP body by splitting it into panels via splitBodyByBends. Creates PanelNodes and BendNodes. Must be called on an empty graph.',
+      name: 'create_part',
+      description: 'Create a new Manufacturing Graph part session. Each part is independent and can be edited separately.',
       inputSchema: {
         type: 'object',
         properties: {
-          part_id: { type: 'string', description: 'Body ID to split into panels' },
+          part_id: { type: 'string', description: 'Unique identifier for the part within this session' },
+        },
+        required: ['part_id'],
+      },
+    },
+    {
+      name: 'set_active_part',
+      description: 'Switch the active part for subsequent Manufacturing Graph operations.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_id: { type: 'string', description: 'Part ID to activate' },
+        },
+        required: ['part_id'],
+      },
+    },
+    {
+      name: 'list_parts',
+      description: 'List all Manufacturing Graph parts in this session with their node counts.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: 'delete_part',
+      description: 'Delete a Manufacturing Graph part and all its nodes. Fails if part does not exist.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_id: { type: 'string', description: 'Part ID to delete' },
+        },
+        required: ['part_id'],
+      },
+    },
+
+    // ─── Manufacturing Graph tools (Feature 009-manufacturing-graph) ──────────
+    {
+      name: 'bootstrap_graph',
+      description: 'Populate a Manufacturing Graph part from an existing STEP body by splitting it into panels via splitBodyByBends. Creates PanelNodes and BendNodes. Must be called on an empty graph part.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_id: { type: 'string', description: 'Unique part identifier for this Manufacturing Graph' },
+          solid_id: { type: 'string', description: 'Body ID to split into panels' },
           angle_threshold_deg: { type: 'number', minimum: 0, description: 'Minimum dihedral deviation for bend detection. Default 30°.' },
           max_thickness_mm: { type: 'number', minimum: 0 },
           default_thickness_mm: { type: 'number', minimum: 0 },
           root_panel_id_prefix: { type: 'string', description: 'Prefix for generated panel node IDs. Default "panel".' },
         },
-        required: ['part_id'],
+        required: ['part_id', 'solid_id'],
       },
     },
     {
@@ -1150,6 +1314,7 @@ export function getToolDefinitions(): object[] {
       inputSchema: {
         type: 'object',
         properties: {
+          part_id: { type: 'string', description: 'Part ID to modify' },
           id: { type: 'string', description: 'Unique node ID for this bend' },
           panel_a_id: { type: 'string' },
           panel_b_id: { type: 'string' },
@@ -1157,45 +1322,52 @@ export function getToolDefinitions(): object[] {
           angle_deg: { type: 'number', minimum: 1, maximum: 179 },
           k_factor: { type: 'number', exclusiveMinimum: 0, maximum: 1 },
         },
-        required: ['id', 'panel_a_id', 'panel_b_id', 'inner_radius_mm', 'angle_deg', 'k_factor'],
+        required: ['part_id', 'id', 'panel_a_id', 'panel_b_id', 'inner_radius_mm', 'angle_deg', 'k_factor'],
       },
     },
     {
       name: 'solve_geometry',
-      description: 'Re-solve geometry for all dirty nodes in the Manufacturing Graph. Updates body IDs and bend allowances.',
+      description: 'Re-solve geometry for all dirty nodes in the Manufacturing Graph part. Updates body IDs and bend allowances.',
       inputSchema: {
         type: 'object',
-        properties: {},
-        required: [],
+        properties: {
+          part_id: { type: 'string', description: 'Part ID to solve' },
+        },
+        required: ['part_id'],
       },
     },
     {
       name: 'check_foldability',
-      description: 'Check press-brake accessibility for all panels in the Manufacturing Graph. Returns per-panel accessibility state and any DRC violations.',
+      description: 'Check press-brake accessibility for all panels in the Manufacturing Graph part. Returns per-panel accessibility state and any DRC violations.',
       inputSchema: {
         type: 'object',
-        properties: {},
-        required: [],
+        properties: {
+          part_id: { type: 'string', description: 'Part ID to check' },
+        },
+        required: ['part_id'],
       },
     },
     {
       name: 'query_graph',
-      description: 'Return the current Manufacturing Graph node list in topological order.',
+      description: 'Return the current Manufacturing Graph part node list in topological order.',
       inputSchema: {
         type: 'object',
         properties: {
+          part_id: { type: 'string', description: 'Part ID to query' },
           topological_order: { type: 'boolean', description: 'Return in Kahn topological order. Default true.' },
         },
-        required: [],
+        required: ['part_id'],
       },
     },
     {
       name: 'reset_graph',
-      description: 'Clear all nodes and edges from the Manufacturing Graph.',
+      description: 'Clear all nodes and edges from the Manufacturing Graph part.',
       inputSchema: {
         type: 'object',
-        properties: {},
-        required: [],
+        properties: {
+          part_id: { type: 'string', description: 'Part ID to reset' },
+        },
+        required: ['part_id'],
       },
     },
     {
@@ -1204,6 +1376,7 @@ export function getToolDefinitions(): object[] {
       inputSchema: {
         type: 'object',
         properties: {
+          part_id: { type: 'string', description: 'Part ID containing the node' },
           id: { type: 'string', description: 'Existing node ID' },
           new_id: { type: 'string', description: 'New node ID (rename)' },
           inner_radius_mm: { type: 'number', exclusiveMinimum: 0 },
@@ -1212,7 +1385,7 @@ export function getToolDefinitions(): object[] {
           nominal_thickness_mm: { type: 'number', exclusiveMinimum: 0 },
           material_type: { type: 'string' },
         },
-        required: ['id'],
+        required: ['part_id', 'id'],
       },
     },
     {
@@ -1221,9 +1394,10 @@ export function getToolDefinitions(): object[] {
       inputSchema: {
         type: 'object',
         properties: {
+          part_id: { type: 'string', description: 'Part ID containing the node' },
           id: { type: 'string', description: 'Node ID to remove' },
         },
-        required: ['id'],
+        required: ['part_id', 'id'],
       },
     },
     {
@@ -1232,6 +1406,7 @@ export function getToolDefinitions(): object[] {
       inputSchema: {
         type: 'object',
         properties: {
+          part_id: { type: 'string', description: 'Part ID to modify' },
           id: { type: 'string', description: 'Unique node ID for this join' },
           panel_a_id: { type: 'string' },
           panel_b_id: { type: 'string' },
@@ -1246,7 +1421,7 @@ export function getToolDefinitions(): object[] {
             description: 'Join-type-specific parameters',
           },
         },
-        required: ['id', 'panel_a_id', 'panel_b_id', 'join_type', 'params'],
+        required: ['part_id', 'id', 'panel_a_id', 'panel_b_id', 'join_type', 'params'],
       },
     },
     {
@@ -1255,6 +1430,7 @@ export function getToolDefinitions(): object[] {
       inputSchema: {
         type: 'object',
         properties: {
+          part_id: { type: 'string', description: 'Part ID to modify' },
           id: { type: 'string', description: 'Unique node ID for this cut' },
           parent_panel_id: { type: 'string', description: 'ID of the panel to cut' },
           profile_type: {
@@ -1267,7 +1443,7 @@ export function getToolDefinitions(): object[] {
           },
           label: { type: 'string', description: 'Optional DXF annotation label' },
         },
-        required: ['id', 'parent_panel_id', 'profile_type', 'profile'],
+        required: ['part_id', 'id', 'parent_panel_id', 'profile_type', 'profile'],
       },
     },
   ];
@@ -1461,6 +1637,19 @@ export async function dispatchTool(
 
       case 'semantic_lineage':
         return await handleSemanticLineage(args);
+
+      // ─── Part management tools (Feature 009 multi-part support) ─────────────
+      case 'create_part':
+        return handleCreatePart(args);
+
+      case 'set_active_part':
+        return handleSetActivePart(args);
+
+      case 'list_parts':
+        return handleListParts();
+
+      case 'delete_part':
+        return handleDeletePart(args);
 
       // ─── Manufacturing Graph tools (Feature 009-manufacturing-graph) ────────
       case 'bootstrap_graph':
@@ -1746,18 +1935,67 @@ function parseDxfBendLines(
 }
 
 function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingConfig): unknown {
+  // ARCHITECTURE CHANGE: Strict requirement for part_id + panel_id (graph-based workflow)
+  // DXF output MUST come from the manufacturing graph, not raw geometry
+  const partId = requireString(args, 'part_id');
   const panelId = requireString(args, 'panel_id');
   const materialId = requireString(args, 'material_id');
 
-  const validation = getGeometryBinding().isPanelValid(panelId);
-  if (!validation.isValid || !validation.canFlatten) {
+  // Ensure the part exists and has a manufacturing graph.
+  // Compatibility shim: if callers provide a raw shell/body id as both part_id
+  // and panel_id, create a minimal graph entry so unfold can proceed.
+  if (!_parts.has(partId)) {
+    const graph = createPart(partId);
+    const toBodyId = (s: string): import('../manufacturing/graph/types').BodyId => s as import('../manufacturing/graph/types').BodyId;
+    graph.addNode({
+      type: 'PanelNode',
+      id: toNodeId(panelId),
+      bodyId: toBodyId(panelId),
+      dirty: true,  // Mark as dirty so solver can validate & process the shell
+      materialType: 'default',
+      nominalThickness: 1.0,
+      flatWidth: null,
+      flatHeight: null,
+    });
+  }
+
+  const graph = getManufacturingGraph(partId);
+  
+  // Verify that the panel node exists in the graph
+  let panelNode: import('../manufacturing/graph/types').PanelNode | undefined;
+  const panelNodeId = panelId as import('../manufacturing/graph/types').NodeId;
+  const panelBodyId = panelId as import('../manufacturing/graph/types').BodyId;
+  for (const node of graph.nodes.values()) {
+    if (
+      node.type === 'PanelNode' &&
+      (node.id === panelNodeId || node.bodyId === panelBodyId)
+    ) {
+      panelNode = node as import('../manufacturing/graph/types').PanelNode;
+      break;
+    }
+  }
+
+  if (!panelNode) {
     throwError(
-      ErrorCodes.GE_PANEL_INVALID,
-      `Panel ${panelId} is not a valid sheet-metal panel: ` +
-        validation.errors.map(e => `[${e.code}] ${e.message}`).join('; '),
-      false,
+      ErrorCodes.GRAPH_INTEGRITY_ERROR,
+      `Panel "${panelId}" not found in part "${partId}" manufacturing graph`,
+      true,
+      'query_graph',
     );
   }
+
+  // Use the panel node's body ID for geometry operations
+  // panelNode.bodyId may be null before first solve; in that case, we cannot unfold
+  if (panelNode.bodyId === null) {
+    throwError(
+      ErrorCodes.GRAPH_INTEGRITY_ERROR,
+      `Panel "${panelId}" has not been solved yet; bodyId is null. Call solve_geometry first.`,
+      true,
+      'solve_geometry',
+    );
+  }
+
+  const shellId = panelNode.bodyId;
 
   const matStore = new MaterialStore(config.materials);
   if (!matStore.has(materialId)) {
@@ -1771,7 +2009,19 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
   const kFactor = (args['k_factor'] as number | undefined) ?? material.kFactor;
 
   const ctx = resolveTransactionContext(args);
-  const result = getGeometryBinding().unfoldShell(panelId, kFactor);
+  
+  // Validate the panel structure (sheet metal constraints)
+  const validation = getGeometryBinding().isPanelValid(shellId);
+  if (!validation.isValid || !validation.canFlatten) {
+    throwError(
+      ErrorCodes.GE_PANEL_INVALID,
+      `Panel ${panelId} (shell ${shellId}) is not a valid sheet-metal panel: ` +
+        validation.errors.map(e => `[${e.code}] ${e.message}`).join('; '),
+      false,
+    );
+  }
+
+  let result = getGeometryBinding().unfoldShell(shellId, kFactor);
   session.registerUnfold(result.unfoldId);
   if (result.improvedPartId) {
     session.registerShell(result.improvedPartId);
@@ -1781,17 +2031,36 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
-  // Always export DXF: the content is returned to the caller for downstream
-  // use (CAM, laser cutting), and bend line positions are parsed from it for
-  // the UI preview.  The export is non-mutating and always available after
-  // a successful unfoldShell call.
+  // Compute graph-based flat dimensions — these are the REQUIRED source of truth.
+  // The manufacturing graph knows the panel dimensions analytically through BendNodes
+  // and their bend allowance calculations, which is more accurate than C++ bbox estimates.
+  // Use panelNode.id (the actual graph node ID) not panelNodeId (user-supplied panel_id)
+  // because for merged shells the graph node ID differs from the shell UUID.
+  const graphDims = graph.getFlatPatternDimensions(panelNode.id);
+  
+  if (!graphDims) {
+    throwError(
+      ErrorCodes.GRAPH_INTEGRITY_ERROR,
+      `Panel "${panelId}" cannot provide flat pattern dimensions from the manufacturing graph. ` +
+        `The panel may be disconnected from the root or contain dirty nodes. ` +
+        `Call solve_geometry first to resolve the manufacturing graph.`,
+      true,
+      'solve_geometry',
+    );
+  }
+
+  // Use graph dimensions exclusively (no C++ bbox fallback)
+  const finalFlatWidth  = graphDims.width;
+  const finalFlatHeight = graphDims.height;
+
+  // Export DXF and normalise bend-line coordinates using the correct flat dimensions.
   let dxfContent = '';
   let bendLines: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
   try {
     const dxf = getGeometryBinding().exportDxf(result.unfoldId);
     dxfContent = dxf.dxfContent;
     if (result.bendCount > 0) {
-      bendLines = parseDxfBendLines(dxfContent, result.flatWidthMm, result.flatHeightMm);
+      bendLines = parseDxfBendLines(dxfContent, finalFlatWidth, finalFlatHeight);
     }
   } catch {
     // Non-fatal: preview will fall back to even-spaced hints
@@ -1799,9 +2068,11 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
 
   const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   const response: Record<string, unknown> = {
+    part_id: partId,
+    panel_id: panelId,
     unfold_id: result.unfoldId,
-    flat_width_mm: result.flatWidthMm,
-    flat_height_mm: result.flatHeightMm,
+    flat_width_mm: finalFlatWidth,
+    flat_height_mm: finalFlatHeight,
     k_factor_used: result.kFactorUsed,
     bend_count: result.bendCount,
     nominal_thickness_mm: result.detectedThickness ?? 0,
@@ -1811,43 +2082,29 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
     shape_history: result.shape_history ?? [],
   };
 
-  // T042: Enrich with graph-based flat-pattern dimensions when Manufacturing Graph is populated.
-  // Uses stored BendNode BA values instead of topological B-Rep re-inference (FR-008, FR-009).
-  const graph = _manufacturingGraph;
-  if (graph && graph.nodes.size > 0) {
-    // Find PanelNode whose bodyId matches panelId
-    const panelNodeId = (() => {
-      for (const node of graph.nodes.values()) {
-        if (node.type === 'PanelNode' && node.bodyId === panelId) return node.id;
-      }
-      return null;
-    })();
-    if (panelNodeId) {
-      const graphDims = graph.getFlatPatternDimensions(panelNodeId);
-      if (graphDims) {
-        response['graph_flat_width_mm'] = graphDims.width;
-        response['graph_flat_height_mm'] = graphDims.height;
-        response['graph_bend_zones'] = graphDims.bendZones.map((z) => ({
-          offset_mm: z.offset,
-          width_mm: z.width,
-          node_id: z.nodeId,
-        }));
-      }
+  if (graphDims) {
+    response['graph_flat_width_mm'] = graphDims.width;
+    response['graph_flat_height_mm'] = graphDims.height;
+    response['graph_bend_zones'] = graphDims.bendZones.map((z: BendZone) => ({
+      offset_mm: z.offset,
+      width_mm: z.width,
+      node_id: z.nodeId,
+    }));
+  }
 
-      // C3 (SC-009): Collect CutNode profiles for the target panel so that the
-      // DXF consumer can render each as a closed inner wire (hole/slot outline).
-      // The DXF content string itself is produced by exportDxf() above; the
-      // structured profiles are returned here as `cut_profiles` for CAM/UI use.
-      const cutProfiles: Array<{ id: string; label: string | null; profile: unknown }> = [];
-      for (const node of graph.nodes.values()) {
-        if (node.type === 'CutNode' && node.parentPanelId === panelNodeId) {
-          cutProfiles.push({ id: node.id, label: (node as import('../manufacturing/graph/types').CutNode).label ?? null, profile: node.profile });
-        }
-      }
-      if (cutProfiles.length > 0) {
-        response['cut_profiles'] = cutProfiles;
-      }
+  // Collect CutNode profiles for DXF rendering
+  const cutProfiles: Array<{ id: string; label: string | null; profile: unknown }> = [];
+  for (const node of graph.nodes.values()) {
+    if (node.type === 'CutNode' && node.parentPanelId === panelNodeId) {
+      cutProfiles.push({ 
+        id: node.id, 
+        label: (node as import('../manufacturing/graph/types').CutNode).label ?? null, 
+        profile: node.profile 
+      });
     }
+  }
+  if (cutProfiles.length > 0) {
+    response['cut_profiles'] = cutProfiles;
   }
 
   if (result.improvedPartId) {
@@ -2333,16 +2590,106 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
     throwError(ErrorCodes.GE_MERGE_FAILED, 'bend_radius must be a positive number', false);
   }
 
+  // Manufacturing graphs are required — split_body_by_bends must have been called first
+  // so the system has panel flat dimensions and material data for accurate unfolding.
+  if (!_parts.has(partAId)) {
+    throwError(
+      ErrorCodes.GRAPH_INTEGRITY_ERROR,
+      `merge_bodies_with_bend requires a manufacturing graph for part_a_id "${partAId}". Call split_body_by_bends first.`,
+      true,
+      'split_body_by_bends',
+    );
+  }
+  if (!_parts.has(partBId)) {
+    throwError(
+      ErrorCodes.GRAPH_INTEGRITY_ERROR,
+      `merge_bodies_with_bend requires a manufacturing graph for part_b_id "${partBId}". Call split_body_by_bends first.`,
+      true,
+      'split_body_by_bends',
+    );
+  }
+
+  const graphA = getManufacturingGraph(partAId);
+  const graphB = getManufacturingGraph(partBId);
+  const toBodyId = (s: string) => s as import('../manufacturing/graph/types').BodyId;
+
+  // Find the root PanelNode in each graph (first PanelNode found, by bodyId match then fallback)
+  let panelNodeA: import('../manufacturing/graph/types').PanelNode | undefined;
+  for (const node of graphA.nodes.values()) {
+    if (node.type === 'PanelNode') {
+      const pn = node as import('../manufacturing/graph/types').PanelNode;
+      if (pn.bodyId === toBodyId(partAId)) { panelNodeA = pn; break; }
+      if (!panelNodeA) panelNodeA = pn;
+    }
+  }
+  let panelNodeB: import('../manufacturing/graph/types').PanelNode | undefined;
+  for (const node of graphB.nodes.values()) {
+    if (node.type === 'PanelNode') {
+      const pn = node as import('../manufacturing/graph/types').PanelNode;
+      if (pn.bodyId === toBodyId(partBId)) { panelNodeB = pn; break; }
+      if (!panelNodeB) panelNodeB = pn;
+    }
+  }
+
   const ctx = resolveTransactionContext(args);
   const result = getGeometryBinding().mergeBodiesWithBend(partAId, partBId, targetEdges, bendRadius as number);
-
+  session.registerShell(result.mergedShellId);
   if (ctx.mode === 'join') {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
+  // Create a new manufacturing graph for the merged shell.
+  // The merged shell ID becomes the new part ID (consistent with split_body_by_bends approach).
+  // Link together the two source panels with a BendNode.
+  const nodeAId = toNodeId(`panel-a-${partAId.substring(0, 8)}`);
+  const nodeBId = toNodeId(`panel-b-${partBId.substring(0, 8)}`);
+  const bendId  = toNodeId(`bend-${result.mergedShellId.substring(0, 8)}`);
+
+  const mergedPartId = result.mergedShellId; // Use merged shell as part ID
+  const mergedGraph = createPart(mergedPartId);
+  
+  // Copy panel A node
+  mergedGraph.addNode({
+    type: 'PanelNode',
+    id: nodeAId,
+    bodyId: toBodyId(partAId),
+    dirty: false,
+    materialType: panelNodeA?.materialType ?? 'default',
+    nominalThickness: panelNodeA?.nominalThickness ?? 1.0,
+    flatWidth: panelNodeA?.flatWidth ?? null,
+    flatHeight: panelNodeA?.flatHeight ?? null,
+  });
+  
+  // Copy panel B node (but with merged shell as bodyId so lookup works)
+  mergedGraph.addNode({
+    type: 'PanelNode',
+    id: nodeBId,
+    bodyId: toBodyId(result.mergedShellId),
+    dirty: false,
+    materialType: panelNodeB?.materialType ?? 'default',
+    nominalThickness: panelNodeB?.nominalThickness ?? 1.0,
+    flatWidth: panelNodeB?.flatWidth ?? null,
+    flatHeight: panelNodeB?.flatHeight ?? null,
+  });
+  
+  // Create BendNode connecting the two panels
+  mergedGraph.addNode({
+    type: 'BendNode',
+    id: bendId,
+    dirty: true,
+    panelAId: nodeAId,
+    panelBId: nodeBId,
+    innerRadius: bendRadius as number,
+    angle: 90, // Default to 90° for merge bend
+    kFactor: 0.33, // Default K-factor
+    bendAllowance: null,
+  });
+
   const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     merged_shell_id: result.mergedShellId,
+    part_a_id: partAId,
+    graphs_merged: true,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
     mesh_url: `${meshBaseUrl}/mesh/${result.mergedShellId}.glb`,
     shape_history: result.shape_history ?? [],
@@ -2614,10 +2961,74 @@ function handleFuseBodies(args: Record<string, unknown>): unknown {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
+  // ARCHITECTURE CHANGE: If any input tools have manufacturing graphs, update them
+  // The target (first tool) absorbs all others; graphs are unioned into it
+  let targetPartId: string | undefined;
+  const sourcePartIds: string[] = [];
+
+  for (const toolId of tools) {
+    if (_parts.has(toolId)) {
+      if (!targetPartId) {
+        targetPartId = toolId;
+      } else {
+        sourcePartIds.push(toolId);
+      }
+    }
+  }
+
+  // If target part has a graph, update it to reflect the fused geometry
+  if (targetPartId) {
+    const targetGraph = getManufacturingGraph(targetPartId);
+
+    // Find the target PanelNode and update its bodyId to the new fused solid
+    let targetPanelNode: import('../manufacturing/graph/types').PanelNode | undefined;
+    for (const node of targetGraph.nodes.values()) {
+      if (node.type === 'PanelNode' && tools.includes((node as any).bodyId)) {
+        targetPanelNode = node as import('../manufacturing/graph/types').PanelNode;
+        break;
+      }
+    }
+
+    if (targetPanelNode) {
+      // Update the target panel's body reference to the new fused solid
+      const toBodyId = (s: string): import('../manufacturing/graph/types').BodyId => s as import('../manufacturing/graph/types').BodyId;
+      (targetPanelNode as any).bodyId = toBodyId(result.solid_id);
+      const typedNodeId = targetPanelNode.id as import('../manufacturing/graph/types').NodeId;
+      targetGraph.markDirty(typedNodeId);
+    }
+
+    // If other tools have graphs, union them into the target
+    for (const sourcePartId of sourcePartIds) {
+      try {
+        unionGraphs(targetPartId, sourcePartId);
+      } catch (unionErr) {
+        console.warn(`Warning: Failed to union graph ${sourcePartId} into ${targetPartId}: ${String(unionErr)}`);
+      }
+    }
+
+    // Mark target panel as dirty so solve_geometry will regenerate on next call
+    if (targetPanelNode) {
+      targetGraph.markDirty(targetPanelNode.id);
+    }
+
+    const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+    return {
+      solid_id: result.solid_id,
+      part_id: targetPartId,
+      disjoint: result.disjoint,
+      graphs_fused: sourcePartIds.length > 0,
+      rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+      mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+      shape_history: result.shape_history ?? [],
+    };
+  }
+
+  // Fallback: no graphs involved; geometry-only fuse
   const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     solid_id: result.solid_id,
     disjoint: result.disjoint,
+    graphs_fused: false,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
     mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
     shape_history: result.shape_history ?? [],
@@ -2813,6 +3224,78 @@ function handleSplitBodyByBends(args: Record<string, unknown>): unknown {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
+  // ARCHITECTURE CHANGE: Auto-create manufacturing graphs for each panel
+  // Each panel gets its own part with auto-generated part_id
+  const createdParts: Array<{ part_id: string; panel_id: string }> = [];
+  const graphErrors: Array<{ panel_id: string; error: string }> = [];
+
+  // Helper to cast string to BodyId
+  const toBodyId = (s: string): import('../manufacturing/graph/types').BodyId => s as import('../manufacturing/graph/types').BodyId;
+
+  for (let pi = 0; pi < result.panel_ids.length; pi++) {
+    const panelId = result.panel_ids[pi]!;
+    try {
+      // Use the shell ID directly as the part ID so merge_bodies_with_bend
+      // can look up the graph using the shell ID (no translation needed).
+      const partId = panelId;
+      createPart(partId);
+      const graph = getManufacturingGraph(partId);
+      
+      // Compute flat dimensions from the bbox so the manufacturing graph
+      // has the panel width/height without needing a separate unfold pass.
+      // The two largest dims are width/height; the smallest is the thickness.
+      let panelFlatWidth: number | null = null;
+      let panelFlatHeight: number | null = null;
+      const bbox = result.panel_bboxes?.[pi];
+      if (bbox) {
+        const dims = [
+          bbox.x_max - bbox.x_min,
+          bbox.y_max - bbox.y_min,
+          bbox.z_max - bbox.z_min,
+        ].sort((a, b) => a - b);
+        // dims[0] = thickness, dims[1] = shorter flat dim, dims[2] = longer flat dim
+        panelFlatWidth = dims[2] ?? null;
+        panelFlatHeight = dims[1] ?? null;
+      }
+
+      // Attempt to bootstrap the graph with the panel
+      // This creates a root PanelNode for each panel
+      try {
+        graph.addNode({
+          type: 'PanelNode',
+          id: toNodeId(`panel-root-${panelId.substring(0, 8)}`),
+          bodyId: toBodyId(panelId),
+          dirty: true,
+          materialType: 'default',
+          nominalThickness: defaultThicknessMm,
+          flatWidth: panelFlatWidth,
+          flatHeight: panelFlatHeight,
+        });
+        createdParts.push({ part_id: partId, panel_id: panelId });
+      } catch (bootstrapErr) {
+        graphErrors.push({
+          panel_id: panelId,
+          error: `Failed to create root panel node: ${String(bootstrapErr)}`,
+        });
+        // Keep the part created but mark it as having an error
+      }
+    } catch (partCreateErr) {
+      graphErrors.push({
+        panel_id: panelId,
+        error: `Failed to create part: ${String(partCreateErr)}`,
+      });
+    }
+  }
+
+  // Report errors if any graph creation failed
+  if (graphErrors.length > 0 && graphErrors.length === result.panel_ids.length) {
+    throwError(
+      ErrorCodes.GRAPH_INTEGRITY_ERROR,
+      `All manufacturing graphs failed to create: ${graphErrors.map(e => e.error).join('; ')}`,
+      true,
+    );
+  }
+
   const allIds = [...result.panel_ids, ...result.protrusion_ids];
   const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
@@ -2827,6 +3310,9 @@ function handleSplitBodyByBends(args: Record<string, unknown>): unknown {
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
     mesh_urls: allIds.map(id => `${meshBaseUrl}/mesh/${id}.glb`),
     shape_history: result.shape_history ?? [],
+    // New: Manufacturing graph creation results
+    created_parts: createdParts,
+    graph_creation_errors: graphErrors,
   };
 }
 
@@ -2904,6 +3390,21 @@ function handleTranslateBody(args: Record<string, unknown>): unknown {
     session.registerShell(res.solid_id);
     if (ctx.mode === 'join') {
       transactionRegistry.appendHistory(ctx.transactionId, res.shape_history ?? []);
+    }
+    // Propagate manufacturing graph: if the source shell had a graph and we're not
+    // keeping the original, move the part entry to the new shell ID and update bodyId.
+    if (!keepOriginal && _parts.has(target) && res.solid_id !== target) {
+      const graph = _parts.get(target)!;
+      const toBodyId2 = (s: string) => s as import('../manufacturing/graph/types').BodyId;
+      for (const node of graph.nodes.values()) {
+        if (node.type === 'PanelNode' &&
+            (node as import('../manufacturing/graph/types').PanelNode).bodyId === (target as import('../manufacturing/graph/types').BodyId)) {
+          (node as import('../manufacturing/graph/types').PanelNode).bodyId = toBodyId2(res.solid_id);
+          break;
+        }
+      }
+      _parts.delete(target);
+      _parts.set(res.solid_id, graph);
     }
   }
 
@@ -3318,6 +3819,55 @@ function handleListAssemblyTree(args: Record<string, unknown>): unknown {
   };
 }
 
+// ─── Part management handlers (Feature 009 multi-part support) ────────────────
+
+function handleCreatePart(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  createPart(partId);
+  return {
+    part_id: partId,
+    status: 'created',
+    is_active: true,
+  };
+}
+
+function handleSetActivePart(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  setActivePart(partId);
+  const graph = getManufacturingGraph(partId);
+  let panelCount = 0;
+  let bendCount = 0;
+  for (const node of graph.nodes.values()) {
+    if (node.type === 'PanelNode') panelCount++;
+    else if (node.type === 'BendNode') bendCount++;
+  }
+  return {
+    part_id: partId,
+    status: 'active',
+    panel_count: panelCount,
+    bend_count: bendCount,
+  };
+}
+
+function handleListParts(): unknown {
+  const parts = listParts();
+  return {
+    parts,
+    active_part_id: _activePartId ?? null,
+    total_parts: parts.length,
+  };
+}
+
+function handleDeletePart(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  deletePart(partId);
+  return {
+    part_id: partId,
+    status: 'deleted',
+    active_part_id: _activePartId ?? null,
+  };
+}
+
 // ─── Manufacturing Graph handlers (Feature 009-manufacturing-graph) ───────────
 
 async function handleBootstrapGraph(
@@ -3332,12 +3882,18 @@ async function handleBootstrapGraph(
     rootPanelIdPrefix: (args['root_panel_id_prefix'] as string | undefined),
   };
 
-  const graph = getManufacturingGraph();
+  // Create graph if not already present
+  if (!_parts.has(partId)) {
+    createPart(partId);
+  }
+
+  const graph = getManufacturingGraph(partId);
   const binding = getGraphBinding();
   const fc = getGraphFoldabilityChecker();
   const result = await bootstrapGraph(partId, graph, binding, fc, config, options);
 
   return {
+    part_id: partId,
     node_ids: result.nodeIds,
     panel_count: result.panelCount,
     bend_count: result.bendCount,
@@ -3351,6 +3907,7 @@ async function handleAddBend(
   args: Record<string, unknown>,
   config: ManufacturingConfig,
 ): Promise<unknown> {
+  const partId = requireString(args, 'part_id');
   const id = requireString(args, 'id');
   const panelAId = requireString(args, 'panel_a_id');
   const panelBId = requireString(args, 'panel_b_id');
@@ -3358,7 +3915,7 @@ async function handleAddBend(
   const angle = args['angle_deg'] as number;
   const kFactor = args['k_factor'] as number;
 
-  const graph = getManufacturingGraph();
+  const graph = getManufacturingGraph(partId);
 
   // DRC check before mutation
   const defaultMaterial = config.materials[0];
@@ -3385,7 +3942,7 @@ async function handleAddBend(
       },
     });
     if (drcResult.violations.some((v) => v.severity === 'ERROR')) {
-      return { success: false, drc_violations: drcResult.violations };
+      return { part_id: partId, success: false, drc_violations: drcResult.violations };
     }
   }
 
@@ -3405,6 +3962,7 @@ async function handleAddBend(
   const stale = graph.getStaleWarning();
 
   return {
+    part_id: partId,
     success: result.success,
     dirtied_node_ids: result.dirtiedNodeIds,
     drc_violations: result.drcViolations,
@@ -3412,8 +3970,9 @@ async function handleAddBend(
   };
 }
 
-async function handleSolveGeometry(_args: Record<string, unknown>): Promise<unknown> {
-  const graph = getManufacturingGraph();
+async function handleSolveGeometry(args: Record<string, unknown>): Promise<unknown> {
+  const partId = requireString(args, 'part_id');
+  const graph = getManufacturingGraph(partId);
   const binding = getGraphBinding();
   const outcome = await getGeometrySolver().solve(graph, binding);
 
@@ -3427,6 +3986,7 @@ async function handleSolveGeometry(_args: Record<string, unknown>): Promise<unkn
   }
 
   return {
+    part_id: partId,
     solve_id: outcome.result.solveId,
     solved_nodes: outcome.result.solvedNodes,
     invalidated_body_ids: outcome.result.invalidatedBodyIds,
@@ -3435,36 +3995,42 @@ async function handleSolveGeometry(_args: Record<string, unknown>): Promise<unkn
   };
 }
 
-function handleCheckFoldability(_args: Record<string, unknown>): unknown {
-  const graph = getManufacturingGraph();
+function handleCheckFoldability(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  const graph = getManufacturingGraph(partId);
   const result = getGraphFoldabilityChecker().check({ graph });
   return {
+    part_id: partId,
     violations: result.violations,
     panel_accessibility: result.panelAccessibility,
   };
 }
 
 function handleQueryGraph(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
   const topologicalOrder = (args['topological_order'] as boolean | undefined) ?? true;
-  const graph = getManufacturingGraph();
+  const graph = getManufacturingGraph(partId);
   const nodes = graph.queryNodes(topologicalOrder);
   const stale = graph.getStaleWarning();
   return {
+    part_id: partId,
     nodes: nodes.map((n) => ({ ...n })),
     stale_warning: stale,
     node_count: nodes.length,
   };
 }
 
-function handleResetGraph(_args: Record<string, unknown>): unknown {
-  const graph = getManufacturingGraph();
+function handleResetGraph(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
+  const graph = getManufacturingGraph(partId);
   graph.reset();
-  return { success: true, message: 'Manufacturing Graph cleared.' };
+  return { part_id: partId, success: true, message: 'Manufacturing Graph cleared.' };
 }
 
 function handleUpdateNode(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
   const id = requireString(args, 'id');
-  const graph = getManufacturingGraph();
+  const graph = getManufacturingGraph(partId);
 
   const updates: Record<string, unknown> = {};
   if (args['new_id'] !== undefined) updates['newNodeId'] = args['new_id'];
@@ -3478,6 +4044,7 @@ function handleUpdateNode(args: Record<string, unknown>): unknown {
   const stale = graph.getStaleWarning();
 
   return {
+    part_id: partId,
     success: result.success,
     new_node_id: (result as any).newNodeId ?? null,
     dirtied_node_ids: result.dirtiedNodeIds,
@@ -3486,16 +4053,18 @@ function handleUpdateNode(args: Record<string, unknown>): unknown {
 }
 
 function handleRemoveNode(args: Record<string, unknown>): unknown {
+  const partId = requireString(args, 'part_id');
   const id = requireString(args, 'id');
-  const graph = getManufacturingGraph();
+  const graph = getManufacturingGraph(partId);
   graph.removeNode(toNodeId(id));
-  return { success: true, removed_id: id };
+  return { part_id: partId, success: true, removed_id: id };
 }
 
 async function handleAddJoin(
   args: Record<string, unknown>,
   config: ManufacturingConfig,
 ): Promise<unknown> {
+  const partId = requireString(args, 'part_id');
   const id = requireString(args, 'id');
   const panelAId = requireString(args, 'panel_a_id');
   const panelBId = requireString(args, 'panel_b_id');
@@ -3542,7 +4111,7 @@ async function handleAddJoin(
       throw new Error('unreachable');
   }
 
-  const graph = getManufacturingGraph();
+  const graph = getManufacturingGraph(partId);
   const solver = getGeometrySolver();
   const drc = new DrcChecker(getGraphFoldabilityChecker());
 
@@ -3573,6 +4142,7 @@ async function handleAddJoin(
     const drcResult = drc.check(drcRequest);
     if (drcResult.violations.length > 0) {
       return {
+        part_id: partId,
         success: false,
         drc_violations: drcResult.violations,
       };
@@ -3591,6 +4161,7 @@ async function handleAddJoin(
   const stale = graph.getStaleWarning();
 
   return {
+    part_id: partId,
     success: result.success,
     node_id: id,
     dirtied_node_ids: result.dirtiedNodeIds,
@@ -3603,6 +4174,7 @@ async function handleAddCut(
   args: Record<string, unknown>,
   _config: ManufacturingConfig,
 ): Promise<unknown> {
+  const partId = requireString(args, 'part_id');
   const id = requireString(args, 'id');
   const parentPanelId = requireString(args, 'parent_panel_id');
   const profileType = requireString(args, 'profile_type') as CutProfile['type'];
@@ -3646,7 +4218,7 @@ async function handleAddCut(
       throw new Error('unreachable');
   }
 
-  const graph = getManufacturingGraph();
+  const graph = getManufacturingGraph(partId);
   const solver = getGeometrySolver();
 
   // Get panel bounds for DRC
@@ -3670,7 +4242,7 @@ async function handleAddCut(
   // DRC profile validation
   const profileViolations = validateProfile(profile, panelBounds, existingCuts);
   if (profileViolations.length > 0) {
-    return { success: false, drc_violations: profileViolations };
+    return { part_id: partId, success: false, drc_violations: profileViolations };
   }
 
   const cutNode: CutNode = {
@@ -3693,6 +4265,7 @@ async function handleAddCut(
   const stale = graph.getStaleWarning();
 
   return {
+    part_id: partId,
     success: result.success,
     node_id: id,
     dirtied_node_ids: result.dirtiedNodeIds,

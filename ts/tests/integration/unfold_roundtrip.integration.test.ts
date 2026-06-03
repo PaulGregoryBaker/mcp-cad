@@ -177,6 +177,7 @@ describe('Unfold round-trip harness', () => {
     expect(mergedId).toBeDefined();
 
     const unfold: any = await dispatchTool('apply_unfold', {
+      part_id: mergedId,
       panel_id: mergedId,
       material_id: config.materials[0]!.id,
       transaction_id: txn.transaction_id,
@@ -225,6 +226,7 @@ describe('Unfold round-trip harness', () => {
     expect(pickedPair).toBeDefined();
 
     const unfold: any = await dispatchTool('apply_unfold', {
+      part_id: mergedId,
       panel_id: mergedId,
       material_id: config.materials[0]!.id,
       transaction_id: txn.transaction_id,
@@ -350,6 +352,7 @@ describe('Unfold round-trip harness', () => {
     let unfold: any;
     try {
       unfold = await dispatchTool('apply_unfold', {
+        part_id: mergedId,
         panel_id: mergedId,
         material_id: config.materials[0]!.id,
         transaction_id: txn.transaction_id,
@@ -425,6 +428,7 @@ describe('Unfold round-trip harness', () => {
         let unfold: any;
         try {
           unfold = await dispatchTool('apply_unfold', {
+            part_id: mergedId,
             panel_id: mergedId,
             material_id: config.materials[0]!.id,
             transaction_id: txn.transaction_id,
@@ -588,6 +592,7 @@ describe('Unfold round-trip harness', () => {
     }
 
     const unfold: any = await dispatchTool('apply_unfold', {
+      part_id: mergedId,
       panel_id: mergedId,
       material_id: config.materials[0]!.id,
       transaction_id: txn.transaction_id,
