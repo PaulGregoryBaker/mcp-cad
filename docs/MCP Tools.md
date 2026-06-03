@@ -345,3 +345,39 @@ Safety Interlocking Filters: If context://intent/environmental flags the build a
 Kerf Enforcement Guardrails: Every joint creation tool automatically applies structural offset metrics retrieved dynamically from manufacturing://shop. This ensures laser-cut paths fit tightly together upon physical assembly.
 
 Automatic Assembly Verification: When a joint is synthesized, the MCP verifies that a tool (such as a rivet gun or weld torch tip) can physically reach the target region without hitting neighboring components. If access is blocked, it throws an error to force the AI to choose an alternate joining strategy.
+
+---
+
+## Manufacturing Graph Tools (Feature 009)
+
+These tools expose the Manufacturing Graph DAG — a session-scoped directed acyclic graph of `PanelNode`, `BendNode`, `JoinNode`, and `CutNode` objects that represents sheet-metal intent independently of B-Rep geometry.
+
+### `bootstrap_graph`
+Ingests an existing STEP solid (by `part_id`), calls `splitBodyByBends` to detect panels and bend zones, and populates the Manufacturing Graph with `PanelNode` + `BendNode` entries. Auto-solves geometry once at the end. Returns `rollback_token`, `panel_count`, `bend_count`, and `foldability_warnings`.
+
+### `add_bend`
+Adds a `BendNode` connecting two existing `PanelNode`s. Runs DRC (bend radius, flange width, press-brake accessibility) synchronously before any geometry call. On success, auto-solves and returns `bend_allowance_mm`, `flat_pattern_width_mm`, `rollback_token`.
+
+### `add_join`
+Adds a `JoinNode` connecting two panels with join type `FLANGE`, `TAB_SLOT`, `RIVET_PATTERN`, or `WELD_PREP`. Dispatches geometry helpers (`addTabSlot`, `chamferEdges`) as available. Returns `rollback_token`.
+
+### `add_cut`
+Adds a `CutNode` defining a cut profile (`CIRCLE`, `RECTANGLE`, `POLYGON`, or `FREEFORM`) on a parent panel. Validates profile against panel bounds, polygon validity, and overlap with existing cuts before mutating. Dispatches `createCircleWire`/`createRectWire`/`createPolyWire` + `booleanCut`. Returns `rollback_token`.
+
+### `solve_geometry`
+Explicitly triggers a geometry solve pass over all dirty nodes in topological order. Use when batching multiple mutations in a transaction to avoid repeated NAPI calls. Returns `solved_nodes`, `invalidated_body_ids`.
+
+### `check_foldability`
+Non-mutating check. Runs the `FoldabilityChecker` on the current graph and returns `PanelAccessibility[]` (`OPEN`, `CONSTRAINED`, or `INACCESSIBLE`) with `locking_bend_ids` for any inaccessible panel.
+
+### `query_graph`
+Returns all nodes in Kahn's topological order (or insertion order). Includes `dirty` flag per node, `dirty_node_ids` array, and a `GEOMETRY_STALE` warning when unsolved dirty nodes exist.
+
+### `update_node`
+Updates any field(s) on an existing node, including structural panel references and node ID rename. Re-runs acyclicity check after structural changes. Returns `rollback_token`.
+
+### `remove_node`
+Removes a node from the graph. Fails with `REMOVE_WOULD_ORPHAN_NODES` if the node is still structurally referenced by other nodes. Marks formerly-downstream nodes dirty.
+
+### `reset_graph`
+Clears the entire Manufacturing Graph (all nodes, edges, dirty state). Returns `cleared_node_count` and `cleared_body_count`.

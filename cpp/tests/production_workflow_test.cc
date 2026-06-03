@@ -6,6 +6,7 @@
 
 #include "geometry/geometry_service.hpp"
 
+#include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <STEPControl_Writer.hxx>
 #include <IFSelect_ReturnStatus.hxx>
@@ -350,6 +351,415 @@ TEST_CASE("Validation: 150x150 merged-panel DXF has no CUT overlapping BEND line
   REQUIRE(dxf.dxfContent.find("CUT")     != std::string::npos);
 
   assertNoCutOnBend(dxf.dxfContent, "150x150_merge");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regression: Panel-with-protrusion merge produces correct flat dimensions
+//
+// PanelA (174×150×T) is built by fusing a 150×150×T base with a 24×150×T
+// protrusion at its far edge — matching the user's workflow of translating an
+// inner-cube panel to align with an edge and performing a union fuse.  PanelB
+// is a plain 150×150×T panel standing up at 90° from panelA's left edge.
+//
+// Correct flat: ≈(174 + 150 + BA) × 150 mm  ≈  327 × 150 mm
+// Buggy flat:   ≈174 × 151 mm  (UV-overlap collapses both panels to one footprint)
+// ─────────────────────────────────────────────────────────────────────────────
+TEST_CASE("Regression: panel-with-protrusion merge produces correct flat dimensions",
+          "[prod][regression][protrusion]") {
+  auto svc = GeometryService::create();
+
+  // PanelA: 150×150×T base with a 24×150×T protrusion fused at x=150
+  // → combined footprint 174×150×T
+  constexpr double W = 150.0, H = 150.0, T = 1.95, P = 24.0;
+  TopoDS_Shape panelA_base  = BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), W, H, T).Shape();
+  TopoDS_Shape panelA_protr = BRepPrimAPI_MakeBox(gp_Pnt(W, 0, 0), P, H, T).Shape();
+  BRepAlgoAPI_Fuse fuseA(panelA_base, panelA_protr);
+  fuseA.Build();
+  REQUIRE(fuseA.IsDone());
+  TopoDS_Shape panelA = fuseA.Shape();
+
+  // PanelB: plain 150×150×T standing up at 90° — its bottom (z=T) touches
+  // the leftmost portion of panelA's top face, forming the bend interface.
+  TopoDS_Shape panelB = BRepPrimAPI_MakeBox(gp_Pnt(0, 0, T), T, H, W).Shape();
+
+  auto writeTmp = [](const TopoDS_Shape& s, const std::string& path) {
+    STEPControl_Writer w;
+    REQUIRE(w.Transfer(s, STEPControl_AsIs) == IFSelect_RetDone);
+    REQUIRE(w.Write(path.c_str()) == IFSelect_RetDone);
+  };
+
+  auto tmpA = (fs::temp_directory_path() / "reg_protr_panelA.stp").string();
+  auto tmpB = (fs::temp_directory_path() / "reg_protr_panelB.stp").string();
+  writeTmp(panelA, tmpA);
+  writeTmp(panelB, tmpB);
+
+  SolidId idA = svc->loadStep(tmpA);
+  SolidId idB = svc->loadStep(tmpB);
+  fs::remove(tmpA);
+  fs::remove(tmpB);
+
+  auto shellsA = svc->separateSolids(idA);
+  auto shellsB = svc->separateSolids(idB);
+  REQUIRE_FALSE(shellsA.empty());
+  REQUIRE_FALSE(shellsB.empty());
+
+  // Merge with 1 mm bend radius (matching the user's test scenario)
+  MergeBodyResult merged = svc->mergeBodiesWithBend(shellsA[0], shellsB[0], {"all"}, 1.0);
+  REQUIRE_FALSE(merged.mergedShellId.empty());
+
+  // Unfold — must produce exactly 1 bend
+  UnfoldResult unfold = svc->unfoldShell(merged.mergedShellId, 0.33);
+  REQUIRE_FALSE(unfold.unfoldId.empty());
+
+  std::cout << "[REGRESSION protrusion] flat=" << unfold.flatWidthMm
+            << "x" << unfold.flatHeightMm << "mm  bends=" << unfold.bendCount << "\n";
+  REQUIRE(unfold.bendCount == 1);
+
+  // Expected flat dimensions:
+  //   BA = (innerR + T/2) * pi/2 = (1.0 + 0.975) * 1.5708 ≈ 3.1 mm
+  //   Width  = (W + P) + W + BA = 174 + 150 + 3.1 ≈ 327 mm
+  //   Height = H = 150 mm
+  const double BA        = (1.0 + T / 2.0) * M_PI / 2.0;  // ≈3.1 mm
+  const double expWidth  = (W + P) + W + BA;               // ≈327 mm
+  const double expHeight = H;                              // 150 mm
+  const double tol       = 5.0;                            // mm
+
+  double flatMax = std::max(unfold.flatWidthMm, unfold.flatHeightMm);
+  double flatMin = std::min(unfold.flatWidthMm, unfold.flatHeightMm);
+  std::cout << "[REGRESSION protrusion] expected ≈ " << expWidth << "x" << expHeight << "mm\n";
+
+  // Both checks fail when UV-overlap collapses the flat to ~174×151 mm
+  CHECK(std::abs(flatMax - expWidth)  < tol);
+  CHECK(std::abs(flatMin - expHeight) < tol);
+
+  // DXF integrity: no CUT line may coincide with a BEND line
+  DxfExportResult dxf = svc->exportDxf(unfold.unfoldId);
+  REQUIRE_FALSE(dxf.dxfContent.empty());
+  assertNoCutOnBend(dxf.dxfContent, "protrusion_panel_merge");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regression: fuseBodies-then-bend flat pattern (service-level fuse workflow)
+//
+// Reproduces the exact MCP tool chain the UI runs:
+//   fuse_bodies([panelA_base, protrusion]) → fusedPanel
+//   merge_bodies_with_bend(fusedPanel, panelB, "all", 1.0)
+//   unfold_shell(merged)
+//
+// PanelA_base  = 150×150×T (first inner panel)
+// Protrusion   = 24×150×T  (extension translated to x=150 edge)
+// fusedPanel   = 174×150×T (combined)
+// PanelB       = 150×150×T at 90° from fusedPanel's x=0 edge
+//
+// Correct flat ≈ (174 + 150 + BA) × 150 mm.  Buggy flat ≈ 174×151 mm.
+// ─────────────────────────────────────────────────────────────────────────────
+TEST_CASE("Regression: fuseBodies-then-bend produces correct flat dimensions",
+          "[prod][regression][protrusion][fuse_bodies]") {
+  auto svc = GeometryService::create();
+
+  constexpr double W = 150.0, H = 150.0, T = 1.95, P = 24.0;
+  TopoDS_Shape base_shape  = BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), W, H, T).Shape();
+  TopoDS_Shape protr_shape = BRepPrimAPI_MakeBox(gp_Pnt(W, 0, 0), P, H, T).Shape();
+  TopoDS_Shape panelB_shp  = BRepPrimAPI_MakeBox(gp_Pnt(0, 0, T), T, H, W).Shape();
+
+  auto writeTmp = [](const TopoDS_Shape& s, const std::string& path) {
+    STEPControl_Writer w;
+    REQUIRE(w.Transfer(s, STEPControl_AsIs) == IFSelect_RetDone);
+    REQUIRE(w.Write(path.c_str()) == IFSelect_RetDone);
+  };
+
+  auto tmpBase  = (fs::temp_directory_path() / "fuse_base.stp").string();
+  auto tmpProtr = (fs::temp_directory_path() / "fuse_protr.stp").string();
+  auto tmpB     = (fs::temp_directory_path() / "fuse_panelB.stp").string();
+  writeTmp(base_shape,  tmpBase);
+  writeTmp(protr_shape, tmpProtr);
+  writeTmp(panelB_shp,  tmpB);
+
+  SolidId idBase  = svc->loadStep(tmpBase);
+  SolidId idProtr = svc->loadStep(tmpProtr);
+  SolidId idB     = svc->loadStep(tmpB);
+  fs::remove(tmpBase); fs::remove(tmpProtr); fs::remove(tmpB);
+
+  auto shellsBase  = svc->separateSolids(idBase);
+  auto shellsProtr = svc->separateSolids(idProtr);
+  auto shellsB     = svc->separateSolids(idB);
+  REQUIRE_FALSE(shellsBase.empty());
+  REQUIRE_FALSE(shellsProtr.empty());
+  REQUIRE_FALSE(shellsB.empty());
+
+  // Step 1: fuse_bodies (flat coplanar union — same code path as the MCP tool)
+  FuseResult fused = svc->fuseBodies({shellsBase[0], shellsProtr[0]}, 0.0);
+  REQUIRE_FALSE(fused.solidId.empty());
+
+  // Step 2: merge_bodies_with_bend (90° bend — same code path as the MCP tool)
+  MergeBodyResult merged = svc->mergeBodiesWithBend(fused.solidId, shellsB[0], {"all"}, 1.0);
+  REQUIRE_FALSE(merged.mergedShellId.empty());
+
+  // Step 3: unfold
+  UnfoldResult unfold = svc->unfoldShell(merged.mergedShellId, 0.33);
+  REQUIRE_FALSE(unfold.unfoldId.empty());
+
+  std::cout << "[REGRESSION fuse_bodies_then_bend] flat=" << unfold.flatWidthMm
+            << "x" << unfold.flatHeightMm << "mm  bends=" << unfold.bendCount << "\n";
+  REQUIRE(unfold.bendCount == 1);
+
+  const double BA        = (1.0 + T / 2.0) * M_PI / 2.0;  // ≈3.1 mm
+  const double expWidth  = (W + P) + W + BA;               // ≈327 mm
+  const double expHeight = H;                              // 150 mm
+  const double tol       = 5.0;
+
+  double flatMax = std::max(unfold.flatWidthMm, unfold.flatHeightMm);
+  double flatMin = std::min(unfold.flatWidthMm, unfold.flatHeightMm);
+  std::cout << "[REGRESSION fuse_bodies_then_bend] expected ≈ " << expWidth << "x" << expHeight << "mm\n";
+
+  // Both CHECKs fail when UV-overlap collapses the flat to ~174×151 mm
+  CHECK(std::abs(flatMax - expWidth)  < tol);
+  CHECK(std::abs(flatMin - expHeight) < tol);
+
+  // DXF integrity
+  DxfExportResult dxf = svc->exportDxf(unfold.unfoldId);
+  REQUIRE_FALSE(dxf.dxfContent.empty());
+  assertNoCutOnBend(dxf.dxfContent, "fuse_bodies_then_bend");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regression: testcube inner-panel + real protrusion produces correct flat
+//
+// This is the EXACT workflow the UI performs:
+//   splitBodyByBends(testcube) → panelIds, protrusionIds
+//   translateBody(protrusion[2], dx=73.6, 0, 0, keepOriginal=true)
+//   fuseBodies([panel[7], translatedProtrusion], 0.15) → 150×174mm vertical panel
+//   mergeBodiesWithBend(fusedPanel, panel[6], "all", 1.0) → 3D L-bracket
+//   unfoldShell(merged)
+//
+// Panel geometry (from splitBodyByBends):
+//   panel[7]:      x=[73.55,75], y=[-75,75],   z=[-75,75]   (right face, 1.45×150×150)
+//   protrusion[2]: x=[-0.05,1.05], y=[74.95,99.05], z=[-75.05,75.05] (1.1×24×150)
+//   panel[6]:      x=[-75,75],  y=[73.55,75],  z=[-75,75]   (top face,  150×1.45×150)
+//
+// After translation (dx≈73.6): protrusion[2] sits at x=[73.5,74.6], coplanar with panel[7]
+// After fuse:  x=[73.55,75], y=[-75,99.05], z=[-75,75]  ≈ 1.45×174×150mm
+// After merge: 3D bbox ≈ 150.1×174.1×150.1mm  — matches the UI screenshot exactly
+//
+// Correct flat: ≈ (174 + 150 + BA) × 150mm ≈ 327 × 150mm
+// Buggy flat:   ≈ 174 × 151mm  (UV-overlap; second panel not unfolded)
+// ─────────────────────────────────────────────────────────────────────────────
+TEST_CASE("Regression: testcube inner-panel with protrusion produces correct flat",
+          "[prod][regression][protrusion][testcube_workflow]") {
+  auto svc = GeometryService::create();
+
+  // Load testcube and decompose into panels
+  SolidId tcId = svc->loadStep(fixture("testcube.step"));
+  DecomposedByBendsResult split = svc->splitBodyByBends(tcId, 45.0, 2.0, 1.0, 2);
+  REQUIRE(split.panelIds.size() == 12);
+
+  // panel[7]: right inner face  x=[73.55,75], y=[-75,75],  z=[-75,75]  (1.45×150×150mm)
+  // panel[6]: top  inner face   x=[-75,75],  y=[73.55,75], z=[-75,75]  (150×1.45×150mm)
+  // Bend will be at the y≈73.55-75 junction.
+  // Protrusion must extend on the OPPOSITE side (y<-75) so the corner cut
+  // (which trims y=[73.55,75]) cannot sever the protrusion from the panel.
+  ShellId panel7 = split.panelIds[7];
+  ShellId panel6 = split.panelIds[6];
+
+  auto bbP7 = svc->computeBoundingBox(panel7);
+
+  // panel[7] dimensions
+  double T      = bbP7.xMax - bbP7.xMin;  // ≈1.45mm thickness (in X)
+  double panelY = bbP7.yMax - bbP7.yMin;  // ≈150mm
+  double panelZ = bbP7.zMax - bbP7.zMin;  // ≈150mm
+  double extLen = 24.0;  // protrusion extension length (mm)
+
+  // Create a matching-thickness protrusion box that extends panel[7] in -Y
+  // (away from the bend at y≈75, so the corner cut leaves it intact)
+  TopoDS_Shape protrBox = BRepPrimAPI_MakeBox(
+    gp_Pnt(bbP7.xMin, bbP7.yMin - extLen, bbP7.zMin), T, extLen, panelZ
+  ).Shape();
+
+  auto tmpProt = (fs::temp_directory_path() / "tc_prot2.stp").string();
+  {
+    STEPControl_Writer w;
+    REQUIRE(w.Transfer(protrBox, STEPControl_AsIs) == IFSelect_RetDone);
+    REQUIRE(w.Write(tmpProt.c_str()) == IFSelect_RetDone);
+  }
+  SolidId idProt = svc->loadStep(tmpProt);
+  fs::remove(tmpProt);
+  auto shellsProt = svc->separateSolids(idProt);
+  REQUIRE_FALSE(shellsProt.empty());
+
+  // fuse_bodies: panel[7] + protrusion → (150+24)×150mm = 174×150mm vertical panel
+  // Protrusion is at y=[-99,-75], panel at y=[-75,75].  Total y=[-99,75], span=174mm.
+  FuseResult fused = svc->fuseBodies({panel7, shellsProt[0]}, 0.15);
+  REQUIRE_FALSE(fused.solidId.empty());
+
+  auto bbFused = svc->computeBoundingBox(fused.solidId);
+  double fusedYspan = bbFused.yMax - bbFused.yMin;  // should be ≈174mm
+  std::cout << "[REGRESSION testcube_workflow] fused bbox:"
+            << " x=[" << bbFused.xMin << "," << bbFused.xMax << "]"
+            << " y=[" << bbFused.yMin << "," << bbFused.yMax << "]"
+            << " z=[" << bbFused.zMin << "," << bbFused.zMax << "]\n";
+  REQUIRE(std::abs(fusedYspan - (panelY + extLen)) < 1.0);  // ≈174mm
+
+  // merge_bodies_with_bend: fusedPanel + panel[6] (top face) at 90° with 1mm bend radius
+  MergeBodyResult merged = svc->mergeBodiesWithBend(fused.solidId, panel6, {"all"}, 1.0);
+  REQUIRE_FALSE(merged.mergedShellId.empty());
+
+  UnfoldResult unfold = svc->unfoldShell(merged.mergedShellId, 0.33);
+  REQUIRE_FALSE(unfold.unfoldId.empty());
+
+  double flatMax = std::max(unfold.flatWidthMm, unfold.flatHeightMm);
+  double flatMin = std::min(unfold.flatWidthMm, unfold.flatHeightMm);
+  std::cout << "[REGRESSION testcube_workflow] flat=" << unfold.flatWidthMm
+            << "x" << unfold.flatHeightMm << "mm  bends=" << unfold.bendCount << "\n";
+
+  REQUIRE(unfold.bendCount == 1);
+
+  // Correct flat: (panelY + extLen) + panelY + BA ≈ 174 + 150 + 2.7 ≈ 327mm × 150mm
+  // Buggy flat:   ≈ 174 × 151mm  (UV-overlap: second panel maps to same footprint as first)
+  double BA      = (1.0 + T / 2.0) * M_PI / 2.0;  // ≈2.7mm
+  double expLong = (panelY + extLen) + panelY + BA; // ≈327mm
+  const double tol = 5.0;
+
+  CHECK(std::abs(flatMax - expLong) < tol);
+  CHECK(std::abs(flatMin - panelY)  < tol);
+
+  DxfExportResult dxf = svc->exportDxf(unfold.unfoldId);
+  REQUIRE_FALSE(dxf.dxfContent.empty());
+  assertNoCutOnBend(dxf.dxfContent, "testcube_protrusion_workflow");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regression: protrusion extending toward the bend produces correct flat.
+//
+// Models the actual app workflow using testcube geometry (1mm walls throughout).
+// From the SCAD source:
+//   inner cube: 150×150×150 minus 148×148×148  → 1mm walls at ±74 to ±75
+//   flange 3:   translate([0,75,-75]) cube([1,24,150])  → x=[0,1], y=[75,99]
+//
+// The user translates flange 3 to align with the right inner wall (panel7) and
+// fuses them.  The protrusion extends toward the bend (y>74, same side as
+// panel6), NOT away from it like the earlier testcube_workflow test.
+//
+// All geometry constructed directly to match the original 1mm nominal thickness.
+// (splitBodyByBends returns 1.45mm panels which is an error; bypass it here.)
+//
+// Expected flat: panelY_main + BA + panelY_arm ≈ 174 + 2.4 + 150 ≈ 326mm × 150mm
+// Buggy flat:  ≈ 151 × 174mm  (protrusion severed by corner cut, second arm lost)
+// ─────────────────────────────────────────────────────────────────────────────
+TEST_CASE("Regression: same-side protrusion produces correct flat",
+          "[prod][regression][protrusion][real_protrusion]") {
+  auto svc = GeometryService::create();
+
+  // Geometry matching the SCAD inner cube (1mm walls):
+  //   panel7: right inner wall  x=[74,75], y=[-75,75],  z=[-75,75]  (1×150×150mm)
+  //   panel6: top  inner wall   x=[-75,75], y=[74,75],  z=[-75,75]  (150×1×150mm)
+  //   protrusion: flange 3 translated to align with panel7's x range
+  //               x=[74,75],  y=[75,99],   z=[-75,75]  (1×24×150mm)
+  //               — extends TOWARD the bend at y≈74–75
+
+  const double T   = 1.0;   // nominal wall/flange thickness (mm)
+  const double HL  = 75.0;  // inner cube half-size (mm)
+  const double EXT = 24.0;  // flange extension length (mm)
+
+  auto makeStep = [&](TopoDS_Shape shape, const std::string& tag) -> SolidId {
+    auto path = (fs::temp_directory_path() / ("rp_" + tag + ".stp")).string();
+    STEPControl_Writer w;
+    REQUIRE(w.Transfer(shape, STEPControl_AsIs) == IFSelect_RetDone);
+    REQUIRE(w.Write(path.c_str()) == IFSelect_RetDone);
+    SolidId id = svc->loadStep(path);
+    fs::remove(path);
+    auto shells = svc->separateSolids(id);
+    REQUIRE_FALSE(shells.empty());
+    return shells[0];
+  };
+
+  // panel7: x=[74,75], y=[-75,75], z=[-75,75]
+  ShellId panel7 = makeStep(
+    BRepPrimAPI_MakeBox(gp_Pnt(HL - T, -HL, -HL), T, 2*HL, 2*HL).Shape(), "p7");
+
+  // panel6: x=[-75,75], y=[74,75], z=[-75,75]
+  ShellId panel6 = makeStep(
+    BRepPrimAPI_MakeBox(gp_Pnt(-HL, HL - T, -HL), 2*HL, T, 2*HL).Shape(), "p6");
+
+  // protrusion: x=[74,75], y=[75,99], z=[-75,75]  (same side as bend)
+  ShellId prot = makeStep(
+    BRepPrimAPI_MakeBox(gp_Pnt(HL - T, HL, -HL), T, EXT, 2*HL).Shape(), "pr");
+
+  auto bbP7 = svc->computeBoundingBox(panel7);
+  auto bbP6 = svc->computeBoundingBox(panel6);
+  auto bbPr = svc->computeBoundingBox(prot);
+  std::cout << "[REGRESSION real_protrusion] panel7 x=[" << bbP7.xMin << "," << bbP7.xMax
+            << "] y=[" << bbP7.yMin << "," << bbP7.yMax << "]\n";
+  std::cout << "[REGRESSION real_protrusion] panel6 y=[" << bbP6.yMin << "," << bbP6.yMax
+            << "] x=[" << bbP6.xMin << "," << bbP6.xMax << "]\n";
+  std::cout << "[REGRESSION real_protrusion] prot   x=[" << bbPr.xMin << "," << bbPr.xMax
+            << "] y=[" << bbPr.yMin << "," << bbPr.yMax << "]\n";
+
+  // fuse panel7 + protrusion → flat plate x=[74,75], y=[-75,99] (1×174×150mm)
+  FuseResult fused = svc->fuseBodies({panel7, prot}, 0.15);
+  REQUIRE_FALSE(fused.solidId.empty());
+
+  auto bbFused = svc->computeBoundingBox(fused.solidId);
+  std::cout << "[REGRESSION real_protrusion] fused bbox:"
+            << " x=[" << bbFused.xMin << "," << bbFused.xMax << "]"
+            << " y=[" << bbFused.yMin << "," << bbFused.yMax << "]"
+            << " z=[" << bbFused.zMin << "," << bbFused.zMax << "]\n";
+  REQUIRE(std::abs((bbFused.yMax - bbFused.yMin) - (2*HL + EXT)) < 1.0); // ≈174mm
+
+  // merge fused panel + panel6 at 90° with 1mm bend radius
+  MergeBodyResult merged = svc->mergeBodiesWithBend(fused.solidId, panel6, {"all"}, 1.0);
+  REQUIRE_FALSE(merged.mergedShellId.empty());
+
+  UnfoldResult unfold = svc->unfoldShell(merged.mergedShellId, 0.33);
+  REQUIRE_FALSE(unfold.unfoldId.empty());
+
+  double flatMax = std::max(unfold.flatWidthMm, unfold.flatHeightMm);
+  double flatMin = std::min(unfold.flatWidthMm, unfold.flatHeightMm);
+  std::cout << "[REGRESSION real_protrusion] flat=" << unfold.flatWidthMm
+            << "x" << unfold.flatHeightMm << "mm  bends=" << unfold.bendCount << "\n";
+
+  REQUIRE(unfold.bendCount == 1);
+
+  // Expected flat:
+  //   arm A total (panel + protrusion): 150 + 24 = 174mm
+  //   arm B (panel6): 150mm
+  //   bend allowance (R=1, t=1): (1 + 0.5) * π/2 ≈ 2.36mm
+  //   total long side ≈ 174 + 150 + 2.36 ≈ 326mm
+  double BA      = (1.0 + T / 2.0) * M_PI / 2.0;
+  double expLong = (2*HL + EXT) + 2*HL + BA;  // ≈326mm
+  const double tol = 10.0;
+
+  CHECK(std::abs(flatMax - expLong) < tol);
+  CHECK(std::abs(flatMin - 2*HL)   < tol);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Diagnostic: print bboxes of testcube split panels and protrusions
+// Tag [diag] so it can be run in isolation when needed; not part of CI.
+// ─────────────────────────────────────────────────────────────────────────────
+TEST_CASE("Diag: print testcube panel and protrusion bounding boxes",
+          "[diag][testcube_bbox]") {
+  auto svc = GeometryService::create();
+  SolidId tcId = svc->loadStep(fixture("testcube.step"));
+  DecomposedByBendsResult split = svc->splitBodyByBends(tcId, 45.0, 2.0, 1.0, 2);
+
+  std::cout << "\n=== TESTCUBE PANELS (" << split.panelIds.size() << ") ===\n";
+  for (size_t i = 0; i < split.panelIds.size(); ++i) {
+    auto bb = svc->computeBoundingBox(split.panelIds[i]);
+    std::cout << "  panel[" << i << "] x=[" << bb.xMin << "," << bb.xMax << "]"
+              << " y=[" << bb.yMin << "," << bb.yMax << "]"
+              << " z=[" << bb.zMin << "," << bb.zMax << "]\n";
+  }
+
+  std::cout << "\n=== TESTCUBE PROTRUSIONS (" << split.protrusionIds.size() << ") ===\n";
+  for (size_t i = 0; i < split.protrusionIds.size(); ++i) {
+    auto bb = svc->computeBoundingBox(split.protrusionIds[i]);
+    std::cout << "  protrusion[" << i << "] x=[" << bb.xMin << "," << bb.xMax << "]"
+              << " y=[" << bb.yMin << "," << bb.yMax << "]"
+              << " z=[" << bb.zMin << "," << bb.zMax << "]\n";
+  }
+
+  // Always pass — this is a diagnostic only
+  SUCCEED("Bounding box dump complete");
 }
 
 

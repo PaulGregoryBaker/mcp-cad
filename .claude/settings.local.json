@@ -3,7 +3,37 @@
     "allow": [
       "Bash(npx tsc *)",
       "Bash(npm test *)",
-      "PowerShell(Get-ChildItem -Path \"c:\\\\Projects\\\\mcp-cad\\\\cpp\\\\tests\" -Force 2>$null | Select-Object Name, @{Name=\"Type\";Expression={if\\($_.PSIsContainer\\){\"Directory\"}else{\"File\"}}})"
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Projects\\\\mcp-cad\\\\cpp\\\\tests\" -Force 2>$null | Select-Object Name, @{Name=\"Type\";Expression={if\\($_.PSIsContainer\\){\"Directory\"}else{\"File\"}}})",
+      "Bash(Debug/geometry_tests.exe \"[us1][corner_cycle]\" \"[us1][rotation_invariance]\" \"[us1][testcube_merge_dxf]\")",
+      "PowerShell(cmake --build c:\\\\Projects\\\\mcp-cad\\\\cpp\\\\build --config Debug --target geometry_tests 2>&1)",
+      "PowerShell(cmake --build c:\\\\Projects\\\\mcp-cad\\\\cpp\\\\build --config Release 2>&1)",
+      "PowerShell(cmake --build c:\\\\Projects\\\\mcp-cad\\\\cpp\\\\build --config Release --target geometry_addon 2>&1)",
+      "Read(//c/Projects/Form.AI.tion/lib/mcp/tools/**)",
+      "Bash(grep -n \"FlatPattern\\\\|bendSchedule\\\\|flatWidthMm\\\\|ApplyUnfoldResult\\\\|apply_unfold\\\\|svgData\" c:/Projects/Form.AI.tion/lib/core/providers/mcp_session_provider.dart | head -30)",
+      "Read(//c/Projects/Form.AI.tion/lib/core/providers/**)",
+      "Read(//c/Projects/Form.AI.tion/lib/core/models/**)",
+      "Bash(cmake --build build --config Release --target geometry_addon)",
+      "Read(//c/Projects/Form.AI.tion/lib/features/workspace/widgets/**)",
+      "Bash(cmake --build cpp/build --config Release)",
+      "PowerShell(C:\\\\Projects\\\\mcp-cad\\\\cpp\\\\build\\\\Release\\\\geometry_tests.exe 2>&1)",
+      "Bash(cmake --build . --config Release)",
+      "Bash(ctest -C Release --output-on-failure)",
+      "Bash(ctest -C Release --output-on-failure -R \"Determinism\")",
+      "Bash(ctest -C Release --output-on-failure -R \"simple_box\")",
+      "Bash(./Release/geometry_tests.exe --gtest_filter=\"*Determinism*simple_box*\")",
+      "Bash(./Release/geometry_tests.exe)",
+      "PowerShell(Get-Process -Name \"node\" -ErrorAction SilentlyContinue)",
+      "PowerShell(Stop-Process -Force -ErrorAction SilentlyContinue)",
+      "Bash(./Release/geometry_tests.exe \"[testcube_unfold]\")",
+      "Bash(cmake --build . --config Release --target geometry_addon)",
+      "Read(//tmp/**)",
+      "Bash(npx vitest *)"
+    ],
+    "additionalDirectories": [
+      "c:\\Projects\\Form.AI.tion\\lib\\mcp\\tools",
+      "c:\\Projects\\Form.AI.tion\\lib\\core\\models",
+      "c:\\Projects\\Form.AI.tion\\lib\\core\\providers",
+      "\\tmp"
     ]
   }
 }

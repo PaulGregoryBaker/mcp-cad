@@ -99,6 +99,14 @@ tooling:
     punch_radii_mm: [0.5, 1.0, 2.0, 3.0]
   laser:
     max_kerf_width_mm: 0.15
+
+## Manufacturing Graph (`graph:`)
+
+Controls the behaviour of the Manufacturing Graph DAG engine introduced in Feature 009.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `graph.coplanarity_threshold_deg` | float | `1.0` | Dihedral angle threshold (degrees) below which two adjacent panels are merged into a single flat `PanelNode` rather than connected by a `BendNode`. Increase to tolerate slightly non-planar model imports. |
     min_hole_diameter_mm: 1.5
 
 logistics:

@@ -48,6 +48,7 @@ describe('SYS-JTBD-01 Full Decompose System Integration', () => {
 
     // 4. apply_unfold
     const unfold1 = await dispatchTool('apply_unfold', {
+      part_id: decompose.panel_ids[0],
         panel_id: decompose.panel_ids[0],
         material_id: config.materials[0]!.id,
     }, config) as any;
@@ -55,6 +56,7 @@ describe('SYS-JTBD-01 Full Decompose System Integration', () => {
     expect(unfold1.flat_height_mm).toBeGreaterThan(0);
 
     const unfold2 = await dispatchTool('apply_unfold', {
+      part_id: decompose.panel_ids[0],
         panel_id: decompose.panel_ids[0],
         material_id: config.materials[0]!.id,
     }, config) as any;

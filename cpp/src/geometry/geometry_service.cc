@@ -2748,7 +2748,51 @@ public:
         history.insert(history.end(), h1.begin(), h1.end());
         history.insert(history.end(), h2.begin(), h2.end());
 
+        // BRepAlgoAPI_Fuse returns a COMPOUND wrapper even when the result is
+        // a single connected solid. Downstream ops (mergeBodiesWithBend's fuse
+        // step) behave differently when the input is COMPOUND vs SOLID and can
+        // produce spurious multi-solid results from the corner-cut step. Unwrap
+        // to the bare solid here so the stored shape is always a proper SOLID.
+        if (nextShape.ShapeType() != TopAbs_SOLID) {
+          TopoDS_Solid theSolid;
+          int unwrapCount = 0;
+          for (TopExp_Explorer ex(nextShape, TopAbs_SOLID); ex.More(); ex.Next()) {
+            theSolid = TopoDS::Solid(ex.Current());
+            unwrapCount++;
+          }
+          if (unwrapCount == 1) {
+            nextShape = theSolid;
+          }
+        }
+
         currentShape = nextShape;
+      }
+
+      // Merge coplanar face fragments left by BRepAlgoAPI_Fuse (unifyFaces=true,
+      // unifyEdges=false). Unifying faces removes the seam at the junction so
+      // downstream splitBodyByBends face-pair matching sees clean inner/outer
+      // wall pairs. unifyEdges must be false: merging C1-tangent arc-to-plane
+      // boundary edges creates phantom inner faces at the wrong depth (z=74
+      // instead of z=75), which defeats unfold cycle detection.
+      {
+        ShapeUpgrade_UnifySameDomain fuseUnifier(currentShape,
+            Standard_False,  // unifyEdges  = false
+            Standard_True,   // unifyFaces  = true
+            Standard_False); // concatBSplines
+        fuseUnifier.Build();
+        TopoDS_Shape unified = fuseUnifier.Shape();
+        if (!unified.IsNull()) {
+          if (unified.ShapeType() != TopAbs_SOLID) {
+            int uCount = 0;
+            TopoDS_Solid uSolid;
+            for (TopExp_Explorer ex(unified, TopAbs_SOLID); ex.More(); ex.Next()) {
+              uSolid = TopoDS::Solid(ex.Current());
+              uCount++;
+            }
+            if (uCount == 1) unified = uSolid;
+          }
+          currentShape = unified;
+        }
       }
 
       for (const auto& id : tools) {
@@ -5474,12 +5518,10 @@ private:
 
       TopTools_IndexedMapOfShape faceMapInput;
       TopExp::MapShapes(shape, TopAbs_FACE, faceMapInput);
-      std::cout << "[DEBUG decomposition] Face count BEFORE early unification: " << faceMapInput.Extent() << std::endl;
 
       // US1: Facet Unification Pass - Merge adjacent coplanar/planar triangular facets
       // of complex segmented models (like cauldron.step) before decomposition
       try {
-        std::cout << "[DEBUG unifier] Running ShapeUpgrade_UnifySameDomain on input shape..." << std::endl;
         ShapeUpgrade_UnifySameDomain unifier(shape, Standard_True, Standard_True, Standard_True);
         double angTolRad = angleThresholdDeg * M_PI / 180.0;
         if (angTolRad < 1e-6) angTolRad = 0.0087; // default 0.5 degrees
@@ -5489,16 +5531,10 @@ private:
         TopoDS_Shape unifiedShape = unifier.Shape();
         if (!unifiedShape.IsNull()) {
           shape = unifiedShape;
-          std::cout << "[DEBUG unifier] Unification succeeded!" << std::endl;
-        } else {
-          std::cout << "[DEBUG unifier] Unification returned null shape!" << std::endl;
         }
-      } catch (const Standard_Failure& e) {
-        std::cout << "[DEBUG unifier] Standard_Failure during early unification: " << e.GetMessageString() << std::endl;
-      } catch (const std::exception& e) {
-        std::cout << "[DEBUG unifier] std::exception during early unification: " << e.what() << std::endl;
+      } catch (const Standard_Failure&) {
+      } catch (const std::exception&) {
       } catch (...) {
-        std::cout << "[DEBUG unifier] Unknown exception during early unification" << std::endl;
       }
 
       std::string mode = detectObjectMode(shape, maxThicknessMm);
@@ -5519,10 +5555,6 @@ private:
         }
       }
       
-      std::cout << "[DEBUG decomposition] Face count after early unification: " << faceMapPre.Extent() << std::endl;
-      std::cout << "[DEBUG decomposition] Face types: Planes=" << planeCount << ", Cylinders=" << cylCount << ", Others=" << otherCount << std::endl;
-      std::cout << "[DEBUG decomposition] Detected mode: " << mode << std::endl;
-
       // Build face groups now (needed for protrusion detection).
       // For surface mode isOuter classification is irrelevant; pass dummy centroid.
       gp_Pnt solidCentroid(0, 0, 0);
@@ -5532,7 +5564,6 @@ private:
         solidCentroid = vp.CentreOfMass();
       }
       auto faceGroupsPre = buildFaceGroups(shape, faceMapPre, angleThresholdDeg, solidCentroid);
-      std::cout << "[DEBUG decomposition] Number of face groups pre-decomposition: " << faceGroupsPre.size() << std::endl;
 
       // Compute the original solid's tight bounding box via vertex iteration.
       // BRepBndLib::Add is NOT used here: for STEP-imported shapes it samples the
@@ -6333,7 +6364,7 @@ private:
           std::ostringstream msg;
           msg << "GE_MERGE_FILLET_FAILED: Fused result is not a single solid "
               << "(solids=" << solidCount << ", freeShells=" << freeShells
-              << "). Cannot fillet ÔÇö the input bodies likely don't form a clean joint.";
+              << "). Cannot fillet — the input bodies likely don't form a clean joint.";
           throw GeometryError("GE_MERGE_FILLET_FAILED", msg.str(), true, "rollback");
         }
         filletInput = theSolid;
@@ -6570,8 +6601,30 @@ private:
               true, "rollback");
           }
           result = applyOuterOp.Shape();
+          // Post-cut cleanup: BRepAlgoAPI_Cut can leave tiny artifact solids at
+          // near-degenerate corners when the cut-box edge exactly coincides with
+          // a seam face of a previously-fused input (e.g. panel+protrusion merged
+          // before this merge step). Discard solids whose volume is <1% of the
+          // largest — these are numerical artifacts from the Boolean op, not
+          // real material.
+          {
+            TopoDS_Solid largestSolid;
+            double largestVol = -1.0;
+            int solidCnt = 0;
+            for (TopExp_Explorer ex(result, TopAbs_SOLID); ex.More(); ex.Next()) {
+              TopoDS_Solid s = TopoDS::Solid(ex.Current());
+              GProp_GProps gp;
+              BRepGProp::VolumeProperties(s, gp);
+              double vol = std::abs(gp.Mass());
+              solidCnt++;
+              if (vol > largestVol) { largestVol = vol; largestSolid = s; }
+            }
+            if (solidCnt > 1 && !largestSolid.IsNull()) {
+              result = largestSolid;
+            }
+          }
         } else {
-          // ÔöÇÔöÇ EXPLICIT EDGES PATH (back-compat) ÔöÇÔöÇ
+          // ─── EXPLICIT EDGES PATH (back-compat) ───
           // Caller supplied specific edge IDs; use OCCT MakeFillet to fillet
           // exactly those. Less robust than the deterministic path, but the
           // caller has specified which edges they want.

@@ -85,6 +85,7 @@ describe('SYS-JTBD-03 Unfold and Score Integration', () => {
       // 3. apply_unfold
       try {
         unfold = await dispatchTool('apply_unfold', {
+          part_id: panelId,
           panel_id: panelId,
           material_id: config.materials[0]!.id,
         }, config) as any;
