@@ -129,6 +129,14 @@ export const configJsonSchema = {
         outdoor_exposed: { type: 'boolean' },
       },
     },
+
+    graph: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        coplanarity_threshold_deg: { type: 'number', exclusiveMinimum: 0 },
+      },
+    },
   },
 } as const;
 

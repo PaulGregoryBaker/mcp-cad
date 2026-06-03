@@ -59,6 +59,13 @@ logistics:
     max_length_mm: 2000
     max_width_mm: 1000
 
+# Manufacturing Graph settings (Feature 009-manufacturing-graph)
+graph:
+  # Dihedral angle threshold below which two adjacent panels are merged into a single
+  # flat PanelNode (flat extension) rather than connected by a BendNode.
+  # Default: 1.0 degrees.
+  coplanarity_threshold_deg: 1.0
+
 environmental:
   fire_rated: false
   marine_grade: false
