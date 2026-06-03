@@ -73,6 +73,7 @@ describe('MCP Phase B integration', () => {
     const unfold = (await dispatchTool(
       'apply_unfold',
       {
+        part_id: decompose.panel_ids[0],
         panel_id: decompose.panel_ids[0],
         material_id: cfg.materials[0]!.id,
       },

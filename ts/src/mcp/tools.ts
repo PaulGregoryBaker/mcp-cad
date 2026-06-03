@@ -1947,6 +1947,22 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
   if (!_parts.has(partId)) {
     const graph = createPart(partId);
     const toBodyId = (s: string): import('../manufacturing/graph/types').BodyId => s as import('../manufacturing/graph/types').BodyId;
+    // Try to compute flat dimensions from C++ bbox so getFlatPatternDimensions
+    // can succeed for parts that weren't created via split_body_by_bends.
+    let shimFlatWidth: number | null = null;
+    let shimFlatHeight: number | null = null;
+    try {
+      const bbox = getGeometryBinding().computeBoundingBox(panelId);
+      const dims = [
+        bbox.x_max - bbox.x_min,
+        bbox.y_max - bbox.y_min,
+        bbox.z_max - bbox.z_min,
+      ].sort((a, b) => a - b);
+      shimFlatWidth  = dims[2] ?? null;
+      shimFlatHeight = dims[1] ?? null;
+    } catch {
+      // non-fatal: fallback to null (will fail at getFlatPatternDimensions)
+    }
     graph.addNode({
       type: 'PanelNode',
       id: toNodeId(panelId),
@@ -1954,8 +1970,8 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
       dirty: true,  // Mark as dirty so solver can validate & process the shell
       materialType: 'default',
       nominalThickness: 1.0,
-      flatWidth: null,
-      flatHeight: null,
+      flatWidth: shimFlatWidth,
+      flatHeight: shimFlatHeight,
     });
   }
 
@@ -1965,13 +1981,20 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
   let panelNode: import('../manufacturing/graph/types').PanelNode | undefined;
   const panelNodeId = panelId as import('../manufacturing/graph/types').NodeId;
   const panelBodyId = panelId as import('../manufacturing/graph/types').BodyId;
+  // First pass: exact node-id match (preferred — panel_id is a stable graph identifier).
   for (const node of graph.nodes.values()) {
-    if (
-      node.type === 'PanelNode' &&
-      (node.id === panelNodeId || node.bodyId === panelBodyId)
-    ) {
+    if (node.type === 'PanelNode' && node.id === panelNodeId) {
       panelNode = node as import('../manufacturing/graph/types').PanelNode;
       break;
+    }
+  }
+  // Second pass fallback: bodyId match (for callers that pass a raw shell UUID as panel_id).
+  if (!panelNode) {
+    for (const node of graph.nodes.values()) {
+      if (node.type === 'PanelNode' && node.bodyId === panelBodyId) {
+        panelNode = node as import('../manufacturing/graph/types').PanelNode;
+        break;
+      }
     }
   }
 
@@ -2613,54 +2636,85 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
   const graphB = getManufacturingGraph(partBId);
   const toBodyId = (s: string) => s as import('../manufacturing/graph/types').BodyId;
 
-  // Find the root PanelNode in each graph (first PanelNode found, by bodyId match then fallback)
+  // Find the representative PanelNode in each graph using a two-pass lookup:
+  //   Pass 1: match by node.id === partId (finds the "output" node in a merged graph,
+  //           where nodeBId = partAId so that apply_unfold also locates it correctly)
+  //   Pass 2: match by bodyId === partId (handles single-panel split graphs)
+  //   Fallback: first PanelNode found
   let panelNodeA: import('../manufacturing/graph/types').PanelNode | undefined;
   for (const node of graphA.nodes.values()) {
-    if (node.type === 'PanelNode') {
-      const pn = node as import('../manufacturing/graph/types').PanelNode;
-      if (pn.bodyId === toBodyId(partAId)) { panelNodeA = pn; break; }
-      if (!panelNodeA) panelNodeA = pn;
+    if (node.type === 'PanelNode' && node.id === (partAId as import('../manufacturing/graph/types').NodeId)) {
+      panelNodeA = node as import('../manufacturing/graph/types').PanelNode;
+      break;
+    }
+  }
+  if (!panelNodeA) {
+    for (const node of graphA.nodes.values()) {
+      if (node.type === 'PanelNode') {
+        const pn = node as import('../manufacturing/graph/types').PanelNode;
+        if (pn.bodyId === toBodyId(partAId)) { panelNodeA = pn; break; }
+        if (!panelNodeA) panelNodeA = pn;
+      }
     }
   }
   let panelNodeB: import('../manufacturing/graph/types').PanelNode | undefined;
   for (const node of graphB.nodes.values()) {
-    if (node.type === 'PanelNode') {
-      const pn = node as import('../manufacturing/graph/types').PanelNode;
-      if (pn.bodyId === toBodyId(partBId)) { panelNodeB = pn; break; }
-      if (!panelNodeB) panelNodeB = pn;
+    if (node.type === 'PanelNode' && node.id === (partBId as import('../manufacturing/graph/types').NodeId)) {
+      panelNodeB = node as import('../manufacturing/graph/types').PanelNode;
+      break;
+    }
+  }
+  if (!panelNodeB) {
+    for (const node of graphB.nodes.values()) {
+      if (node.type === 'PanelNode') {
+        const pn = node as import('../manufacturing/graph/types').PanelNode;
+        if (pn.bodyId === toBodyId(partBId)) { panelNodeB = pn; break; }
+        if (!panelNodeB) panelNodeB = pn;
+      }
     }
   }
 
+  // Use the actual current shell UUIDs for the C++ geometry call.
+  // After translate_body, panelNode.bodyId may differ from the part_id key in _parts.
+  const shellAId = panelNodeA?.bodyId ?? (partAId as import('../manufacturing/graph/types').BodyId);
+  const shellBId = panelNodeB?.bodyId ?? (partBId as import('../manufacturing/graph/types').BodyId);
+
   const ctx = resolveTransactionContext(args);
-  const result = getGeometryBinding().mergeBodiesWithBend(partAId, partBId, targetEdges, bendRadius as number);
+  const result = getGeometryBinding().mergeBodiesWithBend(shellAId as string, shellBId as string, targetEdges, bendRadius as number);
   session.registerShell(result.mergedShellId);
   if (ctx.mode === 'join') {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
-  // Create a new manufacturing graph for the merged shell.
-  // The merged shell ID becomes the new part ID (consistent with split_body_by_bends approach).
-  // Link together the two source panels with a BendNode.
+  // Build the merged manufacturing graph under partAId as the stable key.
+  // partAId is the caller's handle that persists across geometry mutations,
+  // so using it as the merged part_id keeps the ID stable for the UI.
   const nodeAId = toNodeId(`panel-a-${partAId.substring(0, 8)}`);
-  const nodeBId = toNodeId(`panel-b-${partBId.substring(0, 8)}`);
-  const bendId  = toNodeId(`bend-${result.mergedShellId.substring(0, 8)}`);
+  // nodeBId equals partAId so that apply_unfold(panel_id: partAId) finds this node by id.
+  const nodeBId = toNodeId(partAId);
+  const bendId  = toNodeId(`bend-${partAId.substring(0, 8)}`);
 
-  const mergedPartId = result.mergedShellId; // Use merged shell as part ID
-  const mergedGraph = createPart(mergedPartId);
-  
-  // Copy panel A node
+  // Remove old graphs for both parts, then create merged graph at the stable partAId key.
+  _parts.delete(partAId);
+  _parts.delete(partBId);
+  if (_activePartId === partAId || _activePartId === partBId) _activePartId = undefined;
+  const mergedGraph = createPart(partAId);
+  const mergedPartId = partAId; // Stable: same as the caller's part_a_id input
+
+  // Copy panel A node (upstream panel, retains its original body UUID)
   mergedGraph.addNode({
     type: 'PanelNode',
     id: nodeAId,
-    bodyId: toBodyId(partAId),
+    bodyId: shellAId,
     dirty: false,
     materialType: panelNodeA?.materialType ?? 'default',
     nominalThickness: panelNodeA?.nominalThickness ?? 1.0,
     flatWidth: panelNodeA?.flatWidth ?? null,
     flatHeight: panelNodeA?.flatHeight ?? null,
   });
-  
-  // Copy panel B node (but with merged shell as bodyId so lookup works)
+
+  // Panel B node holds the merged shell UUID as its bodyId.
+  // Its node id equals partAId so apply_unfold(panel_id: partAId) resolves to this node.
   mergedGraph.addNode({
     type: 'PanelNode',
     id: nodeBId,
@@ -2671,7 +2725,7 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
     flatWidth: panelNodeB?.flatWidth ?? null,
     flatHeight: panelNodeB?.flatHeight ?? null,
   });
-  
+
   // Create BendNode connecting the two panels
   mergedGraph.addNode({
     type: 'BendNode',
@@ -2688,7 +2742,7 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
   const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     merged_shell_id: result.mergedShellId,
-    merged_part_id: mergedPartId, // New manufacturing graph part created for merged shell
+    merged_part_id: mergedPartId, // Stable: equals part_a_id input — use this for apply_unfold
     part_a_id: partAId,
     graphs_merged: true,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
@@ -3239,6 +3293,13 @@ function handleSplitBodyByBends(args: Record<string, unknown>): unknown {
       // Use the shell ID directly as the part ID so merge_bodies_with_bend
       // can look up the graph using the shell ID (no translation needed).
       const partId = panelId;
+      // If a stale graph entry exists for this UUID (e.g. from a previous
+      // merge that was later rolled back and the C++ engine reused the UUID),
+      // overwrite it with a fresh graph rather than failing silently.
+      if (_parts.has(partId)) {
+        _parts.delete(partId);
+        if (_activePartId === partId) _activePartId = undefined;
+      }
       createPart(partId);
       const graph = getManufacturingGraph(partId);
       
@@ -3393,7 +3454,8 @@ function handleTranslateBody(args: Record<string, unknown>): unknown {
       transactionRegistry.appendHistory(ctx.transactionId, res.shape_history ?? []);
     }
     // Propagate manufacturing graph: if the source shell had a graph and we're not
-    // keeping the original, move the part entry to the new shell ID and update bodyId.
+    // keeping the original, update the PanelNode's bodyId to the new shell UUID.
+    // The _parts key (part_id) stays stable — only the internal bodyId reference is updated.
     if (!keepOriginal && _parts.has(target) && res.solid_id !== target) {
       const graph = _parts.get(target)!;
       const toBodyId2 = (s: string) => s as import('../manufacturing/graph/types').BodyId;
@@ -3404,8 +3466,7 @@ function handleTranslateBody(args: Record<string, unknown>): unknown {
           break;
         }
       }
-      _parts.delete(target);
-      _parts.set(res.solid_id, graph);
+      // Do NOT remap _parts key — part_id is stable across geometry mutations.
     }
   }
 

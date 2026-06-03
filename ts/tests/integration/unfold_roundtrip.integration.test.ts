@@ -163,7 +163,7 @@ describe('Unfold round-trip harness', () => {
           transaction_id: txn.transaction_id,
         }, config);
         if (m?.merged_shell_id) {
-          mergedId = m.merged_shell_id;
+          mergedId = m.merged_part_id; // stable: equals part_a_id input
           break;
         }
       } catch (e) {
@@ -210,7 +210,7 @@ describe('Unfold round-trip harness', () => {
           transaction_id: txn.transaction_id,
         }, config);
         if (m?.merged_shell_id) {
-          mergedId = m.merged_shell_id;
+          mergedId = m.merged_part_id; // stable: equals part_a_id input
           pickedPair = [outer[0]!, outer[i]!];
           break;
         }
@@ -285,11 +285,11 @@ describe('Unfold round-trip harness', () => {
     // overlap but fillet can't find a usable seam).  The split_by_bends
     // corner-overlap behaviour now gives the latter.
     await expect(dispatchTool('merge_bodies_with_bend', {
-      part_a_id: ab.merged_shell_id, part_b_id: pC.id,
+      part_a_id: ab.merged_part_id, part_b_id: pC.id,
       target_edges: ['all'], bend_radius: 0.3,
       transaction_id: txn.transaction_id,
     }, config)).rejects.toMatchObject({
-      code: expect.stringMatching(/^GE_MERGE_(FAILED|FILLET_FAILED|NO_SEAM_EDGES|THICKNESS_MISMATCH|BEND_AXIS_AMBIGUOUS|BEND_EXTENT_TOO_SHORT)$/),
+      code: expect.stringMatching(/^GE_MERGE_(FAILED|FILLET_FAILED|NO_SEAM_EDGES|THICKNESS_MISMATCH|BEND_AXIS_AMBIGUOUS|BEND_EXTENT_TOO_SHORT|GAP)$/),
     });
 
 
@@ -334,11 +334,11 @@ describe('Unfold round-trip harness', () => {
     let mergeError: unknown;
     try {
       const m: any = await dispatchTool('merge_bodies_with_bend', {
-        part_a_id: pA.id, part_b_id: movedB,
+        part_a_id: pA.id, part_b_id: pB.id, // stable part_id; actual shell UUID resolved internally
         target_edges: ['all'], bend_radius: 0.3,
         transaction_id: txn.transaction_id,
       }, config);
-      mergedId = m?.merged_shell_id;
+      mergedId = m?.merged_part_id; // stable: equals pA.id
     } catch (e) {
       mergeError = e;
     }
@@ -415,7 +415,7 @@ describe('Unfold round-trip harness', () => {
             target_edges: ['all'], bend_radius: 0.3,
             transaction_id: txn.transaction_id,
           }, config);
-          mergedId = m?.merged_shell_id;
+          mergedId = m?.merged_part_id; // stable: equals pA.id
         } catch (e) {
           failures.push({ cube: cube.label, pairIdx: i, reason: 'merge_threw', got: (e as { code?: string; message?: string }) });
           continue;
@@ -579,11 +579,11 @@ describe('Unfold round-trip harness', () => {
     let mergeError: unknown;
     try {
       const m: any = await dispatchTool('merge_bodies_with_bend', {
-        part_a_id: pA!.id, part_b_id: movedB,
+        part_a_id: pA!.id, part_b_id: pB!.id, // stable part_id; actual shell UUID resolved internally
         target_edges: ['all'], bend_radius: 0.3,
         transaction_id: txn.transaction_id,
       }, config);
-      mergedId = m?.merged_shell_id;
+      mergedId = m?.merged_part_id; // stable: equals pA!.id
     } catch (e) { mergeError = e; }
 
     if (!mergedId) {
@@ -592,7 +592,7 @@ describe('Unfold round-trip harness', () => {
     }
 
     const unfold: any = await dispatchTool('apply_unfold', {
-      part_id: mergedId,
+      part_id: mergedId,   // stable merged_part_id = pA!.id
       panel_id: mergedId,
       material_id: config.materials[0]!.id,
       transaction_id: txn.transaction_id,
@@ -661,11 +661,11 @@ describe('Unfold round-trip harness', () => {
     expect(ab?.merged_shell_id).toBeDefined();
 
     await expect(dispatchTool('merge_bodies_with_bend', {
-      part_a_id: ab.merged_shell_id, part_b_id: pC!.id,
+      part_a_id: ab.merged_part_id, part_b_id: pC!.id, // stable: equals pA!.id
       target_edges: ['all'], bend_radius: 0.3,
       transaction_id: txn.transaction_id,
     }, config)).rejects.toMatchObject({
-      code: expect.stringMatching(/^GE_MERGE_(FAILED|FILLET_FAILED|NO_SEAM_EDGES|THICKNESS_MISMATCH|BEND_AXIS_AMBIGUOUS|BEND_EXTENT_TOO_SHORT)$/),
+      code: expect.stringMatching(/^GE_MERGE_(FAILED|FILLET_FAILED|NO_SEAM_EDGES|THICKNESS_MISMATCH|BEND_AXIS_AMBIGUOUS|BEND_EXTENT_TOO_SHORT|GAP)$/),
     });
 
     await dispatchTool('rollback_transaction', { transaction_id: txn.transaction_id }, config);
