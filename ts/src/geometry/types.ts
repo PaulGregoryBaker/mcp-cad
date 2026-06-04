@@ -403,6 +403,7 @@ export interface SplitBodyByBendsResult {
   detected_mode: string;
   rollback_token: string;
   shape_history?: ShapeHistoryRecord[];
+  split_pairs: Array<[string, string]>;
 }
 
 export interface RemoveProtrusionsResult {

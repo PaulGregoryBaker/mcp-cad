@@ -256,6 +256,7 @@ struct DecomposedByBendsResult {
   SnapshotId                    rollbackToken;
   std::string                   detectedMode;       // "surface" | "thin_solid"
   std::vector<ShapeHistoryRecord> shapeHistory;     // face-level lineage records
+  std::vector<std::pair<std::string, std::string>> splitPairs; // adjacent panel IDs that were separated
 };
 
 struct RemoveProtrusionsResult {

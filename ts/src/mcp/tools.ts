@@ -48,6 +48,7 @@ import { validateBendSequence } from '../manufacturing/bend_sequence';
 import type { FeatureSet } from '../manufacturing/feature';
 import { ManufacturingGraph } from '../manufacturing/graph/graph';
 import { GeometrySolver } from '../manufacturing/graph/solver';
+import { reconstructManufacturingPlan } from '../manufacturing/reconstruction/orchestrator';
 import { bootstrapGraph } from '../manufacturing/graph/bootstrap';
 import { DrcChecker } from '../manufacturing/graph/drc';
 import type { DrcCheckRequest } from '../manufacturing/graph/drc';
@@ -1476,6 +1477,21 @@ export function getToolDefinitions(): object[] {
         required: ['part_id', 'id', 'parent_panel_id', 'profile_type', 'profile'],
       },
     },
+    {
+      name: 'build_manufacturing_plan',
+      description: 'Automatically partition a solid body, validate panels, and reconstruct them as a sheet metal assembly with a valid Manufacturing Graph.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_id: { type: 'string', description: 'ID of the solid body or shell to reconstruct' },
+          angle_threshold_deg: { type: 'number', description: 'Angle threshold in degrees for partitioning (default 30.0)' },
+          max_thickness_mm: { type: 'number', description: 'Maximum thickness in mm to classify as panel (default 5.0)' },
+          default_thickness_mm: { type: 'number', description: 'Default thickness in mm for panels (default 1.0)' },
+          transaction_id: { type: 'string', description: 'Optional transaction ID to join' },
+        },
+        required: ['part_id'],
+      },
+    },
   ];
 }
 
@@ -1685,6 +1701,9 @@ export async function dispatchTool(
         return handleDeletePart(args);
 
       // ─── Manufacturing Graph tools (Feature 009-manufacturing-graph) ────────
+      case 'build_manufacturing_plan':
+        return await handleBuildManufacturingPlan(args, config);
+
       case 'bootstrap_graph':
         return await handleBootstrapGraph(args, config);
 
@@ -1975,7 +1994,6 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
   const partId = requireString(args, 'part_id');
   const panelId = requireString(args, 'panel_id');
   const materialId = requireString(args, 'material_id');
-  const transactionId = requireString(args, 'transaction_id');
 
   const graph = getManufacturingGraph(partId);
 
@@ -4006,6 +4024,69 @@ function handleDeletePart(args: Record<string, unknown>): unknown {
     status: 'deleted',
     active_part_id: _activePartId ?? null,
   };
+}
+
+async function handleBuildManufacturingPlan(
+  args: Record<string, unknown>,
+  config: ManufacturingConfig,
+): Promise<unknown> {
+  const partId = requireString(args, 'part_id');
+  const angleThresholdDeg = typeof args['angle_threshold_deg'] === 'number' ? args['angle_threshold_deg'] : 30.0;
+  const maxThicknessMm = typeof args['max_thickness_mm'] === 'number' ? args['max_thickness_mm'] : 5.0;
+  const defaultThicknessMm = typeof args['default_thickness_mm'] === 'number' ? args['default_thickness_mm'] : 1.0;
+  const transactionId = typeof args['transaction_id'] === 'string' ? args['transaction_id'] : undefined;
+
+  const binding = getGeometryBinding();
+
+  if (transactionId) {
+    const active = transactionRegistry.getActive();
+    if (!active || active.id !== transactionId) {
+      throwError(
+        ErrorCodes.TRANSACTION_MISMATCH,
+        active
+          ? `Specified transaction_id ${transactionId} does not match the active transaction ${active.id}.`
+          : `No active transaction; cannot join transaction ${transactionId}.`,
+        true,
+        'begin_transaction',
+      );
+    }
+  }
+
+  const report = await reconstructManufacturingPlan(
+    partId,
+    angleThresholdDeg,
+    maxThicknessMm,
+    defaultThicknessMm,
+    config,
+    binding,
+    transactionId,
+  );
+
+  for (const item of report.reconstructed_parts) {
+    const reconGraph = new ManufacturingGraph(item.part_id, config.graph?.coplanarityThresholdDeg ?? 1.0);
+    for (const node of item.graph.nodes) {
+      reconGraph.nodes.set(node.id, node);
+    }
+    for (const edge of item.graph.edges) {
+      if (!reconGraph.edges.has(edge.from as any)) {
+        reconGraph.edges.set(edge.from as any, new Set());
+      }
+      reconGraph.edges.get(edge.from as any)!.add(edge.to as any);
+
+      if (!reconGraph.reverseEdges.has(edge.to as any)) {
+        reconGraph.reverseEdges.set(edge.to as any, new Set());
+      }
+      reconGraph.reverseEdges.get(edge.to as any)!.add(edge.from as any);
+    }
+    const firstPanel = item.graph.nodes.find(n => n.type === 'PanelNode');
+    if (firstPanel) {
+      reconGraph.rootPanelId = firstPanel.id;
+    }
+    _parts.set(item.part_id, reconGraph);
+    _activePartId = item.part_id;
+  }
+
+  return report;
 }
 
 // ─── Manufacturing Graph handlers (Feature 009-manufacturing-graph) ───────────

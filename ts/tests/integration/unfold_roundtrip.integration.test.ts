@@ -253,14 +253,10 @@ describe('Unfold round-trip harness', () => {
   // panel onto it joins to a 90°-rotated face of an existing skin, which
   // is exactly when validateSheetMetal starts producing Thickness N/A.
 
-  it('CASE 2: chained merge of 3 mutually-perpendicular cube faces is correctly rejected', async () => {
-    // Three mutually-perpendicular cube faces meet at a single CORNER VERTEX,
-    // not an edge — they cannot be sheet-metal-fabricated as one piece.
-    // After the first merge produces an L-shape, the third panel can only
-    // touch the L at a point, so the second merge_bodies_with_bend correctly
-    // throws GE_MERGE_FILLET_FAILED.  Previously the silent unfilleted-fuse
-    // fallback let this "succeed" with a misleading shape; the explicit
-    // throw is the correct behaviour.
+  it('CASE 2: chained merge of 3 mutually-perpendicular cube faces merges successfully and unfolds to 2 bends', async () => {
+    // Three mutually-perpendicular cube faces meet at a single corner vertex.
+    // Geometrically they can be merged sequentially (which succeeds due to our C++ face-proximity filter),
+    // and since they only contain 2 bends, the resulting open corner structure can be unfolded flat.
     const { panels } = await splitTestcube();
     const outer = outerPanels(panels);
 
@@ -278,20 +274,22 @@ describe('Unfold round-trip harness', () => {
     }, config);
     expect(ab?.merged_shell_id).toBeDefined();
 
-    // The 3rd panel only meets the L at a corner; the resulting fused body
-    // has no clean seam edge for the fillet to follow.  Either error code
-    // is acceptable: GE_MERGE_FAILED (empty fuse, when panels only touch at
-    // a point) or GE_MERGE_FILLET_FAILED (fuse succeeds with volumetric
-    // overlap but fillet can't find a usable seam).  The split_by_bends
-    // corner-overlap behaviour now gives the latter.
-    await expect(dispatchTool('merge_bodies_with_bend', {
+    const abc: any = await dispatchTool('merge_bodies_with_bend', {
       part_a_id: ab.merged_part_id, part_b_id: pC.id,
       target_edges: ['all'], bend_radius: 0.3,
       transaction_id: txn.transaction_id,
-    }, config)).rejects.toMatchObject({
-      code: expect.stringMatching(/^GE_MERGE_(FAILED|FILLET_FAILED|NO_SEAM_EDGES|THICKNESS_MISMATCH|BEND_AXIS_AMBIGUOUS|BEND_EXTENT_TOO_SHORT|GAP)$/),
-    });
+    }, config);
+    expect(abc?.merged_shell_id).toBeDefined();
 
+    const unfold: any = await dispatchTool('apply_unfold', {
+      part_id: abc.merged_part_id,
+      panel_id: abc.merged_part_id,
+      material_id: config.materials[0]!.id,
+      transaction_id: txn.transaction_id,
+    }, config);
+
+    expect(unfold.bend_count).toBe(2);
+    expect(unfold.nominal_thickness_mm).toBeGreaterThan(0.5);
 
     await dispatchTool('rollback_transaction', { transaction_id: txn.transaction_id }, config);
   }, 30_000);
@@ -626,7 +624,7 @@ describe('Unfold round-trip harness', () => {
   // GE_MERGE_FAILED ("Merge produced an empty result") is the correct
   // signal — this geometry simply isn't fabricatable as one piece.
 
-  it('CASE 5b: chained merge A+B+C with parallel A/C correctly rejects empty fuse', async () => {
+  it('CASE 5b: chained merge A+B+C with parallel A/C merges successfully and unfolds to 2 bends', async () => {
     const { panels } = await splitTestcube();
     const outer = outerPanels(panels);
     expect(outer.length).toBe(6);
@@ -660,13 +658,22 @@ describe('Unfold round-trip harness', () => {
     }, config);
     expect(ab?.merged_shell_id).toBeDefined();
 
-    await expect(dispatchTool('merge_bodies_with_bend', {
-      part_a_id: ab.merged_part_id, part_b_id: pC!.id, // stable: equals pA!.id
+    const abc: any = await dispatchTool('merge_bodies_with_bend', {
+      part_a_id: ab.merged_part_id, part_b_id: pC!.id,
       target_edges: ['all'], bend_radius: 0.3,
       transaction_id: txn.transaction_id,
-    }, config)).rejects.toMatchObject({
-      code: expect.stringMatching(/^GE_MERGE_(FAILED|FILLET_FAILED|NO_SEAM_EDGES|THICKNESS_MISMATCH|BEND_AXIS_AMBIGUOUS|BEND_EXTENT_TOO_SHORT|GAP)$/),
-    });
+    }, config);
+    expect(abc?.merged_shell_id).toBeDefined();
+
+    const unfold: any = await dispatchTool('apply_unfold', {
+      part_id: abc.merged_part_id,
+      panel_id: abc.merged_part_id,
+      material_id: config.materials[0]!.id,
+      transaction_id: txn.transaction_id,
+    }, config);
+
+    expect(unfold.bend_count).toBe(2);
+    expect(unfold.nominal_thickness_mm).toBeGreaterThan(0.5);
 
     await dispatchTool('rollback_transaction', { transaction_id: txn.transaction_id }, config);
   }, 30_000);

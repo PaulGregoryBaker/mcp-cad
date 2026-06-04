@@ -1,0 +1,120 @@
+{
+  "tool": "build_manufacturing_plan",
+  "description": "Decomposes an imported 3D model into planar sheet metal panels, creates their manufacturing graphs, filters out non-panel protrusions (welded nuts, bosses), and recombines them using merge by bend, skipping impossible/process-breaking joints.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "part_id": {
+        "type": "string",
+        "description": "ID of the target imported body/solid in the session."
+      },
+      "angle_threshold_deg": {
+        "type": "number",
+        "default": 30.0,
+        "description": "Dihedral angle threshold for detecting bends (degrees)."
+      },
+      "max_thickness_mm": {
+        "type": "number",
+        "default": 5.0,
+        "description": "Maximum thickness considered for sheet metal panels."
+      },
+      "default_thickness_mm": {
+        "type": "number",
+        "default": 1.0,
+        "description": "Default thickness used if it cannot be inferred from geometry."
+      },
+      "material_id": {
+        "type": "string",
+        "description": "Optional material ID to source default thickness and K-factor."
+      },
+      "transaction_id": {
+        "type": "string",
+        "description": "Active transaction ID for rollback and state tracking."
+      }
+    },
+    "required": ["part_id", "transaction_id"]
+  },
+  "response": {
+    "type": "object",
+    "properties": {
+      "success": {
+        "type": "boolean",
+        "description": "True if the feature extraction completed without fatal errors."
+      },
+      "reconstructed_parts": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "part_id": { "type": "string" },
+            "graph": {
+              "type": "object",
+              "properties": {
+                "part_id": { "type": "string" },
+                "nodes": { "type": "array", "items": { "type": "object" } },
+                "edges": { "type": "array", "items": { "type": "object" } }
+              },
+              "required": ["part_id", "nodes", "edges"]
+            }
+          },
+          "required": ["part_id", "graph"]
+        }
+      },
+      "unmerged_parts": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "part_id": { "type": "string" },
+            "reason": {
+              "type": "string",
+              "enum": ["protrusion", "panel_validation_failed", "merge_failed"]
+            },
+            "bbox": {
+              "type": "object",
+              "properties": {
+                "x_min": { "type": "number" },
+                "y_min": { "type": "number" },
+                "z_min": { "type": "number" },
+                "x_max": { "type": "number" },
+                "y_max": { "type": "number" },
+                "z_max": { "type": "number" }
+              },
+              "required": ["x_min", "y_min", "z_min", "x_max", "y_max", "z_max"]
+            },
+            "parent_panel_id": { "type": ["string", "null"] }
+          },
+          "required": ["part_id", "reason", "bbox", "parent_panel_id"]
+        }
+      },
+      "skipped_joints": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "part_a_id": { "type": "string" },
+            "part_b_id": { "type": "string" },
+            "reason": {
+              "type": "string",
+              "enum": ["collision", "foldability_violation", "drc_violation"]
+            },
+            "violations": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "code": { "type": "string" },
+                  "message": { "type": "string" },
+                  "severity": { "type": "string" }
+                },
+                "required": ["code", "message", "severity"]
+              }
+            }
+          },
+          "required": ["part_a_id", "part_b_id", "reason", "violations"]
+        }
+      }
+    },
+    "required": ["success", "reconstructed_parts", "unmerged_parts", "skipped_joints"]
+  }
+}

@@ -5808,11 +5808,40 @@ private:
       auto panelBboxes      = computeBboxes(panelIds);
       auto protrusionBboxes = computeBboxes(protrusionIds);
 
+      std::vector<std::pair<std::string, std::string>> splitPairs;
+      // Populate splitPairs: check all pairs of panelIds
+      for (size_t i = 0; i < panelIds.size(); ++i) {
+        for (size_t j = i + 1; j < panelIds.size(); ++j) {
+          const auto& shapeA = shells_[panelIds[i]].shape;
+          const auto& shapeB = shells_[panelIds[j]].shape;
+          if (shapeA.IsNull() || shapeB.IsNull()) continue;
+
+          Bnd_Box boxA, boxB;
+          BRepBndLib::AddOptimal(shapeA, boxA);
+          BRepBndLib::AddOptimal(shapeB, boxB);
+
+          Bnd_Box boxAExpanded = boxA;
+          boxAExpanded.Enlarge(25.0); // 25mm search radius for adjacent bends
+          if (boxA.IsVoid() || boxB.IsVoid() || boxAExpanded.IsOut(boxB)) {
+            continue; // BBoxes are clearly apart
+          }
+
+          BRepExtrema_DistShapeShape distCalc(shapeA, shapeB);
+          if (distCalc.IsDone()) {
+            double d = distCalc.Value();
+            if (d <= 25.0) { // If the panels are within 25mm (bend radius + width gap)
+              splitPairs.push_back({panelIds[i], panelIds[j]});
+            }
+          }
+        }
+      }
+
       return DecomposedByBendsResult{
           std::move(panelIds), std::move(panelBboxes),
           std::move(protrusionIds), std::move(protrusionBboxes),
           std::move(protrusionParents),
-          token, mode, std::move(shapeHistory)};
+          token, mode, std::move(shapeHistory),
+          std::move(splitPairs)};
 
     } catch (const GeometryError&) {
       throw;
@@ -6367,7 +6396,7 @@ private:
           gp_Pnt cA = centA.CentreOfMass();
           gp_Pnt cB = centB.CentreOfMass();
 
-          auto outerFace = [&](const TopoDS_Shape& body, const gp_Pnt& otherCentroid,
+          auto outerFace = [&](const TopoDS_Shape& body, const TopoDS_Shape& otherBody, const gp_Pnt& otherCentroid,
                                gp_Vec& nOut, gp_Pln& planeOut) -> bool {
             double bestScore = -1.0;
             bool ok = false;
@@ -6375,6 +6404,13 @@ private:
               const TopoDS_Face& f = TopoDS::Face(fx.Current());
               Handle(Geom_Surface) s = BRep_Tool::Surface(f);
               if (s.IsNull() || !s->IsKind(STANDARD_TYPE(Geom_Plane))) continue;
+
+              // Proximity filter: face must be close to the other body (near the joint)
+              BRepExtrema_DistShapeShape distCalc(f, otherBody);
+              if (distCalc.IsDone() && distCalc.Value() > 15.0) {
+                continue; // Skip faces that are far from the joint
+              }
+
               GProp_GProps fp;
               BRepGProp::SurfaceProperties(f, fp);
               double area = fp.Mass();
@@ -6393,7 +6429,7 @@ private:
 
           gp_Vec nInA, nInB;
           gp_Pln planeA, planeB;
-          if (!outerFace(inputA, cB, nInA, planeA) || !outerFace(inputB, cA, nInB, planeB)) {
+          if (!outerFace(inputA, inputB, cB, nInA, planeA) || !outerFace(inputB, inputA, cA, nInB, planeB)) {
             throw GeometryError("GE_MERGE_BEND_AXIS_AMBIGUOUS",
               "Could not find outer planar faces on both inputs. Each input must "
               "have at least one planar face to act as the panel skin.",
@@ -6456,7 +6492,41 @@ private:
             BRepBndLib::AddOptimal(body, bb);
             double x1,y1,z1,x2,y2,z2;
             bb.Get(x1,y1,z1,x2,y2,z2);
-            return std::min({x2-x1, y2-y1, z2-z1});
+            double minDim = std::min({x2-x1, y2-y1, z2-z1});
+            if (minDim <= 6.0) {
+              return minDim;
+            }
+            TopTools_IndexedMapOfShape faceMap;
+            TopExp::MapShapes(body, TopAbs_FACE, faceMap);
+            double bestThickness = 0.0;
+            double minFound = 1e30;
+            for (int i = 1; i <= faceMap.Extent(); ++i) {
+              const TopoDS_Face& fA = TopoDS::Face(faceMap(i));
+              Handle(Geom_Surface) surfA = BRep_Tool::Surface(fA);
+              if (surfA.IsNull() || !surfA->IsKind(STANDARD_TYPE(Geom_Plane))) continue;
+              gp_Vec nA = faceOutwardNormal(fA);
+              for (int j = i + 1; j <= faceMap.Extent(); ++j) {
+                const TopoDS_Face& fB = TopoDS::Face(faceMap(j));
+                Handle(Geom_Surface) surfB = BRep_Tool::Surface(fB);
+                if (surfB.IsNull() || !surfB->IsKind(STANDARD_TYPE(Geom_Plane))) continue;
+                gp_Vec nB = faceOutwardNormal(fB);
+                if (nA.Dot(nB) >= -0.95) continue;
+                BRepExtrema_DistShapeShape distCalc(fA, fB);
+                if (distCalc.IsDone()) {
+                  double d = distCalc.Value();
+                  if (d >= 0.1 && d <= 10.0) {
+                    if (d < minFound) {
+                      minFound = d;
+                      bestThickness = d;
+                    }
+                  }
+                }
+              }
+            }
+            if (bestThickness > 0.0) {
+              return bestThickness;
+            }
+            return minDim;
           };
           double tA = panelThickness(inputA);
           double tB = panelThickness(inputB);

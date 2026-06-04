@@ -196,6 +196,7 @@ export interface GeometryAddon {
       new_id: string;
       operation_label: string;
     }>;
+    split_pairs: Array<[string, string]>;
   };
   removeProtrusions(
     partId: string,
@@ -436,7 +437,9 @@ export class GeometryBinding {
   }
 
   clearSnapshot(snapshotId: string): void {
-    this.addon.clearSnapshot(snapshotId);
+    if (typeof (this.addon as any).clearSnapshot === 'function') {
+      this.addon.clearSnapshot(snapshotId);
+    }
   }
 
   clearSnapshots(): void {
@@ -814,6 +817,7 @@ export class GeometryBinding {
         rollback_token: res.rollbackToken,
         rollbackToken: res.rollbackToken,
         shape_history: res.shape_history,
+        split_pairs: res.split_pairs,
       };
     } catch (err) {
       throw toStructuredError(err);
