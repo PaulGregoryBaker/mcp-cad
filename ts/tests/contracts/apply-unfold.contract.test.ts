@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { GeometryAddon } from '../../src/geometry/binding';
 import { GeometryBinding, kerfOffsetMm } from '../../src/geometry/binding';
-import { dispatchTool, setGeometryBindingMock } from '../../src/mcp/tools';
+import { dispatchTool, setGeometryBindingMock, registerTestPart } from '../../src/mcp/tools';
 import type { ManufacturingConfig } from '../../src/config/loader';
 
 // ─── Mock addon ───────────────────────────────────────────────────────────────
@@ -52,6 +52,12 @@ const mockAddon: GeometryAddon = {
     flanges: [],
     reliefs: [],
   })),
+  validateSheetMetal: vi.fn(() => ({
+    is_valid: true,
+    nominal_thickness: 1.5,
+    can_flatten: true,
+    validation_errors: [],
+  })),
 };
 
 // ─── Test config ─────────────────────────────────────────────────────────────
@@ -82,22 +88,32 @@ const config: ManufacturingConfig = {
 
 describe('apply_unfold: output schema contract', () => {
   let binding: GeometryBinding;
+  let txnId: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     binding = new GeometryBinding(mockAddon);
     setGeometryBindingMock(binding);
     // Register a shell in the session so apply_unfold doesn't throw SHELL_NOT_FOUND
     binding.booleanCut('solid-1', { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: 0 });
+    registerTestPart('shell-1', ['shell-1']);
+
+    const txn = await dispatchTool('begin_transaction', { label: 'apply-unfold-contract-test' }, config) as any;
+    txnId = txn.transaction_id;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    if (txnId) {
+      try {
+        await dispatchTool('rollback_transaction', { transaction_id: txnId }, config);
+      } catch (err) {}
+    }
     setGeometryBindingMock(undefined);
   });
 
   it('result has required fields: unfold_id, flat_width_mm, flat_height_mm, k_factor_used, bend_count', async () => {
     const result = await dispatchTool(
       'apply_unfold',
-      { panel_id: 'shell-1', material_id: 'mild_steel_1.5mm' },
+      { part_id: 'shell-1', panel_id: 'shell-1', material_id: 'mild_steel_1.5mm', transaction_id: txnId },
       config,
     ) as Record<string, unknown>;
 
@@ -111,7 +127,7 @@ describe('apply_unfold: output schema contract', () => {
   it('k_factor_used reflects material default when not overridden', async () => {
     const result = await dispatchTool(
       'apply_unfold',
-      { panel_id: 'shell-1', material_id: 'mild_steel_1.5mm' },
+      { part_id: 'shell-1', panel_id: 'shell-1', material_id: 'mild_steel_1.5mm', transaction_id: txnId },
       config,
     ) as Record<string, unknown>;
 
@@ -121,7 +137,7 @@ describe('apply_unfold: output schema contract', () => {
   it('k_factor_used respects override when provided', async () => {
     const result = await dispatchTool(
       'apply_unfold',
-      { panel_id: 'shell-1', material_id: 'mild_steel_1.5mm', k_factor: 0.42 },
+      { part_id: 'shell-1', panel_id: 'shell-1', material_id: 'mild_steel_1.5mm', k_factor: 0.42, transaction_id: txnId },
       config,
     ) as Record<string, unknown>;
 
@@ -132,7 +148,7 @@ describe('apply_unfold: output schema contract', () => {
     await expect(
       dispatchTool(
         'apply_unfold',
-        { panel_id: 'shell-1', material_id: 'unknown_material' },
+        { part_id: 'shell-1', panel_id: 'shell-1', material_id: 'unknown_material', transaction_id: txnId },
         config,
       ),
     ).rejects.toMatchObject({ code: 'MD_MATERIAL_NOT_FOUND' });
@@ -141,7 +157,7 @@ describe('apply_unfold: output schema contract', () => {
   it('includes rollback_token in response', async () => {
     const result = await dispatchTool(
       'apply_unfold',
-      { panel_id: 'shell-1', material_id: 'mild_steel_1.5mm' },
+      { part_id: 'shell-1', panel_id: 'shell-1', material_id: 'mild_steel_1.5mm', transaction_id: txnId },
       config,
     ) as Record<string, unknown>;
 
@@ -156,7 +172,7 @@ describe('apply_unfold: error model contract', () => {
     await expect(
       dispatchTool(
         'apply_unfold',
-        { material_id: 'mild_steel_1.5mm' },
+        { part_id: 'shell-1', material_id: 'mild_steel_1.5mm', transaction_id: 'tok-some' },
         config,
       ),
     ).rejects.toMatchObject({ code: 'INTERNAL_ERROR' });
@@ -166,7 +182,27 @@ describe('apply_unfold: error model contract', () => {
     await expect(
       dispatchTool(
         'apply_unfold',
-        { panel_id: 'shell-1' },
+        { part_id: 'shell-1', panel_id: 'shell-1', transaction_id: 'tok-some' },
+        config,
+      ),
+    ).rejects.toMatchObject({ code: 'INTERNAL_ERROR' });
+  });
+
+  it('throws McpToolError with code when part_id is missing', async () => {
+    await expect(
+      dispatchTool(
+        'apply_unfold',
+        { panel_id: 'shell-1', material_id: 'mild_steel_1.5mm', transaction_id: 'tok-some' },
+        config,
+      ),
+    ).rejects.toMatchObject({ code: 'INTERNAL_ERROR' });
+  });
+
+  it('throws McpToolError with code when transaction_id is missing', async () => {
+    await expect(
+      dispatchTool(
+        'apply_unfold',
+        { part_id: 'shell-1', panel_id: 'shell-1', material_id: 'mild_steel_1.5mm' },
         config,
       ),
     ).rejects.toMatchObject({ code: 'INTERNAL_ERROR' });

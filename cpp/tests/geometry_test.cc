@@ -974,3 +974,46 @@ TEST_CASE("US2: centerAndAlignBody on cauldron", "[us2][cauldron][alignment]") {
   CHECK(r1 == Approx(1.0).margin(1e-5));
 }
 
+TEST_CASE("US1: checkAssemblyClashes basic detection", "[us1][clash]") {
+  auto svc = GeometryService::create();
+  SolidId solidId = svc->loadStep(fixture("simple_box.stp"));
+  auto shells = svc->separateSolids(solidId);
+  REQUIRE(shells.size() == 1);
+  ShellId boxA = shells[0];
+
+  // Create an overlapping box by translating boxA slightly
+  TransformResult resOverlap = svc->translateBody(boxA, 5.0, 5.0, 5.0, true);
+  ShellId boxB = resOverlap.solidId;
+
+  // Create a non-overlapping box by translating boxA far away
+  TransformResult resFar = svc->translateBody(boxA, 500.0, 500.0, 500.0, true);
+  ShellId boxFar = resFar.solidId;
+
+  SECTION("clash detected when parts overlap and are adjacent") {
+    std::vector<std::pair<ShellId, ShellId>> adj = {{boxA, boxB}};
+    auto clashes = svc->checkAssemblyClashes({boxA, boxB}, adj);
+    REQUIRE(clashes.size() == 1);
+    CHECK(clashes[0].partIdA == boxA);
+    CHECK(clashes[0].partIdB == boxB);
+    CHECK(clashes[0].intersectionVolumeMm3 > 1.0);
+    CHECK(clashes[0].clashBoundingBox.dx > 0.0);
+  }
+
+  SECTION("no clash when parts overlap but are NOT adjacent") {
+    auto clashes = svc->checkAssemblyClashes({boxA, boxB}, {});
+    CHECK(clashes.empty());
+  }
+
+  SECTION("no clash when parts are adjacent but do NOT overlap") {
+    std::vector<std::pair<ShellId, ShellId>> adj = {{boxA, boxFar}};
+    auto clashes = svc->checkAssemblyClashes({boxA, boxFar}, adj);
+    CHECK(clashes.empty());
+  }
+
+  SECTION("throwing exception on non-existent shell ID") {
+    std::vector<std::pair<ShellId, ShellId>> adj = {{boxA, "non-existent-id"}};
+    CHECK_THROWS_AS(svc->checkAssemblyClashes({boxA, "non-existent-id"}, adj), GeometryError);
+  }
+}
+
+

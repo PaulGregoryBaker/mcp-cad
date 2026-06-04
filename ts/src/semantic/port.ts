@@ -75,6 +75,9 @@ export interface SemanticPersistencePort {
     targetId: string,
     transactionId: string,
   ): Promise<void>;
+  getRelationshipsByKind(
+    rel: RelationshipType,
+  ): Promise<Array<{ sourceId: string; targetId: string }>>;
 
   // semantic_mapping
   insertMapping(input: InsertMappingInput): Promise<number>; // returns revision_id

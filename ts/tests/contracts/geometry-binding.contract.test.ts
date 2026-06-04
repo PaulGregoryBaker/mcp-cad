@@ -66,6 +66,12 @@ const mockAddon: GeometryAddon = {
     restoredShellIds: [],
   })),
   clearSnapshots: vi.fn(() => undefined),
+  validateSheetMetal: vi.fn((partId: string) => ({
+    is_valid: true,
+    nominal_thickness: 1.5,
+    can_flatten: true,
+    validation_errors: [],
+  })),
 };
 
 // ─── Kerf offset validation ───────────────────────────────────────────────────

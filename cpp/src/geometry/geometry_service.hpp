@@ -16,6 +16,7 @@
 #include <optional>
 #include <stdexcept>
 #include <array>
+#include <utility>
 
 #include "topology_graph.hpp"
 #include "snapshot.hpp"
@@ -480,6 +481,10 @@ public:
   // ── Clash and gap detection (non-mutating) ────────────────────────────────
   virtual ClashReport computeIntersections(
       const std::vector<ShellId>& partIds) = 0;
+
+  virtual std::vector<ClashPair> checkAssemblyClashes(
+      const std::vector<ShellId>& partIds,
+      const std::vector<std::pair<ShellId, ShellId>>& adjacentPairs) = 0;
 
   virtual GapReport computeGaps(
       const ShellId& partAId,

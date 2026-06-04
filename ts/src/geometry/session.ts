@@ -34,6 +34,10 @@ export class SessionState {
     this.shellIds.add(id);
   }
 
+  getActiveShellIds(): string[] {
+    return Array.from(this.shellIds);
+  }
+
   registerUnfold(id: string): void {
     this.unfoldIds.add(id);
   }

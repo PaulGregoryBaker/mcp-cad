@@ -121,6 +121,7 @@
 // ÔöÇÔöÇÔöÇ Standard library ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 #include <memory>
 #include <mutex>
 #include <sstream>
@@ -2658,53 +2659,15 @@ public:
       toolShapes.push_back(it->second.shape);
     }
 
-    // Pre-fuse gap check: every consecutive pair must be within sewing tolerance.
-    // A gap > kMergeTolerance means the bodies are not topologically adjacent and
-    // the fuse would produce a disconnected compound masquerading as one body.
-    {
-      const double kMergeTolerance = 0.1; // mm
-      for (size_t i = 0; i + 1 < toolShapes.size(); ++i) {
-        const TopoDS_Shape& sA = toolShapes[i];
-        const TopoDS_Shape& sB = toolShapes[i + 1];
-
-        Bnd_Box boxA, boxB;
-        BRepBndLib::AddOptimal(sA, boxA);
-        BRepBndLib::AddOptimal(sB, boxB);
-
-        Bnd_Box boxAExpanded = boxA;
-        boxAExpanded.Enlarge(kMergeTolerance);
-        const bool boxesClearlyApart =
-            !boxA.IsVoid() && !boxB.IsVoid() && boxAExpanded.IsOut(boxB);
-
-        if (boxesClearlyApart) {
-          BRepExtrema_DistShapeShape gapCheck;
-          gapCheck.LoadS1(sA);
-          gapCheck.LoadS2(sB);
-          gapCheck.Perform();
-
-          double gap = kMergeTolerance + 1.0; // conservative default if measurement fails
-          if (gapCheck.IsDone()) {
-            gap = gapCheck.Value();
-          }
-
-          if (gap > kMergeTolerance) {
-            std::ostringstream msg;
-            msg << std::fixed << std::setprecision(3)
-                << "GE_MERGE_GAP: Bodies " << (i) << " and " << (i + 1)
-                << " are " << gap << " mm apart. "
-                << "Maximum allowed gap is " << kMergeTolerance << " mm. "
-                << "Use close_gap to snap them together before fusing.";
-            throw GeometryError("GE_MERGE_GAP", msg.str(), false, "");
-          }
-        }
-      }
-    }
+    // Pre-fuse gap check was removed to support Boolean fuse of disjoint (non-touching) solids
+    // as per Feature 006 spec.md. Disjoint fuses are allowed and return success with disjoint=true.
 
     SnapshotId token = createSnapshotLocked("before fuseBodies");
 
     try {
       TopoDS_Shape currentShape = toolShapes[0];
       std::vector<ShapeHistoryRecord> history;
+      bool disjoint = false;
 
       for (size_t i = 1; i < toolShapes.size(); ++i) {
         BRepAlgoAPI_Fuse fuser(currentShape, toolShapes[i]);
@@ -2722,7 +2685,7 @@ public:
           throw GeometryError("GE_BOOLEAN_FAILURE", "Boolean fuse result is invalid", true, "rollback");
         }
 
-        // Post-fuse connectivity check: reject disconnected compounds.
+        // Post-fuse connectivity check: detect disconnected compounds.
         {
           int solidCount = 0;
           for (TopExp_Explorer ex(nextShape, TopAbs_SOLID); ex.More(); ex.Next()) solidCount++;
@@ -2736,10 +2699,7 @@ public:
               || (solidCount == 0 && shellCount > 1)
               || (solidCount == 0 && shellCount == 0 && topLevelCount > 1);
           if (disconnected) {
-            throw GeometryError("GE_MERGE_DISCONNECTED",
-              "Fuse produced disconnected bodies ÔÇö the shapes are not topologically joined. "
-              "Check for a gap and use close_gap to fix it.",
-              false, "");
+            disjoint = true;
           }
         }
 
@@ -2802,7 +2762,7 @@ public:
       ShellId resultId = generateUUID();
       shells_[resultId] = ShellState{resultId, "", currentShape};
 
-      return FuseResult{resultId, false, token, std::move(history)};
+      return FuseResult{resultId, disjoint, token, std::move(history)};
 
     } catch (const GeometryError&) {
       throw;
@@ -7382,6 +7342,129 @@ private:
     return report;
   }
 
+  std::vector<ClashPair> checkAssemblyClashes(
+      const std::vector<ShellId>& partIds,
+      const std::vector<std::pair<ShellId, ShellId>>& adjacentPairs) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    std::vector<ClashPair> clashes;
+
+    std::unordered_set<ShellId> allowedParts;
+    if (!partIds.empty()) {
+      allowedParts.insert(partIds.begin(), partIds.end());
+    }
+
+    for (const auto& pair : adjacentPairs) {
+      const ShellId& idA = pair.first;
+      const ShellId& idB = pair.second;
+
+      if (!partIds.empty()) {
+        if (allowedParts.find(idA) == allowedParts.end() ||
+            allowedParts.find(idB) == allowedParts.end()) {
+          continue;
+        }
+      }
+
+      TopoDS_Shape shapeA;
+      auto itA = shells_.find(idA);
+      if (itA != shells_.end()) {
+        shapeA = itA->second.shape;
+      } else {
+        auto solidItA = solids_.find(idA);
+        if (solidItA != solids_.end()) {
+          shapeA = solidItA->second.shape;
+        } else {
+          throw GeometryError("GE_SHELL_NOT_FOUND", "Shell or solid not found: " + idA, false, "");
+        }
+      }
+
+      TopoDS_Shape shapeB;
+      auto itB = shells_.find(idB);
+      if (itB != shells_.end()) {
+        shapeB = itB->second.shape;
+      } else {
+        auto solidItB = solids_.find(idB);
+        if (solidItB != solids_.end()) {
+          shapeB = solidItB->second.shape;
+        } else {
+          throw GeometryError("GE_SHELL_NOT_FOUND", "Shell or solid not found: " + idB, false, "");
+        }
+      }
+
+      try {
+        Bnd_Box boxA;
+        Bnd_Box boxB;
+        BRepBndLib::AddOptimal(shapeA, boxA);
+        BRepBndLib::AddOptimal(shapeB, boxB);
+
+        if (boxA.IsOut(boxB)) {
+          continue;
+        }
+
+        BRepAlgoAPI_Common common(shapeA, shapeB);
+        common.Build();
+
+        if (!common.IsDone()) {
+          throw GeometryError("GE_CLASH_FAILED",
+                              "Intersection computation failed between " +
+                                  idA + " and " + idB,
+                              false, "");
+        }
+
+        TopoDS_Shape intersection = common.Shape();
+        if (intersection.IsNull()) continue;
+
+        GProp_GProps props;
+        BRepGProp::VolumeProperties(intersection, props);
+        double vol = props.Mass();
+        if (vol < 1e-9) continue;
+
+        ClashPair clash;
+        clash.partIdA = idA;
+        clash.partIdB = idB;
+        clash.intersectionVolumeMm3 = vol;
+
+        Bnd_Box bbox;
+        BRepBndLib::Add(intersection, bbox);
+        double xmin, ymin, zmin, xmax, ymax, zmax;
+        bbox.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+        clash.clashBoundingBox = {xmin, ymin, zmin,
+                                  xmax - xmin, ymax - ymin, zmax - zmin};
+
+        GProp_GProps propsA, propsB;
+        BRepGProp::VolumeProperties(shapeA, propsA);
+        BRepGProp::VolumeProperties(shapeB, propsB);
+        gp_Pnt cA = propsA.CentreOfMass();
+        gp_Pnt cB = propsB.CentreOfMass();
+        gp_Vec dir(cA, cB);
+        if (dir.Magnitude() < 1e-10) dir = gp_Vec(0, 0, 1);
+        dir.Normalize();
+        clash.suggestedCuttingPlane.normalX = dir.X();
+        clash.suggestedCuttingPlane.normalY = dir.Y();
+        clash.suggestedCuttingPlane.normalZ = dir.Z();
+        double dx = (xmax - xmin) * 0.5;
+        double dy = (ymax - ymin) * 0.5;
+        double dz = (zmax - zmin) * 0.5;
+        double half_size = dx * std::abs(dir.X()) + dy * std::abs(dir.Y()) + dz * std::abs(dir.Z());
+
+        clash.suggestedCuttingPlane.originX = (xmin + xmax) * 0.5 + dir.X() * half_size;
+        clash.suggestedCuttingPlane.originY = (ymin + ymax) * 0.5 + dir.Y() * half_size;
+        clash.suggestedCuttingPlane.originZ = (zmin + zmax) * 0.5 + dir.Z() * half_size;
+
+        clashes.push_back(std::move(clash));
+      } catch (const GeometryError&) {
+        throw;
+      } catch (const Standard_Failure& e) {
+        throw GeometryError("GE_CLASH_FAILED",
+                            std::string("OCCT exception during clash detection: ") +
+                                e.GetMessageString(),
+                            false, "");
+      }
+    }
+
+    return clashes;
+  }
+
   // ÔöÇÔöÇ Gap detection ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
   GapReport computeGaps(const ShellId& partAId,
@@ -7478,9 +7561,17 @@ private:
                                    bool                keepPositiveSide) override {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    auto it = shells_.find(partId);
-    if (it == shells_.end()) {
-      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell not found: " + partId, false, "");
+    TopoDS_Shape originalShape;
+    bool isSolid = false;
+    auto shellIt = shells_.find(partId);
+    auto solidIt = solids_.find(partId);
+    if (shellIt != shells_.end()) {
+      originalShape = shellIt->second.shape;
+    } else if (solidIt != solids_.end()) {
+      originalShape = solidIt->second.shape;
+      isSolid = true;
+    } else {
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell or solid not found: " + partId, false, "");
     }
 
     // Snapshot before mutation (Constitution Principle IV)
@@ -7506,19 +7597,19 @@ private:
       // Reference point on the side the tool occupies (opposite to keep side)
       gp_Vec n(normal);
       gp_Pnt refPt = keepPositiveSide
-          ? origin.Translated(n * -100.0)   // tool on negative side ÔåÆ keep positive
-          : origin.Translated(n * 100.0);   // tool on positive side ÔåÆ keep negative
+          ? origin.Translated(n * -100.0)   // tool on negative side Æ keep positive
+          : origin.Translated(n * 100.0);   // tool on positive side Æ keep negative
 
       BRepPrimAPI_MakeHalfSpace halfSpace(planeFace, refPt);
       TopoDS_Solid halfSpaceSolid = halfSpace.Solid();
 
-      TopoDS_Shape inputForHistory = it->second.shape;
-      BRepAlgoAPI_Cut cutter(it->second.shape, halfSpaceSolid);
+      TopoDS_Shape inputForHistory = originalShape;
+      BRepAlgoAPI_Cut cutter(originalShape, halfSpaceSolid);
       cutter.Build();
 
       if (!cutter.IsDone()) {
         throw GeometryError("GE_TRIM_FAILED",
-                            "Plane trim failed for shell: " + partId, true, "rollback");
+                            "Plane trim failed for part: " + partId, true, "rollback");
       }
 
       TopoDS_Shape result = cutter.Shape();
@@ -7527,8 +7618,12 @@ private:
                             "Plane trim produced empty result", true, "rollback");
       }
 
-      // Replace the shell's shape in-place
-      it->second.shape = result;
+      // Replace the shape in-place
+      if (isSolid) {
+        solidIt->second.shape = result;
+      } else {
+        shellIt->second.shape = result;
+      }
 
       auto history = captureHistory(cutter, inputForHistory,
           [](const TopoDS_Shape& s) { return shapeId(s); }, "trimBodyWithPlane");

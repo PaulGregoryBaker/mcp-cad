@@ -413,3 +413,28 @@ export interface RemoveProtrusionsResult {
   rollback_token: string;
   shape_history?: ShapeHistoryRecord[];
 }
+
+// ── Feature 009-validate-all ──────────────────────────────────────────────────
+export interface AutofixRecommendation {
+  tool_name: string;
+  arguments: Record<string, any>;
+}
+
+export interface ValidationError {
+  id: string;
+  category: 'sheet_metal' | 'clash_detection' | 'semantic_graph' | 'manufacturing' | 'nesting';
+  severity: 'error' | 'warning' | 'info';
+  message: string;
+  affected_part_ids: string[];
+  autofix?: AutofixRecommendation;
+}
+
+export interface ValidationReport {
+  valid: boolean;
+  errors: ValidationError[];
+  summary: {
+    total_parts_checked: number;
+    rule_count: number;
+    execution_time_ms: number;
+  };
+}

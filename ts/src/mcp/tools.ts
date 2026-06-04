@@ -22,6 +22,7 @@ import { transactionRegistry } from './transactions';
 import type { SemanticStore } from '../semantic/semantic_store';
 import { SemanticStoreError } from '../semantic/semantic_store';
 import { MappingLayer } from '../semantic/mapping_layer';
+import { validationEngine } from '../validation/validator';
 
 let _semanticStore: SemanticStore | null = null;
 
@@ -195,16 +196,25 @@ function unionGraphs(targetPartId: string, sourcePartId: string): void {
   }
 
   // Copy all edges from source to target
-  for (const [edgeId, edge] of sourceGraph.edges) {
-    if (targetGraph.edges.has(edgeId)) {
-      throwError(
-        ErrorCodes.GRAPH_INTEGRITY_ERROR,
-        `Cannot union graphs: edge "${edgeId}" exists in both target and source graphs`,
-        true,
-      );
+  for (const [fromNodeId, downstreams] of sourceGraph.edges) {
+    if (!targetGraph.edges.has(fromNodeId)) {
+      targetGraph.edges.set(fromNodeId, new Set());
     }
-    const clonedEdge = JSON.parse(JSON.stringify(edge));
-    targetGraph.edges.set(edgeId, clonedEdge);
+    const targetSet = targetGraph.edges.get(fromNodeId)!;
+    for (const down of downstreams) {
+      targetSet.add(down);
+    }
+  }
+
+  // Copy all reverseEdges from source to target
+  for (const [toNodeId, upstreams] of sourceGraph.reverseEdges) {
+    if (!targetGraph.reverseEdges.has(toNodeId)) {
+      targetGraph.reverseEdges.set(toNodeId, new Set());
+    }
+    const targetSet = targetGraph.reverseEdges.get(toNodeId)!;
+    for (const up of upstreams) {
+      targetSet.add(up);
+    }
   }
 
   // Mark all copied nodes as dirty so solver regenerates their geometry
@@ -605,9 +615,9 @@ export function getToolDefinitions(): object[] {
       inputSchema: {
         type: 'object',
         properties: {
-          part_id:        { type: 'string', description: 'The part whose face will be extended' },
-          face_id:        { type: 'string', description: 'Face ID to extend; omit to auto-select the closest face facing the target' },
-          target_type:    { type: 'string', enum: ['part_surface', 'face_id', 'plane'], description: 'How the target is specified (default: part_surface)' },
+          part_id: { type: 'string', description: 'The part whose face will be extended' },
+          face_id: { type: 'string', description: 'Face ID to extend; omit to auto-select the closest face facing the target' },
+          target_type: { type: 'string', enum: ['part_surface', 'face_id', 'plane'], description: 'How the target is specified (default: part_surface)' },
           target_part_id: { type: 'string', description: 'Target part ID (required when target_type is part_surface or face_id)' },
           target_face_id: { type: 'string', description: 'Specific face ID on the target part (only used when target_type is face_id)' },
           target: {
@@ -616,8 +626,8 @@ export function getToolDefinitions(): object[] {
             properties: {
               part_id: { type: 'string' },
               face_id: { type: 'string' },
-              normal:  { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } } },
-              origin:  { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } } },
+              normal: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } } },
+              origin: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } } },
             },
           },
           transaction_id: { type: 'string' },
@@ -970,7 +980,7 @@ export function getToolDefinitions(): object[] {
       inputSchema: {
         type: 'object',
         properties: {
-          target:     { type: 'string', description: 'Body ID' },
+          target: { type: 'string', description: 'Body ID' },
           properties: {
             type: 'array',
             items: { type: 'string', enum: ['volume', 'surface_area', 'centroid', 'inertia_tensor'] },
@@ -987,8 +997,8 @@ export function getToolDefinitions(): object[] {
       inputSchema: {
         type: 'object',
         properties: {
-          target_a:        { type: 'string', description: 'First entity ID (face, edge, vertex, or body)' },
-          target_b:        { type: 'string', description: 'Second entity ID' },
+          target_a: { type: 'string', description: 'First entity ID (face, edge, vertex, or body)' },
+          target_b: { type: 'string', description: 'Second entity ID' },
           measurement_type: {
             type: 'string',
             enum: ['min_distance', 'max_distance', 'angle'],
@@ -1005,7 +1015,7 @@ export function getToolDefinitions(): object[] {
       inputSchema: {
         type: 'object',
         properties: {
-          target:      { type: 'string', description: 'Body or shell ID to explore' },
+          target: { type: 'string', description: 'Body or shell ID to explore' },
           return_type: {
             type: 'string',
             enum: ['solid', 'shell', 'face', 'edge', 'vertex'],
@@ -1021,9 +1031,9 @@ export function getToolDefinitions(): object[] {
       inputSchema: {
         type: 'object',
         properties: {
-          targets:        { type: 'array', items: { type: 'string' }, minItems: 1, description: 'IDs of bodies to translate' },
-          vector:         { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[dx, dy, dz] translation vector in mm' },
-          keep_original:  { type: 'boolean', default: false, description: 'If true, keep the original body' },
+          targets: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'IDs of bodies to translate' },
+          vector: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[dx, dy, dz] translation vector in mm' },
+          keep_original: { type: 'boolean', default: false, description: 'If true, keep the original body' },
           transaction_id: { type: 'string' }
         },
         required: ['targets', 'vector', 'transaction_id']
@@ -1035,12 +1045,12 @@ export function getToolDefinitions(): object[] {
       inputSchema: {
         type: 'object',
         properties: {
-          targets:          { type: 'array', items: { type: 'string' }, minItems: 1, description: 'IDs of bodies to rotate' },
-          axis_origin:      { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[x, y, z] of a point on the rotation axis (mm)' },
-          axis_direction:   { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[dx, dy, dz] direction vector of the axis' },
-          angle_degrees:    { type: 'number', description: 'Rotation angle in degrees (right-hand rule)' },
-          keep_original:    { type: 'boolean', default: false, description: 'If true, keep the original body' },
-          transaction_id:   { type: 'string' }
+          targets: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'IDs of bodies to rotate' },
+          axis_origin: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[x, y, z] of a point on the rotation axis (mm)' },
+          axis_direction: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[dx, dy, dz] direction vector of the axis' },
+          angle_degrees: { type: 'number', description: 'Rotation angle in degrees (right-hand rule)' },
+          keep_original: { type: 'boolean', default: false, description: 'If true, keep the original body' },
+          transaction_id: { type: 'string' }
         },
         required: ['targets', 'axis_origin', 'axis_direction', 'angle_degrees', 'transaction_id']
       }
@@ -1051,10 +1061,10 @@ export function getToolDefinitions(): object[] {
       inputSchema: {
         type: 'object',
         properties: {
-          targets:        { type: 'array', items: { type: 'string' }, minItems: 1, description: 'IDs of bodies to mirror' },
-          plane_origin:   { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[x, y, z] of a point on the mirror plane (mm)' },
-          plane_normal:   { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[nx, ny, nz] plane normal' },
-          keep_original:  { type: 'boolean', default: false, description: 'If true, keep the original body' },
+          targets: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'IDs of bodies to mirror' },
+          plane_origin: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[x, y, z] of a point on the mirror plane (mm)' },
+          plane_normal: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[nx, ny, nz] plane normal' },
+          keep_original: { type: 'boolean', default: false, description: 'If true, keep the original body' },
           transaction_id: { type: 'string' }
         },
         required: ['targets', 'plane_origin', 'plane_normal', 'transaction_id']
@@ -1066,10 +1076,10 @@ export function getToolDefinitions(): object[] {
       inputSchema: {
         type: 'object',
         properties: {
-          targets:        { type: 'array', items: { type: 'string' }, minItems: 1, description: 'IDs of bodies to scale' },
-          origin:         { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[x, y, z] scale origin (mm)' },
-          scale_factor:   { type: 'number', minimum: 0.0001, description: 'Uniform scale factor (> 0)' },
-          keep_original:  { type: 'boolean', default: false, description: 'If true, keep the original body' },
+          targets: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'IDs of bodies to scale' },
+          origin: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[x, y, z] scale origin (mm)' },
+          scale_factor: { type: 'number', minimum: 0.0001, description: 'Uniform scale factor (> 0)' },
+          keep_original: { type: 'boolean', default: false, description: 'If true, keep the original body' },
           transaction_id: { type: 'string' }
         },
         required: ['targets', 'origin', 'scale_factor', 'transaction_id']
@@ -1081,10 +1091,10 @@ export function getToolDefinitions(): object[] {
       inputSchema: {
         type: 'object',
         properties: {
-          source_face:    { type: 'string', description: 'Face ID on the body to move' },
+          source_face: { type: 'string', description: 'Face ID on the body to move' },
           destination_face: { type: 'string', description: 'Target face ID (this body does not move)' },
-          flip_normal:    { type: 'boolean', default: false, description: 'If true, source face normal is flipped before alignment' },
-          keep_original:  { type: 'boolean', default: false, description: 'If true, keep the original body' },
+          flip_normal: { type: 'boolean', default: false, description: 'If true, source face normal is flipped before alignment' },
+          keep_original: { type: 'boolean', default: false, description: 'If true, keep the original body' },
           transaction_id: { type: 'string' }
         },
         required: ['source_face', 'destination_face', 'transaction_id']
@@ -1096,9 +1106,9 @@ export function getToolDefinitions(): object[] {
       inputSchema: {
         type: 'object',
         properties: {
-          part_id:        { type: 'string', description: 'Body/shell containing the edges' },
-          targets:        { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Edge IDs to fillet' },
-          radius:         { type: 'number', exclusiveMinimum: 0, description: 'Fillet radius in mm' },
+          part_id: { type: 'string', description: 'Body/shell containing the edges' },
+          targets: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Edge IDs to fillet' },
+          radius: { type: 'number', exclusiveMinimum: 0, description: 'Fillet radius in mm' },
           transaction_id: { type: 'string' }
         },
         required: ['part_id', 'targets', 'radius', 'transaction_id']
@@ -1110,9 +1120,9 @@ export function getToolDefinitions(): object[] {
       inputSchema: {
         type: 'object',
         properties: {
-          part_id:        { type: 'string', description: 'Body/shell containing the edges' },
-          targets:        { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Edge IDs to chamfer' },
-          distance:       { type: 'number', exclusiveMinimum: 0, description: 'Chamfer offset distance in mm' },
+          part_id: { type: 'string', description: 'Body/shell containing the edges' },
+          targets: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Edge IDs to chamfer' },
+          distance: { type: 'number', exclusiveMinimum: 0, description: 'Chamfer offset distance in mm' },
           transaction_id: { type: 'string' }
         },
         required: ['part_id', 'targets', 'distance', 'transaction_id']
@@ -1124,9 +1134,9 @@ export function getToolDefinitions(): object[] {
       inputSchema: {
         type: 'object',
         properties: {
-          part_id:        { type: 'string', description: 'Body/shell to simplify' },
-          unify_faces:    { type: 'boolean', default: true, description: 'Merge co-planar adjacent faces' },
-          unify_edges:    { type: 'boolean', default: true, description: 'Merge collinear adjacent edges' },
+          part_id: { type: 'string', description: 'Body/shell to simplify' },
+          unify_faces: { type: 'boolean', default: true, description: 'Merge co-planar adjacent faces' },
+          unify_edges: { type: 'boolean', default: true, description: 'Merge collinear adjacent edges' },
           transaction_id: { type: 'string' }
         },
         required: ['part_id', 'transaction_id']
@@ -1138,10 +1148,10 @@ export function getToolDefinitions(): object[] {
       inputSchema: {
         type: 'object',
         properties: {
-          part_id:          { type: 'string', description: 'Body/shell to heal' },
-          fix_tolerances:   { type: 'boolean', default: true, description: 'Repair loose tolerancing issues' },
-          fix_wires:        { type: 'boolean', default: true, description: 'Heal open or incorrect wires' },
-          transaction_id:   { type: 'string' }
+          part_id: { type: 'string', description: 'Body/shell to heal' },
+          fix_tolerances: { type: 'boolean', default: true, description: 'Repair loose tolerancing issues' },
+          fix_wires: { type: 'boolean', default: true, description: 'Heal open or incorrect wires' },
+          transaction_id: { type: 'string' }
         },
         required: ['part_id', 'transaction_id']
       }
@@ -1152,9 +1162,9 @@ export function getToolDefinitions(): object[] {
       inputSchema: {
         type: 'object',
         properties: {
-          part_id:        { type: 'string', description: 'Body/shell to offset' },
-          offset_value:   { type: 'number', description: 'Offset distance in mm. Positive = outward (thicken), negative = inward (shrink).' },
-          tolerance:      { type: 'number', default: 1e-4, description: 'Shape tolerance (mm)' },
+          part_id: { type: 'string', description: 'Body/shell to offset' },
+          offset_value: { type: 'number', description: 'Offset distance in mm. Positive = outward (thicken), negative = inward (shrink).' },
+          tolerance: { type: 'number', default: 1e-4, description: 'Shape tolerance (mm)' },
           transaction_id: { type: 'string' }
         },
         required: ['part_id', 'offset_value', 'transaction_id']
@@ -1166,8 +1176,8 @@ export function getToolDefinitions(): object[] {
       inputSchema: {
         type: 'object',
         properties: {
-          part_id:        { type: 'string', description: 'Body containing the faces' },
-          targets:        { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Face IDs to delete' },
+          part_id: { type: 'string', description: 'Body containing the faces' },
+          targets: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Face IDs to delete' },
           heal_remaining: { type: 'boolean', default: true, description: 'If true, attempt to stitch/sew the remaining faces' },
           transaction_id: { type: 'string' }
         },
@@ -1244,6 +1254,26 @@ export function getToolDefinitions(): object[] {
           assembly_id: { type: 'string', description: 'Assembly document ID' }
         },
         required: ['assembly_id']
+      }
+    },
+    {
+      name: 'validate_assembly',
+      description: 'Performs comprehensive geometry and assembly verification, checking for sheet metal unfoldability and adjacent part overlaps, returning detailed errors and autofix tool recommendations.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          part_ids: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Optional list of part IDs to check. If omitted, checks all parts in the workspace.'
+          },
+          sheet_metal_flags: {
+            type: 'object',
+            additionalProperties: { type: 'boolean' },
+            description: 'Optional overrides to flag parts as sheet metal (true) or non-sheet-metal (false). Default is true for all parts.'
+          }
+        },
+        required: []
       }
     },
 
@@ -1460,6 +1490,9 @@ export async function dispatchTool(
     switch (toolName) {
       case 'clean_geometry':
         return handleCleanGeometry(args);
+
+      case 'validate_assembly':
+        return handleValidateAssembly(args);
 
       case 'fuse_bodies':
         return handleFuseBodies(args);
@@ -1942,9 +1975,10 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
   const partId = requireString(args, 'part_id');
   const panelId = requireString(args, 'panel_id');
   const materialId = requireString(args, 'material_id');
+  const transactionId = requireString(args, 'transaction_id');
 
   const graph = getManufacturingGraph(partId);
-  
+
   // Verify that the panel node exists in the graph.
   // Strict lookup: panel_id must be a stable graph NodeId, not a volatile shell UUID.
   const panelNodeId = panelId as import('../manufacturing/graph/types').NodeId;
@@ -1960,7 +1994,7 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
     throwError(
       ErrorCodes.GRAPH_INTEGRITY_ERROR,
       `Panel "${panelId}" not found in part "${partId}" manufacturing graph. ` +
-        `panel_id must be a stable node ID from the manufacturing graph, not a volatile shell UUID.`,
+      `panel_id must be a stable node ID from the manufacturing graph, not a volatile shell UUID.`,
       true,
       'query_graph',
     );
@@ -1991,14 +2025,14 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
   const kFactor = (args['k_factor'] as number | undefined) ?? material.kFactor;
 
   const ctx = resolveTransactionContext(args);
-  
+
   // Validate the panel structure (sheet metal constraints)
   const validation = getGeometryBinding().isPanelValid(shellId);
   if (!validation.isValid || !validation.canFlatten) {
     throwError(
       ErrorCodes.GE_PANEL_INVALID,
       `Panel ${panelId} (shell ${shellId}) is not a valid sheet-metal panel: ` +
-        validation.errors.map(e => `[${e.code}] ${e.message}`).join('; '),
+      validation.errors.map(e => `[${e.code}] ${e.message}`).join('; '),
       false,
     );
   }
@@ -2019,20 +2053,20 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
   // Use panelNode.id (the actual graph node ID) not panelNodeId (user-supplied panel_id)
   // because for merged shells the graph node ID differs from the shell UUID.
   const graphDims = graph.getFlatPatternDimensions(panelNode.id);
-  
+
   if (!graphDims) {
     throwError(
       ErrorCodes.GRAPH_INTEGRITY_ERROR,
       `Panel "${panelId}" cannot provide flat pattern dimensions from the manufacturing graph. ` +
-        `The panel may be disconnected from the root or contain dirty nodes. ` +
-        `Call solve_geometry first to resolve the manufacturing graph.`,
+      `The panel may be disconnected from the root or contain dirty nodes. ` +
+      `Call solve_geometry first to resolve the manufacturing graph.`,
       true,
       'solve_geometry',
     );
   }
 
   // Use graph dimensions exclusively (no C++ bbox fallback)
-  const finalFlatWidth  = graphDims.width;
+  const finalFlatWidth = graphDims.width;
   const finalFlatHeight = graphDims.height;
 
   // Export DXF and normalise bend-line coordinates using the correct flat dimensions.
@@ -2081,10 +2115,10 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
   const cutProfiles: Array<{ id: string; label: string | null; profile: unknown }> = [];
   for (const node of graph.nodes.values()) {
     if (node.type === 'CutNode' && node.parentPanelId === panelNodeId) {
-      cutProfiles.push({ 
-        id: node.id, 
-        label: (node as import('../manufacturing/graph/types').CutNode).label ?? null, 
-        profile: node.profile 
+      cutProfiles.push({
+        id: node.id,
+        label: (node as import('../manufacturing/graph/types').CutNode).label ?? null,
+        profile: node.profile
       });
     }
   }
@@ -2541,7 +2575,7 @@ function resolveTransactionContext(args: Record<string, unknown>): TransactionCo
 // ─── Body topology tool handlers ──────────────────────────────────────────────
 
 function handleSplitBodyByPlane(args: Record<string, unknown>): unknown {
-  const partId   = requireString(args, 'part_id');
+  const partId = requireString(args, 'part_id');
   const planeArg = args['cutting_plane'];
   if (!planeArg || typeof planeArg !== 'object' || !('normal' in planeArg) || !('origin' in planeArg)) {
     throwError(ErrorCodes.GE_SPLIT_FAILED, 'cutting_plane must have normal and origin objects', false);
@@ -2567,10 +2601,10 @@ function handleSplitBodyByPlane(args: Record<string, unknown>): unknown {
 }
 
 function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
-  const partAId      = requireString(args, 'part_a_id');
-  const partBId      = requireString(args, 'part_b_id');
-  const targetEdges  = requireStringArray(args, 'target_edges');
-  const bendRadius   = args['bend_radius'];
+  const partAId = requireString(args, 'part_a_id');
+  const partBId = requireString(args, 'part_b_id');
+  const targetEdges = requireStringArray(args, 'target_edges');
+  const bendRadius = args['bend_radius'];
   if (typeof bendRadius !== 'number' || bendRadius <= 0) {
     throwError(ErrorCodes.GE_MERGE_FAILED, 'bend_radius must be a positive number', false);
   }
@@ -2629,8 +2663,8 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
     throwError(
       ErrorCodes.GRAPH_INTEGRITY_ERROR,
       `merge_bodies_with_bend part_a: No PanelNode with id === part_a_id ("${partAId}"). ` +
-        `Found ${panelNodesA.length} panel(s): ${panelNodesA.map(p => p.id).join(', ')}. ` +
-        `Provide part_a_id that matches a panel node id in the graph, or ensure exactly one panel exists.`,
+      `Found ${panelNodesA.length} panel(s): ${panelNodesA.map(p => p.id).join(', ')}. ` +
+      `Provide part_a_id that matches a panel node id in the graph, or ensure exactly one panel exists.`,
       true,
     );
   }
@@ -2663,8 +2697,8 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
     throwError(
       ErrorCodes.GRAPH_INTEGRITY_ERROR,
       `merge_bodies_with_bend part_b: No PanelNode with id === part_b_id ("${partBId}"). ` +
-        `Found ${panelNodesB.length} panel(s): ${panelNodesB.map(p => p.id).join(', ')}. ` +
-        `Provide part_b_id that matches a panel node id in the graph, or ensure exactly one panel exists.`,
+      `Found ${panelNodesB.length} panel(s): ${panelNodesB.map(p => p.id).join(', ')}. ` +
+      `Provide part_b_id that matches a panel node id in the graph, or ensure exactly one panel exists.`,
       true,
     );
   }
@@ -2705,7 +2739,7 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
   const nodeAId = toNodeId(`panel-a-${partAId.substring(0, 8)}`);
   // nodeBId equals partAId so that apply_unfold(panel_id: partAId) finds this node by id.
   const nodeBId = toNodeId(partAId);
-  const bendId  = toNodeId(`bend-${partAId.substring(0, 8)}`);
+  const bendId = toNodeId(`bend-${partAId.substring(0, 8)}`);
 
   // Remove old graphs for both parts, then create merged graph at the stable partAId key.
   _parts.delete(partAId);
@@ -2791,8 +2825,8 @@ function handleIsPanelValid(args: Record<string, unknown>): unknown {
 }
 
 function handleExtendFaceToTarget(args: Record<string, unknown>): unknown {
-  const partId     = requireString(args, 'part_id');
-  const faceId     = typeof args['face_id'] === 'string' ? args['face_id'] as string : '';
+  const partId = requireString(args, 'part_id');
+  const faceId = typeof args['face_id'] === 'string' ? args['face_id'] as string : '';
   const targetType = typeof args['target_type'] === 'string' ? args['target_type'] as string : 'part_surface';
 
   if (targetType !== 'plane' && targetType !== 'face_id' && targetType !== 'part_surface') {
@@ -2841,8 +2875,8 @@ function handleExtendFaceToTarget(args: Record<string, unknown>): unknown {
 }
 
 function handleOffsetFace(args: Record<string, unknown>): unknown {
-  const partId   = requireString(args, 'part_id');
-  const faceId   = requireString(args, 'face_id');
+  const partId = requireString(args, 'part_id');
+  const faceId = requireString(args, 'face_id');
   const distance = args['distance'];
   if (typeof distance !== 'number' || Math.abs(distance) < 1e-10) {
     throwError(ErrorCodes.GE_OFFSET_FAILED, 'distance must be a non-zero number', false);
@@ -2865,11 +2899,11 @@ function handleOffsetFace(args: Record<string, unknown>): unknown {
 }
 
 function handleAddFlange(args: Record<string, unknown>): unknown {
-  const partId       = requireString(args, 'part_id');
-  const edgeId       = requireString(args, 'edge_id');
-  const length       = args['length'];
-  const angle        = args['angle'];
-  const bendRadius   = args['bend_radius'];
+  const partId = requireString(args, 'part_id');
+  const edgeId = requireString(args, 'edge_id');
+  const length = args['length'];
+  const angle = args['angle'];
+  const bendRadius = args['bend_radius'];
 
   if (typeof length !== 'number' || length <= 0) {
     throwError(ErrorCodes.GE_FLANGE_FAILED, 'length must be a positive number', false);
@@ -2951,7 +2985,7 @@ function handleComputeIntersections(args: Record<string, unknown>): unknown {
 function handleComputeGaps(args: Record<string, unknown>): unknown {
   const partAId = requireString(args, 'part_a_id');
   const partBId = requireString(args, 'part_b_id');
-  const maxDist  = args['max_distance_threshold_mm'];
+  const maxDist = args['max_distance_threshold_mm'];
   if (typeof maxDist !== 'number' || maxDist < 0) {
     throwError(ErrorCodes.GE_GAP_DETECTION_FAILED, 'max_distance_threshold_mm must be a non-negative number', false);
   }
@@ -3001,7 +3035,7 @@ function handleMassProperties(args: Record<string, unknown>): unknown {
 function handleMeasureDistance(args: Record<string, unknown>): unknown {
   const targetA = requireString(args, 'target_a');
   const targetB = requireString(args, 'target_b');
-  const mType   = (args['measurement_type'] as string | undefined) ?? 'min_distance';
+  const mType = (args['measurement_type'] as string | undefined) ?? 'min_distance';
   const result = getGeometryBinding().measureDistance(targetA, targetB, mType);
   return {
     value: result.value,
@@ -3010,7 +3044,7 @@ function handleMeasureDistance(args: Record<string, unknown>): unknown {
 }
 
 function handleExploreTopology(args: Record<string, unknown>): unknown {
-  const target     = requireString(args, 'target');
+  const target = requireString(args, 'target');
   const returnType = requireString(args, 'return_type');
   const result = getGeometryBinding().exploreTopology(target, returnType);
   return {
@@ -3145,7 +3179,7 @@ function handleIntersectBodies(args: Record<string, unknown>): unknown {
 }
 
 function handleTrimBodyWithPlane(args: Record<string, unknown>): unknown {
-  const partId          = requireString(args, 'part_id');
+  const partId = requireString(args, 'part_id');
   const keepPositiveSide = args['keep_positive_side'];
   if (typeof keepPositiveSide !== 'boolean') {
     throwError(ErrorCodes.GE_TRIM_FAILED, 'keep_positive_side must be a boolean', false);
@@ -3182,7 +3216,7 @@ function handleCheckBoundaryCompliance(
   args: Record<string, unknown>,
   config: ManufacturingConfig,
 ): unknown {
-  const partId       = requireString(args, 'part_id');
+  const partId = requireString(args, 'part_id');
   const envelopeType = requireString(args, 'envelope_type');
 
   if (envelopeType !== 'shipping' && envelopeType !== 'coating') {
@@ -3313,7 +3347,7 @@ function handleSplitBodyByBends(args: Record<string, unknown>): unknown {
     }
     createPart(partId);
     const graph = getManufacturingGraph(partId);
-    
+
     // Compute flat dimensions from the bbox so the manufacturing graph
     // has the panel width/height without needing a separate unfold pass.
     // The two largest dims are width/height; the smallest is the thickness.
@@ -3913,6 +3947,18 @@ function handleListAssemblyTree(args: Record<string, unknown>): unknown {
   };
 }
 
+async function handleValidateAssembly(args: Record<string, unknown>): Promise<unknown> {
+  const part_ids = args.part_ids as string[] | undefined;
+  const sheet_metal_flags = args.sheet_metal_flags as Record<string, boolean> | undefined;
+
+  const report = await validationEngine.validate({
+    part_ids,
+    sheet_metal_flags,
+  });
+
+  return report;
+}
+
 // ─── Part management handlers (Feature 009 multi-part support) ────────────────
 
 function handleCreatePart(args: Record<string, unknown>): unknown {
@@ -4367,4 +4413,27 @@ async function handleAddCut(
     stale_warning: stale,
   };
 }
+
+/**
+ * Test helper to register a part and seed its graph with panel nodes.
+ * Used by tests to bypass split_body_by_bends prerequisite checks.
+ */
+export function registerTestPart(partId: string, panelBodyIds: string[] = []): void {
+  initializeSolvers();
+  _parts.delete(partId);
+  const graph = createPart(partId);
+  for (const bodyId of panelBodyIds) {
+    graph.addNode({
+      type: 'PanelNode',
+      id: toNodeId(bodyId),
+      bodyId: bodyId as import('../manufacturing/graph/types').BodyId,
+      dirty: false,
+      materialType: 'default',
+      nominalThickness: 1.0,
+      flatWidth: 100,
+      flatHeight: 100,
+    } as any);
+  }
+}
+
 

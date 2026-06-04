@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import * as path from 'node:path';
 
-import { dispatchTool } from '../../src/mcp/tools';
+import { dispatchTool, registerTestPart } from '../../src/mcp/tools';
 import { loadConfig } from '../../src/config/loader';
 import { getFixturePath } from '../helpers/fixtures';
 import { geometryBinding } from '../../src/geometry/binding';
@@ -85,6 +85,8 @@ describe('Advanced Sheet Metal Unfolding Integration Tests', () => {
 
     const txn: any = await dispatchTool('begin_transaction', { label: 'unfold_dxf_test' }, config);
     expect(txn.transaction_id).toBeDefined();
+
+    registerTestPart(decompose.panel_ids[0], [decompose.panel_ids[0]]);
 
     const unfold: any = await dispatchTool('apply_unfold', {
       part_id: decompose.panel_ids[0],
@@ -347,7 +349,7 @@ describe('Advanced Sheet Metal Unfolding Integration Tests', () => {
       try {
         unfold = await dispatchTool('apply_unfold', {
           part_id: panel.id,
-          panel_id: panel.id,
+          panel_id: `panel-root-${panel.id.substring(0, 8)}`,
           material_id: config.materials[0]!.id,
           transaction_id: txn.transaction_id,
         }, config);
@@ -396,6 +398,8 @@ describe('Advanced Sheet Metal Unfolding Integration Tests', () => {
 
     const txn: any = await dispatchTool('begin_transaction', { label: 'unfold_cube_regression' }, config);
 
+    registerTestPart(decompose.panel_ids[0], [decompose.panel_ids[0]]);
+
     await expect(
       dispatchTool('apply_unfold', {
         part_id: decompose.panel_ids[0],
@@ -424,6 +428,8 @@ describe('Advanced Sheet Metal Unfolding Integration Tests', () => {
     // outer body before splitting.  The body registered under solid_id is what gets
     // unfolded directly in the app when "Gen Flat Patterns" is pressed before splitting.
     const txn: any = await dispatchTool('begin_transaction', { label: 'unfold_wholecube_regression' }, config);
+
+    registerTestPart(clean.solid_id, [clean.solid_id]);
 
     let unfoldResult: any;
     let unfoldError: unknown;

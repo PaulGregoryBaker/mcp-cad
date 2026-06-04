@@ -14,7 +14,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as path from 'node:path';
-import { dispatchTool, setGeometryBindingMock } from '../../src/mcp/tools';
+import { dispatchTool, setGeometryBindingMock, registerTestPart } from '../../src/mcp/tools';
 import { loadConfig } from '../../src/config/loader';
 import type { GeometryAddon } from '../../src/geometry/binding';
 import type { ManufacturingConfig } from '../../src/config/loader';
@@ -115,6 +115,12 @@ function buildMockAddon(): GeometryAddon {
         { verdict: 'generated', original_id: 'f2', new_id: 'f2a', operation_label: 'split_body_by_bends' },
         { verdict: 'deleted',   original_id: 'f3', new_id: '',    operation_label: 'split_body_by_bends' },
       ],
+    })),
+    validateSheetMetal: vi.fn(() => ({
+      is_valid: true,
+      nominal_thickness: 1.0,
+      can_flatten: true,
+      validation_errors: [],
     })),
 
     // Expose `cleared` to tests so they can assert clearSnapshots was called.
@@ -579,6 +585,8 @@ describe('Transaction primitive (Feature 004 Phase 4) — shape_history for all 
   });
 
   it('merge_bodies_with_bend appends shape_history to transaction', async () => {
+    registerTestPart('a', ['a']);
+    registerTestPart('b', ['b']);
     const begin = (await dispatchTool('begin_transaction', { label: 'p4', product: 'x' }, config)) as { transaction_id: string };
     const res = (await dispatchTool('merge_bodies_with_bend', {
       transaction_id: begin.transaction_id,
@@ -656,6 +664,7 @@ describe('Transaction primitive (Feature 004 Phase 4) — shape_history for all 
   });
 
   it('apply_unfold returns empty shape_history (stub)', async () => {
+    registerTestPart('shell-1', ['shell-1']);
     const begin = (await dispatchTool('begin_transaction', { label: 'p4', product: 'x' }, config)) as { transaction_id: string };
     const res = (await dispatchTool('apply_unfold', {
       transaction_id: begin.transaction_id,

@@ -2,7 +2,7 @@ import { describe, expect, it, beforeAll } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { dispatchTool } from '../../src/mcp/tools';
+import { dispatchTool, registerTestPart } from '../../src/mcp/tools';
 import { loadConfig } from '../../src/config/loader';
 import { getInf03FixturePath } from '../helpers/fixtures';
 
@@ -50,12 +50,18 @@ describe('SYS-JTBD-04 Export Lifecycle Integration', () => {
     
     expect(decompose.panel_ids.length).toBeGreaterThan(0);
 
+    // Start explicit transaction for unfolding
+    const txn = await dispatchTool('begin_transaction', { label: 'sys-jtbd-04' }, config) as any;
+    expect(txn.transaction_id).toBeDefined();
+
     const unfoldIds = [];
     for (const panelId of decompose.panel_ids) {
+        registerTestPart(panelId, [panelId]);
         const unfold = await dispatchTool('apply_unfold', {
-        part_id: panelId,
+            part_id: panelId,
             panel_id: panelId,
             material_id: config.materials[0]!.id,
+            transaction_id: txn.transaction_id,
         }, config) as any;
         unfoldIds.push(unfold.unfold_id);
     }
@@ -104,5 +110,7 @@ describe('SYS-JTBD-04 Export Lifecycle Integration', () => {
     expect(types).toContain('dxf');
     expect(types).toContain('bom_csv');
     expect(types).toContain('assembly_json');
+
+    await dispatchTool('rollback_transaction', { transaction_id: txn.transaction_id }, config);
   });
 });

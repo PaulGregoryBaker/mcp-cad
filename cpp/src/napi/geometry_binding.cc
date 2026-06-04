@@ -760,6 +760,81 @@ Napi::Value ComputeIntersections(const Napi::CallbackInfo& info) {
   return env.Undefined();
 }
 
+Napi::Value CheckAssemblyClashes(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 2 || !info[0].IsArray() || !info[1].IsArray()) {
+    Napi::TypeError::New(env, "checkAssemblyClashes(partIds: string[], adjacentPairs: [string, string][])").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  Napi::Array partIdsArr = info[0].As<Napi::Array>();
+  std::vector<ShellId> partIds;
+  partIds.reserve(partIdsArr.Length());
+  for (uint32_t i = 0; i < partIdsArr.Length(); ++i) {
+    partIds.push_back(partIdsArr.Get(i).As<Napi::String>().Utf8Value());
+  }
+
+  Napi::Array pairsArr = info[1].As<Napi::Array>();
+  std::vector<std::pair<ShellId, ShellId>> adjacentPairs;
+  adjacentPairs.reserve(pairsArr.Length());
+  for (uint32_t i = 0; i < pairsArr.Length(); ++i) {
+    Napi::Value val = pairsArr.Get(i);
+    if (!val.IsArray()) {
+      Napi::TypeError::New(env, "adjacentPairs must be an array of string pairs").ThrowAsJavaScriptException();
+      return env.Undefined();
+    }
+    Napi::Array pair = val.As<Napi::Array>();
+    if (pair.Length() < 2) {
+      Napi::TypeError::New(env, "each adjacentPair must contain two elements").ThrowAsJavaScriptException();
+      return env.Undefined();
+    }
+    std::string a = pair.Get(uint32_t(0)).As<Napi::String>().Utf8Value();
+    std::string b = pair.Get(uint32_t(1)).As<Napi::String>().Utf8Value();
+    adjacentPairs.emplace_back(a, b);
+  }
+
+  TRY_GEOMETRY(env, {
+    std::vector<ClashPair> clashes = svc().checkAssemblyClashes(partIds, adjacentPairs);
+    Napi::Array result = Napi::Array::New(env, clashes.size());
+    for (size_t i = 0; i < clashes.size(); ++i) {
+      const ClashPair& cp = clashes[i];
+      Napi::Object clash = Napi::Object::New(env);
+      clash.Set("partIdA", Napi::String::New(env, cp.partIdA));
+      clash.Set("partIdB", Napi::String::New(env, cp.partIdB));
+      clash.Set("intersectionVolumeMm3", Napi::Number::New(env, cp.intersectionVolumeMm3));
+
+      Napi::Object bbox = Napi::Object::New(env);
+      Napi::Object bboxOrigin = Napi::Object::New(env);
+      bboxOrigin.Set("x", Napi::Number::New(env, cp.clashBoundingBox.ox));
+      bboxOrigin.Set("y", Napi::Number::New(env, cp.clashBoundingBox.oy));
+      bboxOrigin.Set("z", Napi::Number::New(env, cp.clashBoundingBox.oz));
+      Napi::Object bboxDims = Napi::Object::New(env);
+      bboxDims.Set("x", Napi::Number::New(env, cp.clashBoundingBox.dx));
+      bboxDims.Set("y", Napi::Number::New(env, cp.clashBoundingBox.dy));
+      bboxDims.Set("z", Napi::Number::New(env, cp.clashBoundingBox.dz));
+      bbox.Set("origin", bboxOrigin);
+      bbox.Set("dimensions", bboxDims);
+      clash.Set("clashBoundingBox", bbox);
+
+      Napi::Object plane = Napi::Object::New(env);
+      Napi::Object planeNormal = Napi::Object::New(env);
+      planeNormal.Set("x", Napi::Number::New(env, cp.suggestedCuttingPlane.normalX));
+      planeNormal.Set("y", Napi::Number::New(env, cp.suggestedCuttingPlane.normalY));
+      planeNormal.Set("z", Napi::Number::New(env, cp.suggestedCuttingPlane.normalZ));
+      Napi::Object planeOrigin = Napi::Object::New(env);
+      planeOrigin.Set("x", Napi::Number::New(env, cp.suggestedCuttingPlane.originX));
+      planeOrigin.Set("y", Napi::Number::New(env, cp.suggestedCuttingPlane.originY));
+      planeOrigin.Set("z", Napi::Number::New(env, cp.suggestedCuttingPlane.originZ));
+      plane.Set("normal", planeNormal);
+      plane.Set("origin", planeOrigin);
+      clash.Set("suggestedCuttingPlane", plane);
+
+      result.Set(static_cast<uint32_t>(i), clash);
+    }
+    return result;
+  })
+  return env.Undefined();
+}
+
 Napi::Value ComputeGaps(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   if (info.Length() < 3) {
@@ -1853,6 +1928,7 @@ void RegisterGeometryMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("restoreSnapshot",       Napi::Function::New(env, RestoreSnapshot));
   exports.Set("clearSnapshots",        Napi::Function::New(env, ClearSnapshots));
   exports.Set("computeIntersections",  Napi::Function::New(env, ComputeIntersections));
+  exports.Set("checkAssemblyClashes",  Napi::Function::New(env, CheckAssemblyClashes));
   exports.Set("computeGaps",           Napi::Function::New(env, ComputeGaps));
   exports.Set("trimBodyWithPlane",     Napi::Function::New(env, TrimBodyWithPlane));
   exports.Set("splitBodyByPlane",      Napi::Function::New(env, SplitBodyByPlane));

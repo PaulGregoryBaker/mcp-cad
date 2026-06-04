@@ -2,7 +2,7 @@ import { describe, expect, it, beforeAll } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { dispatchTool } from '../../src/mcp/tools';
+import { dispatchTool, registerTestPart } from '../../src/mcp/tools';
 import { loadConfig } from '../../src/config/loader';
 import { getInf03FixturePath } from '../helpers/fixtures';
 
@@ -39,6 +39,7 @@ describe('SYS-JTBD-03 Unfold and Score Integration', () => {
       let panelId: any;
       let unfold: any;
       let score: any;
+      let txn: any;
       // 1. Clean geometry
       try {
         clean = await dispatchTool('clean_geometry', { file_path: fixturePath }, config) as any;
@@ -82,12 +83,19 @@ describe('SYS-JTBD-03 Unfold and Score Integration', () => {
         throw new Error('No panelId found after decompose_volume');
       }
 
+      // Start transaction for mutating operations in this iteration
+      txn = await dispatchTool('begin_transaction', { label: `sys-jtbd-03-iter-${i}` }, config) as any;
+      expect(txn.transaction_id).toBeDefined();
+
+      registerTestPart(panelId, [panelId]);
+
       // 3. apply_unfold
       try {
         unfold = await dispatchTool('apply_unfold', {
           part_id: panelId,
           panel_id: panelId,
           material_id: config.materials[0]!.id,
+          transaction_id: txn.transaction_id,
         }, config) as any;
         // eslint-disable-next-line no-console
         console.log(`[UnfoldScoreTest] Iter ${i} apply_unfold result:`, unfold);
@@ -116,6 +124,8 @@ describe('SYS-JTBD-03 Unfold and Score Integration', () => {
         console.error(`[UnfoldScoreTest] Iter ${i} evaluate_manufacturability failed:`, err);
         throw err;
       }
+
+      await dispatchTool('rollback_transaction', { transaction_id: txn.transaction_id }, config);
 
       results.push({
         unfold_width: unfold.flat_width_mm,
