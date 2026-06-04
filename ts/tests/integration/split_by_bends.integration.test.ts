@@ -119,6 +119,15 @@ console.log('split_body_by_bends.two hollow cubes tests starting...');
     expect(result.protrusion_count).toBe(4);
     expect(result.panel_ids).toHaveLength(12);
     expect(result.rollback_token).toBeDefined();
+
+    // Verify manufacturing graphs were created for ALL panels AND protrusions.
+    // created_parts must contain 12 panels + 4 protrusions = 16 entries.
+    expect(result.created_parts).toHaveLength(16);
+    // Every protrusion shell must have its own manufacturing graph entry.
+    const createdPartIds: string[] = result.created_parts.map((cp: any) => cp.part_id);
+    for (const protId of result.protrusion_ids) {
+      expect(createdPartIds, `protrusion ${protId} must have a manufacturing graph`).toContain(protId);
+    }
   });
 
   // ── Diagnostic: protrusion bboxes must be local features, not full panels ──

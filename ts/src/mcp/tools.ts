@@ -3380,6 +3380,47 @@ function handleSplitBodyByBends(args: Record<string, unknown>): unknown {
     createdParts.push({ part_id: partId, panel_id: panelId });
   }
 
+  // Auto-create manufacturing graphs for protrusions as well.
+  // Each protrusion is an independent shell (flange, tab, boss) that may
+  // need to be unfolded or evaluated separately.
+  for (let pi = 0; pi < result.protrusion_ids.length; pi++) {
+    const protrusionId = result.protrusion_ids[pi]!;
+    const protPartId = protrusionId;
+    if (_parts.has(protPartId)) {
+      _parts.delete(protPartId);
+      if (_activePartId === protPartId) _activePartId = undefined;
+    }
+    createPart(protPartId);
+    const graph = getManufacturingGraph(protPartId);
+
+    let protFlatWidth: number | null = null;
+    let protFlatHeight: number | null = null;
+    const bbox = result.protrusion_bboxes?.[pi];
+    if (bbox) {
+      const dims = [
+        bbox.x_max - bbox.x_min,
+        bbox.y_max - bbox.y_min,
+        bbox.z_max - bbox.z_min,
+      ].sort((a, b) => a - b);
+      protFlatWidth  = dims[2] ?? null;
+      protFlatHeight = dims[1] ?? null;
+    }
+
+    // Node ID equals the protrusion ID so apply_unfold(panel_id: protrusionId,
+    // part_id: protrusionId) resolves this node without a queryGraph round-trip.
+    graph.addNode({
+      type: 'PanelNode',
+      id: toNodeId(protrusionId),
+      bodyId: toBodyId(protrusionId),
+      dirty: true,
+      materialType: 'default',
+      nominalThickness: defaultThicknessMm,
+      flatWidth: protFlatWidth,
+      flatHeight: protFlatHeight,
+    });
+    createdParts.push({ part_id: protPartId, panel_id: protrusionId });
+  }
+
   const allIds = [...result.panel_ids, ...result.protrusion_ids];
   const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
