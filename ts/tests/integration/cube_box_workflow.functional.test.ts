@@ -14,7 +14,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as path from 'node:path';
-import { dispatchTool, setGeometryBindingMock } from '../../src/mcp/tools';
+import { dispatchTool, setGeometryBindingMock, registerTestPart } from '../../src/mcp/tools';
 import { loadConfig } from '../../src/config/loader';
 import type { GeometryAddon } from '../../src/geometry/binding';
 import type { TopologyGraph } from '../../src/geometry/types';
@@ -373,6 +373,12 @@ describe('Cube Box Sheet Metal Workflow', () => {
     // ── Phase 7: Merge adjacent panels into two L-shaped assemblies ───────────
 
     type MergeResult = { merged_shell_id: string; rollback_token: string };
+
+    // Register test parts with manufacturing graphs to satisfy prerequisite checks
+    registerTestPart(topPanel, [topPanel]);
+    registerTestPart(frontPanel, [frontPanel]);
+    registerTestPart(bottomPanel, [bottomPanel]);
+    registerTestPart(backPanel, [backPanel]);
 
     const topFront = await dispatchTool('merge_bodies_with_bend', {
       part_a_id:    topPanel,

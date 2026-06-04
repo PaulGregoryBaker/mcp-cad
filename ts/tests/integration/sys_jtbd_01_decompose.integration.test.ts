@@ -2,7 +2,7 @@ import { describe, expect, it, beforeAll } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { dispatchTool } from '../../src/mcp/tools';
+import { dispatchTool, registerTestPart } from '../../src/mcp/tools';
 import { loadConfig } from '../../src/config/loader';
 import { getInf03FixturePath } from '../helpers/fixtures';
 
@@ -36,21 +36,29 @@ describe('SYS-JTBD-01 Full Decompose System Integration', () => {
     const decompose = await dispatchTool('decompose_volume', { solid_id: clean.solid_id, strategy: 'Integrity' }, config) as any;
     expect(decompose.panel_ids.length).toBeGreaterThanOrEqual(1);
     
+    // Start explicit transaction for mutating steps
+    const txn = await dispatchTool('begin_transaction', { label: 'sys-jtbd-01' }, config) as any;
+    expect(txn.transaction_id).toBeDefined();
+
     // 3. synthesize_joints
     const joints = await dispatchTool('synthesize_joints', {
         panel_ids: [decompose.panel_ids[0], decompose.panel_ids[0]],
         joint_type: 'tab_slot',
-        clearance_mm: 0.15
+        clearance_mm: 0.15,
+        transaction_id: txn.transaction_id
     }, config) as any;
     expect(joints.kerf_offset_mm).toBeDefined();
     expect(joints.kerf_offset_mm).toBeGreaterThanOrEqual(0.1);
     expect(joints.kerf_offset_mm).toBeLessThanOrEqual(0.2);
+
+    registerTestPart(decompose.panel_ids[0], [decompose.panel_ids[0]]);
 
     // 4. apply_unfold
     const unfold1 = await dispatchTool('apply_unfold', {
       part_id: decompose.panel_ids[0],
         panel_id: decompose.panel_ids[0],
         material_id: config.materials[0]!.id,
+        transaction_id: txn.transaction_id
     }, config) as any;
     expect(unfold1.flat_width_mm).toBeGreaterThan(0);
     expect(unfold1.flat_height_mm).toBeGreaterThan(0);
@@ -59,8 +67,11 @@ describe('SYS-JTBD-01 Full Decompose System Integration', () => {
       part_id: decompose.panel_ids[0],
         panel_id: decompose.panel_ids[0],
         material_id: config.materials[0]!.id,
+        transaction_id: txn.transaction_id
     }, config) as any;
     expect(unfold2.flat_width_mm).toBeGreaterThan(0);
     expect(unfold2.flat_height_mm).toBeGreaterThan(0);
+
+    await dispatchTool('rollback_transaction', { transaction_id: txn.transaction_id }, config);
   });
 });

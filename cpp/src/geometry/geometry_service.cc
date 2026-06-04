@@ -2659,53 +2659,15 @@ public:
       toolShapes.push_back(it->second.shape);
     }
 
-    // Pre-fuse gap check: every consecutive pair must be within sewing tolerance.
-    // A gap > kMergeTolerance means the bodies are not topologically adjacent and
-    // the fuse would produce a disconnected compound masquerading as one body.
-    {
-      const double kMergeTolerance = 0.1; // mm
-      for (size_t i = 0; i + 1 < toolShapes.size(); ++i) {
-        const TopoDS_Shape& sA = toolShapes[i];
-        const TopoDS_Shape& sB = toolShapes[i + 1];
-
-        Bnd_Box boxA, boxB;
-        BRepBndLib::AddOptimal(sA, boxA);
-        BRepBndLib::AddOptimal(sB, boxB);
-
-        Bnd_Box boxAExpanded = boxA;
-        boxAExpanded.Enlarge(kMergeTolerance);
-        const bool boxesClearlyApart =
-            !boxA.IsVoid() && !boxB.IsVoid() && boxAExpanded.IsOut(boxB);
-
-        if (boxesClearlyApart) {
-          BRepExtrema_DistShapeShape gapCheck;
-          gapCheck.LoadS1(sA);
-          gapCheck.LoadS2(sB);
-          gapCheck.Perform();
-
-          double gap = kMergeTolerance + 1.0; // conservative default if measurement fails
-          if (gapCheck.IsDone()) {
-            gap = gapCheck.Value();
-          }
-
-          if (gap > kMergeTolerance) {
-            std::ostringstream msg;
-            msg << std::fixed << std::setprecision(3)
-                << "GE_MERGE_GAP: Bodies " << (i) << " and " << (i + 1)
-                << " are " << gap << " mm apart. "
-                << "Maximum allowed gap is " << kMergeTolerance << " mm. "
-                << "Use close_gap to snap them together before fusing.";
-            throw GeometryError("GE_MERGE_GAP", msg.str(), false, "");
-          }
-        }
-      }
-    }
+    // Pre-fuse gap check was removed to support Boolean fuse of disjoint (non-touching) solids
+    // as per Feature 006 spec.md. Disjoint fuses are allowed and return success with disjoint=true.
 
     SnapshotId token = createSnapshotLocked("before fuseBodies");
 
     try {
       TopoDS_Shape currentShape = toolShapes[0];
       std::vector<ShapeHistoryRecord> history;
+      bool disjoint = false;
 
       for (size_t i = 1; i < toolShapes.size(); ++i) {
         BRepAlgoAPI_Fuse fuser(currentShape, toolShapes[i]);
@@ -2723,7 +2685,7 @@ public:
           throw GeometryError("GE_BOOLEAN_FAILURE", "Boolean fuse result is invalid", true, "rollback");
         }
 
-        // Post-fuse connectivity check: reject disconnected compounds.
+        // Post-fuse connectivity check: detect disconnected compounds.
         {
           int solidCount = 0;
           for (TopExp_Explorer ex(nextShape, TopAbs_SOLID); ex.More(); ex.Next()) solidCount++;
@@ -2737,10 +2699,7 @@ public:
               || (solidCount == 0 && shellCount > 1)
               || (solidCount == 0 && shellCount == 0 && topLevelCount > 1);
           if (disconnected) {
-            throw GeometryError("GE_MERGE_DISCONNECTED",
-              "Fuse produced disconnected bodies ÔÇö the shapes are not topologically joined. "
-              "Check for a gap and use close_gap to fix it.",
-              false, "");
+            disjoint = true;
           }
         }
 
@@ -2803,7 +2762,7 @@ public:
       ShellId resultId = generateUUID();
       shells_[resultId] = ShellState{resultId, "", currentShape};
 
-      return FuseResult{resultId, false, token, std::move(history)};
+      return FuseResult{resultId, disjoint, token, std::move(history)};
 
     } catch (const GeometryError&) {
       throw;

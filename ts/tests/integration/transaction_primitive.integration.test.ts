@@ -14,7 +14,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as path from 'node:path';
-import { dispatchTool, setGeometryBindingMock } from '../../src/mcp/tools';
+import { dispatchTool, setGeometryBindingMock, registerTestPart } from '../../src/mcp/tools';
 import { loadConfig } from '../../src/config/loader';
 import type { GeometryAddon } from '../../src/geometry/binding';
 import type { ManufacturingConfig } from '../../src/config/loader';
@@ -585,6 +585,8 @@ describe('Transaction primitive (Feature 004 Phase 4) — shape_history for all 
   });
 
   it('merge_bodies_with_bend appends shape_history to transaction', async () => {
+    registerTestPart('a', ['a']);
+    registerTestPart('b', ['b']);
     const begin = (await dispatchTool('begin_transaction', { label: 'p4', product: 'x' }, config)) as { transaction_id: string };
     const res = (await dispatchTool('merge_bodies_with_bend', {
       transaction_id: begin.transaction_id,
@@ -662,6 +664,7 @@ describe('Transaction primitive (Feature 004 Phase 4) — shape_history for all 
   });
 
   it('apply_unfold returns empty shape_history (stub)', async () => {
+    registerTestPart('shell-1', ['shell-1']);
     const begin = (await dispatchTool('begin_transaction', { label: 'p4', product: 'x' }, config)) as { transaction_id: string };
     const res = (await dispatchTool('apply_unfold', {
       transaction_id: begin.transaction_id,

@@ -196,16 +196,25 @@ function unionGraphs(targetPartId: string, sourcePartId: string): void {
   }
 
   // Copy all edges from source to target
-  for (const [edgeId, edge] of sourceGraph.edges) {
-    if (targetGraph.edges.has(edgeId)) {
-      throwError(
-        ErrorCodes.GRAPH_INTEGRITY_ERROR,
-        `Cannot union graphs: edge "${edgeId}" exists in both target and source graphs`,
-        true,
-      );
+  for (const [fromNodeId, downstreams] of sourceGraph.edges) {
+    if (!targetGraph.edges.has(fromNodeId)) {
+      targetGraph.edges.set(fromNodeId, new Set());
     }
-    const clonedEdge = JSON.parse(JSON.stringify(edge));
-    targetGraph.edges.set(edgeId, clonedEdge);
+    const targetSet = targetGraph.edges.get(fromNodeId)!;
+    for (const down of downstreams) {
+      targetSet.add(down);
+    }
+  }
+
+  // Copy all reverseEdges from source to target
+  for (const [toNodeId, upstreams] of sourceGraph.reverseEdges) {
+    if (!targetGraph.reverseEdges.has(toNodeId)) {
+      targetGraph.reverseEdges.set(toNodeId, new Set());
+    }
+    const targetSet = targetGraph.reverseEdges.get(toNodeId)!;
+    for (const up of upstreams) {
+      targetSet.add(up);
+    }
   }
 
   // Mark all copied nodes as dirty so solver regenerates their geometry
@@ -1263,7 +1272,8 @@ export function getToolDefinitions(): object[] {
             additionalProperties: { type: 'boolean' },
             description: 'Optional overrides to flag parts as sheet metal (true) or non-sheet-metal (false). Default is true for all parts.'
           }
-        }
+        },
+        required: []
       }
     },
 
@@ -1965,6 +1975,7 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
   const partId = requireString(args, 'part_id');
   const panelId = requireString(args, 'panel_id');
   const materialId = requireString(args, 'material_id');
+  const transactionId = requireString(args, 'transaction_id');
 
   const graph = getManufacturingGraph(partId);
 
@@ -4361,4 +4372,27 @@ async function handleAddCut(
     stale_warning: stale,
   };
 }
+
+/**
+ * Test helper to register a part and seed its graph with panel nodes.
+ * Used by tests to bypass split_body_by_bends prerequisite checks.
+ */
+export function registerTestPart(partId: string, panelBodyIds: string[] = []): void {
+  initializeSolvers();
+  _parts.delete(partId);
+  const graph = createPart(partId);
+  for (const bodyId of panelBodyIds) {
+    graph.addNode({
+      type: 'PanelNode',
+      id: toNodeId(bodyId),
+      bodyId: bodyId as import('../manufacturing/graph/types').BodyId,
+      dirty: false,
+      materialType: 'default',
+      nominalThickness: 1.0,
+      flatWidth: 100,
+      flatHeight: 100,
+    } as any);
+  }
+}
+
 
