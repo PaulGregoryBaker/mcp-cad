@@ -6,6 +6,9 @@
  * Tasks: T002, T032
  */
 
+import type { PanelFrame } from '../dxf/orientation';
+export type { PanelFrame };
+
 // ─── Branded ID types ─────────────────────────────────────────────────────────
 
 /** Caller-supplied human-readable node identifier. Stable across Geometry Solves. */
@@ -36,6 +39,9 @@ export interface PanelNode {
   nominalThickness: number;     // mm
   flatWidth: number | null;     // mm — null before first Solve
   flatHeight: number | null;    // mm — null before first Solve
+  canonical: boolean;           // true if this is the canonical unfold target in a merged graph
+  shapeDxf: string | null;      // DXF content of flat panel outline & details; the source of truth manufacturing drawing; null before split_body_by_bends
+  panelFrame?: PanelFrame | null; // 3D orientation frame (origin, u, v axes); derived from bbox at split time
 }
 
 export interface BendNode {
@@ -164,6 +170,28 @@ export interface GeometrySolveResult {
   invalidatedBodyIds: BodyId[];
   dirtyCountBefore: number;
   solveMs: number;
+}
+
+// ─── Graph-driven geometry reconstruction plan ───────────────────────────────
+
+export type GeometryRebuildStepType =
+  | 'BUILD_PANEL_FROM_DXF'
+  | 'THICKEN_PANEL'
+  | 'APPLY_BEND'
+  | 'APPLY_JOIN'
+  | 'APPLY_CUT'
+  | 'PLACE_IN_ASSEMBLY';
+
+export interface GeometryRebuildStep {
+  stepType: GeometryRebuildStepType;
+  nodeId: NodeId;
+  detail: Record<string, unknown>;
+}
+
+export interface GeometryRebuildPlan {
+  partId: string;
+  orderedNodeIds: NodeId[];
+  steps: GeometryRebuildStep[];
 }
 
 // ─── DRC types ────────────────────────────────────────────────────────────────

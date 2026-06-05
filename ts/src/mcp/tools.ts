@@ -53,13 +53,19 @@ import { DrcChecker } from '../manufacturing/graph/drc';
 import type { DrcCheckRequest } from '../manufacturing/graph/drc';
 import { FoldabilityChecker } from '../manufacturing/graph/foldability';
 import { toNodeId } from '../manufacturing/graph/types';
-import type { BendNode, BendZone, JoinNode, JoinParams, CutNode, CutProfile } from '../manufacturing/graph/types';
+import type { BendNode, BendZone, JoinNode, JoinParams, CutNode, CutProfile, PanelFrame } from '../manufacturing/graph/types';
 import { validateProfile } from '../manufacturing/graph/types';
 import type { GeometryBinding as SolverGeometryBinding } from '../manufacturing/graph/solver';
+import { computeDxfMergePlacement } from '../manufacturing/dxf/orientation';
+import { mergeDxfOutlines } from '../manufacturing/dxf/merge';
 
 // Adapts the class-based GeometryBinding to the solver's GeometryBinding interface
 function getGraphBinding(): SolverGeometryBinding {
   const gb = getGeometryBinding();
+  const hasBuildSheetFromDxf = gb.hasBuildSheetFromDxf();
+  const hasThickenSheet = gb.hasThickenSheet();
+  const hasApplyBend = gb.hasApplyBend();
+
   return {
     createSnapshot: (label) => gb.createSnapshot(label),
     restoreSnapshot: (id) => {
@@ -82,6 +88,24 @@ function getGraphBinding(): SolverGeometryBinding {
       const r = gb.cutBodies(blank, tools, keep);
       return { solid_id: r.solid_id };
     },
+    buildSheetFromDxf: hasBuildSheetFromDxf
+      ? (dxfContent) => {
+          const r = gb.buildSheetFromDxf(dxfContent);
+          return { sheetId: r.sheetId };
+        }
+      : undefined,
+    thickenSheet: hasThickenSheet
+      ? (sheetId, thicknessMm) => {
+          const r = gb.thickenSheet(sheetId, thicknessMm);
+          return { solidId: r.solidId };
+        }
+      : undefined,
+    applyBend: hasApplyBend
+      ? (panelAId, panelBId, innerRadiusMm, angleDeg, kFactor) => {
+          const r = gb.applyBend(panelAId, panelBId, innerRadiusMm, angleDeg, kFactor);
+          return { mergedShellId: r.mergedShellId };
+        }
+      : undefined,
   };
 }
 
@@ -173,59 +197,7 @@ function listParts(): Array<{ part_id: string; panel_count: number; bend_count: 
   return result;
 }
 
-/** Union two manufacturing graphs: absorb source into target.
- *  All nodes from source_graph are copied into target_graph with their IDs.
- *  Then source_part is deleted from _parts.
- *  Prerequisite: both parts must exist in _parts. */
-function unionGraphs(targetPartId: string, sourcePartId: string): void {
-  const targetGraph = getManufacturingGraph(targetPartId);
-  const sourceGraph = getManufacturingGraph(sourcePartId);
 
-  // Copy all nodes from source to target (preserving node IDs)
-  for (const [nodeId, node] of sourceGraph.nodes) {
-    if (targetGraph.nodes.has(nodeId)) {
-      throwError(
-        ErrorCodes.GRAPH_INTEGRITY_ERROR,
-        `Cannot union graphs: node "${nodeId}" exists in both target and source graphs`,
-        true,
-      );
-    }
-    // Clone the node to avoid shared references
-    const clonedNode = JSON.parse(JSON.stringify(node));
-    targetGraph.nodes.set(nodeId, clonedNode);
-  }
-
-  // Copy all edges from source to target
-  for (const [fromNodeId, downstreams] of sourceGraph.edges) {
-    if (!targetGraph.edges.has(fromNodeId)) {
-      targetGraph.edges.set(fromNodeId, new Set());
-    }
-    const targetSet = targetGraph.edges.get(fromNodeId)!;
-    for (const down of downstreams) {
-      targetSet.add(down);
-    }
-  }
-
-  // Copy all reverseEdges from source to target
-  for (const [toNodeId, upstreams] of sourceGraph.reverseEdges) {
-    if (!targetGraph.reverseEdges.has(toNodeId)) {
-      targetGraph.reverseEdges.set(toNodeId, new Set());
-    }
-    const targetSet = targetGraph.reverseEdges.get(toNodeId)!;
-    for (const up of upstreams) {
-      targetSet.add(up);
-    }
-  }
-
-  // Mark all copied nodes as dirty so solver regenerates their geometry
-  for (const nodeId of sourceGraph.nodes.keys()) {
-    const typedNodeId = nodeId as import('../manufacturing/graph/types').NodeId;
-    targetGraph.markDirty(typedNodeId);
-  }
-
-  // Delete source part
-  deletePart(sourcePartId);
-}
 
 function getGeometrySolver(): GeometrySolver {
   initializeSolvers();
@@ -1919,74 +1891,423 @@ function handleReconstructCurvedBends(args: Record<string, unknown>): unknown {
   };
 }
 
-/** Parse BEND_UP / BEND_DOWN LINE entities from DXF text and return each
- *  as fractional coordinates {x1,y1,x2,y2} in the range [0,1] relative to
- *  the flat-pattern bounding box.  Only straight-line entities on bend layers
- *  are extracted; arcs and other entities are ignored. */
-function parseDxfBendLines(
-  dxf: string,
+/**
+ * Derive an approximate PanelFrame from an axis-aligned bounding box.
+ *
+ * For a flat sheet-metal panel the smallest bbox dimension = thickness.
+ * The face normal is the unit vector along the thin axis, placed at the
+ * centroid of the outward-facing (larger-coordinate) face.
+ * U = longest in-plane axis, V = cross(N, U) (right-handed).
+ *
+ * Ambiguity: if two dimensions are equal (square panel) we still assign
+ * U/V deterministically in X→Y→Z priority order.
+ *
+ * Returns null when the bbox is degenerate (zero volume).
+ */
+function derivePanelFrameFromBbox(bbox: {
+  x_min: number; y_min: number; z_min: number;
+  x_max: number; y_max: number; z_max: number;
+}): PanelFrame | null {
+  const dx = bbox.x_max - bbox.x_min;
+  const dy = bbox.y_max - bbox.y_min;
+  const dz = bbox.z_max - bbox.z_min;
+
+  if (dx <= 0 || dy <= 0 || dz <= 0) return null;
+
+  // Index 0=x, 1=y, 2=z with associated extents and unit vectors
+  const axes: Array<{ label: number; extent: number; unit: [number, number, number] }> = [
+    { label: 0, extent: dx, unit: [1, 0, 0] },
+    { label: 1, extent: dy, unit: [0, 1, 0] },
+    { label: 2, extent: dz, unit: [0, 0, 1] },
+  ];
+
+  // Sort ascending: axes[0] = thinnest (normal), axes[1] = medium, axes[2] = longest
+  axes.sort((a, b) => a.extent - b.extent);
+
+  const normalAxis = axes[0]!;
+  const uAxis = axes[2]!; // longest in-plane
+  const vAxis = axes[1]!; // medium in-plane
+
+  // Origin at centroid of the +normal face (outward-facing)
+  const cx = (bbox.x_min + bbox.x_max) / 2;
+  const cy = (bbox.y_min + bbox.y_max) / 2;
+  const cz = (bbox.z_min + bbox.z_max) / 2;
+
+  // Shift origin to the +normal face surface
+  const normalOffset = normalAxis.extent / 2;
+  const origin: [number, number, number] = [
+    cx + normalAxis.unit[0] * normalOffset,
+    cy + normalAxis.unit[1] * normalOffset,
+    cz + normalAxis.unit[2] * normalOffset,
+  ];
+
+  return {
+    origin,
+    u: uAxis.unit,
+    v: vAxis.unit,
+  };
+}
+
+/**
+ * Merge multiple panel DXF outlines into one, assuming coplanar-in-contact configuration.
+ * Returns merged DXF and flat dimensions, or null if inputs lack sufficient DXF data.
+@@ * Returns CLEANED merged DXF (invalid cut lines removed) and flat dimensions.
+@@ * The cleaned DXF is persisted as the source of truth for geometry recalculation.
+@@ * Returns null if inputs lack sufficient DXF data.
+ */
+function mergeInputDxfOutlines(panelDxfs: (string | null)[]): { mergedDxf: string; width: number; height: number } | null {
+  const validDxfs = panelDxfs.filter((d) => d && d.trim().length > 0) as string[];
+  if (validDxfs.length === 0) return null;
+  if (validDxfs.length === 1) {
+    const dxf = validDxfs[0]!;
+    const metrics = mergeDxfOutlines(dxf, dxf, {
+      rotationMatrix: [[1, 0], [0, 1]],
+      translation: [0, 0],
+    }).metrics;
+    return { mergedDxf: dxf, width: metrics.bbox.width, height: metrics.bbox.height };
+  }
+
+  let merged = validDxfs[0]!;
+  // Track the current merged outline width so each next panel is placed
+  // exactly adjacent (edge-to-edge) rather than using a hardcoded offset.
+  let mergedWidth = mergeDxfOutlines(merged, merged, {
+    rotationMatrix: [[1, 0], [0, 1]],
+    translation: [0, 0],
+  }).metrics.bbox.width;
+
+  for (let i = 1; i < validDxfs.length; i++) {
+    const next = validDxfs[i]!;
+    const result = mergeDxfOutlines(merged, next, {
+      rotationMatrix: [[1, 0], [0, 1]],
+      translation: [mergedWidth, 0],
+    });
+    merged = result.mergedDxf;
+    mergedWidth = result.metrics.bbox.width;
+  }
+
+  // Compute final height from the last merged outline.
+  const finalMetrics = mergeDxfOutlines(merged, merged, {
+    rotationMatrix: [[1, 0], [0, 1]],
+    translation: [0, 0],
+  }).metrics;
+  const finalWidth = finalMetrics.bbox.width;
+  const finalHeight = finalMetrics.bbox.height;
+
+  // VALIDATION: Remove any invalid internal cut lines from merged DXF.
+  // The merge operation may create seam/corruption artifacts as LINE entities.
+  // Filter them out to prevent seam lines from appearing in merged panels.
+  const cleanedMerged = filterInvalidCutLines(merged, finalWidth, finalHeight);
+
+  return {
+    mergedDxf: cleanedMerged,  // Already cleaned - invalid cut lines removed
+    width: finalWidth,
+    height: finalHeight,
+  };
+}
+
+/**
+ * Validate and filter DXF content to remove invalid internal cut lines.
+ *
+ * RULE: A straight line cut within a single panel is invalid unless:
+ * 1. It connects to the panel edge (becomes part of outline), OR
+ * 2. It's closed (forms a hole)
+ *
+ * A LINE entity with both endpoints internal to the panel is a seam/corruption
+ * artifact and is removed. CIRCLE and closed POLYLINE cuts are always valid.
+ *
+ * @returns Cleaned DXF with invalid LINE entities removed
+ */
+function filterInvalidCutLines(
+  dxfContent: string,
+  panelWidthMm: number,
+  panelHeightMm: number,
+): string {
+  const lines = dxfContent.split('\n');
+  const result: string[] = [];
+
+  let i = 0;
+  while (i < lines.length) {
+    // Look for LINE entity marker (group code 0 = "LINE")
+    if (lines[i] === '0' && i + 1 < lines.length && lines[i + 1] === 'LINE') {
+      i += 2; // Skip "0" and "LINE"
+
+      let x1: number | null = null,
+        y1: number | null = null;
+      let x2: number | null = null,
+        y2: number | null = null;
+      const entityLines: string[] = ['0', 'LINE'];
+
+      // Parse LINE entity until next entity (another "0" marker)
+      while (i < lines.length && lines[i] !== '0') {
+        const code = lines[i];
+        const value = i + 1 < lines.length ? lines[i + 1] : '';
+
+        // Collect all lines for potential reinsertion
+        entityLines.push(code);
+        if (i + 1 < lines.length) {
+          entityLines.push(value);
+        }
+
+        // Extract coordinates
+        if (code === '10') {
+          x1 = parseFloat(value);
+        } else if (code === '20') {
+          y1 = parseFloat(value);
+        } else if (code === '11') {
+          x2 = parseFloat(value);
+        } else if (code === '21') {
+          y2 = parseFloat(value);
+        }
+
+        i += 2;
+      }
+
+      // Check if LINE is valid:
+      // Valid if AT LEAST ONE endpoint is on the panel edge
+      // Invalid if BOTH endpoints are purely internal (not on edge)
+      const isValid =
+        isPointOnPanelEdge(x1, y1, panelWidthMm, panelHeightMm) ||
+        isPointOnPanelEdge(x2, y2, panelWidthMm, panelHeightMm);
+
+      if (isValid) {
+        // Keep the LINE entity
+        for (const line of entityLines) {
+          result.push(line);
+        }
+      }
+      // Skip invalid LINE (seam line artifact)
+    } else {
+      // Keep non-LINE entities (LWPOLYLINE, CIRCLE, etc.) as-is
+      result.push(lines[i]);
+      i++;
+    }
+  }
+
+  return result.join('\n');
+}
+
+/**
+ * Check if a point is on any edge of the panel outline rectangle.
+ * Edges: bottom (y=0), top (y=height), left (x=0), right (x=width)
+ */
+function isPointOnPanelEdge(
+  x: number | null,
+  y: number | null,
+  widthMm: number,
+  heightMm: number,
+): boolean {
+  if (x === null || y === null) return false;
+
+  const eps = 0.01; // mm tolerance for floating-point comparison
+
+  // Bottom edge: y ≈ 0, 0 ≤ x ≤ width
+  if (Math.abs(y) < eps && x >= -eps && x <= widthMm + eps) {
+    return true;
+  }
+  // Top edge: y ≈ height, 0 ≤ x ≤ width
+  if (Math.abs(y - heightMm) < eps && x >= -eps && x <= widthMm + eps) {
+    return true;
+  }
+  // Left edge: x ≈ 0, 0 ≤ y ≤ height
+  if (Math.abs(x) < eps && y >= -eps && y <= heightMm + eps) {
+    return true;
+  }
+  // Right edge: x ≈ width, 0 ≤ y ≤ height
+  if (Math.abs(x - widthMm) < eps && y >= -eps && y <= heightMm + eps) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Generate DXF directly from manufacturing graph data.
+ * SOURCE OF TRUTH: The manufacturing graph (FlatPatternDimensions, BendZones, CutNodes)
+ * NOT derived from C++ geometry binding.
+ *
+ * DXF contains:
+ * - Panel outline rectangle on layer "0"
+ * - Cut profiles on layer "CUTS"
+ *
+ * Bend annotations are returned separately via `bend_lines` in apply_unfold.
+ * We intentionally keep `shapeDxf` free of interior seam lines so merged
+ * panels do not render seam-as-cut artifacts in flat views.
+ */
+function generateDxfFromManufacturingGraph(
   flatWidthMm: number,
   flatHeightMm: number,
-): Array<{ x1: number; y1: number; x2: number; y2: number }> {
-  const lines: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
-  const tokens = dxf.split('\n').map((t) => t.trim());
+  _bendZones: import('../manufacturing/graph/types').BendZone[],
+  cutNodes: import('../manufacturing/graph/types').CutNode[],
+): string {
+  const lines: string[] = [];
 
-  let inLine = false;
-  let isBendLayer = false;
-  let x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+  // ─── DXF Header ───────────────────────────────────────────────────────────
+  lines.push(
+    '0',
+    'SECTION',
+    '2',
+    'HEADER',
+    '9',
+    '$ACADVER',
+    '1',
+    'AC1015',
+    '0',
+    'ENDSEC',
+  );
 
-  for (let i = 0; i < tokens.length - 1; i++) {
-    const code = parseInt(tokens[i], 10);
-    const val = tokens[i + 1];
+  // ─── DXF Entities ─────────────────────────────────────────────────────────
+  lines.push(
+    '0',
+    'SECTION',
+    '2',
+    'ENTITIES',
+  );
 
-    if (isNaN(code)) continue;
+  // Panel outline: rectangle from (0,0) to (width,height)
+  lines.push(
+    '0',
+    'LWPOLYLINE',
+    '8',
+    '0', // layer
+    '90',
+    '4', // 4 vertices (closed rectangle)
+    '70',
+    '1', // closed polyline
+  );
+  // Vertex 1: (0, 0)
+  lines.push('10', '0.0', '20', '0.0');
+  // Vertex 2: (width, 0)
+  lines.push('10', flatWidthMm.toString(), '20', '0.0');
+  // Vertex 3: (width, height)
+  lines.push('10', flatWidthMm.toString(), '20', flatHeightMm.toString());
+  // Vertex 4: (0, height)
+  lines.push('10', '0.0', '20', flatHeightMm.toString());
 
-    if (code === 0) {
-      // Flush completed LINE entity on a bend layer
-      if (inLine && isBendLayer) {
-        lines.push({
-          x1: x1 / flatWidthMm,
-          y1: y1 / flatHeightMm,
-          x2: x2 / flatWidthMm,
-          y2: y2 / flatHeightMm,
-        });
+  // Cut profiles: circles, rectangles, polygons, freeform shapes
+  for (const cutNode of cutNodes) {
+    const profile = cutNode.profile;
+
+    if (profile.type === 'CIRCLE') {
+      const { centreX, centreY, radius } = profile;
+      lines.push(
+        '0',
+        'CIRCLE',
+        '8',
+        'CUTS',
+        '10',
+        centreX.toString(),
+        '20',
+        centreY.toString(),
+        '40',
+        radius.toString(),
+      );
+    } else if (profile.type === 'RECTANGLE') {
+      const { originX, originY, width, height } = profile;
+      lines.push(
+        '0',
+        'LWPOLYLINE',
+        '8',
+        'CUTS',
+        '90',
+        '4', // 4 vertices
+        '70',
+        '1', // closed
+      );
+      lines.push('10', originX.toString(), '20', originY.toString());
+      lines.push('10', (originX + width).toString(), '20', originY.toString());
+      lines.push('10', (originX + width).toString(), '20', (originY + height).toString());
+      lines.push('10', originX.toString(), '20', (originY + height).toString());
+    } else if (profile.type === 'POLYGON' || profile.type === 'FREEFORM') {
+      const { vertices } = profile;
+      lines.push(
+        '0',
+        'LWPOLYLINE',
+        '8',
+        'CUTS',
+        '90',
+        vertices.length.toString(),
+        '70',
+        '1', // closed for POLYGON, implicit closure for FREEFORM
+      );
+      for (const vertex of vertices) {
+        lines.push('10', vertex.x.toString(), '20', vertex.y.toString());
       }
-      inLine = val === 'LINE';
-      isBendLayer = false;
-      x1 = y1 = x2 = y2 = 0;
-    } else if (inLine) {
-      if (code === 8) {
-        isBendLayer = val === 'BEND_UP' || val === 'BEND_DOWN';
-      } else if (code === 10) { x1 = parseFloat(val); }
-      else if (code === 20) { y1 = parseFloat(val); }
-      else if (code === 11) { x2 = parseFloat(val); }
-      else if (code === 21) { y2 = parseFloat(val); }
     }
-    i++; // each group code consumes two tokens
   }
-  return lines;
+
+  // ─── DXF Footer ───────────────────────────────────────────────────────────
+  lines.push(
+    '0',
+    'ENDSEC',
+    '0',
+    'EOF',
+  );
+
+  const dxfContent = lines.join('\n');
+
+  // VALIDATION: Remove any invalid internal cut lines (seam/corruption artifacts).
+  // A LINE is invalid if both endpoints are interior (not on panel edge).
+  // This permanently prevents seam lines from appearing in the DXF.
+  return filterInvalidCutLines(dxfContent, flatWidthMm, flatHeightMm);
+}
+
+/**
+ * Extract bend lines from FlatPatternDimensions.
+ * Returns normalized coordinates {x1,y1,x2,y2} in the range [0,1] relative to
+ * the flat-pattern bounding box.
+ * SOURCE: Manufacturing graph bendZones, NOT parsed from DXF text.
+ */
+function extractBendLinesFromGraph(
+  flatWidthMm: number,
+  bendZones: import('../manufacturing/graph/types').BendZone[],
+): Array<{ x1: number; y1: number; x2: number; y2: number }> {
+  const bendLines: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
+
+  for (const zone of bendZones) {
+    const xOffset = zone.offset + zone.width / 2; // line at center of bend zone
+    bendLines.push({
+      x1: xOffset / flatWidthMm,
+      y1: 0, // from bottom
+      x2: xOffset / flatWidthMm,
+      y2: 1, // to top (normalized)
+    });
+  }
+
+  return bendLines;
 }
 
 function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingConfig): unknown {
-  // ARCHITECTURE CHANGE: Strict requirement for part_id + panel_id (graph-based workflow)
   // DXF output MUST come from the manufacturing graph, not raw geometry.
-  // NO fallback: apply_unfold requires an existing manufacturing graph created via bootstrap_graph
-  // or split_body_by_bends. Providing raw shell UUIDs is not supported.
+  // panel_id defaults to part_id — in every workflow they are identical.
+  // Callers should pass part_id as both; the distinction is kept only for
+  // backward compatibility.
   const partId = requireString(args, 'part_id');
-  const panelId = requireString(args, 'panel_id');
+  const panelId = typeof args['panel_id'] === 'string' && args['panel_id'].length > 0
+    ? args['panel_id']
+    : partId;
   const materialId = requireString(args, 'material_id');
-  const transactionId = requireString(args, 'transaction_id');
+  requireString(args, 'transaction_id');
 
   const graph = getManufacturingGraph(partId);
 
-  // Verify that the panel node exists in the graph.
-  // Strict lookup: panel_id must be a stable graph NodeId, not a volatile shell UUID.
+  // Find the canonical panel node in the graph.
+  // Match priority:
+  //   1. node.id === panelId (stable node ID)
+  //   2. node.bodyId === panelId AND canonical !== false (current shell UUID after a transform)
+  // No fallbacks. If neither matches, the caller has the wrong ID.
   const panelNodeId = panelId as import('../manufacturing/graph/types').NodeId;
   let panelNode: import('../manufacturing/graph/types').PanelNode | undefined;
   for (const node of graph.nodes.values()) {
-    if (node.type === 'PanelNode' && node.id === panelNodeId) {
-      panelNode = node as import('../manufacturing/graph/types').PanelNode;
-      break;
+    if (node.type === 'PanelNode') {
+      const pn = node as import('../manufacturing/graph/types').PanelNode;
+      if (pn.id === panelNodeId) {
+        panelNode = pn;
+        break;
+      }
+      if (pn.bodyId === (panelId as import('../manufacturing/graph/types').BodyId) && pn.canonical !== false) {
+        panelNode = pn;
+        break;
+      }
     }
   }
 
@@ -1997,6 +2318,18 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
       `panel_id must be a stable node ID from the manufacturing graph, not a volatile shell UUID.`,
       true,
       'query_graph',
+    );
+  }
+
+  // Reject explicit non-canonical panel IDs to prevent unfolding stale upstream panels
+  // in merged containers. UI should always pass preserved_part_id as panel_id.
+  if (panelNode.canonical === false) {
+    throwError(
+      ErrorCodes.GRAPH_INTEGRITY_ERROR,
+      `Panel "${panelId}" is non-canonical in part "${partId}". ` +
+      `Use preserved_part_id as panel_id for unfold operations.`,
+      true,
+      'merge_bodies_with_bend',
     );
   }
 
@@ -2047,12 +2380,35 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
-  // Compute graph-based flat dimensions — these are the REQUIRED source of truth.
+  // Compute graph-based flat dimensions — these are the preferred source of truth.
   // The manufacturing graph knows the panel dimensions analytically through BendNodes
-  // and their bend allowance calculations, which is more accurate than C++ bbox estimates.
+  // and their bend allowance calculations.
   // Use panelNode.id (the actual graph node ID) not panelNodeId (user-supplied panel_id)
   // because for merged shells the graph node ID differs from the shell UUID.
-  const graphDims = graph.getFlatPatternDimensions(panelNode.id);
+  let graphDims = graph.getFlatPatternDimensions(panelNode.id);
+
+  // Bootstrap: when graphDims is null the panel node has no pre-computed flat dimensions
+  // (e.g. immediately after fuse_bodies, before any prior unfold).  The C++ unfold has
+  // already succeeded above, so the geometry IS valid.  Use the C++ result to seed the
+  // graph node so downstream callers (flat-pattern export, BOM, etc.) see consistent data.
+  if (!graphDims) {
+    if (result.flatWidthMm > 0 && result.flatHeightMm > 0) {
+      panelNode.flatWidth = result.flatWidthMm;
+      panelNode.flatHeight = result.flatHeightMm;
+      if ((result.detectedThickness ?? 0) > 0) {
+        panelNode.nominalThickness = result.detectedThickness as number;
+      }
+      panelNode.dirty = false;
+      panelNode.shapeDxf = generateDxfFromManufacturingGraph(
+        result.flatWidthMm,
+        result.flatHeightMm,
+        [],
+        [],
+      );
+      // Re-read dims now that the node is hydrated
+      graphDims = graph.getFlatPatternDimensions(panelNode.id);
+    }
+  }
 
   if (!graphDims) {
     throwError(
@@ -2066,24 +2422,68 @@ function handleApplyUnfold(args: Record<string, unknown>, config: ManufacturingC
   }
 
   // Use graph dimensions exclusively (no C++ bbox fallback)
-  const finalFlatWidth = graphDims.width;
-  const finalFlatHeight = graphDims.height;
+  const finalFlatWidth = graphDims!.width;
+  const finalFlatHeight = graphDims!.height;
 
-  // Export DXF and normalise bend-line coordinates using the correct flat dimensions.
-  // DXF export is mandatory; failure is a hard error that must not be silently swallowed.
-  // Export DXF and normalise bend-line coordinates using the correct flat dimensions.
+  // Graph-authored shapeDxf is the source of truth for merged/fused panels and must
+  // not be replaced by geometry-export seam edges.
   let dxfContent = '';
   let bendLines: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
-  try {
-    const dxf = getGeometryBinding().exportDxf(result.unfoldId);
-    dxfContent = dxf.dxfContent;
-    if (result.bendCount > 0) {
-      bendLines = parseDxfBendLines(dxfContent, finalFlatWidth, finalFlatHeight);
+  const hasGraphShapeDxf = typeof panelNode.shapeDxf === 'string' && panelNode.shapeDxf.trim().length > 0;
+
+  if (hasGraphShapeDxf) {
+    // Clean pre-existing graph-authored DXF: remove invalid internal cut lines
+    // This ensures the source of truth (DXF) is valid for geometry recalculation
+    dxfContent = filterInvalidCutLines(panelNode.shapeDxf!, finalFlatWidth, finalFlatHeight);
+  } else {
+    try {
+      const exported = getGeometryBinding().exportDxf(result.unfoldId);
+      dxfContent = exported.dxfContent;
+      // VALIDATION: Remove any invalid internal cut lines from geometry export.
+      // Geometry export may include seam/corruption artifacts as LINE entities.
+      // This is the permanent filter to prevent seam lines from appearing.
+      dxfContent = filterInvalidCutLines(dxfContent, finalFlatWidth, finalFlatHeight);
+    } catch (exportErr) {
+      const exportMsg = exportErr instanceof Error ? exportErr.message : String(exportErr);
+      try {
+        // Collect CutNodes for the unfolded panel (only those with parentPanelId matching this panel)
+        const cutNodesForPanel: import('../manufacturing/graph/types').CutNode[] = [];
+        for (const node of graph.nodes.values()) {
+          if (node.type === 'CutNode' && node.parentPanelId === panelNode.id) {
+            cutNodesForPanel.push(node as import('../manufacturing/graph/types').CutNode);
+          }
+        }
+
+        dxfContent = generateDxfFromManufacturingGraph(
+          finalFlatWidth,
+          finalFlatHeight,
+          graphDims!.bendZones,
+          cutNodesForPanel,
+        );
+        // Note: generateDxfFromManufacturingGraph already applies filterInvalidCutLines internally
+      } catch (fallbackErr) {
+        const fallbackMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+        console.error(
+          `[apply_unfold] DXF export failed for panel "${panelId}": ${exportMsg}. ` +
+          `Graph fallback also failed: ${fallbackMsg}. ` +
+          `Geometry is valid (${finalFlatWidth}×${finalFlatHeight}mm, ${result.bendCount} bends).`
+        );
+      }
     }
-  } catch {
-    // Non-fatal: preview will fall back to even-spaced hints.
-    // This can happen with complex unfolds or geometry anomalies.
   }
+
+  // Only return bend guide lines when DXF did not come from graph-authored shape data.
+  // Graph-authored merged outlines intentionally suppress seam/guide lines.
+  if (!hasGraphShapeDxf && result.bendCount > 0) {
+    bendLines = extractBendLinesFromGraph(finalFlatWidth, graphDims!.bendZones);
+  }
+
+  // Persist the engineering drawing on the graph node.
+  // This is the canonical 2D manufacturing representation for subsequent graph operations.
+    // Persist the CLEANED engineering drawing on the graph node.
+    // DXF is the canonical 2D manufacturing representation (source of truth).
+    // It is used for geometry recalculation, so it must be free of invalid artifacts.
+  panelNode.shapeDxf = dxfContent;
 
   const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   const response: Record<string, unknown> = {
@@ -2545,6 +2945,14 @@ function requireStringArray(args: Record<string, unknown>, key: string): string[
   return val as string[];
 }
 
+function requireObject(args: Record<string, unknown>, key: string): Record<string, unknown> {
+  const val = args[key];
+  if (!val || typeof val !== 'object' || Array.isArray(val)) {
+    throwError(ErrorCodes.INTERNAL_ERROR, `Missing required object parameter: ${key}`, false);
+  }
+  return val as Record<string, unknown>;
+}
+
 type TransactionContext = { mode: 'join'; transactionId: string } | { mode: 'implicit' };
 
 function resolveTransactionContext(args: Record<string, unknown>): TransactionContext {
@@ -2726,6 +3134,136 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
   const shellAId = panelNodeA.bodyId as import('../manufacturing/graph/types').BodyId;
   const shellBId = panelNodeB.bodyId as import('../manufacturing/graph/types').BodyId;
 
+  // STRICT mode (no fallbacks): DXF must exist and must merge successfully
+  // before any 3D merge is attempted.
+  if (!panelNodeA.shapeDxf || !panelNodeB.shapeDxf) {
+    throwError(
+      ErrorCodes.GE_MERGE_FAILED,
+      'merge_bodies_with_bend requires valid shapeDxf for both panels. Run apply_unfold for both parts first.',
+      true,
+      'apply_unfold',
+    );
+  }
+  const ensurePanelFrame = (
+    panelNode: import('../manufacturing/graph/types').PanelNode,
+    label: 'part_a' | 'part_b',
+  ): PanelFrame => {
+    if (panelNode.panelFrame) return panelNode.panelFrame;
+    if (!panelNode.bodyId) {
+      throwError(
+        ErrorCodes.GE_MERGE_FAILED,
+        `merge_bodies_with_bend ${label}: Panel has null bodyId; cannot derive panelFrame.`,
+        true,
+        'solve_geometry',
+      );
+    }
+
+    let bbox: {
+      x_min: number; y_min: number; z_min: number;
+      x_max: number; y_max: number; z_max: number;
+    };
+    try {
+      bbox = getGeometryBinding().computeBoundingBox(panelNode.bodyId as string);
+    } catch (err) {
+      throwError(
+        ErrorCodes.GE_MERGE_FAILED,
+        `merge_bodies_with_bend ${label}: Failed to derive panelFrame from bbox for body ${panelNode.bodyId}: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+        false,
+      );
+    }
+
+    const derived = derivePanelFrameFromBbox(bbox);
+    if (!derived) {
+      throwError(
+        ErrorCodes.GE_MERGE_FAILED,
+        `merge_bodies_with_bend ${label}: Could not derive panelFrame from bbox for body ${panelNode.bodyId}.`,
+        false,
+      );
+    }
+    panelNode.panelFrame = derived;
+    return derived;
+  };
+
+  const frameA = ensurePanelFrame(panelNodeA, 'part_a');
+  const frameB = ensurePanelFrame(panelNodeB, 'part_b');
+  const contactToleranceMm = Math.max(panelNodeA.nominalThickness, panelNodeB.nominalThickness) * 2.5;
+  const placement = computeDxfMergePlacement(frameA, frameB, { contactToleranceMm });
+
+  // Build normals to classify coplanar-vs-bend cases.
+  const nA: [number, number, number] = [
+    frameA.u[1] * frameA.v[2] - frameA.u[2] * frameA.v[1],
+    frameA.u[2] * frameA.v[0] - frameA.u[0] * frameA.v[2],
+    frameA.u[0] * frameA.v[1] - frameA.u[1] * frameA.v[0],
+  ];
+  const nB: [number, number, number] = [
+    frameB.u[1] * frameB.v[2] - frameB.u[2] * frameB.v[1],
+    frameB.u[2] * frameB.v[0] - frameB.u[0] * frameB.v[2],
+    frameB.u[0] * frameB.v[1] - frameB.u[1] * frameB.v[0],
+  ];
+  const normA = Math.hypot(nA[0], nA[1], nA[2]);
+  const normB = Math.hypot(nB[0], nB[1], nB[2]);
+  const normalsDot = (nA[0] * nB[0] + nA[1] * nB[1] + nA[2] * nB[2]) / (normA * normB);
+  const normalsNearlyParallel = Math.abs(normalsDot) > 0.98;
+
+  let rotationMatrix: [[number, number], [number, number]];
+  let translation: [number, number];
+
+  if (normalsNearlyParallel) {
+    // Coplanar merges must satisfy contact tolerance strictly.
+    if (!placement.inContact) {
+      throwError(
+        ErrorCodes.GE_MERGE_FAILED,
+        `merge_bodies_with_bend: Coplanar panels are not in contact. ` +
+        `Normal offset ${placement.normalOffsetMm.toFixed(2)} mm exceeds tolerance ${contactToleranceMm.toFixed(2)} mm.`,
+        false,
+      );
+    }
+    rotationMatrix = placement.rotationMatrix;
+    translation = placement.translation;
+  } else {
+    // Perpendicular/non-coplanar bend case: flatten panel B adjacent to panel A with zero gap.
+    // This avoids spurious 100mm "gap" from projecting 3D origins directly into 2D.
+    if (panelNodeA.flatWidth === null) {
+      throwError(
+        ErrorCodes.GE_MERGE_FAILED,
+        'merge_bodies_with_bend requires panel A flatWidth for bend flattening. Run apply_unfold first.',
+        true,
+        'apply_unfold',
+      );
+    }
+    // The 3D rotationMatrix from computeDxfMergePlacement is degenerate for perpendicular panels
+    // (panel B's v-axis is normal to panel A, so its projection onto panel A's v-axis = 0).
+    // In 2D flat-pattern space, panel B is simply unfolded and placed flat — use identity.
+    rotationMatrix = [[1, 0], [0, 1]];
+    translation = [panelNodeA.flatWidth, 0];
+  }
+
+  let preflightMerge: ReturnType<typeof mergeDxfOutlines>;
+  try {
+    preflightMerge = mergeDxfOutlines(panelNodeA.shapeDxf, panelNodeB.shapeDxf, {
+      rotationMatrix,
+      translation,
+    });
+  } catch (err) {
+    throwError(
+      ErrorCodes.GE_MERGE_FAILED,
+      `merge_bodies_with_bend DXF merge failed: ${err instanceof Error ? err.message : String(err)}. ` +
+      `No geometry merge performed because DXF is the source of truth.`,
+      false,
+    );
+  }
+
+  let mergedDxf: string | null = preflightMerge.mergedDxf;
+  const mergedFlatWidth: number | null = preflightMerge.metrics.bbox.width;
+  const mergedFlatHeight: number | null = preflightMerge.metrics.bbox.height;
+
+  // CLEAN: DXF is the source of truth, so clean it immediately after creation
+  // before assigning to panel nodes. Invalid internal cut lines must not persist.
+  if (mergedDxf && mergedFlatWidth && mergedFlatHeight) {
+    mergedDxf = filterInvalidCutLines(mergedDxf, mergedFlatWidth, mergedFlatHeight);
+  }
+
   const ctx = resolveTransactionContext(args);
   const result = getGeometryBinding().mergeBodiesWithBend(shellAId as string, shellBId as string, targetEdges, bendRadius as number);
   session.registerShell(result.mergedShellId);
@@ -2734,11 +3272,12 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
   }
 
   // Build the merged manufacturing graph under partAId as the stable key.
-  // partAId is the caller's handle that persists across geometry mutations,
-  // so using it as the merged part_id keeps the ID stable for the UI.
+  // The canonical panel node gets id = partAId.
+  // A second canonical alias node gets id = partBId so that apply_unfold(part_id: partBId)
+  // resolves by exact node ID match — no fallback needed.
   const nodeAId = toNodeId(`panel-a-${partAId.substring(0, 8)}`);
-  // nodeBId equals partAId so that apply_unfold(panel_id: partAId) finds this node by id.
-  const nodeBId = toNodeId(partAId);
+  const nodeBId = toNodeId(partAId);       // canonical node, looked up via partAId
+  const nodeBIdAlias = toNodeId(partBId);  // alias node, looked up via partBId
   const bendId = toNodeId(`bend-${partAId.substring(0, 8)}`);
 
   // Remove old graphs for both parts, then create merged graph at the stable partAId key.
@@ -2747,21 +3286,31 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
   if (_activePartId === partAId || _activePartId === partBId) _activePartId = undefined;
   const mergedGraph = createPart(partAId);
   const mergedPartId = partAId; // Stable: same as the caller's part_a_id input
+  // Register partBId as alias so _parts lookup works for both consumed IDs.
+  _parts.set(partBId, mergedGraph);
 
   // Copy panel A node (upstream panel, retains its original body UUID)
+  // Mark as non-canonical so apply_unfold rejects it with a clear message.
   mergedGraph.addNode({
     type: 'PanelNode',
     id: nodeAId,
-    bodyId: shellAId,
+    bodyId: null,
     dirty: false,
     materialType: panelNodeA?.materialType ?? 'default',
     nominalThickness: panelNodeA?.nominalThickness ?? 1.0,
     flatWidth: panelNodeA?.flatWidth ?? null,
     flatHeight: panelNodeA?.flatHeight ?? null,
+    canonical: false,  // Stale upstream panel; not unfold target
+    shapeDxf: panelNodeA?.shapeDxf ?? null,
+    panelFrame: panelNodeA?.panelFrame,
   });
 
   // Panel B node holds the merged shell UUID as its bodyId.
   // Its node id equals partAId so apply_unfold(panel_id: partAId) resolves to this node.
+  // Mark as canonical — this is the unfold entrypoint for merged geometries.
+  // shapeDxf is now the merged 2D outline from bend unfolding.
+  // panelFrame carries the reference frame (panel A's frame) so further chained merges
+  // can position the next panel correctly.
   mergedGraph.addNode({
     type: 'PanelNode',
     id: nodeBId,
@@ -2769,8 +3318,26 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
     dirty: false,
     materialType: panelNodeB?.materialType ?? 'default',
     nominalThickness: panelNodeB?.nominalThickness ?? 1.0,
-    flatWidth: panelNodeB?.flatWidth ?? null,
-    flatHeight: panelNodeB?.flatHeight ?? null,
+    flatWidth: mergedFlatWidth,
+    flatHeight: mergedFlatHeight,
+    canonical: true,
+    shapeDxf: mergedDxf,
+    panelFrame: panelNodeA?.panelFrame, // Use panel A frame as the accumulated reference frame
+  });
+
+  // Alias node: same geometry, id = partBId so apply_unfold(panel_id: partBId) also resolves.
+  mergedGraph.addNode({
+    type: 'PanelNode',
+    id: nodeBIdAlias,
+    bodyId: null,
+    dirty: false,
+    materialType: panelNodeB?.materialType ?? 'default',
+    nominalThickness: panelNodeB?.nominalThickness ?? 1.0,
+    flatWidth: mergedFlatWidth,
+    flatHeight: mergedFlatHeight,
+    canonical: false,
+    shapeDxf: mergedDxf,
+    panelFrame: panelNodeA?.panelFrame,
   });
 
   // Create BendNode connecting the two panels
@@ -2790,8 +3357,14 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
   return {
     merged_shell_id: result.mergedShellId,
     merged_part_id: mergedPartId, // Stable: equals part_a_id input — use this for apply_unfold
+    part_id: mergedPartId,
+    preserved_part_id: mergedPartId,
+    consumed_part_ids: [partBId],  // These IDs are now aliases to merged_part_id
     part_a_id: partAId,
     graphs_merged: true,
+    visible_shell_id: result.mergedShellId,
+    hidden_shell_ids: [shellAId, shellBId],
+    visibility_policy: 'show_only_recreated',
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
     mesh_url: `${meshBaseUrl}/mesh/${result.mergedShellId}.glb`,
     shape_history: result.shape_history ?? [],
@@ -2834,7 +3407,7 @@ function handleExtendFaceToTarget(args: Record<string, unknown>): unknown {
       'target_type must be "plane", "face_id", or "part_surface"', false);
   }
 
-  const target = (args['target'] ?? {}) as Record<string, unknown>;
+  const target = requireObject(args, 'target');
 
   // Accept flat target_part_id/target_face_id or nested target.part_id/target.face_id
   let targetPartId = '';
@@ -2851,14 +3424,23 @@ function handleExtendFaceToTarget(args: Record<string, unknown>): unknown {
     throwError(ErrorCodes.GE_EXTEND_FAILED, 'target_part_id is required', false);
   }
 
-  const normalObj = (target['normal'] ?? { x: 0, y: 0, z: 1 }) as { x: number; y: number; z: number };
-  const originObj = (target['origin'] ?? { x: 0, y: 0, z: 0 }) as { x: number; y: number; z: number };
+  const normalObj = target['normal'] as { x: number; y: number; z: number } | undefined;
+  const originObj = target['origin'] as { x: number; y: number; z: number } | undefined;
+  if (!normalObj || typeof normalObj.x !== 'number' || typeof normalObj.y !== 'number' || typeof normalObj.z !== 'number') {
+    throwError(ErrorCodes.GE_EXTEND_FAILED, 'target.normal must be an object with numeric x, y, z', false);
+  }
+  if (!originObj || typeof originObj.x !== 'number' || typeof originObj.y !== 'number' || typeof originObj.z !== 'number') {
+    throwError(ErrorCodes.GE_EXTEND_FAILED, 'target.origin must be an object with numeric x, y, z', false);
+  }
   const targetPlane = { normal: normalObj, origin: originObj };
 
   const ctx = resolveTransactionContext(args);
   const result = getGeometryBinding().extendFaceToTarget(
     partId, faceId, targetType, targetPartId, targetFaceId, targetPlane,
   );
+
+  // Register the modified shell immediately so it can be used in subsequent operations
+  session.registerShell(result.modifiedShellId);
 
   if (ctx.mode === 'join') {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
@@ -2884,6 +3466,9 @@ function handleOffsetFace(args: Record<string, unknown>): unknown {
 
   const ctx = resolveTransactionContext(args);
   const result = getGeometryBinding().offsetFace(partId, faceId, distance as number);
+
+  // Register the modified shell immediately so it can be used in subsequent operations
+  session.registerShell(result.modifiedShellId);
 
   if (ctx.mode === 'join') {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
@@ -2920,6 +3505,9 @@ function handleAddFlange(args: Record<string, unknown>): unknown {
     partId, edgeId, length as number, angle as number, bendRadius as number,
   );
 
+  // Register the modified shell immediately so it can be used in subsequent operations
+  session.registerShell(result.modifiedShellId);
+
   if (ctx.mode === 'join') {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
@@ -2940,6 +3528,9 @@ function handleRipEdge(args: Record<string, unknown>): unknown {
 
   const ctx = resolveTransactionContext(args);
   const result = getGeometryBinding().ripEdge(partId, edgeId);
+
+  // Register the modified shell immediately so it can be used in subsequent operations
+  session.registerShell(result.modifiedShellId);
 
   if (ctx.mode === 'join') {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
@@ -3057,68 +3648,128 @@ function handleFuseBodies(args: Record<string, unknown>): unknown {
   const fuzzyTolerance = (args['fuzzy_tolerance'] as number | undefined) ?? 1e-5;
   const ctx = resolveTransactionContext(args);
 
-  const result = getGeometryBinding().fuseBodies(tools, fuzzyTolerance);
+  // Resolve stable part IDs to their current shell IDs (after any transforms).
+  // This ensures fuse_bodies finds the correct geometry even after translate_body, rotate_body, etc.
+  const shellIds: string[] = [];
+  for (const toolId of tools) {
+    const { shellId } = resolveTargetToShell(toolId);
+    shellIds.push(shellId);
+  }
+
+  const result = getGeometryBinding().fuseBodies(shellIds, fuzzyTolerance);
+
+  // Register the fused solid in the session so it can be used immediately in subsequent operations
+  // (e.g., apply_unfold, split_body_by_bends, etc.)
+  session.registerShell(result.solid_id);
 
   if (ctx.mode === 'join') {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
   }
 
-  // ARCHITECTURE CHANGE: If any input tools have manufacturing graphs, update them
-  // The target (first tool) absorbs all others; graphs are unioned into it
-  let targetPartId: string | undefined;
-  const sourcePartIds: string[] = [];
+  // Persistence contract: preserve the FIRST tool id as the canonical part_id.
+  // UI should treat this as stable ownership for the fused result.
+  const preservedPartId = tools[0]!;
 
+  // Collect input part ids that currently have manufacturing graphs.
+  const graphPartIds: string[] = [];
   for (const toolId of tools) {
-    if (_parts.has(toolId)) {
-      if (!targetPartId) {
-        targetPartId = toolId;
-      } else {
-        sourcePartIds.push(toolId);
-      }
-    }
+    if (_parts.has(toolId)) graphPartIds.push(toolId);
   }
 
-  // If target part has a graph, update it to reflect the fused geometry
-  if (targetPartId) {
-    const targetGraph = getManufacturingGraph(targetPartId);
+  // If target part has a graph, rebuild a clean fused graph.
+  // Boolean fuse semantics are geometric union, not bend-preserving assembly,
+  // so carrying old BendNodes forward produces incorrect flat patterns.
+  if (graphPartIds.length > 0) {
+    const sourcePartIds = graphPartIds.filter((id) => id !== preservedPartId);
+    const fusedPartIds = [...new Set([preservedPartId, ...graphPartIds, result.solid_id])];
 
-    // Find the target PanelNode and update its bodyId to the new fused solid
-    let targetPanelNode: import('../manufacturing/graph/types').PanelNode | undefined;
-    for (const node of targetGraph.nodes.values()) {
-      if (node.type === 'PanelNode' && tools.includes((node as any).bodyId)) {
-        targetPanelNode = node as import('../manufacturing/graph/types').PanelNode;
-        break;
+    // Remove all existing part-id aliases that were involved in this fuse.
+    for (const pid of fusedPartIds) {
+      _parts.delete(pid);
+    }
+    if (_activePartId && fusedPartIds.includes(_activePartId)) {
+      _activePartId = undefined;
+    }
+
+    // Create a fresh graph rooted at preservedPartId (first in tools list).
+    const fusedGraph = createPart(preservedPartId);
+    const toBodyId = (s: string): import('../manufacturing/graph/types').BodyId => s as import('../manufacturing/graph/types').BodyId;
+
+    // Derive flat dimensions by 2D DXF merge (source of truth for shapes).
+    // Collect DXF from each input panel; attempt deterministic outline union.
+    // If any input lacks DXF, fall back to null so user calls apply_unfold to derive from geometry.
+    const panelDxfs: (string | null)[] = [];
+    let allInputsHaveDimensions = true;
+    let combinedThickness = 0;
+
+    for (const pid of [preservedPartId, ...sourcePartIds]) {
+      const g = _parts.get(pid);
+      if (!g) continue;
+      for (const node of g.nodes.values()) {
+        if (node.type === 'PanelNode' && node.canonical !== false) {
+          const pn = node as import('../manufacturing/graph/types').PanelNode;
+          panelDxfs.push(pn.shapeDxf ?? null);
+          combinedThickness = Math.max(combinedThickness, pn.nominalThickness);
+          if (!pn.shapeDxf) allInputsHaveDimensions = false;
+          break; // one canonical panel per part
+        }
       }
     }
 
-    if (targetPanelNode) {
-      // Update the target panel's body reference to the new fused solid
-      const toBodyId = (s: string): import('../manufacturing/graph/types').BodyId => s as import('../manufacturing/graph/types').BodyId;
-      (targetPanelNode as any).bodyId = toBodyId(result.solid_id);
-      const typedNodeId = targetPanelNode.id as import('../manufacturing/graph/types').NodeId;
-      targetGraph.markDirty(typedNodeId);
-    }
+    const nominalThickness = combinedThickness > 0 ? combinedThickness : 1.0;
+    let flatWidth: number | null = null;
+    let flatHeight: number | null = null;
+    let shapeDxf: string | null = null;
 
-    // If other tools have graphs, union them into the target.
-    for (const sourcePartId of sourcePartIds) {
+    if (allInputsHaveDimensions && panelDxfs.length > 0) {
       try {
-        unionGraphs(targetPartId, sourcePartId);
-      } catch (unionErr) {
-        console.warn(`Warning: Failed to union graph ${sourcePartId} into ${targetPartId}: ${String(unionErr)}`);
+        const merged = mergeInputDxfOutlines(panelDxfs);
+        if (merged) {
+          // mergeInputDxfOutlines already returns cleaned DXF (invalid cut lines removed)
+          shapeDxf = merged.mergedDxf;
+          flatWidth = merged.width;
+          flatHeight = merged.height;
+        }
+      } catch (err) {
+        console.warn(
+          `[handleFuseBodies] DXF merge failed: ${err instanceof Error ? err.message : String(err)}. ` +
+          `Falling back to null dimensions.`
+        );
       }
     }
 
-    // Mark target panel as dirty so solve_geometry will regenerate on next call
-    if (targetPanelNode) {
-      targetGraph.markDirty(targetPanelNode.id);
+    // Register all consumed IDs and the new fused solid ID as aliases.
+    // Visibility rule: only preservedPartId carries the renderable bodyId.
+    // Mark as dirty if flat dimensions weren't derived from inputs, so user calls solve_geometry.
+    const isDirty = flatWidth === null || flatHeight === null;
+    for (const pid of fusedPartIds) {
+      const isRenderableCanonical = pid === preservedPartId;
+      _parts.set(pid, fusedGraph);
+      fusedGraph.addNode({
+        type: 'PanelNode',
+        id: toNodeId(pid),
+        bodyId: isRenderableCanonical ? toBodyId(result.solid_id) : null,
+        dirty: isDirty,
+        materialType: 'default',
+        nominalThickness,
+        flatWidth,
+        flatHeight,
+        canonical: isRenderableCanonical,
+        shapeDxf,
+      });
     }
 
     const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
     return {
       solid_id: result.solid_id,
-      part_id: targetPartId,
+      part_id: preservedPartId,
+      preserved_part_id: preservedPartId,
+      consumed_part_ids: sourcePartIds,
       disjoint: result.disjoint,
       graphs_fused: sourcePartIds.length > 0,
+      visible_shell_id: result.solid_id,
+      hidden_shell_ids: shellIds,
+      visibility_policy: 'show_only_recreated',
       rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
       mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
       shape_history: result.shape_history ?? [],
@@ -3129,8 +3780,14 @@ function handleFuseBodies(args: Record<string, unknown>): unknown {
   const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     solid_id: result.solid_id,
+    part_id: preservedPartId,
+    preserved_part_id: preservedPartId,
+    consumed_part_ids: tools.slice(1),
     disjoint: result.disjoint,
     graphs_fused: false,
+    visible_shell_id: result.solid_id,
+    hidden_shell_ids: shellIds,
+    visibility_policy: 'show_only_recreated',
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
     mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
     shape_history: result.shape_history ?? [],
@@ -3144,6 +3801,9 @@ function handleCutBodies(args: Record<string, unknown>): unknown {
   const ctx = resolveTransactionContext(args);
 
   const result = getGeometryBinding().cutBodies(blank, tools, keepTools);
+
+  // Register the cut result immediately so it can be used in subsequent operations
+  session.registerShell(result.solid_id);
 
   if (ctx.mode === 'join') {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
@@ -3164,6 +3824,9 @@ function handleIntersectBodies(args: Record<string, unknown>): unknown {
   const ctx = resolveTransactionContext(args);
 
   const result = getGeometryBinding().intersectBodies(targetA, targetB);
+
+  // Register the intersection result immediately so it can be used in subsequent operations
+  session.registerShell(result.solid_id);
 
   if (ctx.mode === 'join') {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
@@ -3198,6 +3861,9 @@ function handleTrimBodyWithPlane(args: Record<string, unknown>): unknown {
 
   const ctx = resolveTransactionContext(args);
   const result = getGeometryBinding().trimBodyWithPlane(partId, plane, keepPositiveSide as boolean);
+
+  // Register the trimmed shell immediately so it can be used in subsequent operations
+  session.registerShell(result.trimmedShellId);
 
   if (ctx.mode === 'join') {
     transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
@@ -3367,15 +4033,25 @@ function handleSplitBodyByBends(args: Record<string, unknown>): unknown {
 
     // Critical: Panel node creation must succeed. No fallback allowed.
     // If this fails, it indicates a malformed geometry or data corruption.
+    const panelShapeDxf =
+      panelFlatWidth !== null && panelFlatHeight !== null
+        ? generateDxfFromManufacturingGraph(panelFlatWidth, panelFlatHeight, [], [])
+        : null;
+
+    const panelFrame = bbox ? derivePanelFrameFromBbox(bbox) : null;
+
     graph.addNode({
       type: 'PanelNode',
-      id: toNodeId(`panel-root-${panelId.substring(0, 8)}`),
+      id: toNodeId(panelId),  // Use raw panelId as node id so apply_unfold can find it
       bodyId: toBodyId(panelId),
       dirty: true,
       materialType: 'default',
       nominalThickness: defaultThicknessMm,
       flatWidth: panelFlatWidth,
       flatHeight: panelFlatHeight,
+      canonical: true,  // Split panels are canonical unfold targets
+      shapeDxf: panelShapeDxf,
+      panelFrame: panelFrame ?? undefined,
     });
     createdParts.push({ part_id: partId, panel_id: panelId });
   }
@@ -3408,6 +4084,14 @@ function handleSplitBodyByBends(args: Record<string, unknown>): unknown {
 
     // Node ID equals the protrusion ID so apply_unfold(panel_id: protrusionId,
     // part_id: protrusionId) resolves this node without a queryGraph round-trip.
+    // Protrusions are canonical unfold targets.
+    const protrusionShapeDxf =
+      protFlatWidth !== null && protFlatHeight !== null
+        ? generateDxfFromManufacturingGraph(protFlatWidth, protFlatHeight, [], [])
+        : null;
+
+    const protrusionFrame = bbox ? derivePanelFrameFromBbox(bbox) : null;
+
     graph.addNode({
       type: 'PanelNode',
       id: toNodeId(protrusionId),
@@ -3417,6 +4101,9 @@ function handleSplitBodyByBends(args: Record<string, unknown>): unknown {
       nominalThickness: defaultThicknessMm,
       flatWidth: protFlatWidth,
       flatHeight: protFlatHeight,
+      canonical: true,  // Protrusions are canonical unfold targets
+      shapeDxf: protrusionShapeDxf,
+      panelFrame: protrusionFrame ?? undefined,
     });
     createdParts.push({ part_id: protPartId, panel_id: protrusionId });
   }
@@ -3437,6 +4124,8 @@ function handleSplitBodyByBends(args: Record<string, unknown>): unknown {
     shape_history: result.shape_history ?? [],
     // Manufacturing graph creation results
     created_parts: createdParts,
+    hidden_source_part_ids: [partId],
+    visibility_policy: 'show_only_recreated',
   };
 }
 
@@ -3461,6 +4150,54 @@ function handleRemoveProtrusions(args: Record<string, unknown>): unknown {
     session.registerShell(shellId);
   }
 
+  // Create manufacturing graph parts for each protrusion so apply_unfold can resolve them.
+  // Mirror what split_body_by_bends does: part_id = shell UUID, single canonical PanelNode.
+  const toBodyId = (s: string): import('../manufacturing/graph/types').BodyId => s as import('../manufacturing/graph/types').BodyId;
+  const createdProtrusionParts: Array<{ part_id: string; panel_id: string }> = [];
+
+  for (let pi = 0; pi < result.protrusion_ids.length; pi++) {
+    const protrusionId = result.protrusion_ids[pi]!;
+    const protPartId = protrusionId;
+    if (_parts.has(protPartId)) {
+      _parts.delete(protPartId);
+      if (_activePartId === protPartId) _activePartId = undefined;
+    }
+    createPart(protPartId);
+    const pGraph = getManufacturingGraph(protPartId);
+
+    let protFlatWidth: number | null = null;
+    let protFlatHeight: number | null = null;
+    const bbox = result.protrusion_bboxes?.[pi];
+    if (bbox) {
+      const dims = [
+        bbox.x_max - bbox.x_min,
+        bbox.y_max - bbox.y_min,
+        bbox.z_max - bbox.z_min,
+      ].sort((a, b) => a - b);
+      protFlatWidth  = dims[2] ?? null;
+      protFlatHeight = dims[1] ?? null;
+    }
+
+    const protrusionShapeDxf =
+      protFlatWidth !== null && protFlatHeight !== null
+        ? generateDxfFromManufacturingGraph(protFlatWidth, protFlatHeight, [], [])
+        : null;
+
+    pGraph.addNode({
+      type: 'PanelNode',
+      id: toNodeId(protrusionId),  // Use raw protrusionId as node id so apply_unfold can find it
+      bodyId: toBodyId(protrusionId),
+      dirty: true,
+      materialType: 'default',
+      nominalThickness: maxThicknessMm,
+      flatWidth: protFlatWidth,
+      flatHeight: protFlatHeight,
+      canonical: true,
+      shapeDxf: protrusionShapeDxf,
+    });
+    createdProtrusionParts.push({ part_id: protPartId, panel_id: protrusionId });
+  }
+
   const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   const allIds = [result.cleaned_part_id, ...result.protrusion_ids];
   return {
@@ -3470,6 +4207,7 @@ function handleRemoveProtrusions(args: Record<string, unknown>): unknown {
     protrusion_bboxes: result.protrusion_bboxes,
     rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
     mesh_urls: allIds.map(id => `${meshBaseUrl}/mesh/${id}.glb`),
+    created_parts: createdProtrusionParts,
   };
 }
 
@@ -3498,6 +4236,85 @@ function handleCenterAndAlignBody(args: Record<string, unknown>): unknown {
   };
 }
 
+// Helper: Resolve a target (part_id or shell UUID) to a shell UUID and optional graph reference.
+// If target is a part_id, looks up the canonical panel's bodyId.
+// Returns { shellId, partGraph } where partGraph is non-null only if target was a part_id.
+function resolveTargetToShell(target: string): { shellId: string; partGraph: ManufacturingGraph | undefined } {
+  if (_parts.has(target)) {
+    // Target is a part_id. Look up the canonical panel node to get the shell.
+    const graph = _parts.get(target)!;
+    for (const node of graph.nodes.values()) {
+      if (node.type === 'PanelNode') {
+        const pn = node as import('../manufacturing/graph/types').PanelNode;
+        if (pn.canonical !== false && pn.bodyId !== null) {
+          return { shellId: pn.bodyId, partGraph: graph };
+        }
+      }
+    }
+    throwError(
+      ErrorCodes.GRAPH_INTEGRITY_ERROR,
+      `Part "${target}" has no valid canonical panel to transform.`,
+      true,
+      'solve_geometry',
+    );
+  }
+
+  // Target is a shell UUID, not a part_id.
+  return { shellId: target, partGraph: undefined };
+}
+
+// Helper: Update a panel node's bodyId after a transform operation and register
+// the new solid_id as an alias in _parts so apply_unfold can find it by either
+// the original part_id or the new solid_id returned by the transform.
+function updatePanelBodyIdAfterTransform(
+  oldShellId: string,
+  newShellId: string,
+  partGraph: ManufacturingGraph | undefined,
+  keepOriginal: boolean,
+): void {
+  if (keepOriginal) return; // No update needed if original is kept.
+  if (newShellId === oldShellId) return; // Shell UUID unchanged (no-op translate).
+
+  const toBodyId = (s: string) => s as import('../manufacturing/graph/types').BodyId;
+  const oldBodyId = oldShellId as import('../manufacturing/graph/types').BodyId;
+  const newBodyId = toBodyId(newShellId);
+
+  if (partGraph) {
+    // Update the graph that owned the shell.
+    for (const node of partGraph.nodes.values()) {
+      if (node.type === 'PanelNode') {
+        const pn = node as import('../manufacturing/graph/types').PanelNode;
+        if (pn.bodyId === oldBodyId) {
+          pn.bodyId = newBodyId;
+          break;
+        }
+      }
+    }
+    // Register the new solid_id as an alias in _parts so apply_unfold can find
+    // the graph whether the caller uses the original part_id or the new solid_id.
+    if (!_parts.has(newShellId)) {
+      _parts.set(newShellId, partGraph);
+    }
+  } else {
+    // Search all graphs for a matching panel.
+    for (const [, graph] of _parts.entries()) {
+      for (const node of graph.nodes.values()) {
+        if (node.type === 'PanelNode') {
+          const pn = node as import('../manufacturing/graph/types').PanelNode;
+          if (pn.bodyId === oldBodyId) {
+            pn.bodyId = newBodyId;
+            // Register new solid_id as alias.
+            if (!_parts.has(newShellId)) {
+              _parts.set(newShellId, graph);
+            }
+            return;
+          }
+        }
+      }
+    }
+  }
+}
+
 function handleTranslateBody(args: Record<string, unknown>): unknown {
   const targets = requireStringArray(args, 'targets');
   const vec = args['vector'] as number[];
@@ -3509,31 +4326,14 @@ function handleTranslateBody(args: Record<string, unknown>): unknown {
 
   const results = [];
   for (const target of targets) {
-    const res = getGeometryBinding().translateBody(target, vec[0], vec[1], vec[2], keepOriginal);
+    const { shellId, partGraph } = resolveTargetToShell(target);
+    const res = getGeometryBinding().translateBody(shellId, vec[0], vec[1], vec[2], keepOriginal);
     results.push(res);
     session.registerShell(res.solid_id);
     if (ctx.mode === 'join') {
       transactionRegistry.appendHistory(ctx.transactionId, res.shape_history ?? []);
     }
-    // Propagate manufacturing graph: update any PanelNode whose bodyId matches the translated shell.
-    // The _parts key (part_id) stays stable — only the internal bodyId reference is updated.
-    // This must search ALL graphs, not just _parts[target], because the panel may be stored
-    // under a stable partId (from a previous merge), not the old shell UUID.
-    if (!keepOriginal && res.solid_id !== target) {
-      const toBodyId2 = (s: string) => s as import('../manufacturing/graph/types').BodyId;
-      const targetBodyId = target as import('../manufacturing/graph/types').BodyId;
-      for (const graph of _parts.values()) {
-        for (const node of graph.nodes.values()) {
-          if (node.type === 'PanelNode') {
-            const pn = node as import('../manufacturing/graph/types').PanelNode;
-            if (pn.bodyId === targetBodyId) {
-              pn.bodyId = toBodyId2(res.solid_id);
-              break;  // Found and updated the panel, move to next target
-            }
-          }
-        }
-      }
-    }
+    updatePanelBodyIdAfterTransform(shellId, res.solid_id, partGraph, keepOriginal);
   }
 
   const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
@@ -3565,8 +4365,9 @@ function handleRotateBody(args: Record<string, unknown>): unknown {
 
   const results = [];
   for (const target of targets) {
+    const { shellId, partGraph } = resolveTargetToShell(target);
     const res = getGeometryBinding().rotateBody(
-      target,
+      shellId,
       axisOrigin[0],
       axisOrigin[1],
       axisOrigin[2],
@@ -3581,6 +4382,7 @@ function handleRotateBody(args: Record<string, unknown>): unknown {
     if (ctx.mode === 'join') {
       transactionRegistry.appendHistory(ctx.transactionId, res.shape_history ?? []);
     }
+    updatePanelBodyIdAfterTransform(shellId, res.solid_id, partGraph, keepOriginal);
   }
 
   const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
@@ -3608,8 +4410,9 @@ function handleMirrorBody(args: Record<string, unknown>): unknown {
 
   const results = [];
   for (const target of targets) {
+    const { shellId, partGraph } = resolveTargetToShell(target);
     const res = getGeometryBinding().mirrorBody(
-      target,
+      shellId,
       planeOrigin[0],
       planeOrigin[1],
       planeOrigin[2],
@@ -3623,6 +4426,7 @@ function handleMirrorBody(args: Record<string, unknown>): unknown {
     if (ctx.mode === 'join') {
       transactionRegistry.appendHistory(ctx.transactionId, res.shape_history ?? []);
     }
+    updatePanelBodyIdAfterTransform(shellId, res.solid_id, partGraph, keepOriginal);
   }
 
   const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
@@ -3650,8 +4454,9 @@ function handleScaleBody(args: Record<string, unknown>): unknown {
 
   const results = [];
   for (const target of targets) {
+    const { shellId, partGraph } = resolveTargetToShell(target);
     const res = getGeometryBinding().scaleBody(
-      target,
+      shellId,
       origin[0],
       origin[1],
       origin[2],
@@ -3663,6 +4468,7 @@ function handleScaleBody(args: Record<string, unknown>): unknown {
     if (ctx.mode === 'join') {
       transactionRegistry.appendHistory(ctx.transactionId, res.shape_history ?? []);
     }
+    updatePanelBodyIdAfterTransform(shellId, res.solid_id, partGraph, keepOriginal);
   }
 
   const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
@@ -4114,6 +4920,7 @@ async function handleSolveGeometry(args: Record<string, unknown>): Promise<unkno
   const partId = requireString(args, 'part_id');
   const graph = getManufacturingGraph(partId);
   const binding = getGraphBinding();
+  const reconstructionPlan = getGeometrySolver().buildReconstructionPlan(graph, partId);
   const outcome = await getGeometrySolver().solve(graph, binding);
 
   if (!outcome.ok) {
@@ -4132,6 +4939,7 @@ async function handleSolveGeometry(args: Record<string, unknown>): Promise<unkno
     invalidated_body_ids: outcome.result.invalidatedBodyIds,
     dirty_count_before: outcome.result.dirtyCountBefore,
     solve_ms: outcome.result.solveMs,
+    reconstruction_plan: reconstructionPlan,
   };
 }
 
@@ -4211,7 +5019,7 @@ async function handleAddJoin(
   const joinType = requireString(args, 'join_type') as JoinNode['joinType'];
   const referenceEdgeA = (args['reference_edge_a'] as string | undefined) ?? '';
   const referenceEdgeB = (args['reference_edge_b'] as string | undefined) ?? '';
-  const rawParams = (args['params'] as Record<string, unknown>) ?? {};
+  const rawParams = requireObject(args, 'params');
 
   // Build join params based on type
   let params: JoinParams;
@@ -4318,7 +5126,7 @@ async function handleAddCut(
   const id = requireString(args, 'id');
   const parentPanelId = requireString(args, 'parent_panel_id');
   const profileType = requireString(args, 'profile_type') as CutProfile['type'];
-  const rawProfile = (args['profile'] as Record<string, unknown>) ?? {};
+  const rawProfile = requireObject(args, 'profile');
   const label = args['label'] as string | undefined;
 
   // Build the CutProfile
@@ -4432,6 +5240,8 @@ export function registerTestPart(partId: string, panelBodyIds: string[] = []): v
       nominalThickness: 1.0,
       flatWidth: 100,
       flatHeight: 100,
+      canonical: true,  // Test panels are canonical
+      shapeDxf: null,   // Test panels have no initial DXF
     } as any);
   }
 }

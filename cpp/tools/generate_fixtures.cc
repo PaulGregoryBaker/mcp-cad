@@ -6,10 +6,13 @@
  * Output directory: cpp/tests/fixtures/
  *
  * Fixtures generated:
- *   simple_box.stp       — 100×100×10 mm box (basic GE unit tests)
- *   sheet_1panel.stp     — 300×200×1.5 mm thin plate (single panel)
- *   sheet_3panel.stp     — three 100×200×1.5 mm plates stacked
- *                          (canonical INF-03 golden-path fixture, T120)
+ *   simple_box.stp             — 100×100×10 mm box (basic GE unit tests)
+ *   sheet_1panel.stp           — 300×200×1.5 mm thin plate (single panel)
+ *   sheet_3panel.stp           — three 100×200×1.5 mm plates stacked
+ *                                (canonical INF-03 golden-path fixture, T120)
+ *   angle_bracket_15deg.stp    — L-bracket: two 100×200×1.5 mm panels at 15° dihedral
+ *   angle_bracket_30deg.stp    — L-bracket: two 100×200×1.5 mm panels at 30° dihedral
+ *   angle_bracket_45deg.stp    — L-bracket: two 100×200×1.5 mm panels at 45° dihedral
  *
  * Usage (from cpp/build-vcpkg/):
  *   generate_fixtures.exe ../tests/fixtures/
@@ -23,13 +26,20 @@
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Vec.hxx>
 #include <TopoDS_Shape.hxx>
 #include <STEPControl_Writer.hxx>
 #include <IFSelect_ReturnStatus.hxx>
 
+#include <cmath>
 #include <filesystem>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -152,6 +162,74 @@ static bool genCubeWithFlanges(const fs::path& outDir) {
   return writeStp(f4.Shape(), (outDir / "cube_with_flanges.stp").string());
 }
 
+/**
+ * angle_bracket_Ndeg.stp — two flat panels meeting at a sharp N-degree dihedral bend.
+ *
+ * Cross-section in XZ (extruded W mm in Y):
+ *   Panel A: horizontal, x=[0,L], z=[0,T]
+ *   Panel B: bends downward by angleDeg from Panel A's right edge
+ *
+ * The dihedral between Panel A's top face and Panel B's outer face equals angleDeg.
+ * Use angle_threshold_deg < angleDeg with split_body_by_bends to recover 2 panels.
+ *
+ * The outer fold corner is at x = L + T*tan(angleDeg/2), z = T (exact sharp-bend geometry).
+ * The inner fold corner is at x = L, z = 0.
+ */
+static bool genAngleBracket(const fs::path& outDir, double angleDeg) {
+  const double theta  = angleDeg * M_PI / 180.0;
+  const double L      = 100.0;  // panel leg length (mm)
+  const double T      = 1.5;    // panel thickness (mm)
+  const double W      = 200.0;  // extrusion width (mm)
+
+  const double c       = std::cos(theta);
+  const double s       = std::sin(theta);
+  const double tanHalf = std::tan(theta / 2.0);
+
+  // 6-point cross-section in the XZ plane (Y=0 before extrusion).
+  // Listed counter-clockwise so the wire normal faces +Y (required for MakePrism).
+  //
+  //   P6──────────P5
+  //   │  Panel A  │
+  //   P1──────────P2
+  //                  ╲ Panel B (bent down at theta)
+  //                   P3
+  //                   P4
+  //
+  // P5 (outer fold corner) is offset from x=L by T*tan(theta/2) — the exact
+  // zero-radius bend correction so Panel B's outer face is flush with P5.
+  gp_Pnt P1(0.0,             0.0, 0.0);
+  gp_Pnt P2(L,               0.0, 0.0);
+  gp_Pnt P3(L + L*c,         0.0, -L*s);
+  gp_Pnt P4(L + L*c + T*s,   0.0, -L*s + T*c);
+  gp_Pnt P5(L + T*tanHalf,   0.0, T);
+  gp_Pnt P6(0.0,             0.0, T);
+
+  BRepBuilderAPI_MakeWire wireMaker;
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P1, P2).Edge());
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P2, P3).Edge());
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P3, P4).Edge());
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P4, P5).Edge());
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P5, P6).Edge());
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P6, P1).Edge());
+
+  if (!wireMaker.IsDone()) {
+    std::cerr << "Wire build failed for " << angleDeg << "deg bracket\n";
+    return false;
+  }
+
+  BRepBuilderAPI_MakeFace faceMaker(wireMaker.Wire(), true);
+  if (!faceMaker.IsDone()) {
+    std::cerr << "Face build failed for " << angleDeg << "deg bracket\n";
+    return false;
+  }
+
+  TopoDS_Shape prism = BRepPrimAPI_MakePrism(faceMaker.Face(), gp_Vec(0.0, W, 0.0)).Shape();
+
+  std::ostringstream name;
+  name << "angle_bracket_" << static_cast<int>(angleDeg) << "deg.stp";
+  return writeStp(prism, (outDir / name.str()).string());
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 int main(int argc, char* argv[]) {
@@ -180,6 +258,9 @@ int main(int argc, char* argv[]) {
   ok &= genSheet3Panel(outDir);
   ok &= genHollowCube(outDir);
   ok &= genCubeWithFlanges(outDir);
+  ok &= genAngleBracket(outDir, 15.0);
+  ok &= genAngleBracket(outDir, 30.0);
+  ok &= genAngleBracket(outDir, 45.0);
 
   if (ok) {
     std::cout << "All fixtures generated successfully.\n";

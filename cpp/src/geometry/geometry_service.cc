@@ -26,6 +26,7 @@
 #include <TopoDS_Shell.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Edge.hxx>
+#include <TopoDS_Wire.hxx>
 
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
@@ -40,6 +41,7 @@
 #include <BRepPrimAPI_MakeCylinder.hxx>
 
 #include <Bnd_Box.hxx>
+#include <Bnd_OBB.hxx>
 #include <BRepBndLib.hxx>
 
 #include <BRepMesh_IncrementalMesh.hxx>
@@ -50,6 +52,7 @@
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_Sewing.hxx>
 
 #include <ShapeFix_Shape.hxx>
 #include <ShapeFix_Edge.hxx>
@@ -2056,6 +2059,164 @@ public:
 
     return DxfExportResult{dxf.str(), entityCount,
                            state.flatWidthMm, state.flatHeightMm};
+  }
+
+  DxfSheetResult buildSheetFromDxf(const std::string& dxfContent) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (dxfContent.empty()) {
+      throw GeometryError("GE_INVALID_DXF", "DXF content is empty.", false, "");
+    }
+
+    std::vector<std::string> lines;
+    {
+      std::istringstream in(dxfContent);
+      std::string line;
+      while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        lines.push_back(line);
+      }
+    }
+
+    std::vector<std::pair<double, double>> vertices;
+    bool inPolyline = false;
+    bool isLayer0 = false;
+    bool hasPendingX = false;
+    double pendingX = 0.0;
+
+    for (size_t i = 0; i + 1 < lines.size(); i += 2) {
+      int code = 0;
+      try {
+        code = std::stoi(lines[i]);
+      } catch (...) {
+        continue;
+      }
+      const std::string& value = lines[i + 1];
+
+      if (code == 0) {
+        if (inPolyline && value != "LWPOLYLINE") {
+          if (isLayer0 && vertices.size() >= 3) break;
+          vertices.clear();
+        }
+        inPolyline = (value == "LWPOLYLINE");
+        isLayer0 = false;
+        hasPendingX = false;
+        continue;
+      }
+
+      if (!inPolyline) continue;
+
+      if (code == 8) {
+        isLayer0 = (value == "0");
+      } else if (code == 10) {
+        try {
+          pendingX = std::stod(value);
+          hasPendingX = true;
+        } catch (...) {
+          hasPendingX = false;
+        }
+      } else if (code == 20 && hasPendingX) {
+        try {
+          double y = std::stod(value);
+          vertices.push_back({pendingX, y});
+        } catch (...) {
+          // Ignore malformed vertex pair
+        }
+        hasPendingX = false;
+      }
+    }
+
+    if (vertices.size() < 3) {
+      throw GeometryError(
+          "GE_INVALID_DXF",
+          "DXF must contain a layer-0 LWPOLYLINE with at least 3 vertices.",
+          false,
+          "");
+    }
+
+    try {
+      BRepBuilderAPI_MakeWire wireMaker;
+
+      for (size_t i = 0; i < vertices.size(); ++i) {
+        const auto& a = vertices[i];
+        const auto& b = vertices[(i + 1) % vertices.size()];
+        if (std::abs(a.first - b.first) < 1e-9 && std::abs(a.second - b.second) < 1e-9) continue;
+        TopoDS_Edge edge = BRepBuilderAPI_MakeEdge(
+            gp_Pnt(a.first, a.second, 0.0),
+            gp_Pnt(b.first, b.second, 0.0));
+        wireMaker.Add(edge);
+      }
+
+      if (!wireMaker.IsDone()) {
+        throw GeometryError("GE_INVALID_DXF", "Failed to build wire from DXF polyline.", false, "");
+      }
+
+      TopoDS_Wire wire = wireMaker.Wire();
+      BRepBuilderAPI_MakeFace faceMaker(wire);
+      if (!faceMaker.IsDone()) {
+        throw GeometryError("GE_INVALID_DXF", "Failed to build planar face from DXF wire.", false, "");
+      }
+
+      // Wrap face into a shell (single-face shell)
+      TopoDS_Face face = faceMaker.Face();
+      BRepBuilderAPI_Sewing sewer;
+      sewer.Add(face);
+      sewer.Perform();
+      TopoDS_Shell shell = TopoDS::Shell(sewer.SewedShape());
+
+      ShellId sheetId = generateUUID();
+      shells_[sheetId] = ShellState{sheetId, "", shell};
+      return DxfSheetResult{sheetId};
+
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_INVALID_DXF",
+                          std::string("DXF build failed: ") + e.GetMessageString(),
+                          false,
+                          "");
+    }
+  }
+
+  ThickenSheetResult thickenSheet(const ShellId& sheetId, double thicknessMm) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (thicknessMm <= 0.0) {
+      throw GeometryError("GE_INVALID_SHEET_METAL", "Thickness must be > 0.", false, "");
+    }
+
+    auto it = shells_.find(sheetId);
+    if (it == shells_.end()) {
+      throw GeometryError("GE_SHELL_NOT_FOUND", "Sheet not found: " + sheetId, false, "");
+    }
+
+    try {
+      BRepPrimAPI_MakePrism prism(it->second.shape, gp_Vec(0.0, 0.0, thicknessMm), true);
+      if (!prism.IsDone() || prism.Shape().IsNull()) {
+        throw GeometryError("GE_EXTRUDE_FAILED", "Failed to thicken sheet into solid.", false, "");
+      }
+
+      ShellId solidId = generateUUID();
+      shells_[solidId] = ShellState{solidId, it->second.parentSolidId, prism.Shape()};
+      return ThickenSheetResult{solidId};
+
+    } catch (const Standard_Failure& e) {
+      throw GeometryError("GE_EXTRUDE_FAILED",
+                          std::string("Sheet thickening failed: ") + e.GetMessageString(),
+                          false,
+                          "");
+    }
+  }
+
+  ApplyBendResult applyBend(
+      const ShellId& panelAId,
+      const ShellId& panelBId,
+      double         innerRadiusMm,
+      double         angleDeg,
+      double         kFactor) override {
+    (void)angleDeg;
+    (void)kFactor;
+
+    MergeBodyResult merged = mergeBodiesWithBend(panelAId, panelBId, {}, innerRadiusMm);
+    return ApplyBendResult{merged.mergedShellId};
   }
 
   // ÔöÇÔöÇ Corner reliefs ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
@@ -6401,9 +6562,12 @@ private:
           }
 
           // ÔöÇÔöÇ 2. Bend axis = intersection of outer planes ÔöÇÔöÇ
-          if (std::abs(nInA.Dot(nInB)) > 0.95) {
+          // Threshold: reject if |dot| > cos(13°) ≈ 0.974, i.e. angle < 13°.
+          // This allows shallow bends (15°, 20°, …) while still rejecting
+          // effectively-coplanar panels where a bend axis is meaningless.
+          if (std::abs(nInA.Dot(nInB)) > 0.974) {
             throw GeometryError("GE_MERGE_BEND_AXIS_AMBIGUOUS",
-              "Outer faces of the two inputs are parallel (within 18┬░). The panels "
+              "Outer faces of the two inputs are parallel (within 13°). The panels "
               "must meet at a non-zero angle so a bend axis can be defined.",
               false, "");
           }
@@ -6451,12 +6615,15 @@ private:
           // thicknesses; correct silently if mismatch is within ~3 mm,
           // throw if it's beyond that (different stock can't be bent
           // cleanly as one piece).
+          // Use OBB (oriented bounding box) so that panels tilted at any angle
+          // report their actual wall thickness, not a world-axis projection.
+          // For a flat panel at 30° the AABB min-dim would be the Z-span
+          // (~51 mm for a 100mm leg), while the OBB min-dim is the true 1.5mm.
           auto panelThickness = [](const TopoDS_Shape& body) -> double {
-            Bnd_Box bb;
-            BRepBndLib::AddOptimal(body, bb);
-            double x1,y1,z1,x2,y2,z2;
-            bb.Get(x1,y1,z1,x2,y2,z2);
-            return std::min({x2-x1, y2-y1, z2-z1});
+            Bnd_OBB obb;
+            BRepBndLib::AddOBB(body, obb, /*isTriangulationUsed=*/false,
+                               /*isOptimal=*/true, /*isShapeToleranceUsed=*/false);
+            return 2.0 * std::min({obb.XHSize(), obb.YHSize(), obb.ZHSize()});
           };
           double tA = panelThickness(inputA);
           double tB = panelThickness(inputB);

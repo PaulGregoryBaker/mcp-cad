@@ -10,6 +10,9 @@ export default defineConfig({
         include: [
           'tests/manufacturing.test.ts',
           'tests/mcp.test.ts',
+          'tests/dxf_orientation.test.ts',
+          'tests/dxf_merge.unit.test.ts',
+          'tests/dxf_panel_frame_bbox.test.ts',
           'tests/rules.test.ts',
           'tests/bom.test.ts',
           'tests/assembly.test.ts',

@@ -30,8 +30,16 @@ export class SessionState {
     this.solidIds.add(id);
   }
 
+  unregisterSolid(id: string): void {
+    this.solidIds.delete(id);
+  }
+
   registerShell(id: string): void {
     this.shellIds.add(id);
+  }
+
+  unregisterShell(id: string): void {
+    this.shellIds.delete(id);
   }
 
   getActiveShellIds(): string[] {

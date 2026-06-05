@@ -86,6 +86,18 @@ struct DxfExportResult {
   double      bboxHeightMm;
 };
 
+struct DxfSheetResult {
+  ShellId sheetId;
+};
+
+struct ThickenSheetResult {
+  ShellId solidId;
+};
+
+struct ApplyBendResult {
+  ShellId mergedShellId;
+};
+
 struct SheetMetalValidationResult {
   bool                     isValid          = false;
   double                   nominalThickness = 0.0;
@@ -510,6 +522,14 @@ public:
   // ── Sheet metal operations ─────────────────────────────────────────────────
   virtual UnfoldResult    unfoldShell(const ShellId& shellId, double kFactor)   = 0;
   virtual DxfExportResult exportDxf(const UnfoldId& unfoldId)                   = 0;
+  virtual DxfSheetResult buildSheetFromDxf(const std::string& dxfContent)       = 0;
+  virtual ThickenSheetResult thickenSheet(const ShellId& sheetId, double thicknessMm) = 0;
+  virtual ApplyBendResult applyBend(
+      const ShellId& panelAId,
+      const ShellId& panelBId,
+      double         innerRadiusMm,
+      double         angleDeg,
+      double         kFactor) = 0;
 
   // ── Corner reliefs ─────────────────────────────────────────────────────────
   enum class ReliefType { DOGBONE, CIRCULAR };

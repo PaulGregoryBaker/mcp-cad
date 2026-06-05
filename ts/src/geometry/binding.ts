@@ -19,6 +19,9 @@ import type {
   RivetHoleResult,
   UnfoldResult,
   DxfExportResult,
+  DxfSheetResult,
+  ThickenSheetResult,
+  ApplyBendResult,
   NestResult,
   RestoreResult,
   ClashReport,
@@ -80,6 +83,9 @@ export interface GeometryAddon {
   ): RivetHoleResult;
   unfoldShell(shellId: string, kFactor: number): UnfoldResult;
   exportDxf(unfoldId: string): DxfExportResult;
+  buildSheetFromDxf?(dxfContent: string): DxfSheetResult;
+  thickenSheet?(sheetId: string, thicknessMm: number): ThickenSheetResult;
+  applyBend?(panelAId: string, panelBId: string, innerRadiusMm: number, angleDeg: number, kFactor: number): ApplyBendResult;
   exportGlb(shellId: string): Buffer;
   nestShells(
     unfoldIds: string[],
@@ -300,6 +306,18 @@ export class GeometryBinding {
     return this._addon ?? getAddon();
   }
 
+  hasBuildSheetFromDxf(): boolean {
+    return typeof this.addon.buildSheetFromDxf === 'function';
+  }
+
+  hasThickenSheet(): boolean {
+    return typeof this.addon.thickenSheet === 'function';
+  }
+
+  hasApplyBend(): boolean {
+    return typeof this.addon.applyBend === 'function';
+  }
+
   loadStep(filePath: string): string {
     try {
       return this.addon.loadStep(filePath);
@@ -394,6 +412,39 @@ export class GeometryBinding {
   exportDxf(unfoldId: string): DxfExportResult {
     try {
       return this.addon.exportDxf(unfoldId);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  buildSheetFromDxf(dxfContent: string): DxfSheetResult {
+    if (!this.addon.buildSheetFromDxf) {
+      throw new Error('Geometry addon does not expose buildSheetFromDxf');
+    }
+    try {
+      return this.addon.buildSheetFromDxf(dxfContent);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  thickenSheet(sheetId: string, thicknessMm: number): ThickenSheetResult {
+    if (!this.addon.thickenSheet) {
+      throw new Error('Geometry addon does not expose thickenSheet');
+    }
+    try {
+      return this.addon.thickenSheet(sheetId, thicknessMm);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  applyBend(panelAId: string, panelBId: string, innerRadiusMm: number, angleDeg: number, kFactor: number): ApplyBendResult {
+    if (!this.addon.applyBend) {
+      throw new Error('Geometry addon does not expose applyBend');
+    }
+    try {
+      return this.addon.applyBend(panelAId, panelBId, innerRadiusMm, angleDeg, kFactor);
     } catch (err) {
       throw toStructuredError(err);
     }

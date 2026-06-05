@@ -355,6 +355,62 @@ Napi::Value ExportDxf(const Napi::CallbackInfo& info) {
   return env.Undefined();
 }
 
+Napi::Value BuildSheetFromDxf(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsString()) {
+    Napi::TypeError::New(env, "buildSheetFromDxf(dxfContent: string)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string dxfContent = info[0].As<Napi::String>().Utf8Value();
+  TRY_GEOMETRY(env, {
+    DxfSheetResult res = svc().buildSheetFromDxf(dxfContent);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("sheetId", Napi::String::New(env, res.sheetId));
+    return result;
+  })
+  return env.Undefined();
+}
+
+Napi::Value ThickenSheet(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 2 || !info[0].IsString() || !info[1].IsNumber()) {
+    Napi::TypeError::New(env, "thickenSheet(sheetId: string, thicknessMm: number)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string sheetId = info[0].As<Napi::String>().Utf8Value();
+  double thicknessMm = info[1].As<Napi::Number>().DoubleValue();
+  TRY_GEOMETRY(env, {
+    ThickenSheetResult res = svc().thickenSheet(sheetId, thicknessMm);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("solidId", Napi::String::New(env, res.solidId));
+    return result;
+  })
+  return env.Undefined();
+}
+
+Napi::Value ApplyBend(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 5) {
+    Napi::TypeError::New(env, "applyBend(panelAId, panelBId, innerRadiusMm, angleDeg, kFactor)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
+  std::string panelAId = info[0].As<Napi::String>().Utf8Value();
+  std::string panelBId = info[1].As<Napi::String>().Utf8Value();
+  double innerRadiusMm = info[2].As<Napi::Number>().DoubleValue();
+  double angleDeg = info[3].As<Napi::Number>().DoubleValue();
+  double kFactor = info[4].As<Napi::Number>().DoubleValue();
+
+  TRY_GEOMETRY(env, {
+    ApplyBendResult res = svc().applyBend(panelAId, panelBId, innerRadiusMm, angleDeg, kFactor);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("mergedShellId", Napi::String::New(env, res.mergedShellId));
+    return result;
+  })
+  return env.Undefined();
+}
+
 Napi::Value ExportGlb(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   if (info.Length() < 1 || !info[0].IsString()) {
@@ -1922,6 +1978,9 @@ void RegisterGeometryMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("addRivetHole",    Napi::Function::New(env, AddRivetHole));
   exports.Set("unfoldShell",     Napi::Function::New(env, UnfoldShell));
   exports.Set("exportDxf",       Napi::Function::New(env, ExportDxf));
+  exports.Set("buildSheetFromDxf", Napi::Function::New(env, BuildSheetFromDxf));
+  exports.Set("thickenSheet",    Napi::Function::New(env, ThickenSheet));
+  exports.Set("applyBend",       Napi::Function::New(env, ApplyBend));
   exports.Set("exportGlb",       Napi::Function::New(env, ExportGlb));
   exports.Set("nestShells",      Napi::Function::New(env, NestShells));
   exports.Set("createSnapshot",        Napi::Function::New(env, CreateSnapshot));

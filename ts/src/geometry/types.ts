@@ -123,6 +123,18 @@ export interface DxfExportResult {
   bboxHeightMm: number;
 }
 
+export interface DxfSheetResult {
+  sheetId: string;
+}
+
+export interface ThickenSheetResult {
+  solidId: string;
+}
+
+export interface ApplyBendResult {
+  mergedShellId: string;
+}
+
 export interface NestPlacement {
   unfoldId: string;
   sheetIndex: number;

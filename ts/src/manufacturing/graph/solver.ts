@@ -15,6 +15,8 @@ import type {
   BodyId,
   SolveOutcome,
   SolvedNode,
+  GeometryRebuildPlan,
+  GeometryRebuildStep,
 } from './types';
 import { computeBendAllowance } from './types';
 import type { ManufacturingGraph } from './graph';
@@ -47,6 +49,12 @@ export interface GeometryBinding {
   createPolyWire?(vertices: ReadonlyArray<{ x: number; y: number }>): { wireId: string };
   /** Boolean subtract a wire profile from a panel body. */
   booleanCut?(panelBodyId: string, wireId: string): { solidId: string };
+  /** Build a planar sheet from a DXF profile. */
+  buildSheetFromDxf?(dxfContent: string): { sheetId: string };
+  /** Thicken a planar sheet into a solid panel. */
+  thickenSheet?(sheetId: string, thicknessMm: number): { solidId: string };
+  /** Apply a bend between two panel solids/shells and return merged body. */
+  applyBend?(panelAId: string, panelBId: string, innerRadiusMm: number, angleDeg: number, kFactor: number): { mergedShellId: string };
 }
 
 // ─── Adapter from full GeometryAddon to GeometryBinding ──────────────────────
@@ -74,6 +82,16 @@ export function addonToBinding(addon: GeometryAddon): GeometryBinding {
       const res = addon.cutBodies(blank, tools, keep);
       return { solid_id: res.solid_id };
     },
+    buildSheetFromDxf: addon.buildSheetFromDxf
+      ? (dxfContent) => addon.buildSheetFromDxf!(dxfContent)
+      : undefined,
+    thickenSheet: addon.thickenSheet
+      ? (sheetId, thicknessMm) => addon.thickenSheet!(sheetId, thicknessMm)
+      : undefined,
+    applyBend: addon.applyBend
+      ? (panelAId, panelBId, innerRadiusMm, angleDeg, kFactor) =>
+          addon.applyBend!(panelAId, panelBId, innerRadiusMm, angleDeg, kFactor)
+      : undefined,
   };
 }
 
@@ -95,6 +113,89 @@ interface DispatchResult {
 // ─── GeometrySolver ──────────────────────────────────────────────────────────
 
 export class GeometrySolver {
+  /**
+   * Build a graph-driven execution plan for reconstructing 3D geometry from
+   * manufacturing intent, with DXF shape as the source of truth.
+   */
+  buildReconstructionPlan(graph: ManufacturingGraph, partId = ''): GeometryRebuildPlan {
+    const orderedNodeIds = graph.topologicalSort() ?? graph.queryNodes(true).map((n) => n.id);
+    const steps: GeometryRebuildStep[] = [];
+
+    for (const nodeId of orderedNodeIds) {
+      const node = graph.nodes.get(nodeId);
+      if (!node) continue;
+
+      if (node.type === 'PanelNode') {
+        if (node.shapeDxf && node.shapeDxf.trim().length > 0) {
+          steps.push({
+            stepType: 'BUILD_PANEL_FROM_DXF',
+            nodeId,
+            detail: {
+              has_shape_dxf: true,
+              dxf_length: node.shapeDxf.length,
+              material_type: node.materialType,
+            },
+          });
+          steps.push({
+            stepType: 'THICKEN_PANEL',
+            nodeId,
+            detail: {
+              nominal_thickness_mm: node.nominalThickness,
+            },
+          });
+        }
+      } else if (node.type === 'BendNode') {
+        steps.push({
+          stepType: 'APPLY_BEND',
+          nodeId,
+          detail: {
+            panel_a_id: node.panelAId,
+            panel_b_id: node.panelBId,
+            inner_radius_mm: node.innerRadius,
+            angle_deg: node.angle,
+            k_factor: node.kFactor,
+          },
+        });
+      } else if (node.type === 'JoinNode') {
+        steps.push({
+          stepType: 'APPLY_JOIN',
+          nodeId,
+          detail: {
+            panel_a_id: node.panelAId,
+            panel_b_id: node.panelBId,
+            join_type: node.joinType,
+          },
+        });
+      } else if (node.type === 'CutNode') {
+        steps.push({
+          stepType: 'APPLY_CUT',
+          nodeId,
+          detail: {
+            parent_panel_id: node.parentPanelId,
+            profile_type: node.profile.type,
+          },
+        });
+      }
+    }
+
+    if (graph.rootPanelId) {
+      steps.push({
+        stepType: 'PLACE_IN_ASSEMBLY',
+        nodeId: graph.rootPanelId,
+        detail: {
+          strategy: 'root-anchored-topology-transform',
+          root_panel_id: graph.rootPanelId,
+        },
+      });
+    }
+
+    return {
+      partId,
+      orderedNodeIds,
+      steps,
+    };
+  }
+
   /**
    * Run a full Geometry Solve on the graph.
    * Iterates dirty nodes in Kahn's topological order, dispatching per node type.
@@ -214,14 +315,26 @@ export class GeometrySolver {
     const noUpdates = new Map<NodeId, BodyId>();
     switch (node.type) {
       case 'PanelNode': {
-        // PanelNode geometry is produced by bootstrap or merging upstream panels.
-        // If bodyId already exists (from bootstrap), it is kept; re-Solve updates it
-        // if this panel was dirtied by an upstream change.
-        // For now: if the panel has a bodyId, pass it through (no-op re-Solve).
-        // Full B-Rep re-computation is beyond Phase 1 scope — body management
-        // is handled by bootstrap and merge calls.
+        // Graph-first reconstruction path:
+        // shapeDxf (2D drawing) -> sheet -> thickened panel solid.
+        if (node.shapeDxf && node.shapeDxf.trim().length > 0) {
+          if (!binding.buildSheetFromDxf || !binding.thickenSheet) {
+            if (node.bodyId !== null) {
+              return { newBodyId: node.bodyId, panelBodyUpdates: noUpdates };
+            }
+            throw new Error(
+              `PanelNode "${node.id}" has shapeDxf but geometry binding lacks ` +
+              `buildSheetFromDxf/thickenSheet primitives for graph-first reconstruction.`,
+            );
+          }
+
+          const sheet = binding.buildSheetFromDxf(node.shapeDxf);
+          const thickened = binding.thickenSheet(sheet.sheetId, node.nominalThickness);
+          return { newBodyId: thickened.solidId as BodyId, panelBodyUpdates: noUpdates };
+        }
+
+        // Legacy fallback path for pre-existing bootstrap/merged bodies.
         if (node.bodyId === null) {
-          // No geometry yet — nothing to dispatch at this stage
           return { newBodyId: null, panelBodyUpdates: noUpdates };
         }
         return { newBodyId: node.bodyId, panelBodyUpdates: noUpdates };
@@ -239,9 +352,13 @@ export class GeometrySolver {
         // Compute bend allowance
         const panelThickness = panelA.nominalThickness;
         node.bendAllowance = computeBendAllowance(node.angle, node.innerRadius, node.kFactor, panelThickness);
-        // Merge the two panels with the bend
-        binding.mergeBodiesWithBend(panelA.bodyId, panelB.bodyId, [], node.innerRadius);
-        return { newBodyId: null, panelBodyUpdates: noUpdates };
+        // Merge/apply bend and route updated body to downstream panel (panelB).
+        const bendResult = binding.applyBend
+          ? binding.applyBend(panelA.bodyId, panelB.bodyId, node.innerRadius, node.angle, node.kFactor)
+          : binding.mergeBodiesWithBend(panelA.bodyId, panelB.bodyId, [], node.innerRadius);
+
+        const updates = new Map<NodeId, BodyId>([[panelB.id, bendResult.mergedShellId as BodyId]]);
+        return { newBodyId: bendResult.mergedShellId as BodyId, panelBodyUpdates: updates };
       }
 
       case 'JoinNode': {
