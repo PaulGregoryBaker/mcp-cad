@@ -253,6 +253,9 @@ export interface BendZone {
   offset: number;     // mm from panel A's near edge
   width: number;      // BA in mm
   nodeId: NodeId;
+  radius?: number;    // inner bend radius (mm)
+  kFactor?: number;   // neutral-axis factor 0 < k ≤ 1
+  angle?: number;     // bend angle in degrees
 }
 
 export interface FlatPatternDimensions {

@@ -120,6 +120,42 @@ struct CurvedRebuildResult {
   std::vector<ShapeHistoryRecord> shapeHistory;
 };
 
+struct BendZoneSpec {
+  double offsetMm;
+  double widthMm;
+  double angleDeg;
+  double innerRadiusMm;
+  double kFactor;
+  // Optional world-space fold frame for placement. When foldNormal is non-zero,
+  // the rebuilt shell is placed with canonical +X → bendDir and canonical +Z →
+  // foldNormal, so the fold lands on the same side as the original geometry.
+  // When zero (default), placement falls back to the reference-shell face frame.
+  double foldNormalX = 0.0, foldNormalY = 0.0, foldNormalZ = 0.0;
+  double bendDirX = 0.0, bendDirY = 0.0, bendDirZ = 0.0;
+};
+
+struct BuildShellFromFlatPatternResult {
+  std::string shellId;
+  bool        ok        = false;
+  std::string errorCode;
+  std::string message;
+};
+
+// Oriented panel frame derived from a shell's largest planar face. This is the
+// panel's local→world transform P(x): a point in panel-local coords (u, v, n)
+// maps to world via origin + u*U + v*V + n*N. Flat dimensions are the true
+// in-plane extents (uExtentMm × vExtentMm), unaffected by world-space tilt.
+struct PanelFrameResult {
+  bool   ok = false;
+  double originX = 0, originY = 0, originZ = 0;  // (u=0, v=0, n=0) corner in world
+  double uX = 1, uY = 0, uZ = 0;                  // in-plane axis (longer extent)
+  double vX = 0, vY = 1, vZ = 0;                  // in-plane axis (shorter extent)
+  double normalX = 0, normalY = 0, normalZ = 1;   // out-of-plane (thickness) axis
+  double uExtentMm = 0, vExtentMm = 0, thicknessMm = 0;
+  std::string errorCode;
+  std::string message;
+};
+
 struct NestPlacement {
   UnfoldId unfoldId;
   int      sheetIndex;
@@ -530,6 +566,17 @@ public:
       double         innerRadiusMm,
       double         angleDeg,
       double         kFactor) = 0;
+
+  virtual BuildShellFromFlatPatternResult buildShellFromFlatPattern(
+      const std::string&            dxfContent,
+      const std::vector<BendZoneSpec>& bendZones,
+      double                        thicknessMm,
+      const std::string&            referenceShellId = "") = 0;
+
+  // Derive a panel's oriented local→world frame P(x) from its largest planar
+  // face. Used at panel-creation time so flat dimensions come from the true
+  // in-plane extents rather than the world axis-aligned bounding box.
+  virtual PanelFrameResult getPanelFrame(const std::string& shellId) = 0;
 
   // ── Corner reliefs ─────────────────────────────────────────────────────────
   enum class ReliefType { DOGBONE, CIRCULAR };

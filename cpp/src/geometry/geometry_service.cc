@@ -19,6 +19,7 @@
 #include <BRep_Builder.hxx>
 #include <BRepTools.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepAdaptor_Surface.hxx>
 
 #include <TopoDS.hxx>
 #include <TopoDS_Shape.hxx>
@@ -2157,12 +2158,14 @@ public:
         throw GeometryError("GE_INVALID_DXF", "Failed to build planar face from DXF wire.", false, "");
       }
 
-      // Wrap face into a shell (single-face shell)
+      // Wrap face into a shell (single-face shell).
+      // BRepBuilderAPI_Sewing on a single unshared face returns a TopoDS_Compound,
+      // not a TopoDS_Shell — use BRep_Builder directly instead.
       TopoDS_Face face = faceMaker.Face();
-      BRepBuilderAPI_Sewing sewer;
-      sewer.Add(face);
-      sewer.Perform();
-      TopoDS_Shell shell = TopoDS::Shell(sewer.SewedShape());
+      BRep_Builder builder;
+      TopoDS_Shell shell;
+      builder.MakeShell(shell);
+      builder.Add(shell, face);
 
       ShellId sheetId = generateUUID();
       shells_[sheetId] = ShellState{sheetId, "", shell};
@@ -2215,8 +2218,442 @@ public:
     (void)angleDeg;
     (void)kFactor;
 
-    MergeBodyResult merged = mergeBodiesWithBend(panelAId, panelBId, {}, innerRadiusMm);
+    MergeBodyResult merged = mergeBodiesWithBend(panelAId, panelBId, {"all"}, innerRadiusMm);
     return ApplyBendResult{merged.mergedShellId};
+  }
+
+  BuildShellFromFlatPatternResult buildShellFromFlatPattern(
+      const std::string&               dxfContent,
+      const std::vector<BendZoneSpec>& bendZones,
+      double                           thicknessMm,
+      const std::string&               referenceShellId = "") override {
+
+    if (thicknessMm <= 0.0)
+      return {"", false, "GE_BUILD_FROM_PATTERN_FAILED", "Thickness must be > 0."};
+    if (dxfContent.empty())
+      return {"", false, "GE_BUILD_FROM_PATTERN_FAILED", "DXF content is empty."};
+    if (bendZones.size() > 1)
+      return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
+              "Only 0 or 1 bend zones are supported."};
+
+    // Parse layer-0 LWPOLYLINE vertices from DXF.
+    // Accumulates vertices from ALL layer-0 polylines so that a merged DXF
+    // with multiple disconnected panels (e.g. panel A + gap + panel B) yields
+    // the correct overall bounding box rather than stopping at the first polyline.
+    auto parseDxfVerts = [](const std::string& dxf)
+        -> std::vector<std::pair<double, double>> {
+      std::vector<std::pair<double, double>> allVerts;
+      std::vector<std::pair<double, double>> curVerts;
+      std::istringstream in(dxf);
+      std::string line;
+      std::vector<std::string> lines;
+      while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        lines.push_back(line);
+      }
+      bool inPoly = false, isL0 = false, hasPx = false;
+      double px = 0.0;
+      for (size_t i = 0; i + 1 < lines.size(); i += 2) {
+        int code = 0;
+        try { code = std::stoi(lines[i]); } catch (...) { continue; }
+        const std::string& v = lines[i + 1];
+        if (code == 0) {
+          if (inPoly && v != "LWPOLYLINE") {
+            if (isL0 && curVerts.size() >= 3)
+              allVerts.insert(allVerts.end(), curVerts.begin(), curVerts.end());
+            curVerts.clear();
+          }
+          inPoly = (v == "LWPOLYLINE");
+          isL0 = hasPx = false;
+          continue;
+        }
+        if (!inPoly) continue;
+        if      (code == 8)             isL0 = (v == "0");
+        else if (code == 10) { try { px = std::stod(v); hasPx = true; } catch (...) { hasPx = false; } }
+        else if (code == 20 && hasPx) {
+          try { curVerts.push_back({px, std::stod(v)}); } catch (...) {}
+          hasPx = false;
+        }
+      }
+      // Flush the last polyline (no closing entity at EOF).
+      if (inPoly && isL0 && curVerts.size() >= 3)
+        allVerts.insert(allVerts.end(), curVerts.begin(), curVerts.end());
+      return allVerts;
+    };
+
+    // Generate a minimal closed-rectangle LWPOLYLINE DXF string
+    auto makeDxfRect = [](double x0, double y0, double x1, double y1) -> std::string {
+      std::ostringstream oss;
+      oss << std::fixed << std::setprecision(6);
+      oss << "  0\nSECTION\n  2\nENTITIES\n";
+      oss << "  0\nLWPOLYLINE\n  8\n0\n 70\n     1\n 90\n     4\n";
+      oss << " 10\n" << x0 << "\n 20\n" << y0 << "\n";
+      oss << " 10\n" << x1 << "\n 20\n" << y0 << "\n";
+      oss << " 10\n" << x1 << "\n 20\n" << y1 << "\n";
+      oss << " 10\n" << x0 << "\n 20\n" << y1 << "\n";
+      oss << "  0\nENDSEC\n  0\nEOF\n";
+      return oss.str();
+    };
+
+    try {
+      if (bendZones.empty()) {
+        DxfSheetResult  sheet = buildSheetFromDxf(dxfContent);
+        ThickenSheetResult sol = thickenSheet(sheet.sheetId, thicknessMm);
+
+        // Place the rebuilt flat sheet at the reference panel's 3D frame so the
+        // derived 3D body sits where the panels physically are (used by fuse_bodies).
+        // The DXF remains the source of truth; this only positions the body.
+        //
+        // The merged DXF is expressed in the reference panel's frame coordinates —
+        // its (0,0) is the panel's (u1,v1) face corner — so the canonical sheet maps
+        // to world via: world = origin + x*U + y*V + (z - t/2)*N + nCentre*N, where
+        // (U,V,N) and origin come from the reference panel's largest planar face and
+        // nCentre centres the thickness on the panel.
+        if (!referenceShellId.empty()) {
+          PanelFrameResult pf = getPanelFrame(referenceShellId);
+          auto refIt = shells_.find(referenceShellId);
+          if (pf.ok && refIt != shells_.end()) {
+            gp_Dir U(pf.uX, pf.uY, pf.uZ), V(pf.vX, pf.vY, pf.vZ), N(pf.normalX, pf.normalY, pf.normalZ);
+            gp_XYZ corner(pf.originX, pf.originY, pf.originZ);
+
+            // Reference shell extent along the normal → thickness centre.
+            double nMin = std::numeric_limits<double>::max(), nMax = -nMin;
+            for (TopExp_Explorer vExp(refIt->second.shape, TopAbs_VERTEX); vExp.More(); vExp.Next()) {
+              gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(vExp.Current()));
+              double n = p.XYZ().Dot(N.XYZ());
+              nMin = std::min(nMin, n); nMax = std::max(nMax, n);
+            }
+            const double nCentre = (nMin + nMax) / 2.0;
+
+            const double Tu = corner.Dot(U.XYZ());
+            const double Tv = corner.Dot(V.XYZ());
+            const double Tn = nCentre - thicknessMm / 2.0;
+            gp_XYZ T = U.XYZ() * Tu + V.XYZ() * Tv + N.XYZ() * Tn;
+
+            gp_Trsf placeTrsf;
+            placeTrsf.SetValues(
+                U.X(), V.X(), N.X(), T.X(),
+                U.Y(), V.Y(), N.Y(), T.Y(),
+                U.Z(), V.Z(), N.Z(), T.Z()
+            );
+            auto solIt = shells_.find(sol.solidId);
+            if (solIt != shells_.end()) {
+              BRepBuilderAPI_Transform placeXfm(solIt->second.shape, placeTrsf, true);
+              solIt->second.shape = placeXfm.Shape();
+            }
+          }
+        }
+        return {sol.solidId, true, "", ""};
+      }
+
+      // Single bend zone
+      const BendZoneSpec& bz = bendZones[0];
+
+      auto verts = parseDxfVerts(dxfContent);
+      if (verts.size() < 3)
+        return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
+                "DXF must have at least 3 vertices in layer-0 LWPOLYLINE."};
+
+      double xMin = verts[0].first,  xMax = verts[0].first;
+      double yMin = verts[0].second, yMax = verts[0].second;
+      for (const auto& v : verts) {
+        xMin = std::min(xMin, v.first);  xMax = std::max(xMax, v.first);
+        yMin = std::min(yMin, v.second); yMax = std::max(yMax, v.second);
+      }
+
+      double bendStart = xMin + bz.offsetMm;
+      double bendEnd   = xMin + bz.offsetMm + bz.widthMm;
+
+      if (bz.offsetMm < 0.0 || bendEnd > xMax + 1e-6)
+        return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
+                "Bend zone extends beyond DXF flat-pattern bounds."};
+      if (bz.offsetMm < 1e-6 || (xMax - bendEnd) < 1e-6)
+        return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
+                "Bend zone must leave non-zero panels on both sides."};
+
+      std::string dxfA = makeDxfRect(xMin,    yMin, bendStart, yMax);
+      std::string dxfB = makeDxfRect(bendEnd, yMin, xMax,      yMax);
+
+      DxfSheetResult    sheetA = buildSheetFromDxf(dxfA);
+      ThickenSheetResult solA  = thickenSheet(sheetA.sheetId, thicknessMm);
+
+      DxfSheetResult    sheetB = buildSheetFromDxf(dxfB);
+      ThickenSheetResult solB  = thickenSheet(sheetB.sheetId, thicknessMm);
+
+      // Panel B is at x=[bendEnd..xMax] in the flat layout; Panel A is at x=[xMin..bendStart].
+      // The gap between them is bz.widthMm (the developed bend-arc length).
+      //
+      // Re-fold into 3D, then bridge the seam with an explicit bend solid so the
+      // panels FUSE into one watertight body at ANY dihedral angle — not just 90°.
+      // (Previously the rotated slabs shared only an edge at acute angles, so the
+      //  Boolean fuse silently dropped Panel B and produced a flat result.)
+      const double extentY  = yMax - yMin;
+      const double thetaRad = bz.angleDeg * M_PI / 180.0;
+
+      // 1. Position Panel B: translate left by widthMm so its left face abuts the
+      //    bend at x=bendStart, then rotate -angleDeg about the Y hinge at (bendStart,*,0).
+      auto itAsolid = shells_.find(solA.solidId);
+      auto itBsolid = shells_.find(solB.solidId);
+      if (itAsolid == shells_.end() || itBsolid == shells_.end())
+        return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
+                "Internal: thickened panel shells not found for refold."};
+
+      TopoDS_Shape shapeA = itAsolid->second.shape;
+      TopoDS_Shape shapeB;
+      {
+        gp_Trsf transTrsf;
+        transTrsf.SetTranslation(gp_Vec(-bz.widthMm, 0.0, 0.0));
+        TopoDS_Shape translatedB =
+            BRepBuilderAPI_Transform(itBsolid->second.shape, transTrsf, true).Shape();
+
+        gp_Ax1 bendAxis(gp_Pnt(bendStart, 0.0, 0.0), gp_Dir(0.0, 1.0, 0.0));
+        gp_Trsf rotTrsf;
+        rotTrsf.SetRotation(bendAxis, -thetaRad);
+        shapeB = BRepBuilderAPI_Transform(translatedB, rotTrsf, true).Shape();
+      }
+
+      // 2. Bend connector: a solid cylindrical sector (apex on the z=0 hinge, radius
+      //    = thickness) that fills the wedge between Panel A's bend face (x=bendStart,
+      //    z∈[0,t], pointing +Z) and Panel B's rotated bend face. Its two planar faces
+      //    coincide with the panels' bend faces, so the fuse is watertight at any angle.
+      //    Axis is -Y (origin at yMax) so the sector sweeps from +Z toward −X, matching
+      //    Panel B's −angleDeg rotation.
+      TopoDS_Shape bendSector;
+      try {
+        gp_Ax2 sectorAxes(gp_Pnt(bendStart, yMax, 0.0), gp_Dir(0.0, -1.0, 0.0), gp_Dir(0.0, 0.0, 1.0));
+        bendSector = BRepPrimAPI_MakeCylinder(sectorAxes, thicknessMm, extentY, thetaRad).Solid();
+      } catch (const Standard_Failure& e) {
+        return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
+                std::string("Failed to build bend connector: ") + e.GetMessageString()};
+      }
+
+      // 3. Fuse A + connector + B into one solid.
+      auto fuseTwo = [](const TopoDS_Shape& s1, const TopoDS_Shape& s2) -> TopoDS_Shape {
+        BRepAlgoAPI_Fuse f(s1, s2);
+        f.SetFuzzyValue(0.15);
+        f.Build();
+        if (!f.IsDone() || f.Shape().IsNull()) return TopoDS_Shape();
+        return f.Shape();
+      };
+      TopoDS_Shape ab = fuseTwo(shapeA, bendSector);
+      if (ab.IsNull())
+        return {"", false, "GE_BUILD_FROM_PATTERN_FAILED", "Fuse (Panel A + bend) failed."};
+      TopoDS_Shape merged = fuseTwo(ab, shapeB);
+      if (merged.IsNull())
+        return {"", false, "GE_BUILD_FROM_PATTERN_FAILED", "Fuse (+ Panel B) failed."};
+
+      // Connectivity guard: a proper refold is a single solid.
+      {
+        int solidCount = 0;
+        for (TopExp_Explorer ex(merged, TopAbs_SOLID); ex.More(); ex.Next()) solidCount++;
+        if (solidCount != 1)
+          return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
+                  "Refold produced " + std::to_string(solidCount) + " solids (expected 1)."};
+      }
+
+      ShellId mergedId = generateUUID();
+      shells_[mergedId] = ShellState{mergedId, "", merged};
+      ApplyBendResult bent{mergedId};
+
+      // ── Placement ────────────────────────────────────────────────────────────
+      // Position the canonical merged shell at the 3D frame of the original
+      // panel A (referenceShellId) in the scene.
+      if (!referenceShellId.empty()) {
+        auto refIt = shells_.find(referenceShellId);
+        if (refIt == shells_.end())
+          return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
+                  "Reference shell not found: " + referenceShellId};
+
+        const TopoDS_Shape& refShape = refIt->second.shape;
+
+        // Canonical panel A centroid (center of [xMin..bendStart]×[yMin..yMax]×[0..t]).
+        double canonCx = (xMin + bendStart) / 2.0;
+        double canonCy = (yMin + yMax)      / 2.0;
+        double canonCz = thicknessMm        / 2.0;
+
+        gp_Dir actualXDir, actualYDir, faceNormal;
+
+        const double fnLen = std::sqrt(bz.foldNormalX * bz.foldNormalX +
+                                       bz.foldNormalY * bz.foldNormalY +
+                                       bz.foldNormalZ * bz.foldNormalZ);
+        const double bdLen = std::sqrt(bz.bendDirX * bz.bendDirX +
+                                       bz.bendDirY * bz.bendDirY +
+                                       bz.bendDirZ * bz.bendDirZ);
+
+        if (fnLen > 1e-6 && bdLen > 1e-6) {
+          // Explicit fold frame supplied by the caller (manufacturing graph):
+          //   canonical +X → bendDir, canonical +Z → foldNormal, +Y = Z × X.
+          // This pins down every axis sign, so the fold is reconstructed on the
+          // same side as the original geometry (no rotation / inversion).
+          actualXDir = gp_Dir(bz.bendDirX, bz.bendDirY, bz.bendDirZ);
+          faceNormal = gp_Dir(bz.foldNormalX, bz.foldNormalY, bz.foldNormalZ);
+          gp_Vec yv = gp_Vec(faceNormal).Crossed(gp_Vec(actualXDir)); // Z × X
+          actualYDir = gp_Dir(yv);
+        } else {
+          // Legacy fallback: derive the frame from the reference shell's largest
+          // planar face. Axis signs are ambiguous here (can invert the fold).
+          double maxArea  = 0.0;
+          gp_Ax3 bestAx3;
+          double bestUExt = 0.0, bestVExt = 0.0;
+          for (TopExp_Explorer fExp(refShape, TopAbs_FACE); fExp.More(); fExp.Next()) {
+            TopoDS_Face face = TopoDS::Face(fExp.Current());
+            BRepAdaptor_Surface surf(face, false);
+            if (surf.GetType() != GeomAbs_Plane) continue;
+            GProp_GProps fp;
+            BRepGProp::SurfaceProperties(face, fp);
+            double area = fp.Mass();
+            if (area > maxArea) {
+              maxArea  = area;
+              bestAx3  = surf.Plane().Position();
+              Standard_Real u1, u2, v1, v2;
+              BRepTools::UVBounds(face, u1, u2, v1, v2);
+              bestUExt = u2 - u1;
+              bestVExt = v2 - v1;
+            }
+          }
+          if (maxArea < 1e-6)
+            return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
+                    "Reference shell has no planar faces."};
+
+          faceNormal = bestAx3.Direction();
+          gp_Dir uDir = bestAx3.XDirection();
+          gp_Dir vDir = bestAx3.YDirection();
+
+          double flatAWidth = bendStart - xMin;  // = bz.offsetMm
+          double flatHeight = yMax - yMin;
+
+          bool uMatchesX = (std::abs(bestUExt - flatAWidth) < std::abs(bestUExt - flatHeight));
+          if (uMatchesX) { actualXDir = uDir; actualYDir = vDir; }
+          else           { actualXDir = vDir; actualYDir = uDir; }
+        }
+
+        // Anchor: the reference panel's ORIENTED-bbox centre (extent midpoints along
+        // the placement axes), NOT its volume centroid. A split-extracted panel is
+        // wedge-shaped near the bend, so its volume centroid is skewed toward the
+        // bend; the reconstructed flat panel is a clean box, so matching volume
+        // centroids translates the whole part. The oriented-bbox centre corresponds
+        // exactly to the canonical box centre (canonCx, canonCy, canonCz).
+        gp_Vec axU(actualXDir), axV(actualYDir), axN(faceNormal);
+        double minU = std::numeric_limits<double>::max(), maxU = -minU;
+        double minV = minU, maxV = -minU, minN = minU, maxN = -minU;
+        for (TopExp_Explorer vExp(refShape, TopAbs_VERTEX); vExp.More(); vExp.Next()) {
+          gp_Vec p(BRep_Tool::Pnt(TopoDS::Vertex(vExp.Current())).XYZ());
+          double u = p.Dot(axU), v = p.Dot(axV), n = p.Dot(axN);
+          minU = std::min(minU, u); maxU = std::max(maxU, u);
+          minV = std::min(minV, v); maxV = std::max(maxV, v);
+          minN = std::min(minN, n); maxN = std::max(maxN, n);
+        }
+        const double midU = (minU + maxU) / 2.0;
+        const double midV = (minV + maxV) / 2.0;
+        const double midN = (minN + maxN) / 2.0;
+        gp_Pnt refCentre(axU.XYZ() * midU + axV.XYZ() * midV + axN.XYZ() * midN);
+
+        // Placement: world = R * canonical + t  (R = [actualXDir | actualYDir | faceNormal])
+        // t = refCentre - R * canonicalPanelACentroid
+        double Rcx = actualXDir.X()*canonCx + actualYDir.X()*canonCy + faceNormal.X()*canonCz;
+        double Rcy = actualXDir.Y()*canonCx + actualYDir.Y()*canonCy + faceNormal.Y()*canonCz;
+        double Rcz = actualXDir.Z()*canonCx + actualYDir.Z()*canonCy + faceNormal.Z()*canonCz;
+
+        gp_Trsf placeTrsf;
+        placeTrsf.SetValues(
+            actualXDir.X(), actualYDir.X(), faceNormal.X(), refCentre.X() - Rcx,
+            actualXDir.Y(), actualYDir.Y(), faceNormal.Y(), refCentre.Y() - Rcy,
+            actualXDir.Z(), actualYDir.Z(), faceNormal.Z(), refCentre.Z() - Rcz
+        );
+
+        auto& mergedEntry = shells_.at(bent.mergedShellId);
+        BRepBuilderAPI_Transform placeXfm(mergedEntry.shape, placeTrsf, true);
+        mergedEntry.shape = placeXfm.Shape();
+      }
+
+      return {bent.mergedShellId, true, "", ""};
+
+    } catch (const GeometryError& e) {
+      return {"", false, "GE_BUILD_FROM_PATTERN_FAILED", e.what()};
+    } catch (const Standard_Failure& e) {
+      return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
+              std::string(e.GetMessageString())};
+    } catch (const std::exception& e) {
+      return {"", false, "GE_BUILD_FROM_PATTERN_FAILED", std::string(e.what())};
+    }
+  }
+
+  // ── Panel frame (P(x) local→world) from the largest planar face ─────────────
+  PanelFrameResult getPanelFrame(const std::string& shellId) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    PanelFrameResult out;
+    auto it = shells_.find(shellId);
+    if (it == shells_.end()) {
+      out.ok = false;
+      out.errorCode = "GE_SHELL_NOT_FOUND";
+      out.message   = "Shell not found: " + shellId;
+      return out;
+    }
+    const TopoDS_Shape& shape = it->second.shape;
+
+    // Largest planar face defines the panel plane.
+    double maxArea = 0.0;
+    gp_Ax3 bestAx3;
+    Standard_Real u1 = 0, u2 = 0, v1 = 0, v2 = 0;
+    bool found = false;
+    for (TopExp_Explorer fExp(shape, TopAbs_FACE); fExp.More(); fExp.Next()) {
+      TopoDS_Face face = TopoDS::Face(fExp.Current());
+      BRepAdaptor_Surface surf(face, false);
+      if (surf.GetType() != GeomAbs_Plane) continue;
+      GProp_GProps fp;
+      BRepGProp::SurfaceProperties(face, fp);
+      double area = fp.Mass();
+      if (area > maxArea) {
+        maxArea = area;
+        bestAx3 = surf.Plane().Position();
+        BRepTools::UVBounds(face, u1, u2, v1, v2);
+        found = true;
+      }
+    }
+    if (!found || maxArea < 1e-6) {
+      out.ok = false;
+      out.errorCode = "GE_PANEL_FRAME_FAILED";
+      out.message   = "Shell has no planar faces.";
+      return out;
+    }
+
+    gp_Pnt loc   = bestAx3.Location();
+    gp_Dir xdir  = bestAx3.XDirection();
+    gp_Dir ydir  = bestAx3.YDirection();
+    gp_Dir ndir  = bestAx3.Direction();
+
+    // True in-plane extents (independent of world-space tilt).
+    double extX = u2 - u1;
+    double extY = v2 - v1;
+
+    // Corner at (u1, v1) in world = the panel-local origin.
+    gp_Pnt corner(loc.XYZ() + xdir.XYZ() * u1 + ydir.XYZ() * v1);
+
+    // Choose U = longer in-plane extent, V = shorter (matches flatWidth/flatHeight).
+    gp_Dir U, V;
+    double uExt, vExt;
+    if (extX >= extY) { U = xdir; uExt = extX; V = ydir; vExt = extY; }
+    else              { U = ydir; uExt = extY; V = xdir; vExt = extX; }
+
+    // Thickness = extent of the shell along the plane normal.
+    double nMin = 0.0, nMax = 0.0; bool firstV = true;
+    for (TopExp_Explorer vExp(shape, TopAbs_VERTEX); vExp.More(); vExp.Next()) {
+      gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(vExp.Current()));
+      double n = gp_Vec(p.XYZ()).Dot(gp_Vec(ndir.XYZ()));
+      if (firstV) { nMin = nMax = n; firstV = false; }
+      else { nMin = std::min(nMin, n); nMax = std::max(nMax, n); }
+    }
+
+    out.ok = true;
+    out.originX = corner.X(); out.originY = corner.Y(); out.originZ = corner.Z();
+    out.uX = U.X(); out.uY = U.Y(); out.uZ = U.Z();
+    out.vX = V.X(); out.vY = V.Y(); out.vZ = V.Z();
+    out.normalX = ndir.X(); out.normalY = ndir.Y(); out.normalZ = ndir.Z();
+    out.uExtentMm = uExt;
+    out.vExtentMm = vExt;
+    out.thicknessMm = nMax - nMin;
+    return out;
   }
 
   // ÔöÇÔöÇ Corner reliefs ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ

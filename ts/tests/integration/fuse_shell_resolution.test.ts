@@ -149,3 +149,45 @@ describe('Regression: fuse_bodies after translate_body', () => {
     expect(fused.solid_id).toBeDefined();
   }, 30_000);
 });
+
+describe('T016: cut_bodies GRAPH_INTEGRITY_ERROR guard (FR-005)', () => {
+  it('rejects cut_bodies when blank is a graph-tracked panel', async () => {
+    const boxPath = getFixturePath('simple_box.stp');
+    const clean: any = await dispatchTool('clean_geometry', { file_path: boxPath }, config);
+    const split: any = await dispatchTool('split_body_by_bends', {
+      part_id: clean.solid_id,
+      angle_threshold_deg: 45,
+      max_thickness_mm: 5.0,
+    }, config);
+    expect(split.panel_ids.length).toBeGreaterThanOrEqual(1);
+    const trackedPanelId = split.panel_ids[0] as string;
+
+    // The panel ID IS the bodyId for split panels (stable part-id = initial shell-id).
+    await expect(
+      dispatchTool('cut_bodies', {
+        blank: trackedPanelId,
+        tools: ['some-untracked-shell'],
+        keep_tools: false,
+      }, config),
+    ).rejects.toMatchObject({ code: 'GRAPH_INTEGRITY_ERROR' });
+  }, 30_000);
+
+  it('allows cut_bodies when blank is not graph-tracked', async () => {
+    // A raw clean_geometry result (before split_by_bends) is not graph-tracked.
+    const boxPath = getFixturePath('simple_box.stp');
+    const clean: any = await dispatchTool('clean_geometry', { file_path: boxPath }, config);
+
+    // clean.solid_id is a raw shell — not in any manufacturing graph.
+    // cut_bodies should reach the C++ call and either succeed or fail with a geometry error,
+    // but NOT with GRAPH_INTEGRITY_ERROR.
+    try {
+      await dispatchTool('cut_bodies', {
+        blank: clean.solid_id,
+        tools: [clean.solid_id],  // self-cut → geometry error, but not GRAPH_INTEGRITY_ERROR
+        keep_tools: false,
+      }, config);
+    } catch (err: any) {
+      expect(err.code).not.toBe('GRAPH_INTEGRITY_ERROR');
+    }
+  }, 30_000);
+});

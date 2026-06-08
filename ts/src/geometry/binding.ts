@@ -22,6 +22,9 @@ import type {
   DxfSheetResult,
   ThickenSheetResult,
   ApplyBendResult,
+  NapiBendZoneSpec,
+  BuildShellFromFlatPatternResult,
+  PanelFrameResult,
   NestResult,
   RestoreResult,
   ClashReport,
@@ -86,6 +89,8 @@ export interface GeometryAddon {
   buildSheetFromDxf?(dxfContent: string): DxfSheetResult;
   thickenSheet?(sheetId: string, thicknessMm: number): ThickenSheetResult;
   applyBend?(panelAId: string, panelBId: string, innerRadiusMm: number, angleDeg: number, kFactor: number): ApplyBendResult;
+  buildShellFromFlatPattern?(dxfContent: string, bendZones: NapiBendZoneSpec[], thicknessMm: number, referenceShellId?: string): BuildShellFromFlatPatternResult;
+  getPanelFrame?(shellId: string): PanelFrameResult;
   exportGlb(shellId: string): Buffer;
   nestShells(
     unfoldIds: string[],
@@ -318,6 +323,14 @@ export class GeometryBinding {
     return typeof this.addon.applyBend === 'function';
   }
 
+  hasBuildShellFromFlatPattern(): boolean {
+    return typeof this.addon.buildShellFromFlatPattern === 'function';
+  }
+
+  hasGetPanelFrame(): boolean {
+    return typeof this.addon.getPanelFrame === 'function';
+  }
+
   loadStep(filePath: string): string {
     try {
       return this.addon.loadStep(filePath);
@@ -445,6 +458,28 @@ export class GeometryBinding {
     }
     try {
       return this.addon.applyBend(panelAId, panelBId, innerRadiusMm, angleDeg, kFactor);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  buildShellFromFlatPattern(dxfContent: string, bendZones: NapiBendZoneSpec[], thicknessMm: number, referenceShellId?: string): BuildShellFromFlatPatternResult {
+    if (!this.addon.buildShellFromFlatPattern) {
+      throw new Error('Geometry addon does not expose buildShellFromFlatPattern');
+    }
+    try {
+      return this.addon.buildShellFromFlatPattern(dxfContent, bendZones, thicknessMm, referenceShellId ?? '');
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  getPanelFrame(shellId: string): PanelFrameResult {
+    if (!this.addon.getPanelFrame) {
+      throw new Error('Geometry addon does not expose getPanelFrame');
+    }
+    try {
+      return this.addon.getPanelFrame(shellId);
     } catch (err) {
       throw toStructuredError(err);
     }

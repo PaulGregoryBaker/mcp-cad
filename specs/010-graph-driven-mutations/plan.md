@@ -1,113 +1,112 @@
-# Implementation Plan: [FEATURE]
+# Implementation Plan: Graph-Driven Object Mutations
 
-**Branch**: `[###-feature-name]` | **Date**: [DATE] | **Spec**: [link]
+**Branch**: `main` | **Date**: 2026-06-06 | **Spec**: [spec.md](spec.md)
 
-**Input**: Feature specification from `/specs/[###-feature-name]/spec.md`
-
-**Note**: This template is filled in by the `/speckit.plan` command. See `.specify/templates/plan-template.md` for the execution workflow.
+**Input**: Feature specification from `/specs/010-graph-driven-mutations/spec.md`
 
 ## Summary
 
-[Extract from feature spec: primary requirement + technical approach from research]
+Invert the mutation architecture so the manufacturing graph (BendNode + merged DXF flat pattern) is updated **before** any C++ geometry call is made. The 3D solid is then derived from the graph description via a new `buildShellFromFlatPattern` C++ entry point, replacing the current boolean-union approach. Adds strict pre-flight validation for `fuse_bodies` (thickness match, coplanarity, DXF connectivity) and a graph-ownership enforcement guard that rejects raw C++ mutations on graph-tracked shells.
 
 ## Technical Context
 
-<!--
-  ACTION REQUIRED: Replace the content in this section with the technical details
-  for the project. The structure here is presented in advisory capacity to guide
-  the iteration process.
--->
+**Language/Version**: TypeScript 5.4 (Node.js 22+) / C++17 (MSVC/GCC, CMake 3.26+)
 
-**Language/Version**: [e.g., Python 3.11, Swift 5.9, Rust 1.75 or NEEDS CLARIFICATION]
+**Primary Dependencies**: OpenCASCADE (OCCT) via node-addon-api v8 NAPI bridge; polygon-clipping 0.15.7 (2D DXF union); zod 3.22 (schema validation); @modelcontextprotocol/sdk 1.0.0
 
-**Primary Dependencies**: [e.g., FastAPI, UIKit, LLVM or NEEDS CLARIFICATION]
+**Storage**: In-memory manufacturing graph (`ManufacturingGraphData`, `Map<string, ManufacturingGraph>`); file-backed BREP via OCCT snapshot registry
 
-**Storage**: [if applicable, e.g., PostgreSQL, CoreData, files or N/A]
+**Testing**: Vitest (unit / contract / integration / e2e projects, `ts/vitest.config.ts`); Catch2 + CTest for C++ tests
 
-**Testing**: [e.g., pytest, XCTest, cargo test or NEEDS CLARIFICATION]
+**Target Platform**: Windows 11 / Linux server; NAPI addon compiled to `.node`
 
-**Target Platform**: [e.g., Linux server, iOS 15+, WASM or NEEDS CLARIFICATION]
+**Performance Goals**: `buildShellFromFlatPattern` < 500ms for single-bend flat patterns (matching existing `mergeBodiesWithBend` latency); TypeScript graph mutations synchronous < 5ms
 
-**Project Type**: [e.g., library/cli/web-service/mobile-app/compiler/desktop-app or NEEDS CLARIFICATION]
+**Constraints**:
+- Graph update MUST complete and be observable before any C++ call returns (FR-001, FR-002)
+- Atomic rollback on any failure — no partial graph state (FR-007)
+- 90° bend only in `buildShellFromFlatPattern` for this spec (per Assumptions)
+- `fuse_bodies` pre-flight errors MUST fire before any graph or geometry mutation (FR-002a/b/c)
 
-**Performance Goals**: [domain-specific, e.g., 1000 req/s, 10k lines/sec, 60 fps or NEEDS CLARIFICATION]
-
-**Constraints**: [domain-specific, e.g., <200ms p95, <100MB memory, offline-capable or NEEDS CLARIFICATION]
-
-**Scale/Scope**: [domain-specific, e.g., 10k users, 1M LOC, 50 screens or NEEDS CLARIFICATION]
+**Scale/Scope**: Single-session; 2–5 panel assemblies typical; no multi-user concurrency
 
 ## Constitution Check
 
-*GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
+*GATE: Must pass before Phase 0 research. Re-checked after Phase 1 design — no violations found.*
 
-[Gates determined based on constitution file]
+| Principle | Status | Notes |
+|-----------|--------|-------|
+| I. Deterministic Geometry | ✅ PASS | `buildShellFromFlatPattern` is deterministic: same DXF + bend specs → same 3D solid every time |
+| II. Bounded Context Separation | ⚠️ WARN | Graph construction lives in MCP Protocol Layer (`tools.ts`) — pre-existing architectural debt, not introduced by this spec. New `buildShellFromFlatPattern` correctly stays inside the Geometry Engine with no manufacturing knowledge. |
+| III. Safety Filter Enforcement | N/A | No fire-rated or safety-context dependencies in this feature |
+| IV. Rollback-First State Management | ✅ PASS | FR-007 mandates atomic rollback; plan integrates with existing C++ snapshot registry and adds graph-state rollback |
+| V. Kerf Compensation | N/A | No joint synthesis in scope |
+| VI. Structured Errors Always | ✅ PASS | All new error codes (`GE_FUSE_*`, `GE_BUILD_FROM_PATTERN_FAILED`) follow the JSON error model with `code`, `message`, `recoverable`, `suggested_tool` |
+| VII. MVP Scope Discipline | ⚠️ WARN | Beyond the original STEP→DXF MVP. However, the manufacturing graph (spec 009) is merged; this spec is its required evolution. Arbitrary bend angles deferred per spec assumptions. |
+| VIII. Configuration Over Hard-Coding | ⚠️ WARN | Thickness tolerance (0.1mm) and coplanarity threshold (2°) from FR-002a/b must be defined as named constants (`FUSE_THICKNESS_TOLERANCE_MM`, `FUSE_COPLANARITY_THRESHOLD_DEG`), not inline magic numbers. Not yet in `manufacturing://rules` resource — post-MVP. |
+| IX. Async Export Contract | N/A | No export operations in scope |
+| X. Graceful Failure Over Silent Fallbacks | ✅ PASS | FR-002a/b/c all produce structured errors before any mutation; FR-007 mandates no partial state; disjoint DXF detection replaces the current silent bounding-box fallback |
+
+**Gate result**: No ERROR-level violations. Three WARNs — none block implementation. §VIII is satisfied by defining constants at module scope.
 
 ## Project Structure
 
 ### Documentation (this feature)
 
 ```text
-specs/[###-feature]/
-├── plan.md              # This file (/speckit.plan command output)
-├── research.md          # Phase 0 output (/speckit.plan command)
-├── data-model.md        # Phase 1 output (/speckit.plan command)
-├── quickstart.md        # Phase 1 output (/speckit.plan command)
-├── contracts/           # Phase 1 output (/speckit.plan command)
-└── tasks.md             # Phase 2 output (/speckit.tasks command - NOT created by /speckit.plan)
+specs/010-graph-driven-mutations/
+├── plan.md              # This file
+├── research.md          # Phase 0: OCCT re-fold strategy, fuse validation, graph enforcement
+├── data-model.md        # Phase 1: modified types, new C++ structs, error codes, state transitions
+├── quickstart.md        # Phase 1: build steps, test run instructions
+├── contracts/
+│   ├── napi-contract.md       # buildShellFromFlatPattern NAPI method signature + behaviour
+│   └── mcp-tool-contract.md   # fuse_bodies error codes, merge_bodies_with_bend order change
+└── tasks.md             # Phase 2 output (/speckit-tasks — not yet created)
 ```
 
 ### Source Code (repository root)
-<!--
-  ACTION REQUIRED: Replace the placeholder tree below with the concrete layout
-  for this feature. Delete unused options and expand the chosen structure with
-  real paths (e.g., apps/admin, packages/something). The delivered plan must
-  not include Option labels.
--->
 
 ```text
-# [REMOVE IF UNUSED] Option 1: Single project (DEFAULT)
-src/
-├── models/
-├── services/
-├── cli/
-└── lib/
-
-tests/
-├── contract/
-├── integration/
-└── unit/
-
-# [REMOVE IF UNUSED] Option 2: Web application (when "frontend" + "backend" detected)
-backend/
+cpp/
 ├── src/
-│   ├── models/
-│   ├── services/
-│   └── api/
+│   ├── geometry/
+│   │   ├── geometry_service.hpp   # + BendZoneSpec, BuildShellFromFlatPatternResult structs
+│   │   │                          # + buildShellFromFlatPattern() method declaration
+│   │   └── geometry_service.cc    # + buildShellFromFlatPattern() implementation
+│   │                              #   (reuses buildSheetFromDxf + thickenSheet + applyBend)
+│   └── napi/
+│       └── geometry_binding.cc    # + NAPI wrapper for buildShellFromFlatPattern
 └── tests/
+    └── (existing C++ test fixtures; new Catch2 tests for buildShellFromFlatPattern)
 
-frontend/
+ts/
 ├── src/
-│   ├── components/
-│   ├── pages/
-│   └── services/
+│   ├── geometry/
+│   │   └── binding.ts             # + buildShellFromFlatPattern to GeometryAddon & GeometryBinding
+│   ├── manufacturing/
+│   │   ├── graph/
+│   │   │   └── types.ts           # + radius, kFactor, angle to BendZone interface
+│   │   └── dxf/
+│   │       └── merge.ts           # + checkDxfUnionConnectivity (returns disjoint flag)
+│   └── mcp/
+│       └── tools.ts               # refactor handleMergeBodiesWithBend (graph-first + buildShellFromFlatPattern)
+│                                  # refactor handleFuseBodies (pre-flight + graph-first + buildSheetFromDxf path)
+│                                  # + findGraphOwner() enforcement guard
+│                                  # + FUSE_THICKNESS_TOLERANCE_MM, FUSE_COPLANARITY_THRESHOLD_DEG constants
 └── tests/
-
-# [REMOVE IF UNUSED] Option 3: Mobile + API (when "iOS/Android" detected)
-api/
-└── [same as backend above]
-
-ios/ or android/
-└── [platform-specific structure: feature modules, UI flows, platform tests]
+    ├── unit/                      # + fuse pre-flight unit tests (thickness, coplanarity, disjoint)
+    ├── integration/               # + merge round-trip, fuse round-trip integration tests
+    └── contract/                  # + GE_FUSE_* error code contract tests
 ```
 
-**Structure Decision**: [Document the selected structure and reference the real
-directories captured above]
+**Structure Decision**: Single project (existing layout). No new top-level directories. C++ and TypeScript remain co-located as in the existing repository.
 
 ## Complexity Tracking
 
-> **Fill ONLY if Constitution Check has violations that must be justified**
+> **Two pre-existing §II violations are inherited — neither introduced by this spec.**
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |-----------|------------|-------------------------------------|
-| [e.g., 4th project] | [current need] | [why 3 projects insufficient] |
-| [e.g., Repository pattern] | [specific problem] | [why direct DB access insufficient] |
+| §II: Graph construction in MCP Protocol Layer | `handleMergeBodiesWithBend` and `handleFuseBodies` directly manipulate `ManufacturingGraph` nodes in `tools.ts` | Extracting graph construction into a dedicated `ManufacturingDomain` service is a larger refactor outside this spec's scope |
+| §VII: Beyond original MVP scope | Manufacturing graph (spec 009) is merged; graph-driven mutations are required to prevent geometry drift | Deferring leaves `merge_bodies_with_bend` and `fuse_bodies` producing inconsistent flat patterns silently — violating §X |

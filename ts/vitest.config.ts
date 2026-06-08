@@ -21,6 +21,7 @@ export default defineConfig({
           'tests/export.test.ts',
            'tests/session.test.ts',
            'tests/config-schema.test.ts',
+           'tests/unit/fuse_preflight.unit.test.ts',
         ],
       },
       {

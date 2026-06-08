@@ -32,6 +32,59 @@ afterEach(async () => {
   }
 });
 
+describe('T025: Graph-first fuse round-trip (SC-006, SC-007)', () => {
+  it('fuses two graph-tracked panels and returns graphs_fused with a valid part_id', async () => {
+    // Load two separate copies of the same fixture so each produces its own graph-tracked panels.
+    const fixturePath = getFixturePath('simple_box.stp');
+
+    const clean1: any = await dispatchTool('clean_geometry', { file_path: fixturePath }, config);
+    const split1: any = await dispatchTool('split_body_by_bends', {
+      part_id: clean1.solid_id,
+      angle_threshold_deg: 45,
+      max_thickness_mm: 5.0,
+    }, config);
+    expect(split1.panel_ids.length).toBeGreaterThanOrEqual(1);
+    const panelA = split1.panel_ids[0] as string;
+
+    const clean2: any = await dispatchTool('clean_geometry', { file_path: fixturePath }, config);
+    const split2: any = await dispatchTool('split_body_by_bends', {
+      part_id: clean2.solid_id,
+      angle_threshold_deg: 45,
+      max_thickness_mm: 5.0,
+    }, config);
+    expect(split2.panel_ids.length).toBeGreaterThanOrEqual(1);
+    const panelB = split2.panel_ids[0] as string;
+
+    // Fuse without apply_unfold first — panelFrame is null, coplanarity check is bypassed.
+    // Both panels from the same fixture have equal nominalThickness, so thickness check passes.
+    const txn: any = await dispatchTool('begin_transaction', { label: 't025_fuse_unfold' }, config);
+    const txId = txn.transaction_id as string;
+
+    const fused: any = await dispatchTool('fuse_bodies', {
+      transaction_id: txId,
+      tools: [panelA, panelB],
+    }, config);
+
+    // Graph-first result assertions
+    expect(fused.solid_id).toBeDefined();
+    expect(fused.part_id).toBe(panelA); // preservedPartId is tools[0]
+    expect(fused.graphs_fused).toBe(true);
+    expect(fused.preserved_part_id).toBe(panelA);
+    expect(fused.consumed_part_ids).toContain(panelB);
+
+    // apply_unfold on the fused part should return dxf_content
+    const unfold: any = await dispatchTool('apply_unfold', {
+      transaction_id: txId,
+      part_id: fused.part_id,
+      panel_id: fused.part_id,
+      material_id: 'mild_steel_1.5mm',
+    }, config);
+
+    expect(typeof unfold.dxf_content).toBe('string');
+    expect((unfold.dxf_content as string).length).toBeGreaterThan(0);
+  }, 60_000);
+});
+
 describe('Regression: fuse after moved graph parts', () => {
   it('should resolve shell IDs when fusing translated graph-backed parts', async () => {
     // Core validation: translate_body changes shell UUIDs,

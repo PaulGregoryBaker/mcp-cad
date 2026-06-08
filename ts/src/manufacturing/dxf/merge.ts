@@ -218,6 +218,25 @@ function ringToDxf(ring: Ring): string {
   return out.join('\n');
 }
 
+/**
+ * Returns true when the 2D polygon union of the two DXF outlines (after applying
+ * the given placement to the second outline) forms a single connected polygon.
+ * Returns false when the union produces 2+ disconnected regions, meaning the
+ * panels do not touch or overlap.
+ */
+export function checkDxfUnionConnectivity(
+  referenceDxf: string,
+  movingDxf: string,
+  placement: Placement2D,
+): boolean {
+  const refRing = parseFirstClosedPolyline(referenceDxf);
+  const movRingLocal = parseFirstClosedPolyline(movingDxf);
+  const movRing = ensureClosed(applyPlacement(movRingLocal, placement));
+  const toPolygon = (ring: Ring) => [[[...ring]]];
+  const union = polygonClipping.union(toPolygon(refRing), toPolygon(movRing)) as number[][][][];
+  return Array.isArray(union) && union.length === 1;
+}
+
 export function mergeDxfOutlines(
   referenceDxf: string,
   movingDxf: string,
