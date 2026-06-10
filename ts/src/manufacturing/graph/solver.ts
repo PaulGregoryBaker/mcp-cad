@@ -53,6 +53,13 @@ export interface GeometryBinding {
   buildSheetFromDxf?(dxfContent: string): { sheetId: string };
   /** Thicken a planar sheet into a solid panel. */
   thickenSheet?(sheetId: string, thicknessMm: number): { solidId: string };
+  /**
+   * Rebuild a panel solid from a flat-pattern DXF and place it at the
+   * reference shell's 3D position. Preferred over buildSheetFromDxf+thickenSheet
+   * because it preserves the panel's original world-space orientation, keeping
+   * panelFrame normals and fold-direction vectors valid for subsequent merges.
+   */
+  buildShellFromFlatPattern?(dxfContent: string, bendZones: unknown[], thicknessMm: number, referenceShellId: string): { shellId: string };
   /** Apply a bend between two panel solids/shells and return merged body. */
   applyBend?(panelAId: string, panelBId: string, innerRadiusMm: number, angleDeg: number, kFactor: number): { mergedShellId: string };
 }
@@ -87,6 +94,10 @@ export function addonToBinding(addon: GeometryAddon): GeometryBinding {
       : undefined,
     thickenSheet: addon.thickenSheet
       ? (sheetId, thicknessMm) => addon.thickenSheet!(sheetId, thicknessMm)
+      : undefined,
+    buildShellFromFlatPattern: addon.buildShellFromFlatPattern
+      ? (dxf, _bendZones, thickness, refShellId) =>
+          addon.buildShellFromFlatPattern!(dxf, [], thickness, refShellId)
       : undefined,
     applyBend: addon.applyBend
       ? (panelAId, panelBId, innerRadiusMm, angleDeg, kFactor) =>
@@ -316,15 +327,31 @@ export class GeometrySolver {
     switch (node.type) {
       case 'PanelNode': {
         // Graph-first reconstruction path:
-        // shapeDxf (2D drawing) -> sheet -> thickened panel solid.
+        // shapeDxf (2D drawing) → rebuilt 3D solid placed at the original shell's position.
         if (node.shapeDxf && node.shapeDxf.trim().length > 0) {
+          // Preferred: buildShellFromFlatPattern with referenceShellId.
+          // This places the rebuilt panel at the SAME 3D position as the original shell,
+          // keeping panelFrame normals valid for subsequent merge_bodies_with_bend fold
+          // direction computation. Without this, both rebuilt panels land at the XY-plane
+          // origin, making the fold-direction cross product degenerate (zero vector).
+          if (binding.buildShellFromFlatPattern && node.bodyId !== null) {
+            const result = binding.buildShellFromFlatPattern(
+              node.shapeDxf, [], node.nominalThickness, node.bodyId as string,
+            );
+            return { newBodyId: result.shellId as BodyId, panelBodyUpdates: noUpdates };
+          }
+
+          // Fallback: buildSheetFromDxf + thickenSheet (places at canonical XY origin).
+          // NOTE: this path loses original 3D position; subsequent merge fold geometry
+          // may be incorrect for non-axis-aligned panels.
           if (!binding.buildSheetFromDxf || !binding.thickenSheet) {
             if (node.bodyId !== null) {
               return { newBodyId: node.bodyId, panelBodyUpdates: noUpdates };
             }
             throw new Error(
               `PanelNode "${node.id}" has shapeDxf but geometry binding lacks ` +
-              `buildSheetFromDxf/thickenSheet primitives for graph-first reconstruction.`,
+              `buildShellFromFlatPattern or buildSheetFromDxf/thickenSheet primitives ` +
+              `for graph-first reconstruction.`,
             );
           }
 

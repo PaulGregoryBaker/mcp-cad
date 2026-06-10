@@ -34,11 +34,8 @@ export class ValidationEngine {
       partIds = session.getActiveShellIds();
     }
 
-    // 2. Require explicit sheet metal flags to avoid silent fallback behavior.
-    const sheetMetalFlags = params.sheet_metal_flags;
-    if (!sheetMetalFlags) {
-      throw new Error('validate_assembly requires explicit sheet_metal_flags (use {} if none).');
-    }
+    // 2. Default to empty sheet_metal_flags when not provided.
+    const sheetMetalFlags = params.sheet_metal_flags ?? {};
 
     // 3. Gather database metadata & build semantic mapping
     const semanticToShell = new Map<string, string>();

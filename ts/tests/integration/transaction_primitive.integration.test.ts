@@ -106,6 +106,13 @@ function buildMockAddon(): GeometryAddon {
     trimBodyWithPlane: vi.fn((id: string) => ({ trimmedShellId: id, rollbackToken: snap() })),
     addRelief: vi.fn((id: string) => ({ modifiedShellId: id, rollbackToken: snap() })),
     checkBoundaryCompliance: vi.fn(() => ({ envelopeId: 'std', compliant: true, violations: [] })),
+    computeBoundingBox: vi.fn(() => ({
+      x_min: 0, y_min: 0, z_min: 0,
+      x_max: 100, y_max: 100, z_max: 100,
+    })),
+    closeGap: vi.fn((a: string, b: string) => ({
+      partBId: b, gapClosedMm: 0,
+    })),
     splitBodyByBends: vi.fn(() => ({
       panel_ids: ['p1'], panel_bboxes: [],
       protrusion_ids: [], protrusion_bboxes: [],
@@ -585,8 +592,10 @@ describe('Transaction primitive (Feature 004 Phase 4) — shape_history for all 
   });
 
   it('merge_bodies_with_bend appends shape_history to transaction', async () => {
-    registerTestPart('a', ['a']);
-    registerTestPart('b', ['b']);
+    // Provide a minimal LWPOLYLINE shapeDxf so merge validation passes
+    const testDxf = '0\nSECTION\n2\nENTITIES\n0\nLWPOLYLINE\n8\n0\n90\n4\n70\n1\n10\n0.0\n20\n0.0\n10\n100.0\n20\n0.0\n10\n100.0\n20\n100.0\n10\n0.0\n20\n100.0\n0\nENDSEC\n0\nEOF';
+    registerTestPart('a', ['a'], testDxf);
+    registerTestPart('b', ['b'], testDxf);
     const begin = (await dispatchTool('begin_transaction', { label: 'p4', product: 'x' }, config)) as { transaction_id: string };
     const res = (await dispatchTool('merge_bodies_with_bend', {
       transaction_id: begin.transaction_id,
@@ -676,13 +685,14 @@ describe('Transaction primitive (Feature 004 Phase 4) — shape_history for all 
 
   it('multiple ops accumulate shape_history in transaction', async () => {
     const begin = (await dispatchTool('begin_transaction', { label: 'p4', product: 'x' }, config)) as { transaction_id: string };
+    // Use 'cube-solid' which is not a graph-tracked part (only registered via loadStep mock)
     await dispatchTool('offset_face', {
       transaction_id: begin.transaction_id,
-      part_id: 'shell-1', face_id: 'f1', distance: 2.0,
+      part_id: 'cube-solid', face_id: 'f1', distance: 2.0,
     }, config);
     await dispatchTool('rip_edge', {
       transaction_id: begin.transaction_id,
-      part_id: 'shell-1', edge_id: 'e1',
+      part_id: 'cube-solid', edge_id: 'e1',
     }, config);
     const hist = (await dispatchTool('get_transaction_history', { transaction_id: begin.transaction_id }, config)) as { records: unknown[] };
     // offset_face → 1 record; rip_edge → 2 records

@@ -248,7 +248,42 @@ export function mergeDxfOutlines(
 
   const toPolygon = (ring: Ring) => [[[...ring]]];
 
-  const union = polygonClipping.union(toPolygon(refRing), toPolygon(movRing)) as number[][][][];
+  let union = polygonClipping.union(toPolygon(refRing), toPolygon(movRing)) as number[][][][];
+  
+  // If union produced 2 disconnected regions, it's likely the k-factor gap.
+  // Measure the actual minimum distance between regions and adjust placement to overlap them.
+  if (union.length === 2) {
+    const region1 = ensureClosed((union[0]?.[0] ?? []).map(([x, y]) => [x, y]));
+    const region2 = ensureClosed((union[1]?.[0] ?? []).map(([x, y]) => [x, y]));
+    
+    // Compute minimum X distance between the two regions (they are side-by-side in X).
+    // Vertex-to-vertex distance misses the case where the nearest points are on edges,
+    // so project onto X axis: find x_max of one region and x_min of the other.
+    let xMin1 = Number.POSITIVE_INFINITY, xMax1 = Number.NEGATIVE_INFINITY;
+    let xMin2 = Number.POSITIVE_INFINITY, xMax2 = Number.NEGATIVE_INFINITY;
+    for (const [x] of region1) { if (x < xMin1) xMin1 = x; if (x > xMax1) xMax1 = x; }
+    for (const [x] of region2) { if (x < xMin2) xMin2 = x; if (x > xMax2) xMax2 = x; }
+    
+    // Gap in X between the two bboxes (negative = overlap, positive = gap)
+    const xGap = xMin2 < xMin1
+      ? xMin1 - xMax2  // region2 is to the left
+      : xMin2 - xMax1; // region2 is to the right
+    
+    // If the gap is small (< 2mm, typical for k-factor), retry with overlap
+    if (xGap > 0 && xGap < 2.0) {
+      // Overlap by the gap distance plus a small buffer
+      const overlapAmount = xGap + 0.05;
+      // Shift the moving ring toward the reference ring to close the gap
+      const shiftX = xMin2 < xMin1 ? overlapAmount : -overlapAmount;
+      const adjustedPlacement: Placement2D = {
+        rotationMatrix: placement.rotationMatrix,
+        translation: [placement.translation[0] + shiftX, placement.translation[1]],
+      };
+      const adjustedMovRing = ensureClosed(applyPlacement(movRingLocal, adjustedPlacement));
+      union = polygonClipping.union(toPolygon(refRing), toPolygon(adjustedMovRing)) as number[][][][];
+    }
+  }
+
   if (!Array.isArray(union) || union.length === 0 || !union[0] || !union[0][0]) {
     throw new Error('DXF union produced empty geometry');
   }
@@ -260,27 +295,9 @@ export function mergeDxfOutlines(
     const outer = union[0]![0]!;
     best = ensureClosed(outer.map(([x, y]) => [x, y]));
   } else {
-    // Multiple polygons: panels were touching edge-to-edge (not overlapping).
-    // polygon-clipping cannot merge zero-area shared edges, so it returns them
-    // as separate polygons. Recover the correct merged outline by computing
-    // the combined bounding box of all outer rings.
-    // This is exact for rectangular panels (the common case) and a safe
-    // over-approximation for non-rectangular ones.
-    const allPts: Ring = [];
-    for (const poly of union) {
-      if (!poly || poly.length === 0) continue;
-      for (const [x, y] of poly[0]!) {
-        allPts.push([x, y]);
-      }
-    }
-    const bb = computeBbox(allPts);
-    best = [
-      [bb.xMin, bb.yMin],
-      [bb.xMax, bb.yMin],
-      [bb.xMax, bb.yMax],
-      [bb.xMin, bb.yMax],
-      [bb.xMin, bb.yMin],
-    ];
+    throw new Error(
+      `DXF union produced disconnected geometry (${union.length} regions); refusing fallback approximation`,
+    );
   }
 
   if (!best) {

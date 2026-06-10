@@ -63,6 +63,12 @@ describe('Geometric Transformations Integration Tests (Feature 006 US3)', () => 
     session.reset();
   });
 
+  const dims = (bbox: any) => ({
+    dx: bbox.x_max - bbox.x_min,
+    dy: bbox.y_max - bbox.y_min,
+    dz: bbox.z_max - bbox.z_min,
+  });
+
   it('translates bodies and shifts bounding box', async () => {
     const clean = await dispatchTool('clean_geometry', { file_path: simpleBoxPath }, config) as any;
     const decomp = await dispatchTool('decompose_volume', { solid_id: clean.solid_id, strategy: 'Integrity' }, config) as any;
@@ -94,6 +100,40 @@ describe('Geometric Transformations Integration Tests (Feature 006 US3)', () => 
     await expect(
       dispatchTool('bounding_box', { target: shell }, config)
     ).rejects.toThrow();
+
+    await dispatchTool('commit_transaction', { transaction_id: txId }, config);
+  });
+
+  it('translate_body preserves orientation (no implicit rotation)', async () => {
+    const clean = await dispatchTool('clean_geometry', { file_path: simpleBoxPath }, config) as any;
+    const decomp = await dispatchTool('decompose_volume', { solid_id: clean.solid_id, strategy: 'Integrity' }, config) as any;
+    const shell = decomp.panel_ids[0];
+
+    const originalBbox = await dispatchTool('bounding_box', { target: shell }, config) as any;
+    const originalDims = dims(originalBbox);
+
+    const tx = await dispatchTool('begin_transaction', { label: 'translate-orientation-test' }, config) as any;
+    const txId = tx.transaction_id;
+
+    const translation = await dispatchTool('translate_body', {
+      transaction_id: txId,
+      targets: [shell],
+      vector: [37, -19, 11],
+      keep_original: false,
+    }, config) as any;
+
+    const movedBbox = await dispatchTool('bounding_box', { target: translation.solid_id }, config) as any;
+    const movedDims = dims(movedBbox);
+
+    // Pure translation must preserve axis-aligned extents.
+    expect(movedDims.dx).toBeCloseTo(originalDims.dx, 3);
+    expect(movedDims.dy).toBeCloseTo(originalDims.dy, 3);
+    expect(movedDims.dz).toBeCloseTo(originalDims.dz, 3);
+
+    // Translation delta still must match.
+    expect(movedBbox.x_min - originalBbox.x_min).toBeCloseTo(37, 3);
+    expect(movedBbox.y_min - originalBbox.y_min).toBeCloseTo(-19, 3);
+    expect(movedBbox.z_min - originalBbox.z_min).toBeCloseTo(11, 3);
 
     await dispatchTool('commit_transaction', { transaction_id: txId }, config);
   });

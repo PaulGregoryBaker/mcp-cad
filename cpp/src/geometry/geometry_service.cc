@@ -2528,11 +2528,7 @@ public:
         }
 
         // Anchor: the reference panel's ORIENTED-bbox centre (extent midpoints along
-        // the placement axes), NOT its volume centroid. A split-extracted panel is
-        // wedge-shaped near the bend, so its volume centroid is skewed toward the
-        // bend; the reconstructed flat panel is a clean box, so matching volume
-        // centroids translates the whole part. The oriented-bbox centre corresponds
-        // exactly to the canonical box centre (canonCx, canonCy, canonCz).
+        // the placement axes), NOT its volume centroid.
         gp_Vec axU(actualXDir), axV(actualYDir), axN(faceNormal);
         double minU = std::numeric_limits<double>::max(), maxU = -minU;
         double minV = minU, maxV = -minU, minN = minU, maxN = -minU;
@@ -2548,8 +2544,8 @@ public:
         const double midN = (minN + maxN) / 2.0;
         gp_Pnt refCentre(axU.XYZ() * midU + axV.XYZ() * midV + axN.XYZ() * midN);
 
-        // Placement: world = R * canonical + t  (R = [actualXDir | actualYDir | faceNormal])
-        // t = refCentre - R * canonicalPanelACentroid
+        // Placement: flat centroid (canonCx, canonCy, canonCz) → world refCentre.
+        // world = R * flat + t  =>  t = refCentre - R * canonC
         double Rcx = actualXDir.X()*canonCx + actualYDir.X()*canonCy + faceNormal.X()*canonCz;
         double Rcy = actualXDir.Y()*canonCx + actualYDir.Y()*canonCy + faceNormal.Y()*canonCz;
         double Rcz = actualXDir.Z()*canonCx + actualYDir.Z()*canonCy + faceNormal.Z()*canonCz;

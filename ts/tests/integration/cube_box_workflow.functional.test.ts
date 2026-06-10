@@ -353,7 +353,7 @@ describe('Cube Box Sheet Metal Workflow', () => {
     expect(extended.rollback_token).toMatch(/^snap-\d+$/);
     expect(mock.extendFaceToTarget).toHaveBeenCalledWith(
       topPanel, 'f-e1', 'face_id', frontPanel, 'f-e2',
-      { normal: { x: 0, y: 0, z: 1 }, origin: { x: 0, y: 0, z: 0 } },
+      { normal: { x: -1, y: 0, z: 0 }, origin: { x: 0, y: 0, z: 0 } },
     );
 
     // ── Phase 6: Verify no volumetric clashes across all four panels ──────────

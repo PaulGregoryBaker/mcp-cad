@@ -19,6 +19,7 @@ import { dispatchTool } from '../../src/mcp/tools';
 import { loadConfig } from '../../src/config/loader';
 import { getFixturePath } from '../helpers/fixtures';
 import { transactionRegistry } from '../../src/mcp/transactions';
+import { parseFirstClosedPolyline } from '../../src/manufacturing/dxf/merge';
 
 const configPath = path.resolve(__dirname, '../../config/config.yaml');
 const config = loadConfig(configPath);
@@ -39,6 +40,25 @@ interface Bbox {
   x_min: number; x_max: number;
   y_min: number; y_max: number;
   z_min: number; z_max: number;
+}
+
+function bboxCenter(b: Bbox): [number, number, number] {
+  return [
+    (b.x_min + b.x_max) / 2,
+    (b.y_min + b.y_max) / 2,
+    (b.z_min + b.z_max) / 2,
+  ];
+}
+
+function unionBbox(a: Bbox, b: Bbox): Bbox {
+  return {
+    x_min: Math.min(a.x_min, b.x_min),
+    x_max: Math.max(a.x_max, b.x_max),
+    y_min: Math.min(a.y_min, b.y_min),
+    y_max: Math.max(a.y_max, b.y_max),
+    z_min: Math.min(a.z_min, b.z_min),
+    z_max: Math.max(a.z_max, b.z_max),
+  };
 }
 
 interface PanelInfo {
@@ -88,6 +108,16 @@ function side(p: PanelInfo): string {
   const axis = p.thicknessAxis;
   const val = axis === 'X' ? p.centre.x : axis === 'Y' ? p.centre.y : p.centre.z;
   return `${val >= 0 ? '+' : '-'}${axis}`;
+}
+
+function polygonArea2d(ring: Array<[number, number]>): number {
+  let sum = 0;
+  for (let i = 0; i < ring.length - 1; i++) {
+    const a = ring[i]!;
+    const b = ring[i + 1]!;
+    sum += a[0] * b[1] - b[0] * a[1];
+  }
+  return Math.abs(sum) * 0.5;
 }
 
 async function splitTestcube(): Promise<{ panels: PanelInfo[]; cleanId: string }> {
@@ -198,10 +228,13 @@ describe('Unfold round-trip harness', () => {
 
     let mergedId: string | undefined;
     let pickedPair: [PanelInfo, PanelInfo] | undefined;
+    let pickedUnionBbox: Bbox | undefined;
     const attemptErrors: Array<{ pair: string; code?: string; message?: string }> = [];
     for (let i = 1; i < outer.length; i++) {
       if (outer[i]!.thicknessAxis === outer[0]!.thicknessAxis) continue;  // need perpendicular
       try {
+        const bboxA = await dispatchTool('bounding_box', { target: outer[0]!.id }, config) as Bbox;
+        const bboxB = await dispatchTool('bounding_box', { target: outer[i]!.id }, config) as Bbox;
         const m: any = await dispatchTool('merge_bodies_with_bend', {
           part_a_id: outer[0]!.id,
           part_b_id: outer[i]!.id,
@@ -212,6 +245,7 @@ describe('Unfold round-trip harness', () => {
         if (m?.merged_shell_id) {
           mergedId = m.merged_part_id; // stable: equals part_a_id input
           pickedPair = [outer[0]!, outer[i]!];
+          pickedUnionBbox = unionBbox(bboxA, bboxB);
           break;
         }
       } catch (e) {
@@ -224,6 +258,23 @@ describe('Unfold round-trip harness', () => {
     }
     expect(mergedId).toBeDefined();
     expect(pickedPair).toBeDefined();
+    expect(pickedUnionBbox).toBeDefined();
+
+    // Direct 3D placement check (not inferred from unfold dimensions):
+    // merged shell must remain near source panels' world-space location.
+    // If merge placement regresses, merged shell often lands near canonical origin.
+    // NOTE: an L-shaped merged shell naturally centers 50-150mm from the union bbox
+    // center of two perpendicular flat panels — use a generous 200mm threshold to
+    // catch placement at the far canonical origin while accepting natural geometry offsets.
+    const mergedBbox = await dispatchTool('bounding_box', { target: mergedId }, config) as Bbox;
+    const cMerged = bboxCenter(mergedBbox);
+    const cUnion = bboxCenter(pickedUnionBbox!);
+    const centerDelta = Math.hypot(
+      cMerged[0] - cUnion[0],
+      cMerged[1] - cUnion[1],
+      cMerged[2] - cUnion[2],
+    );
+    expect(centerDelta).toBeLessThan(200);
 
     const unfold: any = await dispatchTool('apply_unfold', {
       part_id: mergedId,
@@ -583,15 +634,15 @@ describe('Unfold round-trip harness', () => {
     // asymmetric L-with-step. Merge with bend.
     let mergedId: string | undefined;
     let mergeError: unknown;
+    let mergeResult: any;
     try {
-      const m: any = await dispatchTool('merge_bodies_with_bend', {
+      mergeResult = await dispatchTool('merge_bodies_with_bend', {
         part_a_id: pA!.id, part_b_id: pB!.id, // stable part_id; actual shell UUID resolved internally
         target_edges: ['all'], bend_radius: 0.3,
         transaction_id: txn.transaction_id,
       }, config);
-      mergedId = m?.merged_part_id; // stable: equals pA!.id
+      mergedId = mergeResult?.merged_part_id; // stable: equals pA!.id
     } catch (e) { mergeError = e; }
-
     if (!mergedId) {
       console.log('[CASE 5] merge failed:', (mergeError as { code?: string; message?: string }));
       throw mergeError ?? new Error('merge produced no shell');
@@ -611,6 +662,14 @@ describe('Unfold round-trip harness', () => {
     // PRIMARY ASSERTION: one physical corner = one bend, regardless of outline shape.
     expect(unfold.bend_count).toBe(1);
     expect(unfold.nominal_thickness_mm).toBeGreaterThan(0.5);
+
+    // Regression guard: merged flat pattern must keep the asymmetric step.
+    // A plain rectangle means seam-axis offset/topology was lost.
+    const ring = parseFirstClosedPolyline(unfold.dxf_content as string);
+    const area = polygonArea2d(ring);
+    const bboxArea = unfold.flat_width_mm * unfold.flat_height_mm;
+    expect(ring.length - 1).toBeGreaterThan(4);
+    expect(area).toBeLessThan(bboxArea - 1e-3);
 
     await dispatchTool('rollback_transaction', { transaction_id: txn.transaction_id }, config);
   }, 30_000);
@@ -676,4 +735,5 @@ describe('Unfold round-trip harness', () => {
 
     await dispatchTool('rollback_transaction', { transaction_id: txn.transaction_id }, config);
   }, 30_000);
+
 });

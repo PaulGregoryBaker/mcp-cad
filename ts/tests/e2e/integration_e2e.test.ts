@@ -16,6 +16,15 @@ type DecomposeResult = {
   rollback_token: string;
 };
 
+type SplitResult = {
+  panel_ids: string[];
+  panel_count: number;
+};
+
+type TransactionResult = {
+  transaction_id: string;
+};
+
 type JointResult = {
   kerf_offset_mm: number;
 };
@@ -133,10 +142,19 @@ describe('INF-03 E2E Golden Path', () => {
     expect(typeof clean.solid_id).toBe('string');
     expect(clean.is_manifold).toBe(true);
 
-    // Step 2: Decomposition
+    // Step 2: Decompose the compound solid into individual panel shells.
+    // decompose_volume auto-creates a manufacturing graph for each shell so
+    // apply_unfold can produce the flat-pattern DXF without a separate split step.
+    const txn = (await dispatchTool(
+      'begin_transaction',
+      { label: 'inf03-golden-path' },
+      config,
+    )) as TransactionResult;
+    const transactionId = txn.transaction_id;
+
     const decompose = (await dispatchTool(
       'decompose_volume',
-      { solid_id: clean.solid_id, strategy: 'Integrity' },
+      { solid_id: clean.solid_id, strategy: 'Integrity', transaction_id: transactionId },
       config,
     )) as DecomposeResult;
 
@@ -162,12 +180,12 @@ describe('INF-03 E2E Golden Path', () => {
     expect(joints.kerf_offset_mm).toBeGreaterThanOrEqual(0.1);
     expect(joints.kerf_offset_mm).toBeLessThanOrEqual(0.2);
 
-    // Step 4: Unfold each panel
+    // Step 4: Unfold each panel using the graph-first API
     const unfoldResults: UnfoldResult[] = [];
     for (const panelId of decompose.panel_ids) {
       const unfolded = (await dispatchTool(
         'apply_unfold',
-        { panel_id: panelId, material_id: config.materials[0]!.id },
+        { part_id: panelId, panel_id: panelId, material_id: config.materials[0]!.id, transaction_id: transactionId },
         config,
       )) as UnfoldResult;
 
