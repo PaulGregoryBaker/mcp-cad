@@ -143,6 +143,9 @@ export const ErrorCodes = {
   GE_POINT_NOT_ON_PANEL: 'GE_POINT_NOT_ON_PANEL',
   GE_NO_MANUFACTURING_GRAPH: 'GE_NO_MANUFACTURING_GRAPH',
 
+  // Feature 012-accurate-coord-mapping
+  GE_PANEL_FRAME_FAILED: 'GE_PANEL_FRAME_FAILED',
+
   // Internal errors
   INTERNAL_ERROR: 'INTERNAL_ERROR',
 } as const;

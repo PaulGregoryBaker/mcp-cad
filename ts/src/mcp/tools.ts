@@ -66,6 +66,7 @@ import type { BendNode, BendZone, JoinNode, JoinParams, CutNode, CutProfile, Pan
 import { validateProfile } from '../manufacturing/graph/types';
 import type { GeometryBinding as SolverGeometryBinding } from '../manufacturing/graph/solver';
 import { computeDxfMergePlacement } from '../manufacturing/dxf/orientation';
+import type { Placement2D } from '../manufacturing/dxf/merge';
 import { mergeDxfOutlines, checkDxfUnionConnectivity, parseFirstClosedPolyline, applyPlacement } from '../manufacturing/dxf/merge';
 
 // Adapts the class-based GeometryBinding to the solver's GeometryBinding interface
@@ -1511,13 +1512,13 @@ export function getToolDefinitions(): object[] {
       name: 'map_2d_to_3d',
       description:
         'Maps a 2D DXF flat-pattern coordinate back to the corresponding 3D world-space point on the folded shell. ' +
-        'Requires a panel ID from the manufacturing graph. ' +
+        'When panel_id is omitted, the tool performs region lookup across all PanelNodes using dxfPlacement bounds. ' +
         'Non-mutating.',
       inputSchema: {
         type: 'object',
         properties: {
           part_id: { type: 'string', description: 'Manufacturing Graph part ID' },
-          panel_id: { type: 'string', description: 'Node ID of the panel in the manufacturing graph' },
+          panel_id: { type: 'string', description: 'Optional: node ID of the panel in the manufacturing graph. When omitted, region lookup selects the correct panel automatically.' },
           point: {
             type: 'array',
             items: { type: 'number' },
@@ -1526,7 +1527,7 @@ export function getToolDefinitions(): object[] {
             description: '[x, y] DXF flat-pattern coordinate in mm',
           },
         },
-        required: ['part_id', 'panel_id', 'point'],
+        required: ['part_id', 'point'],
       },
     },
   ];
@@ -1841,7 +1842,6 @@ function handleDecomposeVolume(args: Record<string, unknown>): unknown {
 
   // Auto-create manufacturing graphs for each decomposed shell so that
   // apply_unfold works uniformly after decompose_volume (same as split_body_by_bends).
-  // We use bbox-derived flat dimensions since there are no bend detections here.
   const toBodyId = (s: string) => s as import('../manufacturing/graph/types').BodyId;
   for (const shellId of shellIds) {
     if (_parts.has(shellId)) continue;  // already registered (e.g. from a previous decompose)
@@ -1852,17 +1852,30 @@ function handleDecomposeVolume(args: Record<string, unknown>): unknown {
     let panelFrame: PanelFrame | null = null;
     let nominalThickness = 1.0;
     try {
-      const bbox = getGeometryBinding().computeBoundingBox(shellId);
-      const dims = [
-        bbox.x_max - bbox.x_min,
-        bbox.y_max - bbox.y_min,
-        bbox.z_max - bbox.z_min,
-      ].sort((a, b) => a - b);
-      nominalThickness = dims[0] ?? 1.0;
-      flatWidth = dims[2] ?? null;
-      flatHeight = dims[1] ?? null;
-      panelFrame = derivePanelFrameFromBbox(bbox);
-    } catch { /* skip dim derivation if bbox fails */ }
+      // getPanelFrame gives accurate OCCT face frame + dimensions for planar shells.
+      // For non-planar decomposed solids it may throw; fall back to bbox for dims only.
+      const pf = getGeometryBinding().getPanelFrame(shellId);
+      nominalThickness = pf.thicknessMm > 0 ? pf.thicknessMm : 1.0;
+      flatWidth = pf.uExtentMm;
+      flatHeight = pf.vExtentMm;
+      panelFrame = {
+        origin: [pf.originX, pf.originY, pf.originZ],
+        u: [pf.uX, pf.uY, pf.uZ],
+        v: [pf.vX, pf.vY, pf.vZ],
+      };
+    } catch {
+      try {
+        const bbox = getGeometryBinding().computeBoundingBox(shellId);
+        const dims = [
+          bbox.x_max - bbox.x_min,
+          bbox.y_max - bbox.y_min,
+          bbox.z_max - bbox.z_min,
+        ].sort((a, b) => a - b);
+        nominalThickness = dims[0] ?? 1.0;
+        flatWidth = dims[2] ?? null;
+        flatHeight = dims[1] ?? null;
+      } catch { /* skip dim derivation if bbox also fails */ }
+    }
     graph.addNode({
       type: 'PanelNode',
       id: toNodeId(shellId),
@@ -1875,6 +1888,7 @@ function handleDecomposeVolume(args: Record<string, unknown>): unknown {
       canonical: true,
       shapeDxf: null,
       panelFrame: panelFrame ?? undefined,
+      dxfPlacement: { rotationMatrix: [[1, 0], [0, 1]], translation: [0, 0] },
     });
   }
 
@@ -2019,59 +2033,48 @@ function handleReconstructCurvedBends(args: Record<string, unknown>): unknown {
 }
 
 /**
- * Derive an approximate PanelFrame from an axis-aligned bounding box.
+ * Derive a PanelFrame from OCCT face geometry, DXF-axis-aligned.
  *
- * For a flat sheet-metal panel the smallest bbox dimension = thickness.
- * The face normal is the unit vector along the thin axis, placed at the
- * centroid of the outward-facing (larger-coordinate) face.
- * U = longest in-plane axis, V = cross(N, U) (right-handed).
+ * If isRotated=false: returns the natural face frame (u=longer, v=shorter axis).
+ * If isRotated=true: the DXF was rotated 90° CCW by rotateDxf90, so DXF+X = face.v
+ * (fold-perp) and DXF+Y = -face.u (neg fold-parallel). The 3D point at DXF(0,0)
+ * shifts to face.origin + uExtentMm*face.u (the corner that maps to (0,0) post-rotation).
  *
- * Ambiguity: if two dimensions are equal (square panel) we still assign
- * U/V deterministically in X→Y→Z priority order.
- *
- * Returns null when the bbox is degenerate (zero volume).
+ * Throws GE_PANEL_FRAME_FAILED if the shell has no planar face.
+ * NOT exported — only called from graph-creation paths.
  */
-function derivePanelFrameFromBbox(bbox: {
-  x_min: number; y_min: number; z_min: number;
-  x_max: number; y_max: number; z_max: number;
-}): PanelFrame | null {
-  const dx = bbox.x_max - bbox.x_min;
-  const dy = bbox.y_max - bbox.y_min;
-  const dz = bbox.z_max - bbox.z_min;
+function computeDxfAlignedFrame(shellId: string, isRotated: boolean): PanelFrame {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let pf: any;
+  try {
+    pf = getGeometryBinding().getPanelFrame(shellId);
+  } catch {
+    throwError(
+      ErrorCodes.GE_PANEL_FRAME_FAILED,
+      `Shell ${shellId} has no planar faces; cannot derive panel frame.`,
+      false,
+      'clean_geometry',
+    );
+  }
 
-  if (dx <= 0 || dy <= 0 || dz <= 0) return null;
+  if (!isRotated) {
+    return {
+      origin: [pf.originX, pf.originY, pf.originZ],
+      u: [pf.uX, pf.uY, pf.uZ],
+      v: [pf.vX, pf.vY, pf.vZ],
+    };
+  }
 
-  // Index 0=x, 1=y, 2=z with associated extents and unit vectors
-  const axes: Array<{ label: number; extent: number; unit: [number, number, number] }> = [
-    { label: 0, extent: dx, unit: [1, 0, 0] },
-    { label: 1, extent: dy, unit: [0, 1, 0] },
-    { label: 2, extent: dz, unit: [0, 0, 1] },
-  ];
-
-  // Sort ascending: axes[0] = thinnest (normal), axes[1] = medium, axes[2] = longest
-  axes.sort((a, b) => a.extent - b.extent);
-
-  const normalAxis = axes[0]!;
-  const uAxis = axes[2]!; // longest in-plane
-  const vAxis = axes[1]!; // medium in-plane
-
-  // Origin at centroid of the +normal face (outward-facing)
-  const cx = (bbox.x_min + bbox.x_max) / 2;
-  const cy = (bbox.y_min + bbox.y_max) / 2;
-  const cz = (bbox.z_min + bbox.z_max) / 2;
-
-  // Shift origin to the +normal face surface
-  const normalOffset = normalAxis.extent / 2;
-  const origin: [number, number, number] = [
-    cx + normalAxis.unit[0] * normalOffset,
-    cy + normalAxis.unit[1] * normalOffset,
-    cz + normalAxis.unit[2] * normalOffset,
-  ];
-
+  // isRotated=true: DXF was rotated 90° CCW so fold-perp → DXF+X, neg fold-parallel → DXF+Y.
+  // The point at DXF(0,0) is the corner: face.origin + uExtentMm * face.u.
   return {
-    origin,
-    u: uAxis.unit,
-    v: vAxis.unit,
+    origin: [
+      pf.originX + pf.uExtentMm * pf.uX,
+      pf.originY + pf.uExtentMm * pf.uY,
+      pf.originZ + pf.uExtentMm * pf.uZ,
+    ],
+    u: [pf.vX, pf.vY, pf.vZ],
+    v: [-pf.uX, -pf.uY, -pf.uZ],
   };
 }
 
@@ -3526,29 +3529,10 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
       );
     }
 
-    let bbox: {
-      x_min: number; y_min: number; z_min: number;
-      x_max: number; y_max: number; z_max: number;
-    };
-    try {
-      bbox = getGeometryBinding().computeBoundingBox(panelNode.bodyId as string);
-    } catch (err) {
-      throwError(
-        ErrorCodes.GE_MERGE_FAILED,
-        `merge_bodies_with_bend ${label}: Failed to derive panelFrame from bbox for body ${panelNode.bodyId}: ` +
-        `${err instanceof Error ? err.message : String(err)}`,
-        false,
-      );
-    }
-
-    const derived = derivePanelFrameFromBbox(bbox);
-    if (!derived) {
-      throwError(
-        ErrorCodes.GE_MERGE_FAILED,
-        `merge_bodies_with_bend ${label}: Could not derive panelFrame from bbox for body ${panelNode.bodyId}.`,
-        false,
-      );
-    }
+    // Derive natural face frame (isRotated=false) for fold-axis computation.
+    // foldAlongU_A/B is computed later using this frame, then DXF-aligned frames
+    // are stored on the merged graph nodes.
+    const derived = computeDxfAlignedFrame(panelNode.bodyId as string, false);
     panelNode.panelFrame = derived;
     return derived;
   };
@@ -3618,10 +3602,8 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
   const normalsNearlyParallel = Math.abs(normalsDot) > 0.98;
 
   // Fold axis: direction of the shared bend edge = cross(N_A, N_B).
-  // derivePanelFrameFromBbox assigns u = longest in-plane axis, v = shorter.
-  // flatWidth corresponds to U (long); flatHeight corresponds to V (short).
-  // When the fold axis is parallel to U_A (long axis), flatWidth is fold-PARALLEL and
-  // flatHeight (short axis) is the actual fold-perpendicular extent — used for the flat pattern.
+  // flatWidth = U (long axis); flatHeight = V (short axis).
+  // When fold axis is parallel to U_A (long axis), flatHeight is the fold-perpendicular extent.
   const foldAxisVec: [number, number, number] = [
     nA[1] * nB[2] - nA[2] * nB[1],
     nA[2] * nB[0] - nA[0] * nB[2],
@@ -3736,38 +3718,34 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
     // Adjacency check: use the projected 2D placement to verify the panels share/overlap in flat space.
     // inContact (centroid normal offset) is too strict for bend panels; DXF union connectivity is correct.
     if (panelNodeA.shapeDxf && panelNodeB.shapeDxf) {
-      // Two-phase adjacency check:
-      // 1. DXF polygon union — catches panels with non-overlapping outlines.
-      // 2. Displacement ratio — catches panels whose bboxes overlap in DXF space but whose
-      //    centroid-to-centroid 2D translation exceeds 75% of the larger panel's flat width,
-      //    which indicates they are from completely different parts of the body (not adjacent).
-      //
-      // The gate is computed from live axis-aligned bboxes (not the stored panel
-      // frames). This decouples it from the geometry frames — which may be true
-      // oriented frames whose corner origins make the projected-2D placement
-      // degenerate for tilted panels — so the gate keeps its verified behavior
-      // (accepts adjacent bend panels, rejects non-adjacent surface panels).
-      const aabbDxfRect = (bb: typeof bboxA3d): { dxf: string; frame: PanelFrame | null } => {
-        const dims = [bb.x_max - bb.x_min, bb.y_max - bb.y_min, bb.z_max - bb.z_min].sort((a, b) => a - b);
-        const fw = dims[2] ?? 0;
-        const fh = dims[1] ?? 0;
-        return { dxf: generateDxfFromManufacturingGraph(fw, fh, [], []), frame: derivePanelFrameFromBbox(bb) };
-      };
-      const gateA = aabbDxfRect(bboxA3d);
-      const gateB = aabbDxfRect(bboxB3d);
-      const gatePlacement = (gateA.frame && gateB.frame)
-        ? computeDxfMergePlacement(gateA.frame, gateB.frame, { contactToleranceMm })
-        : placement;
-      const adjacentByDxf = checkDxfUnionConnectivity(gateA.dxf, gateB.dxf, {
-        rotationMatrix: gatePlacement.rotationMatrix,
-        translation: gatePlacement.translation,
-      });
-      const txMag = Math.hypot(gatePlacement.translation[0], gatePlacement.translation[1]);
+      // Adjacency gate: centroid-to-centroid displacement check.
+      // OCCT frame origins are at arbitrary face corners, so using placement.translation
+      // directly gives ~1× panel-width for adjacent panels (vs the expected ~0.5× from
+      // the old centroid approach). Use bbox centroids instead — they give a stable
+      // ~0.5× displacement for panels that share a fold edge.
+      const bboxCentroid = (bb: typeof bboxA3d): [number, number, number] => [
+        (bb.x_min + bb.x_max) / 2,
+        (bb.y_min + bb.y_max) / 2,
+        (bb.z_min + bb.z_max) / 2,
+      ];
+      const centA = bboxCentroid(bboxA3d);
+      const centB = bboxCentroid(bboxB3d);
+      const dCent: [number, number, number] = [centB[0]-centA[0], centB[1]-centA[1], centB[2]-centA[2]];
+      // Project centroid displacement onto Panel A's two longest bbox axes (its flat plane).
+      const bboxAAxes = [
+        { size: bboxA3d.x_max-bboxA3d.x_min, ax: [1,0,0] as [number,number,number] },
+        { size: bboxA3d.y_max-bboxA3d.y_min, ax: [0,1,0] as [number,number,number] },
+        { size: bboxA3d.z_max-bboxA3d.z_min, ax: [0,0,1] as [number,number,number] },
+      ].sort((a, b) => b.size - a.size);
+      const aU = bboxAAxes[0]!.ax, aV = bboxAAxes[1]!.ax;
+      const gTx = dCent[0]*aU[0]+dCent[1]*aU[1]+dCent[2]*aU[2];
+      const gTy = dCent[0]*aV[0]+dCent[1]*aV[1]+dCent[2]*aV[2];
       const aabbLongest = (bb: typeof bboxA3d): number =>
         [bb.x_max - bb.x_min, bb.y_max - bb.y_min, bb.z_max - bb.z_min].sort((a, b) => a - b)[2] ?? 0;
       const panelMaxFlatWidth = Math.max(aabbLongest(bboxA3d), aabbLongest(bboxB3d));
-      const adjacentByDisplacement = panelMaxFlatWidth <= 0 || txMag / panelMaxFlatWidth <= 0.75;
-      if (!adjacentByDxf || !adjacentByDisplacement) {
+      const centroidTxMag = Math.hypot(gTx, gTy);
+      const adjacentByDisplacement = panelMaxFlatWidth <= 0 || centroidTxMag / panelMaxFlatWidth <= 0.75;
+      if (!adjacentByDisplacement) {
         throwError(
           ErrorCodes.GE_MERGE_DISCONNECTED,
           `GE_MERGE_DISCONNECTED: merge_bodies_with_bend: Panels are not adjacent ` +
@@ -3933,6 +3911,16 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
   const mergedPartId = partAId; // Stable: same as the caller's part_a_id input
   _parts.set(partBId, mergedGraph);
 
+  // DXF-aligned frames for the merged graph nodes.
+  // foldAlongU_A/B are now known — compute DXF-aligned frames (accounting for rotateDxf90).
+  const frameADxf = computeDxfAlignedFrame(shellAId as string, foldAlongU_A);
+  const frameBDxf = computeDxfAlignedFrame(shellBId as string, foldAlongU_B);
+
+  // Panel A: dxfPlacement = identity (origin of the merged flat)
+  const dxfPlacementA: Placement2D = { rotationMatrix: [[1, 0], [0, 1]], translation: [0, 0] };
+  // Panel B: translated by (effectiveAFlatWidth + ba) along flat X
+  const dxfPlacementB: Placement2D = { rotationMatrix: [[1, 0], [0, 1]], translation: [effectiveAFlatWidth + ba, 0] };
+
   // Upstream panel A node (non-canonical; stale after merge).
   // flatWidth stores Panel A's own fold-perpendicular extent so that
   // getFlatPatternDimensions can sum the chain without double-counting the total.
@@ -3947,7 +3935,8 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
     flatHeight: panelNodeA?.flatHeight ?? null,
     canonical: false,
     shapeDxf: panelNodeA?.shapeDxf ?? null,
-    panelFrame: panelNodeA?.panelFrame,
+    panelFrame: frameADxf,
+    dxfPlacement: dxfPlacementA,
   });
 
   // Canonical merged panel node — bodyId is null until C++ call succeeds.
@@ -3965,7 +3954,8 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
     flatHeight: mergedFlatHeight,
     canonical: true,
     shapeDxf: mergedDxf,
-    panelFrame: panelNodeA?.panelFrame,
+    panelFrame: frameBDxf,
+    dxfPlacement: dxfPlacementB,
   });
 
   // Alias node so apply_unfold(panel_id: partBId) also resolves.
@@ -3982,7 +3972,8 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
     flatHeight: mergedFlatHeight,
     canonical: true,
     shapeDxf: mergedDxf,
-    panelFrame: panelNodeA?.panelFrame,
+    panelFrame: frameBDxf,
+    dxfPlacement: dxfPlacementB,
   });
 
   mergedGraph.addNode({
@@ -3995,6 +3986,7 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
     angle: bendAngle,
     kFactor: kFactorDefault,
     bendAllowance: ba,
+    bendZoneDxfX: effectiveAFlatWidth,
   });
 
   // ── Step 2: C++ call — rebuild from manufacturing graph, then place ──────────
@@ -4975,44 +4967,30 @@ async function handleSplitBodyByBends(args: Record<string, unknown>): Promise<un
     createPart(partId);
     const graph = getManufacturingGraph(partId);
 
-    // Configure the panel's local→world transform P(x) and flat dimensions at
-    // creation time. The TRUE oriented frame comes from the panel's largest
-    // planar face (getPanelFrame), so flat dimensions are the real in-plane
-    // extents and the frame normal is correct — even when the panel is tilted in
-    // world space, where an axis-aligned bbox mis-measures both. Falls back to
-    // the bbox estimate when the helper is unavailable or has no planar face.
+    // Panel frame and flat dimensions from OCCT face analysis (hard fail — no bbox fallback).
     let panelFlatWidth: number | null = null;
     let panelFlatHeight: number | null = null;
     let panelFrame: import('../manufacturing/dxf/orientation').PanelFrame | null = null;
-    const bbox = result.panel_bboxes?.[pi];
 
-    if (getGeometryBinding().hasGetPanelFrame()) {
-      try {
-        const pf = getGeometryBinding().getPanelFrame(panelId);
-        // uExtent ≥ vExtent by construction → u is the longer (flatWidth) axis.
-        panelFlatWidth = pf.uExtentMm;
-        panelFlatHeight = pf.vExtentMm;
-        panelFrame = {
-          origin: [pf.originX, pf.originY, pf.originZ],
-          u: [pf.uX, pf.uY, pf.uZ],
-          v: [pf.vX, pf.vY, pf.vZ],
-        };
-      } catch {
-        // Fall through to the bbox-derived estimate below.
-      }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let _pf: any;
+    try {
+      _pf = getGeometryBinding().getPanelFrame(panelId);
+    } catch {
+      throwError(
+        ErrorCodes.GE_PANEL_FRAME_FAILED,
+        `Shell ${panelId} has no planar faces; cannot derive panel frame.`,
+        false,
+        'clean_geometry',
+      );
     }
-
-    if (panelFrame === null && bbox) {
-      const dims = [
-        bbox.x_max - bbox.x_min,
-        bbox.y_max - bbox.y_min,
-        bbox.z_max - bbox.z_min,
-      ].sort((a, b) => a - b);
-      // dims[0] = thickness, dims[1] = shorter flat dim, dims[2] = longer flat dim
-      panelFlatWidth = dims[2] ?? null;
-      panelFlatHeight = dims[1] ?? null;
-      panelFrame = derivePanelFrameFromBbox(bbox);
-    }
+    panelFlatWidth = _pf.uExtentMm;
+    panelFlatHeight = _pf.vExtentMm;
+    panelFrame = {
+      origin: [_pf.originX, _pf.originY, _pf.originZ],
+      u: [_pf.uX, _pf.uY, _pf.uZ],
+      v: [_pf.vX, _pf.vY, _pf.vZ],
+    };
 
     // Critical: Panel node creation must succeed. No fallback allowed.
     // If this fails, it indicates a malformed geometry or data corruption.
@@ -5057,6 +5035,7 @@ async function handleSplitBodyByBends(args: Record<string, unknown>): Promise<un
       canonical: true,  // Split panels are canonical unfold targets
       shapeDxf: panelShapeDxf,
       panelFrame: panelFrame ?? undefined,
+      dxfPlacement: { rotationMatrix: [[1, 0], [0, 1]], translation: [0, 0] },
     });
     createdParts.push({ part_id: partId, panel_id: panelId });
   }
@@ -5076,15 +5055,30 @@ async function handleSplitBodyByBends(args: Record<string, unknown>): Promise<un
 
     let protFlatWidth: number | null = null;
     let protFlatHeight: number | null = null;
-    const bbox = result.protrusion_bboxes?.[pi];
-    if (bbox) {
-      const dims = [
-        bbox.x_max - bbox.x_min,
-        bbox.y_max - bbox.y_min,
-        bbox.z_max - bbox.z_min,
-      ].sort((a, b) => a - b);
-      protFlatWidth  = dims[2] ?? null;
-      protFlatHeight = dims[1] ?? null;
+    let protrusionFrame: import('../manufacturing/dxf/orientation').PanelFrame | null = null;
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const ppf: any = getGeometryBinding().getPanelFrame(protrusionId);
+      protFlatWidth = ppf.uExtentMm;
+      protFlatHeight = ppf.vExtentMm;
+      protrusionFrame = {
+        origin: [ppf.originX, ppf.originY, ppf.originZ],
+        u: [ppf.uX, ppf.uY, ppf.uZ],
+        v: [ppf.vX, ppf.vY, ppf.vZ],
+      };
+    } catch {
+      // Non-planar protrusion (boss, tube): fall back to bbox for dimensions, no frame.
+      const bbox = result.protrusion_bboxes?.[pi];
+      if (bbox) {
+        const dims = [
+          bbox.x_max - bbox.x_min,
+          bbox.y_max - bbox.y_min,
+          bbox.z_max - bbox.z_min,
+        ].sort((a, b) => a - b);
+        protFlatWidth  = dims[2] ?? null;
+        protFlatHeight = dims[1] ?? null;
+      }
     }
 
     // Node ID equals the protrusion ID so apply_unfold(panel_id: protrusionId,
@@ -5105,13 +5099,11 @@ async function handleSplitBodyByBends(args: Record<string, unknown>): Promise<un
         );
       }
     } catch {
-      // unfoldShell threw — generate DXF from bbox-derived oriented extents.
+      // unfoldShell threw — generate DXF from getPanelFrame-derived extents.
       if (protFlatWidth !== null && protFlatHeight !== null) {
         protrusionShapeDxf = generateDxfFromManufacturingGraph(protFlatWidth, protFlatHeight, [], []);
       }
     }
-
-    const protrusionFrame = bbox ? derivePanelFrameFromBbox(bbox) : null;
 
     graph.addNode({
       type: 'PanelNode',
@@ -5125,6 +5117,7 @@ async function handleSplitBodyByBends(args: Record<string, unknown>): Promise<un
       canonical: true,  // Protrusions are canonical unfold targets
       shapeDxf: protrusionShapeDxf,
       panelFrame: protrusionFrame ?? undefined,
+      dxfPlacement: { rotationMatrix: [[1, 0], [0, 1]], translation: [0, 0] },
     });
     createdParts.push({ part_id: protPartId, panel_id: protrusionId });
   }
@@ -5206,7 +5199,8 @@ function handleMapTo2D(args: Record<string, unknown>): unknown {
 
 function handleMapTo3D(args: Record<string, unknown>): unknown {
   const partId = requireString(args, 'part_id');
-  const panelId = requireString(args, 'panel_id');
+  // panel_id is optional — when omitted, map2dTo3d uses region lookup across all PanelNodes
+  const panelId: string | undefined = typeof args['panel_id'] === 'string' ? args['panel_id'] : undefined;
   const pointArg = args['point'];
   if (!Array.isArray(pointArg) || pointArg.length !== 2 ||
       pointArg.some(v => typeof v !== 'number')) {

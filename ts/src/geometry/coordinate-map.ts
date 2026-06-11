@@ -1,18 +1,18 @@
 /**
  * Bidirectional 3D-to-2D coordinate mapping for manufacturing graph panels.
  *
- * Given a panel's PanelFrame (origin + u/v axes stored on PanelNode), we can
- * project any 3D world-space point into the panel's local 2D flat-pattern
- * coordinate system and vice-versa.
+ * Uses each PanelNode's DXF-aligned frame (origin + u/v axes) and dxfPlacement
+ * (2D rigid transform: panel-local DXF coords → master merged flat coords) to
+ * correctly map across multi-panel assemblies with any number of bends.
  *
- * Accuracy: ≤ COORD_MAP_ACCURACY_THRESHOLD_MM (0.1 mm) round-trip error
- * for planar panels. Curved edges are not supported in Phase 1.
+ * Accuracy: ≤ COORD_MAP_ACCURACY_THRESHOLD_MM (0.1 mm) round-trip error.
  *
- * Feature: 011-graph-driven-geometry (US3 — Coordinate Mapping)
+ * Feature: 012-accurate-coord-mapping
  */
 
 import type { ManufacturingGraphData } from '../manufacturing/graph/types';
 import type { PanelFrame } from '../manufacturing/dxf/orientation';
+import type { Placement2D } from '../manufacturing/dxf/merge';
 
 /** Maximum acceptable projection error (mm) to consider a point "on" a panel surface. */
 const COORD_MAP_ACCURACY_THRESHOLD_MM = 0.1;
@@ -22,7 +22,7 @@ const COORD_MAP_ACCURACY_THRESHOLD_MM = 0.1;
 export interface CoordinateMapResult {
   /** The panel whose surface contains the projected point. */
   panelId: string;
-  /** XY position in the panel's DXF flat-pattern coordinate space (mm). */
+  /** XY position in the master merged flat DXF coordinate space (mm). */
   xy: [number, number];
   /** Estimated projection error (distance from point to panel surface, mm). */
   errorMm: number;
@@ -37,45 +37,24 @@ export interface CoordinateMapError {
   distanceMm?: number;
 }
 
-// ─── Internal helpers ─────────────────────────────────────────────────────────
+// ─── Internal 3D vector helpers ───────────────────────────────────────────────
 
-/**
- * Subtract two 3-vectors.
- */
-function sub3(
-  a: [number, number, number],
-  b: [number, number, number],
-): [number, number, number] {
+function sub3(a: [number, number, number], b: [number, number, number]): [number, number, number] {
   return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 }
 
-/**
- * Dot product of two 3-vectors.
- */
 function dot3(a: [number, number, number], b: [number, number, number]): number {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
-/**
- * Scale a 3-vector.
- */
 function scale3(v: [number, number, number], s: number): [number, number, number] {
   return [v[0] * s, v[1] * s, v[2] * s];
 }
 
-/**
- * Add two 3-vectors.
- */
-function add3(
-  a: [number, number, number],
-  b: [number, number, number],
-): [number, number, number] {
+function add3(a: [number, number, number], b: [number, number, number]): [number, number, number] {
   return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 }
 
-/**
- * Compute the normal to a PanelFrame as cross(u, v).
- */
 function frameNormal(frame: PanelFrame): [number, number, number] {
   const [ux, uy, uz] = frame.u;
   const [vx, vy, vz] = frame.v;
@@ -86,18 +65,6 @@ function frameNormal(frame: PanelFrame): [number, number, number] {
   ];
 }
 
-/**
- * Project a 3D world-space point onto the panel's local 2D (U, V) axes.
- *
- * Steps:
- *   1. Translate to panel origin: d = p - origin
- *   2. Project onto U axis: u_coord = dot(d, u)
- *   3. Project onto V axis: v_coord = dot(d, v)
- *   4. Project onto normal: height = dot(d, n)  (distance above panel surface)
- *
- * Returns: { u, v, height } where u,v are 2D flat-pattern coordinates and
- * height is the signed distance from the panel surface (0 = on surface).
- */
 function projectOntoPanel(
   point3d: [number, number, number],
   frame: PanelFrame,
@@ -111,14 +78,6 @@ function projectOntoPanel(
   };
 }
 
-/**
- * Reconstruct a 3D world-space point from panel-local (U, V) coordinates.
- *
- * Inverse of projectOntoPanel (with height = 0, i.e. the point lies on the
- * panel surface).
- *
- *   p = origin + u * u_coord + v * v_coord
- */
 function unprojectFromPanel(
   uCoord: number,
   vCoord: number,
@@ -130,44 +89,89 @@ function unprojectFromPanel(
   return add3(origin, add3(scale3(uAxis, uCoord), scale3(vAxis, vCoord)));
 }
 
+// ─── 2D placement helpers ─────────────────────────────────────────────────────
+
+/** Apply a 2D rigid transform: [mx, my] = R * [x, y] + t */
+function applyPlacement2D(p: Placement2D, x: number, y: number): [number, number] {
+  const [[a, b], [c, d]] = p.rotationMatrix;
+  const [tx, ty] = p.translation;
+  return [a * x + b * y + tx, c * x + d * y + ty];
+}
+
+/** Transpose a 2×2 matrix (inverse of orthogonal rotation matrix). */
+function transpose2x2(m: [[number, number], [number, number]]): [[number, number], [number, number]] {
+  return [[m[0][0], m[1][0]], [m[0][1], m[1][1]]];
+}
+
+/** Multiply transposed rotation by a 2D vector: R^T * [x, y] */
+function matMul2x2Vec(m: [[number, number], [number, number]], x: number, y: number): [number, number] {
+  return [m[0][0] * x + m[0][1] * y, m[1][0] * x + m[1][1] * y];
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
- * Map a 3D world-space point to its 2D DXF flat-pattern coordinates.
+ * Map a 3D world-space point to its master merged flat DXF coordinate.
  *
- * The function iterates all canonical PanelNodes in the manufacturing graph,
- * projects the point onto each panel's face plane, and returns the one with
- * the smallest perpendicular distance (|height|).
+ * Iterates ALL PanelNodes (canonical and non-canonical). Projects the point
+ * onto each panel's DXF-aligned frame and, when the panel matches (|height| ≤
+ * threshold and local coords within bounds), applies the panel's dxfPlacement
+ * to convert panel-local coords to master flat coords.
  *
- * If the smallest |height| exceeds COORD_MAP_ACCURACY_THRESHOLD_MM the point
- * is not on any panel surface and GE_POINT_NOT_ON_PANEL is returned.
- *
- * @param point3d  3D world-space point [x, y, z] in mm.
- * @param graph    ManufacturingGraph for the part.
- * @returns CoordinateMapResult on success, CoordinateMapError otherwise.
+ * Falls back to closest panel when no match within threshold.
  */
 export function map3dTo2d(
   point3d: [number, number, number],
   graph: ManufacturingGraphData,
 ): CoordinateMapResult | CoordinateMapError {
   let bestPanelId: string | null = null;
-  let bestU = 0;
-  let bestV = 0;
+  let bestXy: [number, number] = [0, 0];
   let bestHeight = Infinity;
+  let bestInBounds = false;
+  let anyFrameFound = false;
 
   for (const node of graph.nodes.values()) {
-    if (node.type !== 'PanelNode' || node.canonical === false) continue;
+    if (node.type !== 'PanelNode') continue;
     const panelNode = node;
     if (!panelNode.panelFrame) continue;
+    anyFrameFound = true;
 
     const { u, v, height } = projectOntoPanel(point3d, panelNode.panelFrame);
     const absHeight = Math.abs(height);
-    if (absHeight < bestHeight) {
+
+    // Region bounds check: u in [0, flatWidth], v in [0, flatHeight]
+    const inBounds =
+      u >= -COORD_MAP_ACCURACY_THRESHOLD_MM &&
+      v >= -COORD_MAP_ACCURACY_THRESHOLD_MM &&
+      (panelNode.flatWidth  === null || u <= (panelNode.flatWidth  + COORD_MAP_ACCURACY_THRESHOLD_MM)) &&
+      (panelNode.flatHeight === null || v <= (panelNode.flatHeight + COORD_MAP_ACCURACY_THRESHOLD_MM));
+
+    const candidateXy: [number, number] = panelNode.dxfPlacement
+      ? applyPlacement2D(panelNode.dxfPlacement, u, v)
+      : [u, v];
+
+    if (inBounds) {
+      // In-bounds panels always beat out-of-bounds. Among in-bounds, pick lowest height.
+      if (absHeight < bestHeight || (absHeight <= bestHeight && !bestInBounds)) {
+        bestHeight = absHeight;
+        bestPanelId = panelNode.id as string;
+        bestInBounds = true;
+        bestXy = candidateXy;
+      }
+    } else if (!bestInBounds && bestPanelId === null) {
+      // No in-bounds panel found yet — track first out-of-bounds panel for error reporting.
       bestHeight = absHeight;
       bestPanelId = panelNode.id as string;
-      bestU = u;
-      bestV = v;
+      bestXy = candidateXy;
     }
+  }
+
+  if (!anyFrameFound) {
+    return {
+      code: 'GE_PANEL_NO_FRAME',
+      message: 'No panel in the manufacturing graph has a panelFrame. ' +
+               'Run split_body_by_bends or apply_unfold first to populate panel frames.',
+    };
   }
 
   if (bestPanelId === null) {
@@ -190,44 +194,87 @@ export function map3dTo2d(
 
   return {
     panelId: bestPanelId,
-    xy: [bestU, bestV],
+    xy: bestXy,
     errorMm: bestHeight,
   };
 }
 
 /**
- * Map a 2D DXF flat-pattern coordinate back to a 3D world-space point.
+ * Map a 2D master merged flat DXF coordinate back to a 3D world-space point.
  *
- * Uses the PanelFrame stored on the specified PanelNode to reconstruct the
- * 3D position that corresponds to the given (X, Y) flat-pattern coordinates.
- *
- * @param panelId  Node ID of the target PanelNode.
- * @param point2d  2D DXF coordinate [x, y] in mm.
- * @param graph    ManufacturingGraph for the part.
- * @returns { point3d } on success, CoordinateMapError otherwise.
+ * When panelId is provided, only that panel is checked.
+ * When panelId is omitted, iterates all PanelNodes and uses the one whose
+ * dxfPlacement-transformed region contains the query point.
  */
 export function map2dTo3d(
-  panelId: string,
+  panelId: string | undefined,
   point2d: [number, number],
   graph: ManufacturingGraphData,
 ): { point3d: [number, number, number]; errorMm: number } | CoordinateMapError {
-  const node = graph.nodes.get(panelId as any);
-  if (!node || node.type !== 'PanelNode') {
-    return {
-      code: 'GE_POINT_NOT_ON_PANEL',
-      message: `Panel "${panelId}" not found in manufacturing graph.`,
-    };
+  for (const node of graph.nodes.values()) {
+    if (node.type !== 'PanelNode') continue;
+    if (panelId !== undefined && node.id !== panelId) continue;
+
+    const panelNode = node;
+    if (!panelNode.panelFrame) continue;
+
+    // Invert dxfPlacement: R^T * (point2d - t) = panel-local coords
+    let lx: number;
+    let ly: number;
+    if (panelNode.dxfPlacement) {
+      const R_inv = transpose2x2(panelNode.dxfPlacement.rotationMatrix);
+      const [tx, ty] = panelNode.dxfPlacement.translation;
+      [lx, ly] = matMul2x2Vec(R_inv, point2d[0] - tx, point2d[1] - ty);
+    } else {
+      lx = point2d[0];
+      ly = point2d[1];
+    }
+
+    // Region bounds check: local (lx, ly) in [0, flatWidth] × [0, flatHeight]
+    const inBounds =
+      lx >= -COORD_MAP_ACCURACY_THRESHOLD_MM &&
+      ly >= -COORD_MAP_ACCURACY_THRESHOLD_MM &&
+      (panelNode.flatWidth  === null || lx <= (panelNode.flatWidth  + COORD_MAP_ACCURACY_THRESHOLD_MM)) &&
+      (panelNode.flatHeight === null || ly <= (panelNode.flatHeight + COORD_MAP_ACCURACY_THRESHOLD_MM));
+
+    if (inBounds) {
+      const point3d = unprojectFromPanel(lx, ly, panelNode.panelFrame);
+      return { point3d, errorMm: 0 };
+    }
   }
 
-  const panelNode = node;
-  if (!panelNode.panelFrame) {
-    return {
-      code: 'GE_PANEL_NO_FRAME',
-      message: `Panel "${panelId}" has no panelFrame. ` +
-               'Run split_body_by_bends or apply_unfold first.',
-    };
+  if (panelId !== undefined) {
+    const node = graph.nodes.get(panelId as any);
+    if (!node || node.type !== 'PanelNode') {
+      return {
+        code: 'GE_POINT_NOT_ON_PANEL',
+        message: `Panel "${panelId}" not found in manufacturing graph.`,
+      };
+    }
+    if (!node.panelFrame) {
+      return {
+        code: 'GE_PANEL_NO_FRAME',
+        message: `Panel "${panelId}" has no panelFrame. ` +
+                 'Run split_body_by_bends or apply_unfold first.',
+      };
+    }
+    // Panel found but point not in region — still reconstruct (legacy behaviour)
+    let lx: number;
+    let ly: number;
+    if (node.dxfPlacement) {
+      const R_inv = transpose2x2(node.dxfPlacement.rotationMatrix);
+      const [tx, ty] = node.dxfPlacement.translation;
+      [lx, ly] = matMul2x2Vec(R_inv, point2d[0] - tx, point2d[1] - ty);
+    } else {
+      lx = point2d[0];
+      ly = point2d[1];
+    }
+    const point3d = unprojectFromPanel(lx, ly, node.panelFrame);
+    return { point3d, errorMm: 0 };
   }
 
-  const point3d = unprojectFromPanel(point2d[0], point2d[1], panelNode.panelFrame);
-  return { point3d, errorMm: 0 };
+  return {
+    code: 'GE_POINT_NOT_ON_PANEL',
+    message: `No panel region contains point [${point2d.join(', ')}] in the manufacturing graph.`,
+  };
 }

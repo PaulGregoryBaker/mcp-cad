@@ -8,6 +8,8 @@
 
 import type { PanelFrame } from '../dxf/orientation';
 export type { PanelFrame };
+import type { Placement2D } from '../dxf/merge';
+export type { Placement2D };
 
 // ─── Branded ID types ─────────────────────────────────────────────────────────
 
@@ -41,7 +43,8 @@ export interface PanelNode {
   flatHeight: number | null;    // mm — null before first Solve
   canonical: boolean;           // true if this is the canonical unfold target in a merged graph
   shapeDxf: string | null;      // DXF content of flat panel outline & details; the source of truth manufacturing drawing; null before split_body_by_bends
-  panelFrame?: PanelFrame | null; // 3D orientation frame (origin, u, v axes); derived from bbox at split time
+  panelFrame?: PanelFrame | null; // 3D orientation frame — DXF-aligned: u=DXF+X, v=DXF+Y, origin=3D point at DXF(0,0)
+  dxfPlacement?: Placement2D;   // 2D rigid transform: panel-local DXF coords → master merged flat coords; identity for root panels
 }
 
 export interface BendNode {
@@ -54,6 +57,7 @@ export interface BendNode {
   angle: number;                // degrees, 1–179 inclusive
   kFactor: number;              // 0 < k ≤ 1
   bendAllowance: number | null; // mm — computed by Solve; null before first Solve
+  bendZoneDxfX?: number;        // X coordinate (mm) in master merged flat where this bend zone starts
 }
 
 // ─── JoinNode params ──────────────────────────────────────────────────────────

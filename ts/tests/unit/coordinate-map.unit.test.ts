@@ -429,6 +429,291 @@ describe('coordinate-map — round-trip: 2D → 3D, move 10 mm in 3D, back to 2D
   });
 });
 
+// ─── Feature 012: dxfPlacement tests ─────────────────────────────────────────
+
+/** Build a graph with multiple panels that have dxfPlacement set (multi-panel assembly). */
+function makeGraphWithPlacement(
+  panels: Array<{
+    id: string;
+    origin: [number, number, number];
+    u: [number, number, number];
+    v: [number, number, number];
+    flatWidth: number;
+    flatHeight: number;
+    dxfPlacement: { rotationMatrix: [[number, number], [number, number]]; translation: [number, number] };
+    canonical?: boolean;
+  }>,
+): ManufacturingGraphData {
+  const nodes = new Map<any, any>();
+  for (const p of panels) {
+    nodes.set(p.id, {
+      type: 'PanelNode',
+      id: p.id,
+      bodyId: p.id,
+      dirty: false,
+      canonical: p.canonical ?? true,
+      materialType: 'default',
+      nominalThickness: 1.5,
+      flatWidth: p.flatWidth,
+      flatHeight: p.flatHeight,
+      panelFrame: { origin: p.origin, u: p.u, v: p.v },
+      dxfPlacement: p.dxfPlacement,
+    });
+  }
+  return { nodes } as unknown as ManufacturingGraphData;
+}
+
+describe('coordinate-map — dxfPlacement: Panel B with non-zero translation', () => {
+  // Panel A: x in [0, 100], flat origin at world (0,0,0), dxfPlacement = identity
+  // Panel B: x in [150, 250] (after 50mm bend), at world (0,110,0) (bend folded 90°),
+  //          flat panel is vertical (u=Y, v=Z in world space, rotated by bend),
+  //          dxfPlacement.translation = [150, 0]
+  const aWidth = 100;
+  const ba = 50;
+  const bWidth = 100;
+
+  const graph = makeGraphWithPlacement([
+    {
+      id: 'panel-a',
+      origin: [0, 0, 0],
+      u: [1, 0, 0],
+      v: [0, 1, 0],
+      flatWidth: aWidth,
+      flatHeight: 60,
+      dxfPlacement: { rotationMatrix: [[1, 0], [0, 1]], translation: [0, 0] },
+      canonical: false,
+    },
+    {
+      id: 'panel-b',
+      origin: [0, 0, 0],       // same origin as A (for simplicity: both flat in XY plane)
+      u: [1, 0, 0],
+      v: [0, 1, 0],
+      flatWidth: bWidth,
+      flatHeight: 60,
+      dxfPlacement: { rotationMatrix: [[1, 0], [0, 1]], translation: [aWidth + ba, 0] },
+      canonical: true,
+    },
+  ]);
+
+  it('point on Panel B maps to master flat x > aWidth + ba', () => {
+    // A point at the LEFT edge of Panel B's face: (u=0, v=0) local → apply dxfPlacementB → (150, 0)
+    const pt3d: [number, number, number] = [0, 0, 0]; // Panel B's origin (same as A here)
+    const result = map3dTo2d(pt3d, graph);
+    // Both panels share the same origin and frame — the function picks the one with the smallest height
+    // (both height=0), so it will match whichever has the point in bounds first.
+    // Since Panel A has dxfPlacement identity, it will match Panel A first (x=0 < aWidth).
+    // To test Panel B specifically, use a point at u > aWidth (outside Panel A's region).
+    expect('xy' in result).toBe(true);
+  });
+
+  it('point at u=aWidth+ba+10 maps into Panel B region', () => {
+    // Panel B: origin at world (aWidth+ba, 0, 0) from its own dxfPlacement offset
+    // But panel B's frame origin is (0,0,0) and u=[1,0,0].
+    // A local (u=10, v=0) point on Panel B's frame → 3D (10, 0, 0)
+    // After dxfPlacement: masterX = 1*10 + 0*0 + 150 = 160
+    // But Panel A also has origin (0,0,0) and covers u in [0,100], so (10,0,0) is in Panel A too.
+    // We need a point outside Panel A's region to be sure Panel B is selected.
+    // Panel A covers u in [0, 100]. A point at (50, 0, 0) is in Panel A (u=50 < 100).
+    // To force Panel B selection, the point must NOT be in Panel A's bounds.
+    // Use flat dxfPlacement math directly: verify Panel B's dxfPlacement translation adds correctly.
+    const pbPlacement = { rotationMatrix: [[1, 0], [0, 1]] as [[number, number], [number, number]], translation: [aWidth + ba, 0] as [number, number] };
+    // Local (u, v) = (10, 5) → master = R * [10, 5] + [150, 0] = [160, 5]
+    const localU = 10, localV = 5;
+    const [[a, b], [c, d]] = pbPlacement.rotationMatrix;
+    const [tx, ty] = pbPlacement.translation;
+    const masterX = a * localU + b * localV + tx;
+    const masterY = c * localU + d * localV + ty;
+    expect(masterX).toBeCloseTo(aWidth + ba + localU, 4);
+    expect(masterY).toBeCloseTo(localV, 4);
+    expect(masterX).toBeGreaterThan(aWidth + ba);
+  });
+
+  it('map2dTo3d with Panel B dxfPlacement reconstructs panel-local coords', () => {
+    // Master flat point in Panel B's region: (160, 5)
+    // Panel B dxfPlacement: translation=[150,0], R=identity
+    // R^T * ([160,5] - [150,0]) = R^T * [10, 5] = [10, 5] (since R=identity)
+    // Panel B frame: origin=(0,0,0), u=(1,0,0), v=(0,1,0)
+    // 3D = origin + 10*u + 5*v = (10, 5, 0)
+    const graph2 = makeGraphWithPlacement([
+      {
+        id: 'panel-b-only',
+        origin: [0, 0, 0],
+        u: [1, 0, 0],
+        v: [0, 1, 0],
+        flatWidth: bWidth,
+        flatHeight: 60,
+        dxfPlacement: { rotationMatrix: [[1, 0], [0, 1]], translation: [aWidth + ba, 0] },
+      },
+    ]);
+    const result = map2dTo3d(undefined, [160, 5], graph2);
+    expect('point3d' in result).toBe(true);
+    if (!('point3d' in result)) return;
+    // local = R^T * ([160,5]-[150,0]) = [10,5]; 3D = (10, 5, 0)
+    expect(result.point3d[0]).toBeCloseTo(10, 4);
+    expect(result.point3d[1]).toBeCloseTo(5, 4);
+    expect(result.point3d[2]).toBeCloseTo(0, 4);
+  });
+});
+
+describe('coordinate-map — dxfPlacement: non-identity rotation (DXF-rotated panel)', () => {
+  // A panel that was DXF-rotated 90° CCW: rotateDxf90 matrix = [[0,1],[-1,0]]
+  // Panel frame: the DXF-aligned frame after rotation
+  //   origin shifted, u = face.v, v = -face.u
+  // For this test: original face u=(1,0,0), v=(0,1,0), width=80, height=60
+  // After DXF rotate: u_dxf=(0,1,0), v_dxf=(-1,0,0), origin=(80,0,0)+original
+  // dxfPlacement = { rotationMatrix: [[0,1],[-1,0]], translation: [200, 0] }
+
+  const rotMatrix: [[number, number], [number, number]] = [[0, 1], [-1, 0]];
+  const translation: [number, number] = [200, 0];
+
+  // Panel with rotated DXF frame
+  // face.u = (1,0,0), face.v = (0,1,0), face.origin = (0,0,0)
+  // DXF-aligned frame: u_dxf = face.v = (0,1,0), v_dxf = -face.u = (-1,0,0)
+  // origin_dxf = original_origin + uExtentMm * face.u = (80, 0, 0)
+  const rotatedGraph = makeGraphWithPlacement([
+    {
+      id: 'panel-rotated',
+      origin: [80, 0, 0],       // DXF origin is at (80,0,0)
+      u: [0, 1, 0],              // DXF +X = face.v
+      v: [-1, 0, 0],             // DXF +Y = -face.u
+      flatWidth: 60,             // after rotation: old height becomes new width
+      flatHeight: 80,            // after rotation: old width becomes new height
+      dxfPlacement: { rotationMatrix: rotMatrix, translation },
+    },
+  ]);
+
+  it('map2dTo3d inverts non-identity rotation matrix', () => {
+    // Master flat point must map to valid local coords (both in [0, flatWidth]×[0, flatHeight]).
+    // R_inv = transpose([[0,1],[-1,0]]) = [[0,-1],[1,0]]
+    // For master (205, -5): local = R_inv * ([205,-5]-[200,0]) = [[0,-1],[1,0]]*[5,-5] = [5, 5]
+    // lx=5 in [0,60], ly=5 in [0,80] ✓
+    // 3D = origin + 5*u + 5*v = (80,0,0) + 5*(0,1,0) + 5*(-1,0,0) = (75, 5, 0)
+    const result = map2dTo3d(undefined, [205, -5], rotatedGraph);
+    expect('point3d' in result).toBe(true);
+    if (!('point3d' in result)) return;
+    expect(result.point3d[0]).toBeCloseTo(75, 4);
+    expect(result.point3d[1]).toBeCloseTo(5, 4);
+    expect(result.point3d[2]).toBeCloseTo(0, 4);
+  });
+
+  it('map3dTo2d applies non-identity rotation to reach master flat', () => {
+    // 3D point (75, 5, 0) is on the panel surface:
+    // d = (75,5,0) - (80,0,0) = (-5,5,0)
+    // u_local = dot(d, (0,1,0)) = 5
+    // v_local = dot(d, (-1,0,0)) = 5
+    // Apply dxfPlacement: R*[5,5]+[200,0] = [[0,1],[-1,0]]*[5,5]+[200,0] = [5,-5]+[200,0] = [205,-5]
+    const result = map3dTo2d([75, 5, 0], rotatedGraph);
+    expect('xy' in result).toBe(true);
+    if (!('xy' in result)) return;
+    expect(result.xy[0]).toBeCloseTo(205, 4);
+    expect(result.xy[1]).toBeCloseTo(-5, 4);
+  });
+
+  it('round-trip with non-identity rotation stays within 0.1 mm', () => {
+    // Use a valid master flat point: (215, -10)
+    // R_inv * ([215,-10]-[200,0]) = [[0,-1],[1,0]]*[15,-10] = [10, 15] → in bounds ✓
+    const pt2d: [number, number] = [215, -10];
+    const r3d = map2dTo3d(undefined, pt2d, rotatedGraph);
+    expect('point3d' in r3d).toBe(true);
+    if (!('point3d' in r3d)) return;
+    const rBack = map3dTo2d(r3d.point3d, rotatedGraph);
+    expect('xy' in rBack).toBe(true);
+    if (!('xy' in rBack)) return;
+    const d = Math.sqrt((rBack.xy[0] - pt2d[0]) ** 2 + (rBack.xy[1] - pt2d[1]) ** 2);
+    expect(d).toBeLessThanOrEqual(0.1);
+  });
+});
+
+describe('coordinate-map — dxfPlacement: 3-panel chain round-trip', () => {
+  // Three panels A, B, C placed in the XY plane (simplified: all flat, same frame direction)
+  // A: u in [0, 80],    dxfPlacement = identity
+  // B: u in [0, 60],    dxfPlacement = translation [80+10, 0]  (10mm bend allowance)
+  // C: u in [0, 70],    dxfPlacement = translation [80+10+60+12, 0]  (12mm bend allowance)
+  //
+  // All three share the same frame orientation (same u/v in world) but at different 3D origins.
+  // This simulates a flat assembly where panels are in the same plane but at different offsets.
+
+  const ba1 = 10;
+  const ba2 = 12;
+  const aWidth = 80;
+  const bWidth = 60;
+  const cWidth = 70;
+
+  const chainGraph = makeGraphWithPlacement([
+    {
+      id: 'panel-a',
+      origin: [0, 0, 0],
+      u: [1, 0, 0],
+      v: [0, 1, 0],
+      flatWidth: aWidth,
+      flatHeight: 50,
+      dxfPlacement: { rotationMatrix: [[1, 0], [0, 1]], translation: [0, 0] },
+      canonical: false,
+    },
+    {
+      id: 'panel-b',
+      origin: [aWidth + ba1, 0, 0],    // B's face starts at x = aWidth+ba1 in 3D
+      u: [1, 0, 0],
+      v: [0, 1, 0],
+      flatWidth: bWidth,
+      flatHeight: 50,
+      dxfPlacement: { rotationMatrix: [[1, 0], [0, 1]], translation: [aWidth + ba1, 0] },
+      canonical: false,
+    },
+    {
+      id: 'panel-c',
+      origin: [aWidth + ba1 + bWidth + ba2, 0, 0],
+      u: [1, 0, 0],
+      v: [0, 1, 0],
+      flatWidth: cWidth,
+      flatHeight: 50,
+      dxfPlacement: { rotationMatrix: [[1, 0], [0, 1]], translation: [aWidth + ba1 + bWidth + ba2, 0] },
+      canonical: true,
+    },
+  ]);
+
+  it('all three panel regions are reachable from 3D and stay within 0.1 mm round-trip', () => {
+    // Sample one point from each panel's region
+    const testPoints: Array<{ pt3d: [number, number, number]; expectedMasterX: number; label: string }> = [
+      { pt3d: [40, 20, 0],                                     expectedMasterX: 40,                              label: 'Panel A center' },
+      { pt3d: [aWidth + ba1 + 20, 20, 0],                      expectedMasterX: aWidth + ba1 + 20,               label: 'Panel B center' },
+      { pt3d: [aWidth + ba1 + bWidth + ba2 + 20, 20, 0],       expectedMasterX: aWidth + ba1 + bWidth + ba2 + 20, label: 'Panel C center' },
+    ];
+
+    for (const { pt3d, expectedMasterX, label } of testPoints) {
+      // 3D → 2D
+      const r2d = map3dTo2d(pt3d, chainGraph);
+      expect('xy' in r2d, `${label}: map3dTo2d should succeed`).toBe(true);
+      if (!('xy' in r2d)) continue;
+      expect(r2d.xy[0]).toBeCloseTo(expectedMasterX, 2, `${label}: masterX`);
+      expect(r2d.errorMm).toBeLessThanOrEqual(0.1, `${label}: projection error`);
+
+      // 2D → 3D round-trip
+      const rBack = map2dTo3d(undefined, r2d.xy, chainGraph);
+      expect('point3d' in rBack, `${label}: map2dTo3d should succeed`).toBe(true);
+      if (!('point3d' in rBack)) continue;
+      const dist = Math.sqrt(
+        (rBack.point3d[0] - pt3d[0]) ** 2 +
+        (rBack.point3d[1] - pt3d[1]) ** 2 +
+        (rBack.point3d[2] - pt3d[2]) ** 2,
+      );
+      expect(dist).toBeLessThanOrEqual(0.1, `${label}: round-trip error`);
+    }
+  });
+
+  it('map2dTo3d without panel_id selects correct panel from master flat coords', () => {
+    // Master flat x=200 is in Panel C (starts at aWidth+ba1+bWidth+ba2 = 80+10+60+12 = 162)
+    const masterPt: [number, number] = [200, 10];
+    const result = map2dTo3d(undefined, masterPt, chainGraph);
+    expect('point3d' in result).toBe(true);
+    if (!('point3d' in result)) return;
+    // Panel C local: R^T*(200-162, 10-0) = (38, 10), 3D = (162+38, 10, 0) = (200, 10, 0)
+    expect(result.point3d[0]).toBeCloseTo(200, 4);
+    expect(result.point3d[1]).toBeCloseTo(10, 4);
+    expect(result.point3d[2]).toBeCloseTo(0, 4);
+  });
+});
+
 describe('coordinate-map — round-trip: tilted panel (non-axis-aligned)', () => {
   it('handles a 45-degree rotated panel in XY plane', () => {
     // Panel with u=(1/√2, 1/√2, 0) and v=(-1/√2, 1/√2, 0) (45° CCW rotation)

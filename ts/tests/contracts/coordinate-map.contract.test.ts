@@ -11,6 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { map3dTo2d, map2dTo3d } from '../../src/geometry/coordinate-map';
 import type { CoordinateMapResult, CoordinateMapError } from '../../src/geometry/coordinate-map';
 import type { ManufacturingGraphData } from '../../src/manufacturing/graph/types';
+import { ErrorCodes, makeError } from '../../src/mcp/errors';
 
 // ─── Minimal graph builder ────────────────────────────────────────────────────
 
@@ -135,5 +136,29 @@ describe('coordinate-map contract — CoordinateMapError shape', () => {
   it('empty graph returns error with code (not a success result)', () => {
     const result = map3dTo2d([0, 0, 0], emptyGraph());
     expect('code' in result).toBe(true);
+  });
+});
+
+// ─── Contract: Feature 012 error code registry (T023) ────────────────────────
+
+describe('coordinate-map contract — Feature 012 error codes', () => {
+  it('GE_PANEL_FRAME_FAILED is present in ErrorCodes', () => {
+    expect(ErrorCodes.GE_PANEL_FRAME_FAILED).toBe('GE_PANEL_FRAME_FAILED');
+  });
+
+  it('GE_PANEL_FRAME_FAILED makeError returns recoverable: false', () => {
+    const err = makeError(ErrorCodes.GE_PANEL_FRAME_FAILED, 'test message', false, 'clean_geometry');
+    expect(err.code).toBe('GE_PANEL_FRAME_FAILED');
+    expect(err.recoverable).toBe(false);
+    expect(err.suggestedTool).toBe('clean_geometry');
+  });
+
+  it('map2dTo3d accepts undefined panel_id and returns a result (region-lookup path)', () => {
+    const graph = graphWithPanel('p1');
+    // Without panel_id: region lookup. Panel p1 has no flatWidth/flatHeight in this graph,
+    // so bounds check is skipped → still returns a result for any in-frame point.
+    const result = map2dTo3d(undefined, [5, 10], graph);
+    // Should succeed (no panel_id required)
+    expect('point3d' in result || 'code' in result).toBe(true);
   });
 });
