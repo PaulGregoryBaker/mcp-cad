@@ -101,6 +101,7 @@ export interface GeometryAddon {
   restoreSnapshot(snapshotId: string): RestoreResult;
   clearSnapshot(snapshotId: string): void;
   clearSnapshots(): void;
+  clearState(): void;
   computeBoundingBox(entityId: string): BoundingBoxResult;
   computeMassProperties(entityId: string, properties?: string[]): MassPropertiesResult;
   measureDistance(entityA: string, entityB: string, measurementType: string): MeasureResult;
@@ -527,6 +528,10 @@ export class GeometryBinding {
 
   clearSnapshots(): void {
     this.addon.clearSnapshots();
+  }
+
+  clearState(): void {
+    this.addon.clearState();
   }
 
   computeBoundingBox(entityId: string): BoundingBoxResult {

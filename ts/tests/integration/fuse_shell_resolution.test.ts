@@ -150,8 +150,12 @@ describe('Regression: fuse_bodies after translate_body', () => {
   }, 30_000);
 });
 
-describe('T016: cut_bodies GRAPH_INTEGRITY_ERROR guard (FR-005)', () => {
-  it('rejects cut_bodies when blank is a graph-tracked panel', async () => {
+describe('T016: cut_bodies passes through to C++ for graph-tracked panels (FR-005 guard removed)', () => {
+  it('reaches C++ when blank is a graph-tracked panel (no longer blocked by GRAPH_INTEGRITY_ERROR)', async () => {
+    // The FR-005 guard was removed from cut_bodies because cut_bodies does not modify
+    // graph metadata — it only does a boolean difference on raw geometry.
+    // The call now passes through to C++; with a non-existent tool shell it gets
+    // GE_SHELL_NOT_FOUND rather than GRAPH_INTEGRITY_ERROR.
     const boxPath = getFixturePath('simple_box.stp');
     const clean: any = await dispatchTool('clean_geometry', { file_path: boxPath }, config);
     const split: any = await dispatchTool('split_body_by_bends', {
@@ -162,14 +166,14 @@ describe('T016: cut_bodies GRAPH_INTEGRITY_ERROR guard (FR-005)', () => {
     expect(split.panel_ids.length).toBeGreaterThanOrEqual(1);
     const trackedPanelId = split.panel_ids[0] as string;
 
-    // The panel ID IS the bodyId for split panels (stable part-id = initial shell-id).
+    // C++ is reached — it finds the blank but cannot find the tool shell.
     await expect(
       dispatchTool('cut_bodies', {
         blank: trackedPanelId,
         tools: ['some-untracked-shell'],
         keep_tools: false,
       }, config),
-    ).rejects.toMatchObject({ code: 'GRAPH_INTEGRITY_ERROR' });
+    ).rejects.toMatchObject({ code: 'GE_SHELL_NOT_FOUND' });
   }, 30_000);
 
   it('allows cut_bodies when blank is not graph-tracked', async () => {

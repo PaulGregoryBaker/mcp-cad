@@ -3391,25 +3391,15 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
   const graphB = getManufacturingGraph(partBId);
   const toBodyId = (s: string) => s as import('../manufacturing/graph/types').BodyId;
 
-  // Single-bend limitation: the flat-pattern refold (buildShellFromFlatPattern)
-  // models exactly ONE bend zone. A merge adds one bend, so if either input
-  // already contains a bend (i.e. it is itself a previously-merged shell), the
-  // result would need ≥2 bends — which this pipeline cannot represent. Reject
-  // such chained merges rather than silently producing a single-bend (wrong) shape.
-  const countBends = (g: ReturnType<typeof getManufacturingGraph>): number => {
-    let n = 0;
-    for (const node of g.nodes.values()) if (node.type === 'BendNode') n++;
-    return n;
-  };
-  if (countBends(graphA) > 0 || countBends(graphB) > 0) {
-    throwError(
-      ErrorCodes.GE_MERGE_FAILED,
-      'merge_bodies_with_bend: one of the inputs already contains a bend. Chained ' +
-      'multi-bend merges are not supported (the flat-pattern refold models a single bend). ' +
-      'Fabricate this as separate bends.',
-      false,
-    );
-  }
+  // Detect chained merge: graphA already has a BendNode from a prior merge.
+  // When true, panelNodeA is the canonical merged node whose shapeDxf is the
+  // previously-merged flat DXF and whose bodyId is the previously-folded 3D shell.
+  // effectiveAFlatWidth for chained merges must come from the DXF bbox (see below),
+  // not from panelNodeA.flatWidth which stores only the last panel's individual width.
+  const isChainedMerge = (() => {
+    for (const node of graphA.nodes.values()) if (node.type === 'BendNode') return true;
+    return false;
+  })();
 
   // Find the representative PanelNode in each graph.
   // Strict requirement: must find exactly one panel with an exact id match OR exactly one panel total.
@@ -3699,6 +3689,7 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
 
   let rotationMatrix: [[number, number], [number, number]];
   let translation: [number, number];
+  let seamYOffset = 0;
 
   if (normalsNearlyParallel && panelNodeA.flatWidth === null) {
     // Coplanar merges (no graph-recorded flatWidth, so not from a split) must satisfy contact tolerance strictly.
@@ -3772,6 +3763,26 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
     effectiveBFlatWidth = (foldAlongU_B && panelNodeB.flatHeight !== null)
       ? panelNodeB.flatHeight
       : (panelNodeB.flatWidth ?? 0);
+
+    // For chained merges, panelNodeA.flatWidth stores the LAST panel's individual
+    // fold-perp width (for getFlatPatternDimensions graph traversal), not the total
+    // merged flat width. Override effectiveAFlatWidth from the actual shapeDxf bbox.
+    if (isChainedMerge && panelNodeA.shapeDxf) {
+      try {
+        const tmpRing = parseFirstClosedPolyline(panelNodeA.shapeDxf);
+        let xMin = Number.POSITIVE_INFINITY, xMax = Number.NEGATIVE_INFINITY;
+        let yMin = Number.POSITIVE_INFINITY, yMax = Number.NEGATIVE_INFINITY;
+        for (const [x, y] of tmpRing) {
+          if (x < xMin) xMin = x; if (x > xMax) xMax = x;
+          if (y < yMin) yMin = y; if (y > yMax) yMax = y;
+        }
+        const dxfW = xMax - xMin;
+        const dxfH = yMax - yMin;
+        // When foldAlongU_A=false: panelADxfForMerge is not rotated → effectiveAFlatWidth = dxfW
+        // When foldAlongU_A=true:  panelADxfForMerge is rotated 90° CCW, new x-extent = dxfH
+        if (dxfW > 0 && dxfH > 0) effectiveAFlatWidth = foldAlongU_A ? dxfH : dxfW;
+      } catch { /* keep computed value on parse failure */ }
+    }
     rotationMatrix = [[1, 0], [0, 1]];
     // Place panel B after the bend zone in flat pattern space.
     // X translation: panel B starts after panel A's fold-perpendicular extent + bend allowance.
@@ -3799,6 +3810,7 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
           return centBSeam - centASeam;
         })()
       : 0;
+    seamYOffset = seamOffset;
     translation = [effectiveAFlatWidth + ba - MERGE_OVERLAP_MM, seamOffset];
   }
 
@@ -3918,8 +3930,8 @@ function handleMergeBodiesWithBend(args: Record<string, unknown>): unknown {
 
   // Panel A: dxfPlacement = identity (origin of the merged flat)
   const dxfPlacementA: Placement2D = { rotationMatrix: [[1, 0], [0, 1]], translation: [0, 0] };
-  // Panel B: translated by (effectiveAFlatWidth + ba) along flat X
-  const dxfPlacementB: Placement2D = { rotationMatrix: [[1, 0], [0, 1]], translation: [effectiveAFlatWidth + ba, 0] };
+  // Panel B: translated by (effectiveAFlatWidth + ba) along flat X, plus seam Y offset
+  const dxfPlacementB: Placement2D = { rotationMatrix: [[1, 0], [0, 1]], translation: [effectiveAFlatWidth + ba, seamYOffset] };
 
   // Upstream panel A node (non-canonical; stale after merge).
   // flatWidth stores Panel A's own fold-perpendicular extent so that
@@ -4727,20 +4739,6 @@ function handleCutBodies(args: Record<string, unknown>): unknown {
   const keepTools = (args['keep_tools'] as boolean | undefined) ?? false;
   const ctx = resolveTransactionContext(args);
 
-  // Guard against raw mutation of graph-tracked shells (FR-005).
-  for (const bodyId of [blank, ...tools]) {
-    const owner = findGraphOwner(bodyId);
-    if (owner !== null) {
-      throwError(
-        ErrorCodes.GRAPH_INTEGRITY_ERROR,
-        `Shell UUID '${bodyId}' belongs to manufacturing-graph-tracked part '${owner.partId}'. ` +
-        `Use merge_bodies_with_bend or fuse_bodies (graph-coordinated paths) to mutate graph-tracked parts.`,
-        true,
-        'merge_bodies_with_bend',
-      );
-    }
-  }
-
   const result = getGeometryBinding().cutBodies(blank, tools, keepTools);
 
   // Register the cut result immediately so it can be used in subsequent operations
@@ -4799,18 +4797,6 @@ function handleTrimBodyWithPlane(args: Record<string, unknown>): unknown {
     throwError(ErrorCodes.GE_TRIM_FAILED, 'plane must have normal and origin objects', false);
   }
   const plane = planeArg as { normal: { x: number; y: number; z: number }; origin: { x: number; y: number; z: number } };
-
-  // Guard against raw mutation of graph-tracked shells (FR-005).
-  const graphOwner = findGraphOwner(partId);
-  if (graphOwner !== null) {
-    throwError(
-      ErrorCodes.GRAPH_INTEGRITY_ERROR,
-      `Shell UUID '${partId}' belongs to manufacturing-graph-tracked part '${graphOwner.partId}'. ` +
-      `Raw plane trims on graph-tracked shells are not permitted. Use graph mutation tools instead.`,
-      true,
-      'solve_geometry',
-    );
-  }
 
   const ctx = resolveTransactionContext(args);
   const result = getGeometryBinding().trimBodyWithPlane(partId, plane, keepPositiveSide as boolean);
@@ -4967,11 +4953,10 @@ async function handleSplitBodyByBends(args: Record<string, unknown>): Promise<un
     createPart(partId);
     const graph = getManufacturingGraph(partId);
 
-    // Panel frame and flat dimensions from OCCT face analysis (hard fail — no bbox fallback).
+    // Panel frame and flat dimensions from OCCT face analysis (hard fail — no fallback).
     let panelFlatWidth: number | null = null;
     let panelFlatHeight: number | null = null;
     let panelFrame: import('../manufacturing/dxf/orientation').PanelFrame | null = null;
-
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let _pf: any;
     try {

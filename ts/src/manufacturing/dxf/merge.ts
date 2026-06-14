@@ -250,34 +250,55 @@ export function mergeDxfOutlines(
 
   let union = polygonClipping.union(toPolygon(refRing), toPolygon(movRing)) as number[][][][];
   
-  // If union produced 2 disconnected regions, it's likely the k-factor gap.
-  // Measure the actual minimum distance between regions and adjust placement to overlap them.
+  // If union produced 2 disconnected regions, it's likely a small gap between panels.
+  // Measure the gap from the ACTUAL refRing and movRing bboxes (not the union output, whose
+  // region order is unpredictable) and nudge the moving ring to close any gap < 2 mm.
   if (union.length === 2) {
-    const region1 = ensureClosed((union[0]?.[0] ?? []).map(([x, y]) => [x, y]));
-    const region2 = ensureClosed((union[1]?.[0] ?? []).map(([x, y]) => [x, y]));
-    
-    // Compute minimum X distance between the two regions (they are side-by-side in X).
-    // Vertex-to-vertex distance misses the case where the nearest points are on edges,
-    // so project onto X axis: find x_max of one region and x_min of the other.
-    let xMin1 = Number.POSITIVE_INFINITY, xMax1 = Number.NEGATIVE_INFINITY;
-    let xMin2 = Number.POSITIVE_INFINITY, xMax2 = Number.NEGATIVE_INFINITY;
-    for (const [x] of region1) { if (x < xMin1) xMin1 = x; if (x > xMax1) xMax1 = x; }
-    for (const [x] of region2) { if (x < xMin2) xMin2 = x; if (x > xMax2) xMax2 = x; }
-    
-    // Gap in X between the two bboxes (negative = overlap, positive = gap)
-    const xGap = xMin2 < xMin1
-      ? xMin1 - xMax2  // region2 is to the left
-      : xMin2 - xMax1; // region2 is to the right
-    
-    // If the gap is small (< 2mm, typical for k-factor), retry with overlap
-    if (xGap > 0 && xGap < 2.0) {
-      // Overlap by the gap distance plus a small buffer
-      const overlapAmount = xGap + 0.05;
-      // Shift the moving ring toward the reference ring to close the gap
-      const shiftX = xMin2 < xMin1 ? overlapAmount : -overlapAmount;
+    let xMinR = Number.POSITIVE_INFINITY, xMaxR = Number.NEGATIVE_INFINITY;
+    let yMinR = Number.POSITIVE_INFINITY, yMaxR = Number.NEGATIVE_INFINITY;
+    let xMinM = Number.POSITIVE_INFINITY, xMaxM = Number.NEGATIVE_INFINITY;
+    let yMinM = Number.POSITIVE_INFINITY, yMaxM = Number.NEGATIVE_INFINITY;
+    for (const [x, y] of refRing) {
+      if (x < xMinR) xMinR = x; if (x > xMaxR) xMaxR = x;
+      if (y < yMinR) yMinR = y; if (y > yMaxR) yMaxR = y;
+    }
+    for (const [x, y] of movRing) {
+      if (x < xMinM) xMinM = x; if (x > xMaxM) xMaxM = x;
+      if (y < yMinM) yMinM = y; if (y > yMaxM) yMaxM = y;
+    }
+
+    const GAP_THRESHOLD = 2.0;
+    const OVERLAP_BUFFER = 0.05;
+
+    // X gap: positive when movRing is to the RIGHT of refRing (or LEFT, handled by sign)
+    // Shift moves the MOVING ring toward the reference.
+    let shiftX = 0;
+    let shiftY = 0;
+
+    if (xMinM > xMaxR) {
+      // movRing is to the RIGHT of refRing
+      const xGap = xMinM - xMaxR;
+      if (xGap > 0 && xGap < GAP_THRESHOLD) shiftX = -(xGap + OVERLAP_BUFFER); // shift left
+    } else if (xMaxM < xMinR) {
+      // movRing is to the LEFT of refRing
+      const xGap = xMinR - xMaxM;
+      if (xGap > 0 && xGap < GAP_THRESHOLD) shiftX = +(xGap + OVERLAP_BUFFER); // shift right
+    }
+
+    if (yMinM > yMaxR) {
+      // movRing is ABOVE refRing
+      const yGap = yMinM - yMaxR;
+      if (yGap > 0 && yGap < GAP_THRESHOLD) shiftY = -(yGap + OVERLAP_BUFFER); // shift down
+    } else if (yMaxM < yMinR) {
+      // movRing is BELOW refRing
+      const yGap = yMinR - yMaxM;
+      if (yGap > 0 && yGap < GAP_THRESHOLD) shiftY = +(yGap + OVERLAP_BUFFER); // shift up
+    }
+
+    if (shiftX !== 0 || shiftY !== 0) {
       const adjustedPlacement: Placement2D = {
         rotationMatrix: placement.rotationMatrix,
-        translation: [placement.translation[0] + shiftX, placement.translation[1]],
+        translation: [placement.translation[0] + shiftX, placement.translation[1] + shiftY],
       };
       const adjustedMovRing = ensureClosed(applyPlacement(movRingLocal, adjustedPlacement));
       union = polygonClipping.union(toPolygon(refRing), toPolygon(adjustedMovRing)) as number[][][][];

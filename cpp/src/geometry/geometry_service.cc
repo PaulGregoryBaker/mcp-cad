@@ -4328,6 +4328,19 @@ public:
     snapshotAssemblies_.clear();
   }
 
+  void clearState() override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    solids_.clear();
+    shells_.clear();
+    unfolds_.clear();
+    snapshots_.clear();
+    snapshotSolids_.clear();
+    snapshotShells_.clear();
+    snapshotUnfolds_.clear();
+    assemblies_.clear();
+    snapshotAssemblies_.clear();
+  }
+
 private:
   // ÔöÇÔöÇ State ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   mutable std::mutex mutex_;

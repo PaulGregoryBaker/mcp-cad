@@ -663,6 +663,7 @@ public:
   virtual SnapshotId    createSnapshot(const std::string& label)            = 0;
   virtual RestoreResult restoreSnapshot(const SnapshotId& snapshotId)       = 0;
   virtual void          clearSnapshots()                                     = 0;
+  virtual void          clearState()                                         = 0;
 
   // ── Feature 006-geometry-primitives US2 (Interrogation) ────────────────────
   virtual BoundingBoxResult    computeBoundingBox(const std::string& entityId) = 0;

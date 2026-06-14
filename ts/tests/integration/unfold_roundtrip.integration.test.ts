@@ -304,14 +304,10 @@ describe('Unfold round-trip harness', () => {
   // panel onto it joins to a 90°-rotated face of an existing skin, which
   // is exactly when validateSheetMetal starts producing Thickness N/A.
 
-  it('CASE 2: chained merge of 3 mutually-perpendicular cube faces is correctly rejected', async () => {
-    // Three mutually-perpendicular cube faces meet at a single CORNER VERTEX,
-    // not an edge — they cannot be sheet-metal-fabricated as one piece.
-    // After the first merge produces an L-shape, the third panel can only
-    // touch the L at a point, so the second merge_bodies_with_bend correctly
-    // throws GE_MERGE_FILLET_FAILED.  Previously the silent unfilleted-fuse
-    // fallback let this "succeed" with a misleading shape; the explicit
-    // throw is the correct behaviour.
+  it('CASE 2: chained merge of 3 mutually-perpendicular cube faces succeeds (box-corner shape)', async () => {
+    // Three mutually-perpendicular cube faces share edges (not just a corner vertex)
+    // in the actual testcube geometry — they CAN be chained. Chained multi-bend
+    // merges are now supported; this test verifies the third merge succeeds.
     const { panels } = await splitTestcube();
     const outer = outerPanels(panels);
 
@@ -329,20 +325,13 @@ describe('Unfold round-trip harness', () => {
     }, config);
     expect(ab?.merged_shell_id).toBeDefined();
 
-    // The 3rd panel only meets the L at a corner; the resulting fused body
-    // has no clean seam edge for the fillet to follow.  Either error code
-    // is acceptable: GE_MERGE_FAILED (empty fuse, when panels only touch at
-    // a point) or GE_MERGE_FILLET_FAILED (fuse succeeds with volumetric
-    // overlap but fillet can't find a usable seam).  The split_by_bends
-    // corner-overlap behaviour now gives the latter.
-    await expect(dispatchTool('merge_bodies_with_bend', {
+    const abc: any = await dispatchTool('merge_bodies_with_bend', {
       part_a_id: ab.merged_part_id, part_b_id: pC.id,
       target_edges: ['all'], bend_radius: 0.3,
       transaction_id: txn.transaction_id,
-    }, config)).rejects.toMatchObject({
-      code: expect.stringMatching(/^GE_MERGE_(FAILED|FILLET_FAILED|NO_SEAM_EDGES|THICKNESS_MISMATCH|BEND_AXIS_AMBIGUOUS|BEND_EXTENT_TOO_SHORT|GAP)$/),
-    });
-
+    }, config);
+    expect(abc?.merged_shell_id).toBeDefined();
+    expect(abc?.merged_part_id).toBeDefined();
 
     await dispatchTool('rollback_transaction', { transaction_id: txn.transaction_id }, config);
   }, 30_000);
@@ -676,22 +665,12 @@ describe('Unfold round-trip harness', () => {
 
   // ── CASE 5b: chained merge where the 3rd panel is parallel to the 1st ──
   //
-  // Attempts to form a "U-shape" from cube outer faces by chaining merges:
-  //   A=+X, B=+Y → L-shape (works), then add C=-X
-  // For a cube specifically, no 3-panel arrangement of outer faces can form
-  // a true flat-pattern-able hairpin: every pair of perpendicular faces
-  // shares an edge with EACH of the other 4, so adding the 3rd panel
-  // "wraps around" rather than extending linearly. The Boolean fuse of
-  // (L-shell) ∪ (parallel-but-opposite-panel) returns an EMPTY compound
-  // (0 solids, 0 shells, 0 children) because the bodies share only an
-  // edge of B, which is insufficient contact.
-  //
-  // The pre-fix behaviour silently passed this through to fillet, which
-  // produced a confusing downstream error. The new explicit
-  // GE_MERGE_FAILED ("Merge produced an empty result") is the correct
-  // signal — this geometry simply isn't fabricatable as one piece.
+  // Forms a U-channel from cube outer faces by chaining merges:
+  //   A=+X, B=+Y → L-shape (works), then add C=-X (parallel to A)
+  // The parallel A and C faces are connected through B, so the fuse succeeds.
+  // Chained multi-bend merges are now supported; this verifies the success path.
 
-  it('CASE 5b: chained merge A+B+C with parallel A/C correctly rejects empty fuse', async () => {
+  it('CASE 5b: chained merge A+B+C with parallel A/C succeeds (U-channel shape)', async () => {
     const { panels } = await splitTestcube();
     const outer = outerPanels(panels);
     expect(outer.length).toBe(6);
@@ -725,13 +704,13 @@ describe('Unfold round-trip harness', () => {
     }, config);
     expect(ab?.merged_shell_id).toBeDefined();
 
-    await expect(dispatchTool('merge_bodies_with_bend', {
-      part_a_id: ab.merged_part_id, part_b_id: pC!.id, // stable: equals pA!.id
+    const abc: any = await dispatchTool('merge_bodies_with_bend', {
+      part_a_id: ab.merged_part_id, part_b_id: pC!.id,
       target_edges: ['all'], bend_radius: 0.3,
       transaction_id: txn.transaction_id,
-    }, config)).rejects.toMatchObject({
-      code: expect.stringMatching(/^GE_MERGE_(FAILED|FILLET_FAILED|NO_SEAM_EDGES|THICKNESS_MISMATCH|BEND_AXIS_AMBIGUOUS|BEND_EXTENT_TOO_SHORT|GAP)$/),
-    });
+    }, config);
+    expect(abc?.merged_shell_id).toBeDefined();
+    expect(abc?.merged_part_id).toBeDefined();
 
     await dispatchTool('rollback_transaction', { transaction_id: txn.transaction_id }, config);
   }, 30_000);

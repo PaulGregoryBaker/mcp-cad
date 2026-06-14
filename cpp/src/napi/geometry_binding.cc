@@ -597,6 +597,13 @@ Napi::Value ClearSnapshots(const Napi::CallbackInfo& info) {
   return info.Env().Undefined();
 }
 
+Napi::Value ClearState(const Napi::CallbackInfo& info) {
+  // Clear all accumulated OCCT state in-place (maps cleared, same service instance).
+  // In-place clear avoids shared_ptr destructor timing issues from service recreation.
+  svc().clearState();
+  return info.Env().Undefined();
+}
+
 // ─── Body topology ───────────────────────────────────────────────────────────
 
 Napi::Value SplitBodyByPlane(const Napi::CallbackInfo& info) {
@@ -2076,6 +2083,7 @@ void RegisterGeometryMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("createSnapshot",        Napi::Function::New(env, CreateSnapshot));
   exports.Set("restoreSnapshot",       Napi::Function::New(env, RestoreSnapshot));
   exports.Set("clearSnapshots",        Napi::Function::New(env, ClearSnapshots));
+  exports.Set("clearState",            Napi::Function::New(env, ClearState));
   exports.Set("computeIntersections",  Napi::Function::New(env, ComputeIntersections));
   exports.Set("checkAssemblyClashes",  Napi::Function::New(env, CheckAssemblyClashes));
   exports.Set("computeGaps",           Napi::Function::New(env, ComputeGaps));

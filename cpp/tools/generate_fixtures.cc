@@ -230,6 +230,85 @@ static bool genAngleBracket(const fs::path& outDir, double angleDeg) {
   return writeStp(prism, (outDir / name.str()).string());
 }
 
+/**
+ * tab_bracket_90deg.stp — two flat panels at 90° where Panel B is shorter than Panel A.
+ *
+ * Panel A: 100×200×1.5 mm horizontal plate (X: 0–100, Y: 0–200, Z: 0–1.5)
+ * Panel B: 1.5×100×100 mm vertical flange (X: 100–101.5, Y: 50–150, Z: -100–0)
+ *          centered on Panel A in Y (yStart=50mm, WB=100mm)
+ *
+ * Construction: extrude a full 90° L-bracket (both panels 200mm) in Y, then cut the
+ * vertical flange at y=[0..50] and y=[150..200] to produce the shorter Panel B.
+ * This prism+cut approach gives cleaner OCCT face topology than a three-box fuse.
+ *
+ * After split_body_by_bends and merge_bodies_with_bend the flat pattern should be T-shaped:
+ *   y=200 ┌──────────┐
+ *         │  Panel A │
+ *   y=150 │          ├──────────┐
+ *         │          │  Panel B │
+ *   y=50  │          ├──────────┘
+ *         │  Panel A │
+ *   y=0   └──────────┘
+ */
+static bool genTabBracket90deg(const fs::path& outDir) {
+  const double T      = 1.5;
+  const double LA     = 100.0;   // horizontal panel length
+  const double WA     = 200.0;   // horizontal panel width (full Y)
+  const double LB     = 100.0;   // vertical flange depth
+  const double WB     = 100.0;   // vertical flange width (partial Y, centered)
+  const double yStart = (WA - WB) / 2.0;  // 50.0
+
+  // 6-point cross-section in the XZ plane (Y=0), counter-clockwise.
+  // Inner corner at (LA, 0), outer top-right at (LA+T, T).
+  gp_Pnt P1(0.0,      0.0, 0.0);
+  gp_Pnt P2(LA,       0.0, 0.0);
+  gp_Pnt P3(LA,       0.0, -LB);
+  gp_Pnt P4(LA + T,   0.0, -LB);
+  gp_Pnt P5(LA + T,   0.0, T);
+  gp_Pnt P6(0.0,      0.0, T);
+
+  BRepBuilderAPI_MakeWire wireMaker;
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P1, P2).Edge());
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P2, P3).Edge());
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P3, P4).Edge());
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P4, P5).Edge());
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P5, P6).Edge());
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P6, P1).Edge());
+
+  if (!wireMaker.IsDone()) {
+    std::cerr << "Tab bracket wire build failed\n";
+    return false;
+  }
+
+  BRepBuilderAPI_MakeFace faceMaker(wireMaker.Wire(), true);
+  if (!faceMaker.IsDone()) {
+    std::cerr << "Tab bracket face build failed\n";
+    return false;
+  }
+
+  // Extrude the full L-section 200mm in Y → both panels are 200mm wide.
+  TopoDS_Shape fullBracket = BRepPrimAPI_MakePrism(faceMaker.Face(), gp_Vec(0.0, WA, 0.0)).Shape();
+
+  // Cut Panel B (vertical flange, z=[-LB..0]) to only the center 100mm of Y.
+  // Cut 1: remove y=[0..yStart] of the vertical portion.
+  TopoDS_Shape cutBox1 = BRepPrimAPI_MakeBox(gp_Pnt(LA, 0.0, -LB), T, yStart, LB).Shape();
+  BRepAlgoAPI_Cut c1(fullBracket, cutBox1);
+  if (!c1.IsDone()) {
+    std::cerr << "Tab bracket cut 1 failed\n";
+    return false;
+  }
+
+  // Cut 2: remove y=[yStart+WB..WA] of the vertical portion.
+  TopoDS_Shape cutBox2 = BRepPrimAPI_MakeBox(gp_Pnt(LA, yStart + WB, -LB), T, yStart, LB).Shape();
+  BRepAlgoAPI_Cut c2(c1.Shape(), cutBox2);
+  if (!c2.IsDone()) {
+    std::cerr << "Tab bracket cut 2 failed\n";
+    return false;
+  }
+
+  return writeStp(c2.Shape(), (outDir / "tab_bracket_90deg.stp").string());
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 int main(int argc, char* argv[]) {
@@ -261,6 +340,7 @@ int main(int argc, char* argv[]) {
   ok &= genAngleBracket(outDir, 15.0);
   ok &= genAngleBracket(outDir, 30.0);
   ok &= genAngleBracket(outDir, 45.0);
+  ok &= genTabBracket90deg(outDir);
 
   if (ok) {
     std::cout << "All fixtures generated successfully.\n";

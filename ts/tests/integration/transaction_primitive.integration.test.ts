@@ -14,7 +14,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as path from 'node:path';
-import { dispatchTool, setGeometryBindingMock, registerTestPart } from '../../src/mcp/tools';
+import { dispatchTool, setGeometryBindingMock, registerTestPart, resetMcpGraphStateForTests } from '../../src/mcp/tools';
 import { loadConfig } from '../../src/config/loader';
 import type { GeometryAddon } from '../../src/geometry/binding';
 import type { ManufacturingConfig } from '../../src/config/loader';
@@ -130,6 +130,14 @@ function buildMockAddon(): GeometryAddon {
       validation_errors: [],
     })),
 
+    getPanelFrame: vi.fn((_id: string) => ({
+      originX: 0, originY: 0, originZ: 0,
+      uX: 1, uY: 0, uZ: 0,
+      vX: 0, vY: 1, vZ: 0,
+      normalX: 0, normalY: 0, normalZ: 1,
+      uExtentMm: 100, vExtentMm: 100, thicknessMm: 1.0,
+    })),
+
     // Expose `cleared` to tests so they can assert clearSnapshots was called.
     _wasCleared: () => cleared,
   } as unknown as GeometryAddon;
@@ -176,6 +184,7 @@ describe('Transaction primitive (Feature 004 Phase 1)', () => {
   afterEach(() => {
     setGeometryBindingMock(undefined);
     transactionRegistry.reset();
+    resetMcpGraphStateForTests();
     vi.restoreAllMocks();
   });
 
@@ -305,6 +314,7 @@ describe('Transaction primitive Phase 2 — mutating tools accept transaction_id
   afterEach(() => {
     setGeometryBindingMock(undefined);
     transactionRegistry.reset();
+    resetMcpGraphStateForTests();
     vi.restoreAllMocks();
   });
 
@@ -414,6 +424,7 @@ describe('Transaction primitive Phase 3 — shape history capture', () => {
   afterEach(() => {
     setGeometryBindingMock(undefined);
     transactionRegistry.reset();
+    resetMcpGraphStateForTests();
     vi.restoreAllMocks();
   });
 
@@ -575,6 +586,7 @@ describe('Transaction primitive (Feature 004 Phase 4) — shape_history for all 
   afterEach(() => {
     setGeometryBindingMock(undefined);
     transactionRegistry.reset();
+    resetMcpGraphStateForTests();
     vi.restoreAllMocks();
   });
 

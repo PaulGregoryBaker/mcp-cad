@@ -14,7 +14,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as path from 'node:path';
-import { dispatchTool, setGeometryBindingMock, registerTestPart } from '../../src/mcp/tools';
+import { dispatchTool, setGeometryBindingMock, registerTestPart, resetMcpGraphStateForTests } from '../../src/mcp/tools';
 import { loadConfig } from '../../src/config/loader';
 import type { GeometryAddon } from '../../src/geometry/binding';
 import type { TopologyGraph } from '../../src/geometry/types';
@@ -188,6 +188,17 @@ function buildMockAddon(): GeometryAddon {
       can_flatten: true,
       validation_errors: [],
     })),
+    getPanelFrame: vi.fn((_id: string) => ({
+      originX: 0, originY: 0, originZ: 0,
+      uX: 1, uY: 0, uZ: 0,
+      vX: 0, vY: 1, vZ: 0,
+      normalX: 0, normalY: 0, normalZ: 1,
+      uExtentMm: 200, vExtentMm: 200, thicknessMm: 1.0,
+    })),
+    computeBoundingBox: vi.fn(() => ({
+      x_min: 0, y_min: 0, z_min: 0,
+      x_max: 200, y_max: 200, z_max: 1,
+    })),
   };
 }
 
@@ -208,6 +219,7 @@ describe('Cube Box Sheet Metal Workflow', () => {
 
   afterEach(() => {
     setGeometryBindingMock(undefined);
+    resetMcpGraphStateForTests();
     vi.restoreAllMocks();
   });
 
@@ -374,11 +386,13 @@ describe('Cube Box Sheet Metal Workflow', () => {
 
     type MergeResult = { merged_shell_id: string; rollback_token: string };
 
-    // Register test parts with manufacturing graphs to satisfy prerequisite checks
-    registerTestPart(topPanel, [topPanel]);
-    registerTestPart(frontPanel, [frontPanel]);
-    registerTestPart(bottomPanel, [bottomPanel]);
-    registerTestPart(backPanel, [backPanel]);
+    // Register test parts with manufacturing graphs to satisfy prerequisite checks.
+    // A minimal closed LWPOLYLINE DXF is required for the merge shapeDxf guard.
+    const panelDxf = '0\nSECTION\n2\nENTITIES\n0\nLWPOLYLINE\n8\n0\n90\n4\n70\n1\n10\n0.0\n20\n0.0\n10\n200.0\n20\n0.0\n10\n200.0\n20\n200.0\n10\n0.0\n20\n200.0\n0\nENDSEC\n0\nEOF';
+    registerTestPart(topPanel, [topPanel], panelDxf);
+    registerTestPart(frontPanel, [frontPanel], panelDxf);
+    registerTestPart(bottomPanel, [bottomPanel], panelDxf);
+    registerTestPart(backPanel, [backPanel], panelDxf);
 
     const topFront = await dispatchTool('merge_bodies_with_bend', {
       part_a_id:    topPanel,
@@ -464,14 +478,16 @@ describe('Cube Box Sheet Metal Workflow', () => {
 
     expect(mock.splitBodyByPlane).toHaveBeenCalledTimes(3);
     expect(mock.offsetFace).toHaveBeenCalledTimes(2);
-    expect(mock.computeGaps).toHaveBeenCalledTimes(1);
+    // 1 explicit compute_gaps call (Phase 4) + 2 internal calls from merge edge-alignment checks
+    expect(mock.computeGaps).toHaveBeenCalledTimes(3);
     expect(mock.extendFaceToTarget).toHaveBeenCalledTimes(1);
     expect(mock.computeIntersections).toHaveBeenCalledTimes(1);
     expect(mock.mergeBodiesWithBend).toHaveBeenCalledTimes(2);
     expect(mock.addFlange).toHaveBeenCalledTimes(2);
     expect(mock.ripEdge).toHaveBeenCalledTimes(1);
     expect(mock.trimBodyWithPlane).toHaveBeenCalledTimes(1);
-    expect(mock.getTopology).toHaveBeenCalledTimes(1);  // check_boundary_compliance
+    // 1 from check_boundary_compliance + 1 from extend_face_to_target (target_type: 'face_id')
+    expect(mock.getTopology).toHaveBeenCalledTimes(2);
   });
 
   // ── Edge case: compliance failure ─────────────────────────────────────────────
