@@ -1,0 +1,3036 @@
+
+> mcp-cad-server@0.1.0 test
+> vitest run tests/integration/
+
+The CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.
+
+[7m[1m[36m RUN [39m[22m[27m [36mv1.6.1[39m [90mC:/Projects/mcp-cad/ts[39m
+
+ [32mÔ£ô[39m tests/integration/graph-workflow.test.ts[2m > [22mDRC gate integration (T054)[2m > [22mdoes not call mergeBodiesWithBend when DRC_BEND_RADIUS_VIOLATION fires
+ [32mÔ£ô[39m tests/integration/graph-workflow.test.ts[2m > [22mDRC gate integration (T054)[2m > [22mcalls mergeBodiesWithBend when DRC passes
+ [32mÔ£ô[39m tests/integration/graph-workflow.test.ts[2m > [22mGolden path: bootstrap ÔåÆ add_bend ÔåÆ query_graph (T065)[2m > [22madds a BendNode and BA is within expected tolerance
+ [32mÔ£ô[39m tests/integration/graph-workflow.test.ts[2m > [22mPerformance: binding invoked once per dirty node (T066)[2m > [22m100-node batch: binding called exactly once per dirty node
+ [32mÔ£ô[39m tests/integration/graph-workflow.test.ts[2m > [22mSC-005 rollback regression (T067)[2m > [22mremoveNode(bend) restores graph to pre-bend state; re-add succeeds
+ [32mÔ£ô[39m tests/integration/graph-workflow.test.ts[2m > [22mSC-005 real transaction rollback (D1 remediation)[2m > [22mrollback() sets state to rolled_back and restores geometry snapshot
+ [31m├ù[39m tests/integration/cube_box_workflow.functional.test.ts[2m > [22mCube Box Sheet Metal Workflow[2m > [22mdecomposes a 200 mm hollow cube into panels, adjusts geometry, merges into L-assemblies, and adds flanges
+[31m   ÔåÆ target.normal must be an object with numeric x, y, z[39m
+ [32mÔ£ô[39m tests/integration/cube_box_workflow.functional.test.ts[2m > [22mCube Box Sheet Metal Workflow[2m > [22mcheck_boundary_compliance reports violations for an oversized panel
+ [32mÔ£ô[39m tests/integration/cube_box_workflow.functional.test.ts[2m > [22mCube Box Sheet Metal Workflow[2m > [22moffset_face rejects zero distance
+ [32mÔ£ô[39m tests/integration/cube_box_workflow.functional.test.ts[2m > [22mCube Box Sheet Metal Workflow[2m > [22msplit_body_by_plane rejects missing cutting_plane
+ [32mÔ£ô[39m tests/integration/cube_box_workflow.functional.test.ts[2m > [22mCube Box Sheet Metal Workflow[2m > [22mcompute_intersections rejects a single-part array
+ [32mÔ£ô[39m tests/integration/cube_box_workflow.functional.test.ts[2m > [22mCube Box Sheet Metal Workflow[2m > [22mmerge_bodies_with_bend rejects zero bend radius
+ [32mÔ£ô[39m tests/integration/cube_box_workflow.functional.test.ts[2m > [22mCube Box Sheet Metal Workflow[2m > [22madd_flange rejects angle of 0
+ [32mÔ£ô[39m tests/integration/cube_box_workflow.functional.test.ts[2m > [22mCube Box Sheet Metal Workflow[2m > [22msplit_body_by_bends decomposes a closed cube into 6 flat panels
+ [32mÔ£ô[39m tests/integration/cube_box_workflow.functional.test.ts[2m > [22mCube Box Sheet Metal Workflow[2m > [22msplit_body_by_bends in surface mode extrudes panels by default_thickness_mm
+ [32mÔ£ô[39m tests/integration/cube_box_workflow.functional.test.ts[2m > [22mCube Box Sheet Metal Workflow[2m > [22msplit_body_by_bends returns protrusions separately from panels
+ [32mÔ£ô[39m tests/integration/cube_box_workflow.functional.test.ts[2m > [22mCube Box Sheet Metal Workflow[2m > [22msplit_body_by_bends with max_recursion_depth accumulates panels from all levels
+ [32mÔ£ô[39m tests/integration/cube_box_workflow.functional.test.ts[2m > [22mCube Box Sheet Metal Workflow[2m > [22msplit_body_by_bends with max_recursion_depth=0 returns only first-pass panels
+ [32mÔ£ô[39m tests/integration/cube_box_workflow.functional.test.ts[2m > [22mCube Box Sheet Metal Workflow[2m > [22msplit_body_by_bends rejects a negative angle_threshold_deg
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 0, 1.5)
+  N: (-0, -0, -1)
+  U: (0, 1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG reconstructCurvedBends] Edge #1: Face1=2560022809001712014 (match=0), Face2=14360467644121576850 (match=0)
+[DEBUG reconstructCurvedBends] Edge #2: Face1=2560022809001712014 (match=0), Face2=14704977835926463236 (match=1)
+[DEBUG reconstructCurvedBends] Edge #3: Face1=2560022809001712014 (match=0), Face2=9135313325272491874 (match=0)
+[DEBUG reconstructCurvedBends] Edge #4: Face1=2560022809001712014 (match=0), Face2=9005025414653499163 (match=1)
+[DEBUG reconstructCurvedBends] Edge #5: Face1=16011645274047294855 (match=0), Face2=14360467644121576850 (match=0)
+[DEBUG reconstructCurvedBends] Edge #6: Face1=16011645274047294855 (match=0), Face2=14704977835926463236 (match=1)
+[DEBUG reconstructCurvedBends] Edge #7: Face1=16011645274047294855 (match=0), Face2=9135313325272491874 (match=0)
+[DEBUG reconstructCurvedBends] Edge #8: Face1=16011645274047294855 (match=0), Face2=9005025414653499163 (match=1)
+[DEBUG reconstructCurvedBends] Edge #9: Face1=14360467644121576850 (match=0), Face2=14704977835926463236 (match=1)
+[DEBUG reconstructCurvedBends] Edge #10: Face1=14360467644121576850 (match=0), Face2=9005025414653499163 (match=1)
+[DEBUG reconstructCurvedBends] Edge #11: Face1=9135313325272491874 (match=0), Face2=14704977835926463236 (match=1)
+[DEBUG reconstructCurvedBends] Edge #12: Face1=9135313325272491874 (match=0), Face2=9005025414653499163 (match=1)
+ [32mÔ£ô[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive (Feature 004 Phase 1)[2m > [22mbegin ÔåÆ decompose ÔåÆ synthesise ÔåÆ rollback restores the pre-transaction state
+ [32mÔ£ô[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive (Feature 004 Phase 1)[2m > [22mbegin ÔåÆ decompose ÔåÆ commit persists changes; subsequent rollback errors
+ [32mÔ£ô[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive (Feature 004 Phase 1)[2m > [22ma second begin_transaction while one is active returns TRANSACTION_ALREADY_ACTIVE
+ [32mÔ£ô[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive (Feature 004 Phase 1)[2m > [22mcommit_transaction with an unknown id returns TRANSACTION_NOT_FOUND
+ [32mÔ£ô[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive (Feature 004 Phase 1)[2m > [22mrollback_transaction with an unknown id returns TRANSACTION_NOT_FOUND
+ [32mÔ£ô[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive Phase 2 ÔÇö mutating tools accept transaction_id[2m > [22mbegin ÔåÆ split_body_by_bends without transaction_id auto-joins the active transaction
+ [32mÔ£ô[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive Phase 2 ÔÇö mutating tools accept transaction_id[2m > [22mbegin ÔåÆ split_body_by_bends with wrong transaction_id returns TRANSACTION_MISMATCH
+ [32mÔ£ô[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive Phase 2 ÔÇö mutating tools accept transaction_id[2m > [22mbegin ÔåÆ split_body_by_bends with matching transaction_id returns transaction_id as rollback_token
+ [32mÔ£ô[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive Phase 2 ÔÇö mutating tools accept transaction_id[2m > [22msplit_body_by_bends without any active transaction returns per-op rollback_token
+ [32mÔ£ô[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive Phase 2 ÔÇö mutating tools accept transaction_id[2m > [22mdecompose_volume without any active transaction creates its own snapshot
+ [32mÔ£ô[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive Phase 2 ÔÇö mutating tools accept transaction_id[2m > [22mdecompose_volume inside a transaction skips per-op snapshot creation
+ [32mÔ£ô[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive Phase 3 ÔÇö shape history capture[2m > [22mbegin ÔåÆ split_body_by_bends ÔåÆ get_transaction_history returns 3 records
+ [32mÔ£ô[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive Phase 3 ÔÇö shape history capture[2m > [22mbegin ÔåÆ split ÔåÆ commit ÔåÆ get_transaction_history still returns records
+ [32mÔ£ô[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive Phase 3 ÔÇö shape history capture[2m > [22mbegin ÔåÆ split ÔåÆ rollback ÔåÆ get_transaction_history returns TRANSACTION_NOT_FOUND
+ [32mÔ£ô[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive Phase 3 ÔÇö shape history capture[2m > [22mget_transaction_history with unknown id returns TRANSACTION_NOT_FOUND
+ [31m├ù[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive (Feature 004 Phase 4) ÔÇö shape_history for all ops[2m > [22msplit_body_by_plane appends shape_history to transaction
+[31m   ÔåÆ Shell UUID 'cube-solid' belongs to manufacturing-graph-tracked part 'cube-solid'. Raw plane splits on graph-tracked shells are not permitted. Use graph mutation tools instead.[39m
+ [32mÔ£ô[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive (Feature 004 Phase 4) ÔÇö shape_history for all ops[2m > [22mmerge_bodies_with_bend appends shape_history to transaction
+ [32mÔ£ô[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive (Feature 004 Phase 4) ÔÇö shape_history for all ops[2m > [22mextend_face_to_target appends shape_history to transaction
+ [32mÔ£ô[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive (Feature 004 Phase 4) ÔÇö shape_history for all ops[2m > [22moffset_face appends shape_history to transaction
+ [32mÔ£ô[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive (Feature 004 Phase 4) ÔÇö shape_history for all ops[2m > [22madd_flange returns empty shape_history (sewing stub)
+ [32mÔ£ô[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive (Feature 004 Phase 4) ÔÇö shape_history for all ops[2m > [22mrip_edge appends 2 shape_history records to transaction
+ [32mÔ£ô[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive (Feature 004 Phase 4) ÔÇö shape_history for all ops[2m > [22mtrim_body_with_plane appends shape_history to transaction
+ [32mÔ£ô[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive (Feature 004 Phase 4) ÔÇö shape_history for all ops[2m > [22msynthesize_joints (tab_slot) returns empty shape_history (stub)
+ [32mÔ£ô[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive (Feature 004 Phase 4) ÔÇö shape_history for all ops[2m > [22mapply_unfold returns empty shape_history (stub)
+ [31m├ù[39m tests/integration/transaction_primitive.integration.test.ts[2m > [22mTransaction primitive (Feature 004 Phase 4) ÔÇö shape_history for all ops[2m > [22mmultiple ops accumulate shape_history in transaction
+[31m   ÔåÆ Shell UUID 'cube-solid' belongs to manufacturing-graph-tracked part 'cube-solid'. Raw face offsets on graph-tracked shells are not permitted. Use graph mutation tools instead.[39m
+[DEBUG splitMode2] Box solid info:
+  origin: (1.5, 0, 0)
+  N: (-1, -0, 0)
+  U: (0, -0, 1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 1.5, 200)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 198.5, 0)
+  N: (-0, 1, 0)
+  U: (0, -0, 1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (198.5, 0, 200)
+  N: (1, 0, -0)
+  U: (-0, 0, -1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 200, 198.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 0, 1.5)
+  N: (-0, -0, -1)
+  U: (0, 1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (1.5, 0, 0)
+  N: (-1, -0, 0)
+  U: (0, -0, 1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 1.5, 200)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 198.5, 0)
+  N: (-0, 1, 0)
+  U: (0, -0, 1)
+  dx=200, dy=200, dz=2
+ [32mÔ£ô[39m tests/integration/multi-part-graph.test.ts[2m > [22mManufacturing Graph Multi-Part Support (Feature 009)[2m > [22mPart isolation: mutations on part-a do not affect part-b[2m > [22mseparate parts maintain independent node collections
+ [32mÔ£ô[39m tests/integration/multi-part-graph.test.ts[2m > [22mManufacturing Graph Multi-Part Support (Feature 009)[2m > [22mPart isolation: mutations on part-a do not affect part-b[2m > [22mremoving a node from part A does not affect part B
+ [32mÔ£ô[39m tests/integration/multi-part-graph.test.ts[2m > [22mManufacturing Graph Multi-Part Support (Feature 009)[2m > [22mPart isolation: mutations on part-a do not affect part-b[2m > [22mresetting part A does not affect part B state
+ [32mÔ£ô[39m tests/integration/multi-part-graph.test.ts[2m > [22mManufacturing Graph Multi-Part Support (Feature 009)[2m > [22mPart isolation: mutations on part-a do not affect part-b[2m > [22mbend operations on part A do not cross-reference part B nodes
+ [32mÔ£ô[39m tests/integration/multi-part-graph.test.ts[2m > [22mManufacturing Graph Multi-Part Support (Feature 009)[2m > [22mPart isolation: mutations on part-a do not affect part-b[2m > [22mnode ID rename on part A does not affect part B with same ID
+ [32mÔ£ô[39m tests/integration/multi-part-graph.test.ts[2m > [22mManufacturing Graph Multi-Part Support (Feature 009)[2m > [22mConcurrent multi-part editing scenarios[2m > [22madding nodes to both parts simultaneously maintains isolation
+ [32mÔ£ô[39m tests/integration/multi-part-graph.test.ts[2m > [22mManufacturing Graph Multi-Part Support (Feature 009)[2m > [22mConcurrent multi-part editing scenarios[2m > [22mquerying parts independently returns correct topological order
+ [32mÔ£ô[39m tests/integration/multi-part-graph.test.ts[2m > [22mManufacturing Graph Multi-Part Support (Feature 009)[2m > [22mPart-level flat pattern dimensions[2m > [22mgetFlatPatternDimensions returns correct per-part flat dimensions
+[DEBUG splitMode2] Box solid info:
+  origin: (198.5, 0, 200)
+  N: (1, 0, -0)
+  U: (-0, 0, -1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 200, 198.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 0, 1.5)
+  N: (-0, -0, -1)
+  U: (0, 1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (1.5, 0, 0)
+  N: (-1, -0, 0)
+  U: (0, -0, 1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 1.5, 200)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 198.5, 0)
+  N: (-0, 1, 0)
+  U: (0, -0, 1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (198.5, 0, 200)
+  N: (1, 0, -0)
+  U: (-0, 0, -1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 200, 198.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 98.55, -100)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (98.55, -100, 100)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 100, 98.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -100, -98.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-98.55, -100, -100)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -98.55, 100)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 73.55, -75)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (73.55, -75, 75)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 75, 73.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=150, dy=150, dz=2
+[90mstdout[2m | tests\integration\md_config.integration.test.ts:125:11[22m[39m
+MD Integration: tooling capability access tests starting...
+
+[90mstdout[2m | tests\integration\md_config.integration.test.ts:167:11[22m[39m
+MD Integration: logistics constraints tests starting...
+
+[90mstdout[2m | tests\integration\md_config.integration.test.ts:213:11[22m[39m
+MD Integration: environmental context tests starting...
+
+[90mstdout[2m | tests\integration\md_config.integration.test.ts:242:11[22m[39m
+MD Integration: ConfigValidationError tests starting...
+
+ [32mÔ£ô[39m tests/integration/md_config.integration.test.ts[2m > [22mMD Integration: MaterialStore[2m > [22mhas() returns true for known material
+ [32mÔ£ô[39m tests/integration/md_config.integration.test.ts[2m > [22mMD Integration: MaterialStore[2m > [22mhas() returns false for unknown material
+ [32mÔ£ô[39m tests/integration/md_config.integration.test.ts[2m > [22mMD Integration: MaterialStore[2m > [22mget() returns material with correct properties
+ [32mÔ£ô[39m tests/integration/md_config.integration.test.ts[2m > [22mMD Integration: MaterialStore[2m > [22mall() returns all materials
+ [32mÔ£ô[39m tests/integration/md_config.integration.test.ts[2m > [22mMD Integration: MaterialStore[2m > [22mthrows on get() unknown material
+ [32mÔ£ô[39m tests/integration/md_config.integration.test.ts[2m > [22mMD Integration: bend allowance formula[2m > [22mcomputeBendAllowance(180┬░, r=0, k=0.33, t=1.0) Ôëê 0
+ [32mÔ£ô[39m tests/integration/md_config.integration.test.ts[2m > [22mMD Integration: bend allowance formula[2m > [22mcomputeBendAllowance(90┬░, r=1.0, k=0.33, t=1.0) > 0
+ [32mÔ£ô[39m tests/integration/md_config.integration.test.ts[2m > [22mMD Integration: bend allowance formula[2m > [22mcomputeBendAllowance(45┬░, r=2.0, k=0.33, t=1.0) computed correctly
+ [32mÔ£ô[39m tests/integration/md_config.integration.test.ts[2m > [22mMD Integration: bend allowance formula[2m > [22mk_factor affects bend allowance linearly
+ [32mÔ£ô[39m tests/integration/md_config.integration.test.ts[2m > [22mMD Integration: tooling capability access[2m > [22mpress brake max tonnage accessible
+ [32mÔ£ô[39m tests/integration/md_config.integration.test.ts[2m > [22mMD Integration: tooling capability access[2m > [22mpress brake V-die widths is array
+ [32mÔ£ô[39m tests/integration/md_config.integration.test.ts[2m > [22mMD Integration: tooling capability access[2m > [22mlaser kerf width in valid range [0.1, 0.2] mm
+ [32mÔ£ô[39m tests/integration/md_config.integration.test.ts[2m > [22mMD Integration: logistics constraints[2m > [22mshipping envelope has all dimensions
+ [32mÔ£ô[39m tests/integration/md_config.integration.test.ts[2m > [22mMD Integration: logistics constraints[2m > [22mcoating envelope is subset of shipping envelope
+ [32mÔ£ô[39m tests/integration/md_config.integration.test.ts[2m > [22mMD Integration: logistics constraints[2m > [22mmax weight is positive
+ [32mÔ£ô[39m tests/integration/md_config.integration.test.ts[2m > [22mMD Integration: environmental context[2m > [22menvironmental flags are boolean
+ [32mÔ£ô[39m tests/integration/md_config.integration.test.ts[2m > [22mMD Integration: environmental context[2m > [22mhighVibration flag accessible
+ [32mÔ£ô[39m tests/integration/md_config.integration.test.ts[2m > [22mMD Integration: ConfigValidationError[2m > [22mloadConfig throws ConfigValidationError for invalid YAML
+ [32mÔ£ô[39m tests/integration/md_config.integration.test.ts[2m > [22mMD Integration: ConfigValidationError[2m > [22mConfigValidationError has issues array and formatted message
+ [32mÔ£ô[39m tests/integration/md_config.integration.test.ts[2m > [22mMD Integration: ConfigValidationError[2m > [22mloadConfig loads the actual config.yaml successfully
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -75, -73.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-73.55, -75, -75)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -73.55, 75)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 98.55, -100)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (98.55, -100, 100)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 100, 98.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -100, -98.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-98.55, -100, -100)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -98.55, 100)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 73.55, -75)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (73.55, -75, 75)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 75, 73.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -75, -73.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-73.55, -75, -75)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -73.55, 75)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 0, 1.5)
+  N: (-0, -0, -1)
+  U: (0, 1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 98.55, -100)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (1.5, 0, 0)
+  N: (-1, -0, 0)
+  U: (0, -0, 1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (98.55, -100, 100)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 1.5, 200)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 100, 98.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 198.5, 0)
+  N: (-0, 1, 0)
+  U: (0, -0, 1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (198.5, 0, 200)
+  N: (1, 0, -0)
+  U: (-0, 0, -1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -100, -98.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 200, 198.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-98.55, -100, -100)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -98.55, 100)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 0, 1.5)
+  N: (-0, -0, -1)
+  U: (0, 1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 73.55, -75)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (1.5, 0, 0)
+  N: (-1, -0, 0)
+  U: (0, -0, 1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (73.55, -75, 75)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 1.5, 200)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 198.5, 0)
+  N: (-0, 1, 0)
+  U: (0, -0, 1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 75, 73.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (198.5, 0, 200)
+  N: (1, 0, -0)
+  U: (-0, 0, -1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 200, 198.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -75, -73.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-73.55, -75, -75)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -73.55, 75)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 98.55, -100)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (98.55, -100, 100)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 100, 98.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -100, -98.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-98.55, -100, -100)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -98.55, 100)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 98.55, -100)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 73.55, -75)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (98.55, -100, 100)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (73.55, -75, 75)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 100, 98.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 75, 73.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -100, -98.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-98.55, -100, -100)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -75, -73.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -98.55, 100)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-73.55, -75, -75)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 73.55, -75)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -73.55, 75)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (73.55, -75, 75)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 75, 73.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 0, 1.5)
+  N: (-0, -0, -1)
+  U: (0, 1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (1.5, 0, 0)
+  N: (-1, -0, 0)
+  U: (0, -0, 1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -75, -73.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 1.5, 200)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 198.5, 0)
+  N: (-0, 1, 0)
+  U: (0, -0, 1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-73.55, -75, -75)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (198.5, 0, 200)
+  N: (1, 0, -0)
+  U: (-0, 0, -1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -73.55, 75)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 200, 198.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=200, dz=2
+stderr | tests/integration/split_pipeline_compliance.integration.test.ts > split_body_by_bends pipeline compliance (BUG-01, BUG-02) > BUG-02: split panels on a non-rectangular fixture have LWPOLYLINE with more than 4 vertices
+Non-rectangular fixture not found ÔÇö skipping BUG-02 polygon test
+
+stderr | tests/integration/split_pipeline_compliance.integration.test.ts > split_body_by_bends pipeline compliance (BUG-01, BUG-02) > BUG-02: non-rectangular split flat patterns align dominant edges to X/Y axes
+Non-rectangular fixture not found ÔÇö skipping alignment test
+
+ [32mÔ£ô[39m tests/integration/split_pipeline_compliance.integration.test.ts[2m > [22msplit_body_by_bends pipeline compliance (BUG-01, BUG-02)[2m > [22mBUG-01: split result includes pipeline_executed:true flag[33m 726[2mms[22m[39m
+ [32mÔ£ô[39m tests/integration/split_pipeline_compliance.integration.test.ts[2m > [22msplit_body_by_bends pipeline compliance (BUG-01, BUG-02)[2m > [22mBUG-01: split sub-part geometry is not the same as the source solid[33m 2027[2mms[22m[39m
+ [32mÔ£ô[39m tests/integration/split_pipeline_compliance.integration.test.ts[2m > [22msplit_body_by_bends pipeline compliance (BUG-01, BUG-02)[2m > [22mBUG-01: each created_part has a manufacturing graph with correct bodyId
+ [32mÔ£ô[39m tests/integration/split_pipeline_compliance.integration.test.ts[2m > [22msplit_body_by_bends pipeline compliance (BUG-01, BUG-02)[2m > [22mBUG-02: shapeDxf for each split panel is non-null and contains a LWPOLYLINE[33m 2078[2mms[22m[39m
+ [32mÔ£ô[39m tests/integration/split_pipeline_compliance.integration.test.ts[2m > [22msplit_body_by_bends pipeline compliance (BUG-01, BUG-02)[2m > [22mBUG-02: split panels on a non-rectangular fixture have LWPOLYLINE with more than 4 vertices
+ [32mÔ£ô[39m tests/integration/split_pipeline_compliance.integration.test.ts[2m > [22msplit_body_by_bends pipeline compliance (BUG-01, BUG-02)[2m > [22mBUG-02: non-rectangular split flat patterns align dominant edges to X/Y axes
+ [32mÔ£ô[39m tests/integration/split_pipeline_compliance.integration.test.ts[2m > [22msplit_body_by_bends pipeline compliance (BUG-01, BUG-02)[2m > [22mT035: sequential split operations on fixture demonstrate pipeline compliance[33m 358[2mms[22m[39m
+[DEBUG splitMode2] Box solid info:
+  origin: (1.5, 90, 95)
+  N: (-1, -0, 0)
+  U: (0, -0, 1)
+  dx=10, dy=20, dz=3
+[DEBUG splitMode2] Box solid info:
+  origin: (90, 1.5, 105)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=10, dy=20, dz=3
+[DEBUG splitMode2] Box solid info:
+  origin: (90, 198.5, 95)
+  N: (-0, 1, 0)
+  U: (0, -0, 1)
+  dx=10, dy=20, dz=3
+[DEBUG splitMode2] Box solid info:
+  origin: (198.5, 90, 105)
+  N: (1, 0, -0)
+  U: (-0, 0, -1)
+  dx=10, dy=20, dz=3
+[DEBUG splitMode2] Box solid info:
+  origin: (1.5, 0, 0)
+  N: (-1, -0, 0)
+  U: (0, -0, 1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 0, 1.5)
+  N: (-0, -0, -1)
+  U: (0, 1, 0)
+  dx=200, dy=200, dz=2
+stderr | tests/integration/validate_assembly.integration.test.ts > Validate Assembly Integration Tests (Feature 009)
+Dolt database setup failed, running in fallback mode: Error: connect ECONNREFUSED 127.0.0.1:3306
+    at C:\Projects\mcp-cad\ts\tests\integration\validate_assembly.integration.test.ts:29:31
+    at file:///C:/Projects/mcp-cad/ts/node_modules/@vitest/runner/dist/index.js:60:26
+    at file:///C:/Projects/mcp-cad/ts/node_modules/@vitest/runner/dist/index.js:700:59
+    at Array.map (<anonymous>)
+    at callSuiteHook (file:///C:/Projects/mcp-cad/ts/node_modules/@vitest/runner/dist/index.js:700:47)
+    at runSuite (file:///C:/Projects/mcp-cad/ts/node_modules/@vitest/runner/dist/index.js:892:33) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '127.0.0.1',
+  port: 3306,
+  fatal: true
+}
+
+[90mstdout[2m | tests/integration/validate_assembly.integration.test.ts[2m > [22m[2mValidate Assembly Integration Tests (Feature 009)[2m > [22m[2mdetects clashes, recommends trim, and verifies the autofix resolves it[22m[39m
+REPORT BEFORE: {
+  "valid": false,
+  "errors": [
+    {
+      "id": "err-clash-d8ef59d1-b296-475f-91ba-cdc9d9c5f2b2-545c902a-4375-4e96-b482-6bd2faab9d72",
+      "category": "clash_detection",
+      "severity": "error",
+      "message": "Physical overlap detected between adjacent parts d8ef59d1-b296-475f-91ba-cdc9d9c5f2b2 and 545c902a-4375-4e96-b482-6bd2faab9d72 (volume: 45125.00 mm┬│)",
+      "affected_part_ids": [
+        "d8ef59d1-b296-475f-91ba-cdc9d9c5f2b2",
+        "545c902a-4375-4e96-b482-6bd2faab9d72"
+      ],
+      "autofix": {
+        "tool_name": "trim_body_with_plane",
+        "arguments": {
+          "part_id": "545c902a-4375-4e96-b482-6bd2faab9d72",
+          "plane": {
+            "normal": {
+              "x": 0.5773502691896263,
+              "y": 0.5773502691896246,
+              "z": 0.5773502691896263
+            },
+            "origin": {
+              "x": 35.00000015000001,
+              "y": 85.00000014999992,
+              "z": 35.00000015000001
+            }
+          },
+          "keep_positive_side": true
+        }
+      }
+    }
+  ],
+  "summary": {
+    "total_parts_checked": 2,
+    "rule_count": 2,
+    "execution_time_ms": 17
+  }
+}
+
+[90mstdout[2m | tests/integration/validate_assembly.integration.test.ts[2m > [22m[2mValidate Assembly Integration Tests (Feature 009)[2m > [22m[2mloads a multi-error assembly, asserts that all error categories are reported, applies recommended autofixes sequentially, and verifies assembly resolves to clean state (T021)[22m[39m
+REPORT AFTER: {
+  "valid": false,
+  "errors": [
+    {
+      "id": "err-unfold-fail-d3d5ffb0-375d-43e2-9ff9-a33e6706fee5",
+      "category": "sheet_metal",
+      "severity": "error",
+      "message": "Unfold check failed for part d3d5ffb0-375d-43e2-9ff9-a33e6706fee5: [object Object]",
+      "affected_part_ids": [
+        "d3d5ffb0-375d-43e2-9ff9-a33e6706fee5"
+      ]
+    },
+    {
+      "id": "err-unfold-fail-e14d4d50-b5a4-44be-a581-7ff4153bca1b",
+      "category": "sheet_metal",
+      "severity": "error",
+      "message": "Unfold check failed for part e14d4d50-b5a4-44be-a581-7ff4153bca1b: [object Object]",
+      "affected_part_ids": [
+        "e14d4d50-b5a4-44be-a581-7ff4153bca1b"
+      ]
+    },
+    {
+      "id": "err-unfold-fail-3585a0e8-12b8-472a-97f2-a340052eef61",
+      "category": "sheet_metal",
+      "severity": "error",
+      "message": "Unfold check failed for part 3585a0e8-12b8-472a-97f2-a340052eef61: [object Object]",
+      "affected_part_ids": [
+        "3585a0e8-12b8-472a-97f2-a340052eef61"
+      ]
+    },
+    {
+      "id": "err-unfold-fail-9dbd647b-e9b2-44a0-87ff-f35b2ac39ad8",
+      "category": "sheet_metal",
+      "severity": "error",
+      "message": "Unfold check failed for part 9dbd647b-e9b2-44a0-87ff-f35b2ac39ad8: [object Object]",
+      "affected_part_ids": [
+        "9dbd647b-e9b2-44a0-87ff-f35b2ac39ad8"
+      ]
+    },
+    {
+      "id": "err-unfold-fail-49c1e5ad-101a-4dd0-8ac0-99f5d7b31e8a",
+      "category": "sheet_metal",
+      "severity": "error",
+      "message": "Unfold check failed for part 49c1e5ad-101a-4dd0-8ac0-99f5d7b31e8a: [object Object]",
+      "affected_part_ids": [
+        "49c1e5ad-101a-4dd0-8ac0-99f5d7b31e8a"
+      ]
+    },
+    {
+      "id": "err-unfold-fail-ba921acc-43e2-4f41-bb89-2459e42f9dc8",
+      "category": "sheet_metal",
+      "severity": "error",
+      "message": "Unfold check failed for part ba921acc-43e2-4f41-bb89-2459e42f9dc8: [object Object]",
+      "affected_part_ids": [
+        "ba921acc-43e2-4f41-bb89-2459e42f9dc8"
+      ]
+    },
+    {
+      "id": "err-clash-fail",
+      "category": "clash_detection",
+      "severity": "error",
+      "message": "Clash detection failed: [object Object]",
+      "affected_part_ids": [
+        "a615ae0a-4294-4504-8c2f-fb3582458f84",
+        "b2a46ff9-15a7-4fca-8181-5d27ce666ef4",
+        "e2a83731-6c41-4a16-ab0f-86cc319186a9",
+        "266f1303-c65c-474c-ada0-a26e8b8eef64",
+        "13fc541d-d0ae-4009-bc42-d45a758f7253",
+        "275e137c-6632-4957-9272-d700937114c9",
+        "d3d5ffb0-375d-43e2-9ff9-a33e6706fee5",
+        "e14d4d50-b5a4-44be-a581-7ff4153bca1b",
+        "3585a0e8-12b8-472a-97f2-a340052eef61",
+        "9dbd647b-e9b2-44a0-87ff-f35b2ac39ad8",
+        "49c1e5ad-101a-4dd0-8ac0-99f5d7b31e8a",
+        "ba921acc-43e2-4f41-bb89-2459e42f9dc8"
+      ]
+    }
+  ],
+  "summary": {
+    "total_parts_checked": 12,
+    "rule_count": 2,
+    "execution_time_ms": 85
+  }
+}
+
+ [32mÔ£ô[39m tests/integration/validate_assembly.integration.test.ts[2m > [22mValidate Assembly Integration Tests (Feature 009)[2m > [22mruns validation on clean single-part assembly (passing sheet metal)[33m 2051[2mms[22m[39m
+ [32mÔ£ô[39m tests/integration/validate_assembly.integration.test.ts[2m > [22mValidate Assembly Integration Tests (Feature 009)[2m > [22mdetects sheet metal unfold failure and recommends split_body_by_bends
+ [32mÔ£ô[39m tests/integration/validate_assembly.integration.test.ts[2m > [22mValidate Assembly Integration Tests (Feature 009)[2m > [22mruns custom registered rules and appends them to the report
+ [32mÔ£ô[39m tests/integration/validate_assembly.integration.test.ts[2m > [22mValidate Assembly Integration Tests (Feature 009)[2m > [22mdetects clashes, recommends trim, and verifies the autofix resolves it
+ [31m├ù[39m tests/integration/validate_assembly.integration.test.ts[2m > [22mValidate Assembly Integration Tests (Feature 009)[2m > [22mloads a multi-error assembly, asserts that all error categories are reported, applies recommended autofixes sequentially, and verifies assembly resolves to clean state (T021)[33m 2246[2mms[22m[39m
+[31m   ÔåÆ expected false to be true // Object.is equality[39m
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 1.5, 200)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 198.5, 0)
+  N: (-0, 1, 0)
+  U: (0, -0, 1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 200, 198.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (198.5, 0, 200)
+  N: (1, 0, -0)
+  U: (-0, 0, -1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 98.55, -100)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (98.55, -100, 100)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 100, 98.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -100, -98.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-98.55, -100, -100)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -98.55, 100)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 73.55, -75)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (73.55, -75, 75)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 75, 73.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -75, -73.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-73.55, -75, -75)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -73.55, 75)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 0, 1.5)
+  N: (-0, -0, -1)
+  U: (0, 1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (1.5, 0, 0)
+  N: (-1, -0, 0)
+  U: (0, -0, 1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 1.5, 200)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 198.5, 0)
+  N: (-0, 1, 0)
+  U: (0, -0, 1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (198.5, 0, 200)
+  N: (1, 0, -0)
+  U: (-0, 0, -1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 200, 198.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 0, 1.5)
+  N: (-0, -0, -1)
+  U: (0, 1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (1.5, 0, 0)
+  N: (-1, -0, 0)
+  U: (0, -0, 1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 1.5, 200)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 198.5, 0)
+  N: (-0, 1, 0)
+  U: (0, -0, 1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (198.5, 0, 200)
+  N: (1, 0, -0)
+  U: (-0, 0, -1)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 200, 198.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=200, dz=2
+stderr | tests/integration/merge_edge_alignment.integration.test.ts > merge_bodies_with_bend edge alignment (BUG-03) > BUG-03: merge on well-aligned panels succeeds with edge_alignment_correction_mm in result
+Unfold failed ÔÇö skipping merge test
+
+stderr | tests/integration/merge_edge_alignment.integration.test.ts > merge_bodies_with_bend edge alignment (BUG-03) > BUG-03: merge on panels with > THRESHOLD offset returns GE_MERGE_EDGE_MISALIGNED
+Unfold failed ÔÇö skipping
+
+ [32mÔ£ô[39m tests/integration/merge_edge_alignment.integration.test.ts[2m > [22mmerge_bodies_with_bend edge alignment (BUG-03)[2m > [22mBUG-03: merge on well-aligned panels succeeds with edge_alignment_correction_mm in result[33m 1192[2mms[22m[39m
+ [32mÔ£ô[39m tests/integration/merge_edge_alignment.integration.test.ts[2m > [22mmerge_bodies_with_bend edge alignment (BUG-03)[2m > [22mBUG-03: merge on panels with > THRESHOLD offset returns GE_MERGE_EDGE_MISALIGNED[33m 350[2mms[22m[39m
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 98.55, -100)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (98.55, -100, 100)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 100, 98.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -100, -98.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-98.55, -100, -100)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -98.55, 100)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 73.55, -75)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (73.55, -75, 75)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 75, 73.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -75, -73.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-73.55, -75, -75)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -73.55, 75)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 98.55, -100)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (98.55, -100, 100)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 200, -0.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=100.197, dz=2.5
+[DEBUG splitMode2] Box solid info:
+  origin: (99.6798, 200, -0.431852)
+  N: (0.258819, 0, 0.965926)
+  U: (0, -1, 0)
+  dx=200, dy=100.197, dz=2.5
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 100, 98.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -100, -98.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-98.55, -100, -100)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -98.55, 100)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 200, -0.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=100.402, dz=2.5
+[DEBUG splitMode2] Box solid info:
+  origin: (99.4019, 200, -0.232051)
+  N: (0.5, 0, 0.866025)
+  U: (0, -1, 0)
+  dx=200, dy=100.402, dz=2.5
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 73.55, -75)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (73.55, -75, 75)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 200, -0.5)
+  N: (0, -0, 1)
+  U: (0, -1, -0)
+  dx=200, dy=102.071, dz=1.05
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 75, 73.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (100.657, 200, -1.36421)
+  N: (0.707107, 0, 0.707107)
+  U: (0, -1, 0)
+  dx=200, dy=98.5707, dz=2.5
+[DEBUG VALIDATION] matchedRatio=0.505549 (matchedAreaSum=20728.5, totalArea=41002)
+  Plane infos count N=8
+    Face 0: area=20414.3, center=(51.0357,100,0.05), normal=(0,-0,1), matched=true, partnerIdx=2
+    Face 1: area=20000, center=(50,100,0), normal=(0,0,-1), matched=false, partnerIdx=-1
+    Face 2: area=314.264, center=(101.286,100,-0.5), normal=(-0,0,-1), matched=true, partnerIdx=0
+    Face 3: area=141.421, center=(100.25,100,-0.25), normal=(-0.707107,0,-0.707107), matched=false, partnerIdx=-1
+    Face 4: area=110, center=(102.071,100,-0.225), normal=(1,0,0), matched=false, partnerIdx=-1
+    Face 5: area=10, center=(0,100,0.025), normal=(-1,0,0), matched=false, partnerIdx=-1
+    Face 6: area=6.01423, center=(58.6246,200,-0.0149079), normal=(-0,1,0), matched=false, partnerIdx=-1
+    Face 7: area=6.01423, center=(58.6246,0,-0.0149079), normal=(0,-1,-0), matched=false, partnerIdx=-1
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -75, -73.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-73.55, -75, -75)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -73.55, 75)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 200, -0.5)
+  N: (0, -0, 1)
+  U: (0, -1, -0)
+  dx=200, dy=102.071, dz=1.05
+[DEBUG splitMode2] Box solid info:
+  origin: (100.657, 200, -1.36421)
+  N: (0.707107, 0, 0.707107)
+  U: (0, -1, 0)
+  dx=200, dy=98.5707, dz=2.5
+[DEBUG VALIDATION] matchedRatio=0.505549 (matchedAreaSum=20728.5, totalArea=41002)
+  Plane infos count N=8
+    Face 0: area=20414.3, center=(51.0357,100,0.05), normal=(0,-0,1), matched=true, partnerIdx=2
+    Face 1: area=20000, center=(50,100,0), normal=(0,0,-1), matched=false, partnerIdx=-1
+    Face 2: area=314.264, center=(101.286,100,-0.5), normal=(-0,0,-1), matched=true, partnerIdx=0
+    Face 3: area=141.421, center=(100.25,100,-0.25), normal=(-0.707107,0,-0.707107), matched=false, partnerIdx=-1
+    Face 4: area=110, center=(102.071,100,-0.225), normal=(1,0,0), matched=false, partnerIdx=-1
+    Face 5: area=10, center=(0,100,0.025), normal=(-1,0,0), matched=false, partnerIdx=-1
+    Face 6: area=6.01423, center=(58.6246,200,-0.0149079), normal=(-0,1,0), matched=false, partnerIdx=-1
+    Face 7: area=6.01423, center=(58.6246,0,-0.0149079), normal=(0,-1,-0), matched=false, partnerIdx=-1
+ [32mÔ£ô[39m tests/integration/unfold.integration.test.ts[2m > [22mAdvanced Sheet Metal Unfolding Integration Tests[2m > [22mvalidate_sheet_metal on solid box fails validation
+ [32mÔ£ô[39m tests/integration/unfold.integration.test.ts[2m > [22mAdvanced Sheet Metal Unfolding Integration Tests[2m > [22mvalidate_sheet_metal on sheet_1panel passes validation
+ [32mÔ£ô[39m tests/integration/unfold.integration.test.ts[2m > [22mAdvanced Sheet Metal Unfolding Integration Tests[2m > [22mreconstruct_curved_bends on sheet_3panel replaces sharp joints with fillets
+ [32mÔ£ô[39m tests/integration/unfold.integration.test.ts[2m > [22mAdvanced Sheet Metal Unfolding Integration Tests[2m > [22mapply_unfold and export_dxf produces layered DXF with CUT, BEND_UP/DOWN and text annotations
+ [31m├ù[39m tests/integration/unfold.integration.test.ts[2m > [22mAdvanced Sheet Metal Unfolding Integration Tests[2m > [22munfold merged perpendicular panels shows combined 400x200 flat dimensions and 1 bend[33m 5781[2mms[22m[39m
+[31m   ÔåÆ expected 200 to be less than 10[39m
+ [31m├ù[39m tests/integration/unfold.integration.test.ts[2m > [22mAdvanced Sheet Metal Unfolding Integration Tests[2m > [22munfold of a 0-bend split panel returns dimensions matching the panel face, not a sliver[33m 1851[2mms[22m[39m
+[31m   ÔåÆ {"code":"GE_SOLID_NOT_FOUND","message":"Solid/Shell not found: 64a6c738-2651-41cf-a388-e9d28696435c","recoverable":false}[39m
+ [32mÔ£ô[39m tests/integration/unfold.integration.test.ts[2m > [22mAdvanced Sheet Metal Unfolding Integration Tests[2m > [22mapply_unfold on a solid cube panel rejects with GE_PANEL_INVALID[33m 3684[2mms[22m[39m
+ [32mÔ£ô[39m tests/integration/unfold.integration.test.ts[2m > [22mAdvanced Sheet Metal Unfolding Integration Tests[2m > [22mapply_unfold on the pre-split testcube whole body is rejected or returns correct bbox dims
+[90mstdout[2m | tests/integration/unfold.integration.test.ts[2m > [22m[2mAdvanced Sheet Metal Unfolding Integration Tests[2m > [22m[2mapply_unfold and export_dxf produces layered DXF with CUT, BEND_UP/DOWN and text annotations[22m[39m
+[DEBUG sheet_1panel] DXF Content:
+  0
+SECTION
+  2
+HEADER
+  0
+ENDSEC
+  0
+SECTION
+  2
+TABLES
+  0
+TABLE
+  2
+LTYPE
+ 70
+1
+  0
+LTYPE
+  2
+CONTINUOUS
+ 70
+0
+  3
+Solid line
+ 72
+65
+ 73
+0
+ 40
+0.0
+  0
+LTYPE
+  2
+DASHED
+ 70
+0
+  3
+Dashed line __ __ __ __ __
+ 72
+65
+ 73
+2
+ 40
+6.35
+ 49
+3.175
+ 49
+-3.175
+  0
+ENDTAB
+  0
+TABLE
+  2
+LAYER
+ 70
+4
+  0
+LAYER
+  2
+0
+ 70
+0
+ 62
+7
+  6
+CONTINUOUS
+  0
+LAYER
+  2
+CUT
+ 70
+0
+ 62
+1
+  6
+CONTINUOUS
+  0
+LAYER
+  2
+BEND_UP
+ 70
+0
+ 62
+3
+  6
+DASHED
+  0
+LAYER
+  2
+BEND_DOWN
+ 70
+0
+ 62
+4
+  6
+DASHED
+  0
+ENDTAB
+  0
+ENDSEC
+  0
+SECTION
+  2
+ENTITIES
+  0
+LINE
+  8
+CUT
+ 10
+0
+ 20
+200
+ 30
+0.0
+ 11
+0
+ 21
+0
+ 31
+0.0
+  0
+LINE
+  8
+CUT
+ 10
+0
+ 20
+0
+ 30
+0.0
+ 11
+300
+ 21
+0
+ 31
+0.0
+  0
+LINE
+  8
+CUT
+ 10
+300
+ 20
+200
+ 30
+0.0
+ 11
+0
+ 21
+200
+ 31
+0.0
+  0
+LINE
+  8
+CUT
+ 10
+300
+ 20
+0
+ 30
+0.0
+ 11
+300
+ 21
+200
+ 31
+0.0
+  0
+ENDSEC
+  0
+EOF
+
+
+[90mstdout[2m | tests/integration/unfold.integration.test.ts[2m > [22m[2mAdvanced Sheet Metal Unfolding Integration Tests[2m > [22m[2munfold merged perpendicular panels shows combined 400x200 flat dimensions and 1 bend[22m[39m
+[DEBUG merge_unfold] flat_width_mm=400.9896016858808, flat_height_mm=400, bend_count=1
+
+[90mstdout[2m | tests/integration/unfold.integration.test.ts[2m > [22m[2mAdvanced Sheet Metal Unfolding Integration Tests[2m > [22m[2mapply_unfold on the pre-split testcube whole body is rejected or returns correct bbox dims[22m[39m
+[unfold_wholecube] correctly rejected with code: GE_PANEL_INVALID
+
+ [31m├ù[39m tests/integration/merge_orientation_preserved.integration.test.ts[2m > [22mmerge_bodies_with_bend: 3D orientation is preserved[2m > [22mdoes not invert or rotate the part out of plane (fold stays in ÔêÆZ, Y preserved, Panel A in place)[33m 2974[2mms[22m[39m
+[31m   ÔåÆ {"code":"GE_SOLID_NOT_FOUND","message":"Entity not found in session: 356d67ec-70a8-461a-a109-0cf5d6ac0f6a","recoverable":false}[39m
+ [32mÔ£ô[39m tests/integration/fuse_unfold_graph_regression.test.ts[2m > [22mT025: Graph-first fuse round-trip (SC-006, SC-007)[2m > [22mfuses two graph-tracked panels and returns graphs_fused with a valid part_id[33m 5312[2mms[22m[39m
+ [31m├ù[39m tests/integration/fuse_unfold_graph_regression.test.ts[2m > [22mRegression: fuse after moved graph parts[2m > [22mshould resolve shell IDs when fusing translated graph-backed parts
+[31m   ÔåÆ {"code":"GE_SHELL_NOT_FOUND","message":"Shell/solid not found: fc6f08e2-3581-4b71-ba3c-a19ec6ecee20","recoverable":false}[39m
+ [31m├ù[39m tests/integration/fuse_unfold_graph_regression.test.ts[2m > [22mRegression: fuse after moved graph parts[2m > [22mshould preserve combined footprint when merging two perpendicular panels with a bend[33m 1832[2mms[22m[39m
+[31m   ÔåÆ {"code":"GE_SOLID_NOT_FOUND","message":"Solid/Shell not found: 80effbb2-30ac-407a-ab41-d12f854457d8","recoverable":false}[39m
+ [31m├ù[39m tests/integration/fuse_unfold_graph_regression.test.ts[2m > [22mRegression: fuse after moved graph parts[2m > [22mshould produce a non-rectangular flat shape when a smaller same-thickness panel is fused as a protrusion[33m 3920[2mms[22m[39m
+[31m   ÔåÆ {"code":"GE_SOLID_NOT_FOUND","message":"Shell not found: e551938a-f11e-4690-b313-33c2f397ab38","recoverable":false}[39m
+ [31m├ù[39m tests/integration/fuse_shell_resolution.test.ts[2m > [22mRegression: fuse_bodies after translate_body[2m > [22mshould resolve shell IDs correctly when fusing translated graph-backed parts[33m 1163[2mms[22m[39m
+[31m   ÔåÆ {"code":"GE_SOLID_NOT_FOUND","message":"Solid not found: 17120771-2604-4bfc-9b64-6c47e7957b79","recoverable":false}[39m
+ [31m├ù[39m tests/integration/fuse_shell_resolution.test.ts[2m > [22mRegression: fuse_bodies after translate_body[2m > [22mshould handle multiple translated parts in fuse[33m 4048[2mms[22m[39m
+[31m   ÔåÆ {"code":"GE_SHELL_NOT_FOUND","message":"Shell/solid not found: 5763dd97-bbab-434f-8d26-fc3cf91efa96","recoverable":false}[39m
+ [32mÔ£ô[39m tests/integration/fuse_shell_resolution.test.ts[2m > [22mT016: cut_bodies GRAPH_INTEGRITY_ERROR guard (FR-005)[2m > [22mrejects cut_bodies when blank is a graph-tracked panel
+ [32mÔ£ô[39m tests/integration/fuse_shell_resolution.test.ts[2m > [22mT016: cut_bodies GRAPH_INTEGRITY_ERROR guard (FR-005)[2m > [22mallows cut_bodies when blank is not graph-tracked
+[90mstdout[2m | tests\integration\md_scoring.integration.test.ts:94:11[22m[39m
+MD Scoring Integration: MD-JTBD-02 violations tests starting...
+
+[90mstdout[2m | tests\integration\md_scoring.integration.test.ts:125:11[22m[39m
+MD Scoring Integration: MD-JTBD-05 passing feature set tests starting...
+
+ [32mÔ£ô[39m tests/integration/md_scoring.integration.test.ts[2m > [22mMD Scoring Integration: MD-JTBD-02 violations[2m > [22mscore < 0.5 for heavily violating feature set
+ [32mÔ£ô[39m tests/integration/md_scoring.integration.test.ts[2m > [22mMD Scoring Integration: MD-JTBD-02 violations[2m > [22mfeasible=false for heavily violating feature set
+ [32mÔ£ô[39m tests/integration/md_scoring.integration.test.ts[2m > [22mMD Scoring Integration: MD-JTBD-02 violations[2m > [22mdetects MIN_BEND_RADIUS violations
+ [32mÔ£ô[39m tests/integration/md_scoring.integration.test.ts[2m > [22mMD Scoring Integration: MD-JTBD-02 violations[2m > [22mdetects MIN_HOLE_DIAMETER violation
+ [32mÔ£ô[39m tests/integration/md_scoring.integration.test.ts[2m > [22mMD Scoring Integration: MD-JTBD-02 violations[2m > [22mdetects MIN_FLANGE_WIDTH violation
+ [32mÔ£ô[39m tests/integration/md_scoring.integration.test.ts[2m > [22mMD Scoring Integration: MD-JTBD-05 passing feature set[2m > [22mscore > 0.9 for fully valid feature set
+ [32mÔ£ô[39m tests/integration/md_scoring.integration.test.ts[2m > [22mMD Scoring Integration: MD-JTBD-05 passing feature set[2m > [22mfeasible=true for valid feature set
+ [32mÔ£ô[39m tests/integration/md_scoring.integration.test.ts[2m > [22mMD Scoring Integration: MD-JTBD-05 passing feature set[2m > [22mviolations array is empty for valid feature set
+ [32mÔ£ô[39m tests/integration/md_scoring.integration.test.ts[2m > [22mMD Scoring Integration: MD-JTBD-05 passing feature set[2m > [22mbend sequence is feasible for valid feature set
+ [32mÔ£ô[39m tests/integration/md_scoring.integration.test.ts[2m > [22mMD Scoring Integration: MD-JTBD-05 passing feature set[2m > [22moutside-in order: 90deg bend before 45deg bend
+[90mstdout[2m | tests\integration\split_by_bends.integration.test.ts:41:11[22m[39m
+split_body_by_bends integration tests starting...
+
+[90mstdout[2m | tests/integration/split_by_bends.integration.test.ts[2m > [22m[2msplit_body_by_bends integration[2m > [22m[2mhollow cube ÔåÆ thin_solid mode, 6 panels, 0 protrusions[22m[39m
+split_body_by_bends.hollow cube tests starting...
+
+[90mstdout[2m | tests/integration/split_by_bends.integration.test.ts[2m > [22m[2msplit_body_by_bends integration[2m > [22m[2mtwo hollow cubes ÔåÆ thin_solid mode, 12 panels, 4 bridge flanges[22m[39m
+split_body_by_bends.two hollow cubes tests starting...
+split_body_by_bends result: {
+  "panel_ids": [
+    "a5f7cbc6-2a23-448d-9f04-5dd1b19f54f5",
+    "84cfd8f1-f00d-40a2-a397-856d69b021da",
+    "bf251910-674d-4e69-9ae5-eb8bfb0c2fcd",
+    "17b09c7d-da11-4cbf-9d64-fee7d4dfecb4",
+    "aee681e5-cebd-4301-97ff-850c8038ed72",
+    "9061f5c5-69e3-470d-b62c-3c5e697b9ef6",
+    "278c3ed3-fef7-4363-994c-67fc17154a22",
+    "d1b494f0-483f-459a-a25f-1999c0c2a86f",
+    "13783cd9-1768-4057-8c7f-cd02ac9b013a",
+    "3b8102c2-d1bc-4f6e-8485-20aba2bcd081",
+    "665b32ee-cbd8-4f97-929f-229ae809c814",
+    "cf9cead4-ed80-48ec-a7b7-9c4f94d64eff"
+  ],
+  "panel_count": 12,
+  "panel_bboxes": [
+    {
+      "x_min": -100,
+      "y_min": 98.55,
+      "z_min": -100,
+      "x_max": 100,
+      "y_max": 100,
+      "z_max": 100
+    },
+    {
+      "x_min": 98.55,
+      "y_min": -100,
+      "z_min": -100,
+      "x_max": 100,
+      "y_max": 100,
+      "z_max": 100
+    },
+    {
+      "x_min": -100,
+      "y_min": -100,
+      "z_min": 98.5,
+      "x_max": 100,
+      "y_max": 100,
+      "z_max": 100
+    },
+    {
+      "x_min": -100,
+      "y_min": -100,
+      "z_min": -100,
+      "x_max": 100,
+      "y_max": 100,
+      "z_max": -98.5
+    },
+    {
+      "x_min": -100,
+      "y_min": -100,
+      "z_min": -100,
+      "x_max": -98.55,
+      "y_max": 100,
+      "z_max": 100
+    },
+    {
+      "x_min": -100,
+      "y_min": -100,
+      "z_min": -100,
+      "x_max": 100,
+      "y_max": -98.55,
+      "z_max": 100
+    },
+    {
+      "x_min": -75,
+      "y_min": 73.55,
+      "z_min": -75.00000000000001,
+      "x_max": 75,
+      "y_max": 75,
+      "z_max": 75
+    },
+    {
+      "x_min": 73.55,
+      "y_min": -75,
+      "z_min": -75.00000000000001,
+      "x_max": 75,
+      "y_max": 75,
+      "z_max": 75
+    },
+    {
+      "x_min": -75,
+      "y_min": -75,
+      "z_min": 73.49999999999999,
+      "x_max": 75,
+      "y_max": 75,
+      "z_max": 75
+    },
+    {
+      "x_min": -75,
+      "y_min": -75,
+      "z_min": -75.00000000000001,
+      "x_max": 75,
+      "y_max": 75,
+      "z_max": -73.49999999999999
+    },
+    {
+      "x_min": -75,
+      "y_min": -75,
+      "z_min": -75.00000000000001,
+      "x_max": -73.55000000000001,
+      "y_max": 75,
+      "z_max": 75
+    },
+    {
+      "x_min": -75,
+      "y_min": -75,
+      "z_min": -75.00000000000001,
+      "x_max": 75,
+      "y_max": -73.55000000000001,
+      "z_max": 75
+    }
+  ],
+  "protrusion_ids": [
+    "3f8872b0-8f86-4913-92f9-c23bd551ea30",
+    "4b493b1e-3778-448d-aa83-b1f5cc24b956",
+    "4a1e668c-7afe-4140-92dd-2bd8e2645802",
+    "9d90553a-12f7-444e-931f-7320a3c13c16"
+  ],
+  "protrusion_count": 4,
+  "protrusion_bboxes": [
+    {
+      "x_min": 74.95,
+      "y_min": -0.05,
+      "z_min": -75.05,
+      "x_max": 99.05000000000001,
+      "y_max": 1.05,
+      "z_max": 75.05
+    },
+    {
+      "x_min": -99.05,
+      "y_min": -0.05,
+      "z_min": -75.05,
+      "x_max": -74.94999999999999,
+      "y_max": 1.05,
+      "z_max": 75.05
+    },
+    {
+      "x_min": -0.050000000000000044,
+      "y_min": 74.95,
+      "z_min": -75.05,
+      "x_max": 1.05,
+      "y_max": 99.05000000000001,
+      "z_max": 75.05
+    },
+    {
+      "x_min": -0.050000000000000044,
+      "y_min": -99.05,
+      "z_min": -75.05,
+      "x_max": 1.05,
+      "y_max": -74.94999999999999,
+      "z_max": 75.05
+    }
+  ],
+  "protrusion_parents": [
+    {
+      "protrusion_id": "3f8872b0-8f86-4913-92f9-c23bd551ea30",
+      "parent_panel_id": null
+    },
+    {
+      "protrusion_id": "4b493b1e-3778-448d-aa83-b1f5cc24b956",
+      "parent_panel_id": null
+    },
+    {
+      "protrusion_id": "4a1e668c-7afe-4140-92dd-2bd8e2645802",
+      "parent_panel_id": null
+    },
+    {
+      "protrusion_id": "9d90553a-12f7-444e-931f-7320a3c13c16",
+      "parent_panel_id": null
+    }
+  ],
+  "detected_mode": "thin_solid",
+  "rollback_token": "b232f8b7-c97a-42e6-b303-6a9525ce5be4",
+  "mesh_urls": [
+    "http://localhost:3001/mesh/a5f7cbc6-2a23-448d-9f04-5dd1b19f54f5.glb",
+    "http://localhost:3001/mesh/84cfd8f1-f00d-40a2-a397-856d69b021da.glb",
+    "http://localhost:3001/mesh/bf251910-674d-4e69-9ae5-eb8bfb0c2fcd.glb",
+    "http://localhost:3001/mesh/17b09c7d-da11-4cbf-9d64-fee7d4dfecb4.glb",
+    "http://localhost:3001/mesh/aee681e5-cebd-4301-97ff-850c8038ed72.glb",
+    "http://localhost:3001/mesh/9061f5c5-69e3-470d-b62c-3c5e697b9ef6.glb",
+    "http://localhost:3001/mesh/278c3ed3-fef7-4363-994c-67fc17154a22.glb",
+    "http://localhost:3001/mesh/d1b494f0-483f-459a-a25f-1999c0c2a86f.glb",
+    "http://localhost:3001/mesh/13783cd9-1768-4057-8c7f-cd02ac9b013a.glb",
+    "http://localhost:3001/mesh/3b8102c2-d1bc-4f6e-8485-20aba2bcd081.glb",
+    "http://localhost:3001/mesh/665b32ee-cbd8-4f97-929f-229ae809c814.glb",
+    "http://localhost:3001/mesh/cf9cead4-ed80-48ec-a7b7-9c4f94d64eff.glb",
+    "http://localhost:3001/mesh/3f8872b0-8f86-4913-92f9-c23bd551ea30.glb",
+    "http://localhost:3001/mesh/4b493b1e-3778-448d-aa83-b1f5cc24b956.glb",
+    "http://localhost:3001/mesh/4a1e668c-7afe-4140-92dd-2bd8e2645802.glb",
+    "http://localhost:3001/mesh/9d90553a-12f7-444e-931f-7320a3c13c16.glb"
+  ],
+  "shape_history": [],
+  "created_parts": [
+    {
+      "part_id": "a5f7cbc6-2a23-448d-9f04-5dd1b19f54f5",
+      "panel_id": "a5f7cbc6-2a23-448d-9f04-5dd1b19f54f5"
+    },
+    {
+      "part_id": "84cfd8f1-f00d-40a2-a397-856d69b021da",
+      "panel_id": "84cfd8f1-f00d-40a2-a397-856d69b021da"
+    },
+    {
+      "part_id": "bf251910-674d-4e69-9ae5-eb8bfb0c2fcd",
+      "panel_id": "bf251910-674d-4e69-9ae5-eb8bfb0c2fcd"
+    },
+    {
+      "part_id": "17b09c7d-da11-4cbf-9d64-fee7d4dfecb4",
+      "panel_id": "17b09c7d-da11-4cbf-9d64-fee7d4dfecb4"
+    },
+    {
+      "part_id": "aee681e5-cebd-4301-97ff-850c8038ed72",
+      "panel_id": "aee681e5-cebd-4301-97ff-850c8038ed72"
+    },
+    {
+      "part_id": "9061f5c5-69e3-470d-b62c-3c5e697b9ef6",
+      "panel_id": "9061f5c5-69e3-470d-b62c-3c5e697b9ef6"
+    },
+    {
+      "part_id": "278c3ed3-fef7-4363-994c-67fc17154a22",
+      "panel_id": "278c3ed3-fef7-4363-994c-67fc17154a22"
+    },
+    {
+      "part_id": "d1b494f0-483f-459a-a25f-1999c0c2a86f",
+      "panel_id": "d1b494f0-483f-459a-a25f-1999c0c2a86f"
+    },
+    {
+      "part_id": "13783cd9-1768-4057-8c7f-cd02ac9b013a",
+      "panel_id": "13783cd9-1768-4057-8c7f-cd02ac9b013a"
+    },
+    {
+      "part_id": "3b8102c2-d1bc-4f6e-8485-20aba2bcd081",
+      "panel_id": "3b8102c2-d1bc-4f6e-8485-20aba2bcd081"
+    },
+    {
+      "part_id": "665b32ee-cbd8-4f97-929f-229ae809c814",
+      "panel_id": "665b32ee-cbd8-4f97-929f-229ae809c814"
+    },
+    {
+      "part_id": "cf9cead4-ed80-48ec-a7b7-9c4f94d64eff",
+      "panel_id": "cf9cead4-ed80-48ec-a7b7-9c4f94d64eff"
+    },
+    {
+      "part_id": "3f8872b0-8f86-4913-92f9-c23bd551ea30",
+      "panel_id": "3f8872b0-8f86-4913-92f9-c23bd551ea30"
+    },
+    {
+      "part_id": "4b493b1e-3778-448d-aa83-b1f5cc24b956",
+      "panel_id": "4b493b1e-3778-448d-aa83-b1f5cc24b956"
+    },
+    {
+      "part_id": "4a1e668c-7afe-4140-92dd-2bd8e2645802",
+      "panel_id": "4a1e668c-7afe-4140-92dd-2bd8e2645802"
+    },
+    {
+      "part_id": "9d90553a-12f7-444e-931f-7320a3c13c16",
+      "panel_id": "9d90553a-12f7-444e-931f-7320a3c13c16"
+    }
+  ],
+  "hidden_source_part_ids": [
+    "d9bc15d6-edbd-4974-9c78-fac9a9f4437b"
+  ],
+  "visibility_policy": "show_only_recreated",
+  "pipeline_executed": true
+}
+
+[90mstdout[2m | tests/integration/split_by_bends.integration.test.ts[2m > [22m[2msplit_body_by_bends integration[2m > [22m[2mtestcube: protrusion bboxes are local features, not panel-sized[22m[39m
+panel bbox volumes (sorted desc): [
+  [32m'60000'[39m, [32m'60000'[39m,
+  [32m'58000'[39m, [32m'58000'[39m,
+  [32m'58000'[39m, [32m'58000'[39m,
+  [32m'33750'[39m, [32m'33750'[39m,
+  [32m'32625'[39m, [32m'32625'[39m,
+  [32m'32625'[39m, [32m'32625'[39m
+]
+protrusion bbox volumes (sorted desc): [ [32m'3979'[39m, [32m'3979'[39m, [32m'3979'[39m, [32m'3979'[39m ]
+protrusion bbox max-dimensions: [ [32m'150.1'[39m, [32m'150.1'[39m, [32m'150.1'[39m, [32m'150.1'[39m ]
+largest panel volume: 60000 largest panel max-dim: 200.0
+protrusion bbox coords:
+  [0] x[75.0..99.1] y[-0.1..1.1] z[-75.0..75.0] dims=24.1├ù1.1├ù150.1
+  [1] x[-99.0..-74.9] y[-0.1..1.1] z[-75.0..75.0] dims=24.1├ù1.1├ù150.1
+  [2] x[-0.1..1.1] y[75.0..99.1] z[-75.0..75.0] dims=1.1├ù24.1├ù150.1
+  [3] x[-0.1..1.1] y[-99.0..-74.9] z[-75.0..75.0] dims=1.1├ù24.1├ù150.1
+panel bbox coords:
+  [0] x[-100.0..100.0] y[98.5..100.0] z[-100.0..100.0] dims=200.0├ù1.5├ù200.0
+  [1] x[98.5..100.0] y[-100.0..100.0] z[-100.0..100.0] dims=1.5├ù200.0├ù200.0
+  [2] x[-100.0..100.0] y[-100.0..100.0] z[98.5..100.0] dims=200.0├ù200.0├ù1.5
+  [3] x[-100.0..100.0] y[-100.0..100.0] z[-100.0..-98.5] dims=200.0├ù200.0├ù1.5
+  [4] x[-100.0..-98.5] y[-100.0..100.0] z[-100.0..100.0] dims=1.5├ù200.0├ù200.0
+  [5] x[-100.0..100.0] y[-100.0..-98.5] z[-100.0..100.0] dims=200.0├ù1.5├ù200.0
+  [6] x[-75.0..75.0] y[73.5..75.0] z[-75.0..75.0] dims=150.0├ù1.5├ù150.0
+  [7] x[73.5..75.0] y[-75.0..75.0] z[-75.0..75.0] dims=1.5├ù150.0├ù150.0
+  [8] x[-75.0..75.0] y[-75.0..75.0] z[73.5..75.0] dims=150.0├ù150.0├ù1.5
+  [9] x[-75.0..75.0] y[-75.0..75.0] z[-75.0..-73.5] dims=150.0├ù150.0├ù1.5
+  [10] x[-75.0..-73.6] y[-75.0..75.0] z[-75.0..75.0] dims=1.4├ù150.0├ù150.0
+  [11] x[-75.0..75.0] y[-75.0..-73.6] z[-75.0..75.0] dims=150.0├ù1.4├ù150.0
+
+ [32mÔ£ô[39m tests/integration/split_by_bends.integration.test.ts[2m > [22msplit_body_by_bends integration[2m > [22mhollow cube ÔåÆ thin_solid mode, 6 panels, 0 protrusions[33m 699[2mms[22m[39m
+ [32mÔ£ô[39m tests/integration/split_by_bends.integration.test.ts[2m > [22msplit_body_by_bends integration[2m > [22mtwo hollow cubes ÔåÆ thin_solid mode, 12 panels, 4 bridge flanges[33m 2336[2mms[22m[39m
+ [32mÔ£ô[39m tests/integration/split_by_bends.integration.test.ts[2m > [22msplit_body_by_bends integration[2m > [22mtestcube: protrusion bboxes are local features, not panel-sized[33m 2426[2mms[22m[39m
+ [32mÔ£ô[39m tests/integration/split_by_bends.integration.test.ts[2m > [22msplit_body_by_bends integration[2m > [22mcube with flanges ÔåÆ thin_solid mode, 10 clean isolated panels (6 walls + 4 flanges)[33m 839[2mms[22m[39m
+ [32mÔ£ô[39m tests/integration/split_by_bends.integration.test.ts[2m > [22msplit_body_by_bends integration[2m > [22mcauldron.step ÔåÆ decomposes correctly into flat trapezoidal panels without isolated triangles[33m 2258[2mms[22m[39m
+ [32mÔ£ô[39m tests/integration/split_by_bends.integration.test.ts[2m > [22msplit_body_by_bends integration[2m > [22mcauldron.step ÔåÆ center_and_align_body translates centroid to [0,0,0] and aligns dominant axis
+ [32mÔ£ô[39m tests/integration/split_by_bends.integration.test.ts[2m > [22msplit_body_by_bends integration[2m > [22mcauldron adjacent split panels ÔåÆ merge_bodies_with_bend watertight fuse[33m 1593[2mms[22m[39m
+ [32mÔ£ô[39m tests/integration/split_by_bends.integration.test.ts[2m > [22msplit_body_by_bends integration[2m > [22mangle_bracket_15deg: split ÔåÆ 2 panels, merge_bodies_with_bend succeeds
+ [32mÔ£ô[39m tests/integration/split_by_bends.integration.test.ts[2m > [22msplit_body_by_bends integration[2m > [22mangle_bracket_30deg: split ÔåÆ 2 panels, merge_bodies_with_bend succeeds
+ [32mÔ£ô[39m tests/integration/split_by_bends.integration.test.ts[2m > [22msplit_body_by_bends integration[2m > [22mangle_bracket_45deg: split ÔåÆ 2 panels, merge_bodies_with_bend succeeds
+ [32mÔ£ô[39m tests/integration/split_by_bends.integration.test.ts[2m > [22msplit_body_by_bends integration[2m > [22mcauldron.step ÔåÆ remove_protrusions loop_traversal vs legacy_volumetric[33m 1811[2mms[22m[39m
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 98.55, -100)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (98.55, -100, 100)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 100, 98.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -100, -98.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-98.55, -100, -100)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -98.55, 100)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 73.55, -75)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (73.55, -75, 75)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 75, 73.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -75, -73.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-73.55, -75, -75)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -73.55, 75)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 98.55, -100)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (98.55, -100, 100)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 100, 98.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -100, -98.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-98.55, -100, -100)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -98.55, 100)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 73.55, -75)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (73.55, -75, 75)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 75, 73.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -75, -73.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-73.55, -75, -75)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -73.55, 75)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (0, 200, -0.5)
+  N: (0, -0, 1)
+  U: (0, -1, -0)
+  dx=200, dy=102.071, dz=1.05
+[DEBUG splitMode2] Box solid info:
+  origin: (100.657, 200, -1.36421)
+  N: (0.707107, 0, 0.707107)
+  U: (0, -1, 0)
+  dx=200, dy=98.5707, dz=2.5
+[DEBUG VALIDATION] matchedRatio=0.505549 (matchedAreaSum=20728.5, totalArea=41002)
+  Plane infos count N=8
+    Face 0: area=20414.3, center=(51.0357,100,0.05), normal=(0,-0,1), matched=true, partnerIdx=2
+    Face 1: area=20000, center=(50,100,0), normal=(0,0,-1), matched=false, partnerIdx=-1
+    Face 2: area=314.264, center=(101.286,100,-0.5), normal=(-0,0,-1), matched=true, partnerIdx=0
+    Face 3: area=141.421, center=(100.25,100,-0.25), normal=(-0.707107,0,-0.707107), matched=false, partnerIdx=-1
+    Face 4: area=110, center=(102.071,100,-0.225), normal=(1,0,0), matched=false, partnerIdx=-1
+    Face 5: area=10, center=(0,100,0.025), normal=(-1,0,0), matched=false, partnerIdx=-1
+    Face 6: area=6.01423, center=(58.6246,200,-0.0149079), normal=(-0,1,0), matched=false, partnerIdx=-1
+    Face 7: area=6.01423, center=(58.6246,0,-0.0149079), normal=(0,-1,-0), matched=false, partnerIdx=-1
+ [31m├ù[39m tests/integration/sys_jtbd_04_export_lifecycle.integration.test.ts[2m > [22mSYS-JTBD-04 Export Lifecycle Integration[2m > [22mverifies export lifecycle state transitions[33m 1909[2mms[22m[39m
+[31m   ÔåÆ {"code":"GE_UNFOLD_NOT_FOUND","message":"Unfold not found: 72f0e1ef-0423-43a4-9059-7ca3c97f1824","recoverable":false}[39m
+ [31m├ù[39m tests/integration/fuse_orientation_preserved.integration.test.ts[2m > [22mfuse_bodies: manufacturing plan + 3D placement[2m > [22mbuilds the correct flat plan AND places the fused body where the panels are[33m 2934[2mms[22m[39m
+[31m   ÔåÆ {"code":"GE_SHELL_NOT_FOUND","message":"Shell not found: 0587126c-79d3-453f-a075-7aebf4c7295d","recoverable":false}[39m
+ [31m├ù[39m tests/integration/merge_protrusion_flat_layout.integration.test.ts[2m > [22mmerge_bodies_with_bend: protrusion flat-pattern layout[2m > [22muses fold-perpendicular (flatHeight) not fold-parallel (flatWidth) for each panel section[33m 2662[2mms[22m[39m
+[31m   ÔåÆ {"code":"GE_SHELL_NOT_FOUND","message":"Shell not found: 8b1b390a-668f-4ee5-92b9-fb410a6deb8d","recoverable":false}[39m
+ [32mÔ£ô[39m tests/integration/interrogation.integration.test.ts[2m > [22mTopological Interrogation Integration Tests (Feature 006 US2)[2m > [22mcomputes bounding box and mass properties on a loaded solid[33m 2127[2mms[22m[39m
+ [31m├ù[39m tests/integration/interrogation.integration.test.ts[2m > [22mTopological Interrogation Integration Tests (Feature 006 US2)[2m > [22mmeasures distance and angles between faces
+[31m   ÔåÆ {"code":"GE_SOLID_NOT_FOUND","message":"Entity not found in session: 884066b7-9a0a-494f-8976-90febce53a30","recoverable":false}[39m
+ [32mÔ£ô[39m tests/integration/interrogation.integration.test.ts[2m > [22mTopological Interrogation Integration Tests (Feature 006 US2)[2m > [22mthrows GE_ALIGN_UNSUPPORTED for angle measurement on non-planar input
+ [31m├ù[39m tests/integration/interrogation.integration.test.ts[2m > [22mTopological Interrogation Integration Tests (Feature 006 US2)[2m > [22mexplores topology on identical input deterministically
+[31m   ÔåÆ {"code":"GE_SOLID_NOT_FOUND","message":"Solid not found: 408d890d-880f-416b-a2bf-e06ca312831a","recoverable":false}[39m
+ [32mÔ£ô[39m tests/integration/interrogation.integration.test.ts[2m > [22mTopological Interrogation Integration Tests (Feature 006 US2)[2m > [22mthrows GE_SOLID_NOT_FOUND for unknown entity id
+[90mstdout[2m | tests/integration/sys_jtbd_03_unfold_score.integration.test.ts[2m > [22m[2mSYS-JTBD-03 Unfold and Score Integration[2m > [22m[2mruns unfold + evaluate deterministically across 3 iterations[22m[39m
+[UnfoldScoreTest] Iter 0 clean_geometry result: {
+  solid_id: [32m'fc451997-31d5-4f09-b380-e09269300fca'[39m,
+  is_manifold: [33mtrue[39m,
+  face_count: [33m6[39m,
+  issues_found: [33m0[39m,
+  healed: [33mfalse[39m,
+  rollback_token: [32m'abacacd3-6765-4c22-b29f-c33309567a29'[39m,
+  mesh_url: [32m'http://localhost:3001/mesh/fc451997-31d5-4f09-b380-e09269300fca.glb'[39m
+}
+[UnfoldScoreTest] Iter 0 decompose_volume result: {
+  parts: [
+    {
+      id: [32m'134f3f9a-903c-4157-9a86-3863123dbfb8'[39m,
+      mesh_url: [32m'http://localhost:3001/mesh/134f3f9a-903c-4157-9a86-3863123dbfb8.glb'[39m
+    }
+  ],
+  panel_ids: [ [32m'134f3f9a-903c-4157-9a86-3863123dbfb8'[39m ],
+  panel_count: [33m1[39m,
+  strategy_applied: [32m'Integrity'[39m,
+  rollback_token: [32m'bdc480af-6e01-4e42-9246-15bffb9b8a97'[39m
+}
+[UnfoldScoreTest] Iter 0 apply_unfold result: {
+  part_id: [32m'134f3f9a-903c-4157-9a86-3863123dbfb8'[39m,
+  panel_id: [32m'134f3f9a-903c-4157-9a86-3863123dbfb8'[39m,
+  unfold_id: [32m'3198ac7a-8cc6-4183-9b26-862dac87fb25'[39m,
+  flat_width_mm: [33m100[39m,
+  flat_height_mm: [33m100[39m,
+  k_factor_used: [33m0.33[39m,
+  bend_count: [33m0[39m,
+  nominal_thickness_mm: [33m4.5[39m,
+  bend_lines: [],
+  dxf_content: [32m'  0\n'[39m +
+    [32m'SECTION\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'HEADER\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'ENDSEC\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'SECTION\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'TABLES\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'TABLE\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'LTYPE\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'1\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LTYPE\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'CONTINUOUS\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'0\n'[39m +
+    [32m'  3\n'[39m +
+    [32m'Solid line\n'[39m +
+    [32m' 72\n'[39m +
+    [32m'65\n'[39m +
+    [32m' 73\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 40\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LTYPE\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'DASHED\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'0\n'[39m +
+    [32m'  3\n'[39m +
+    [32m'Dashed line __ __ __ __ __\n'[39m +
+    [32m' 72\n'[39m +
+    [32m'65\n'[39m +
+    [32m' 73\n'[39m +
+    [32m'2\n'[39m +
+    [32m' 40\n'[39m +
+    [32m'6.35\n'[39m +
+    [32m' 49\n'[39m +
+    [32m'3.175\n'[39m +
+    [32m' 49\n'[39m +
+    [32m'-3.175\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'ENDTAB\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'TABLE\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'LAYER\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'4\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LAYER\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 62\n'[39m +
+    [32m'7\n'[39m +
+    [32m'  6\n'[39m +
+    [32m'CONTINUOUS\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LAYER\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'CUT\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 62\n'[39m +
+    [32m'1\n'[39m +
+    [32m'  6\n'[39m +
+    [32m'CONTINUOUS\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LAYER\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'BEND_UP\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 62\n'[39m +
+    [32m'3\n'[39m +
+    [32m'  6\n'[39m +
+    [32m'DASHED\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LAYER\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'BEND_DOWN\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 62\n'[39m +
+    [32m'4\n'[39m +
+    [32m'  6\n'[39m +
+    [32m'DASHED\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'ENDTAB\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'ENDSEC\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'SECTION\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'ENTITIES\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LINE\n'[39m +
+    [32m'  8\n'[39m +
+    [32m'CUT\n'[39m +
+    [32m' 10\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 20\n'[39m +
+    [32m'200\n'[39m +
+    [32m' 30\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m' 11\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 21\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 31\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LINE\n'[39m +
+    [32m'  8\n'[39m +
+    [32m'CUT\n'[39m +
+    [32m' 10\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 20\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 30\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m' 11\n'[39m +
+    [32m'100\n'[39m +
+    [32m' 21\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 31\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LINE\n'[39m +
+    [32m'  8\n'[39m +
+    [32m'CUT\n'[39m +
+    [32m' 10\n'[39m +
+    [32m'100\n'[39m +
+    [32m' 20\n'[39m +
+    [32m'200\n'[39m +
+    [32m' 30\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m' 11\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 21\n'[39m +
+    [32m'200\n'[39m +
+    [32m' 31\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LINE\n'[39m +
+    [32m'  8\n'[39m +
+    [32m'CUT\n'[39m +
+    [32m' 10\n'[39m +
+    [32m'100\n'[39m +
+    [32m' 20\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 30\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m' 11\n'[39m +
+    [32m'100\n'[39m +
+    [32m' 21\n'[39m +
+    [32m'200\n'[39m +
+    [32m' 31\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'ENDSEC\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'EOF\n'[39m,
+  rollback_token: [32m'transaction://2a17fe10-9307-4768-a1d6-1347690de3e8'[39m,
+  shape_history: [],
+  graph_flat_width_mm: [33m100[39m,
+  graph_flat_height_mm: [33m100[39m,
+  graph_bend_zones: []
+}
+[UnfoldScoreTest] Iter 0 evaluate_manufacturability result: {
+  score: [33m1[39m,
+  feasible: [33mtrue[39m,
+  violations: [],
+  summary: [32m'0 error(s), 0 warning(s) out of 0 checks'[39m
+}
+[UnfoldScoreTest] Iter 1 clean_geometry result: {
+  solid_id: [32m'04adc283-5185-4673-8ca0-8ec889a3c6db'[39m,
+  is_manifold: [33mtrue[39m,
+  face_count: [33m6[39m,
+  issues_found: [33m0[39m,
+  healed: [33mfalse[39m,
+  rollback_token: [32m'17e2ce39-ed55-4ea7-8290-66b44ee2c6aa'[39m,
+  mesh_url: [32m'http://localhost:3001/mesh/04adc283-5185-4673-8ca0-8ec889a3c6db.glb'[39m
+}
+[UnfoldScoreTest] Iter 1 decompose_volume result: {
+  parts: [
+    {
+      id: [32m'83d0ac61-4f1d-4d8f-ab41-f8cb6a13909b'[39m,
+      mesh_url: [32m'http://localhost:3001/mesh/83d0ac61-4f1d-4d8f-ab41-f8cb6a13909b.glb'[39m
+    }
+  ],
+  panel_ids: [ [32m'83d0ac61-4f1d-4d8f-ab41-f8cb6a13909b'[39m ],
+  panel_count: [33m1[39m,
+  strategy_applied: [32m'Integrity'[39m,
+  rollback_token: [32m'15260f87-95d7-4c87-b2d4-4bd89d96add2'[39m
+}
+[UnfoldScoreTest] Iter 1 apply_unfold result: {
+  part_id: [32m'83d0ac61-4f1d-4d8f-ab41-f8cb6a13909b'[39m,
+  panel_id: [32m'83d0ac61-4f1d-4d8f-ab41-f8cb6a13909b'[39m,
+  unfold_id: [32m'4cdc5c33-47c1-4a4e-b346-65bafbcea35d'[39m,
+  flat_width_mm: [33m100[39m,
+  flat_height_mm: [33m100[39m,
+  k_factor_used: [33m0.33[39m,
+  bend_count: [33m0[39m,
+  nominal_thickness_mm: [33m4.5[39m,
+  bend_lines: [],
+  dxf_content: [32m'  0\n'[39m +
+    [32m'SECTION\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'HEADER\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'ENDSEC\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'SECTION\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'TABLES\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'TABLE\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'LTYPE\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'1\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LTYPE\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'CONTINUOUS\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'0\n'[39m +
+    [32m'  3\n'[39m +
+    [32m'Solid line\n'[39m +
+    [32m' 72\n'[39m +
+    [32m'65\n'[39m +
+    [32m' 73\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 40\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LTYPE\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'DASHED\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'0\n'[39m +
+    [32m'  3\n'[39m +
+    [32m'Dashed line __ __ __ __ __\n'[39m +
+    [32m' 72\n'[39m +
+    [32m'65\n'[39m +
+    [32m' 73\n'[39m +
+    [32m'2\n'[39m +
+    [32m' 40\n'[39m +
+    [32m'6.35\n'[39m +
+    [32m' 49\n'[39m +
+    [32m'3.175\n'[39m +
+    [32m' 49\n'[39m +
+    [32m'-3.175\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'ENDTAB\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'TABLE\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'LAYER\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'4\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LAYER\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 62\n'[39m +
+    [32m'7\n'[39m +
+    [32m'  6\n'[39m +
+    [32m'CONTINUOUS\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LAYER\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'CUT\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 62\n'[39m +
+    [32m'1\n'[39m +
+    [32m'  6\n'[39m +
+    [32m'CONTINUOUS\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LAYER\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'BEND_UP\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 62\n'[39m +
+    [32m'3\n'[39m +
+    [32m'  6\n'[39m +
+    [32m'DASHED\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LAYER\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'BEND_DOWN\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 62\n'[39m +
+    [32m'4\n'[39m +
+    [32m'  6\n'[39m +
+    [32m'DASHED\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'ENDTAB\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'ENDSEC\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'SECTION\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'ENTITIES\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LINE\n'[39m +
+    [32m'  8\n'[39m +
+    [32m'CUT\n'[39m +
+    [32m' 10\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 20\n'[39m +
+    [32m'200\n'[39m +
+    [32m' 30\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m' 11\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 21\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 31\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LINE\n'[39m +
+    [32m'  8\n'[39m +
+    [32m'CUT\n'[39m +
+    [32m' 10\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 20\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 30\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m' 11\n'[39m +
+    [32m'100\n'[39m +
+    [32m' 21\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 31\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LINE\n'[39m +
+    [32m'  8\n'[39m +
+    [32m'CUT\n'[39m +
+    [32m' 10\n'[39m +
+    [32m'100\n'[39m +
+    [32m' 20\n'[39m +
+    [32m'200\n'[39m +
+    [32m' 30\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m' 11\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 21\n'[39m +
+    [32m'200\n'[39m +
+    [32m' 31\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LINE\n'[39m +
+    [32m'  8\n'[39m +
+    [32m'CUT\n'[39m +
+    [32m' 10\n'[39m +
+    [32m'100\n'[39m +
+    [32m' 20\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 30\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m' 11\n'[39m +
+    [32m'100\n'[39m +
+    [32m' 21\n'[39m +
+    [32m'200\n'[39m +
+    [32m' 31\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'ENDSEC\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'EOF\n'[39m,
+  rollback_token: [32m'transaction://0f7d69ac-cda3-48ab-9d92-879a417c782c'[39m,
+  shape_history: [],
+  graph_flat_width_mm: [33m100[39m,
+  graph_flat_height_mm: [33m100[39m,
+  graph_bend_zones: []
+}
+[UnfoldScoreTest] Iter 1 evaluate_manufacturability result: {
+  score: [33m1[39m,
+  feasible: [33mtrue[39m,
+  violations: [],
+  summary: [32m'0 error(s), 0 warning(s) out of 0 checks'[39m
+}
+[UnfoldScoreTest] Iter 2 clean_geometry result: {
+  solid_id: [32m'5124e5fd-aacc-4998-929b-41370bf4d5e9'[39m,
+  is_manifold: [33mtrue[39m,
+  face_count: [33m6[39m,
+  issues_found: [33m0[39m,
+  healed: [33mfalse[39m,
+  rollback_token: [32m'c7b353db-2005-48da-bc16-6822d036774c'[39m,
+  mesh_url: [32m'http://localhost:3001/mesh/5124e5fd-aacc-4998-929b-41370bf4d5e9.glb'[39m
+}
+[UnfoldScoreTest] Iter 2 decompose_volume result: {
+  parts: [
+    {
+      id: [32m'4f587df0-4c85-4c86-9ad7-231ece01b3f4'[39m,
+      mesh_url: [32m'http://localhost:3001/mesh/4f587df0-4c85-4c86-9ad7-231ece01b3f4.glb'[39m
+    }
+  ],
+  panel_ids: [ [32m'4f587df0-4c85-4c86-9ad7-231ece01b3f4'[39m ],
+  panel_count: [33m1[39m,
+  strategy_applied: [32m'Integrity'[39m,
+  rollback_token: [32m'37c930f5-b911-4336-8787-c9da0056d131'[39m
+}
+[UnfoldScoreTest] Iter 2 apply_unfold result: {
+  part_id: [32m'4f587df0-4c85-4c86-9ad7-231ece01b3f4'[39m,
+  panel_id: [32m'4f587df0-4c85-4c86-9ad7-231ece01b3f4'[39m,
+  unfold_id: [32m'99251356-fb1b-4633-b2f1-4bda63f2c333'[39m,
+  flat_width_mm: [33m100[39m,
+  flat_height_mm: [33m100[39m,
+  k_factor_used: [33m0.33[39m,
+  bend_count: [33m0[39m,
+  nominal_thickness_mm: [33m4.5[39m,
+  bend_lines: [],
+  dxf_content: [32m'  0\n'[39m +
+    [32m'SECTION\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'HEADER\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'ENDSEC\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'SECTION\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'TABLES\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'TABLE\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'LTYPE\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'1\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LTYPE\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'CONTINUOUS\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'0\n'[39m +
+    [32m'  3\n'[39m +
+    [32m'Solid line\n'[39m +
+    [32m' 72\n'[39m +
+    [32m'65\n'[39m +
+    [32m' 73\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 40\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LTYPE\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'DASHED\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'0\n'[39m +
+    [32m'  3\n'[39m +
+    [32m'Dashed line __ __ __ __ __\n'[39m +
+    [32m' 72\n'[39m +
+    [32m'65\n'[39m +
+    [32m' 73\n'[39m +
+    [32m'2\n'[39m +
+    [32m' 40\n'[39m +
+    [32m'6.35\n'[39m +
+    [32m' 49\n'[39m +
+    [32m'3.175\n'[39m +
+    [32m' 49\n'[39m +
+    [32m'-3.175\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'ENDTAB\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'TABLE\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'LAYER\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'4\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LAYER\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 62\n'[39m +
+    [32m'7\n'[39m +
+    [32m'  6\n'[39m +
+    [32m'CONTINUOUS\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LAYER\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'CUT\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 62\n'[39m +
+    [32m'1\n'[39m +
+    [32m'  6\n'[39m +
+    [32m'CONTINUOUS\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LAYER\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'BEND_UP\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 62\n'[39m +
+    [32m'3\n'[39m +
+    [32m'  6\n'[39m +
+    [32m'DASHED\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LAYER\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'BEND_DOWN\n'[39m +
+    [32m' 70\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 62\n'[39m +
+    [32m'4\n'[39m +
+    [32m'  6\n'[39m +
+    [32m'DASHED\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'ENDTAB\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'ENDSEC\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'SECTION\n'[39m +
+    [32m'  2\n'[39m +
+    [32m'ENTITIES\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LINE\n'[39m +
+    [32m'  8\n'[39m +
+    [32m'CUT\n'[39m +
+    [32m' 10\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 20\n'[39m +
+    [32m'200\n'[39m +
+    [32m' 30\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m' 11\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 21\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 31\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LINE\n'[39m +
+    [32m'  8\n'[39m +
+    [32m'CUT\n'[39m +
+    [32m' 10\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 20\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 30\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m' 11\n'[39m +
+    [32m'100\n'[39m +
+    [32m' 21\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 31\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LINE\n'[39m +
+    [32m'  8\n'[39m +
+    [32m'CUT\n'[39m +
+    [32m' 10\n'[39m +
+    [32m'100\n'[39m +
+    [32m' 20\n'[39m +
+    [32m'200\n'[39m +
+    [32m' 30\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m' 11\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 21\n'[39m +
+    [32m'200\n'[39m +
+    [32m' 31\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'LINE\n'[39m +
+    [32m'  8\n'[39m +
+    [32m'CUT\n'[39m +
+    [32m' 10\n'[39m +
+    [32m'100\n'[39m +
+    [32m' 20\n'[39m +
+    [32m'0\n'[39m +
+    [32m' 30\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m' 11\n'[39m +
+    [32m'100\n'[39m +
+    [32m' 21\n'[39m +
+    [32m'200\n'[39m +
+    [32m' 31\n'[39m +
+    [32m'0.0\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'ENDSEC\n'[39m +
+    [32m'  0\n'[39m +
+    [32m'EOF\n'[39m,
+  rollback_token: [32m'transaction://332c1f87-502f-4caa-91ae-aab0af888df8'[39m,
+  shape_history: [],
+  graph_flat_width_mm: [33m100[39m,
+  graph_flat_height_mm: [33m100[39m,
+  graph_bend_zones: []
+}
+[UnfoldScoreTest] Iter 2 evaluate_manufacturability result: {
+  score: [33m1[39m,
+  feasible: [33mtrue[39m,
+  violations: [],
+  summary: [32m'0 error(s), 0 warning(s) out of 0 checks'[39m
+}
+
+ [32mÔ£ô[39m tests/integration/sys_jtbd_03_unfold_score.integration.test.ts[2m > [22mSYS-JTBD-03 Unfold and Score Integration[2m > [22mruns unfold + evaluate deterministically across 3 iterations[33m 2618[2mms[22m[39m
+[90mstdout[2m | tests/integration/merge_unfold_panel_selection_bug.test.ts[2m > [22m[2mBug: merge_unfold panel selection (MCP team)[2m > [22m[2mDEMONSTRATES BUG FIX: apply_unfold NOW REJECTS stale panel A with clear error message[22m[39m
+[BUG FIX] Post-merge graph has 3 PanelNodes: [
+  { id: [32m'panel-a-82559383'[39m, canonical: [33mfalse[39m },
+  { id: [32m'82559383-3a04-44fe-8d1c-0b99462c8a58'[39m, canonical: [33mtrue[39m },
+  { id: [32m'0dac6573-9b6d-46c5-b0d9-a9cbe075a0f7'[39m, canonical: [33mtrue[39m }
+]
+[BUG FIX] Attempting unfold with NON-CANONICAL panel: id=panel-a-82559383 (canonical=false)
+[BUG FIX] Ô£ô Correctly rejected: Panel "panel-a-82559383" is non-canonical in part "82559383-3a04-44fe-8d1c-0b99462c8a58". Use preserved_part_id as panel_id for unfold operations.
+[BUG FIX] Ô£ô Canonical panel unfolds correctly: 401.0├ù400.0mm, bends=1
+
+[90mstdout[2m | tests/integration/merge_unfold_panel_selection_bug.test.ts[2m > [22m[2mBug: merge_unfold panel selection (MCP team)[2m > [22m[2mCORRECT BEHAVIOR: apply_unfold with canonical merged_part_id produces combined geometry[22m[39m
+[CORRECT] flat=400.9896016858808├ù400mm bends=1 thickness=1
+[CORRECT] Ô£ô Canonical panel_id produces correct merged geometry
+
+[90mstdout[2m | tests/integration/merge_unfold_panel_selection_bug.test.ts[2m > [22m[2mBug: merge_unfold panel selection (MCP team)[2m > [22m[2mACCEPTANCE: query_graph post-merge clearly identifies canonical unfold target[22m[39m
+[ACCEPTANCE] merged_part_id=0af8639b-a35e-47c6-a08f-b4ae2edf4560 maps to PanelNode in graph
+[ACCEPTANCE] Canonical node: {
+  id: [32m'0af8639b-a35e-47c6-a08f-b4ae2edf4560'[39m,
+  bodyId: [32m'b56ab8af-795f-489b-b36e-d20c2c4f508a'[39m,
+  canonical: [33mtrue[39m
+}
+
+ [32mÔ£ô[39m tests/integration/merge_unfold_panel_selection_bug.test.ts[2m > [22mBug: merge_unfold panel selection (MCP team)[2m > [22mDEMONSTRATES BUG FIX: apply_unfold NOW REJECTS stale panel A with clear error message[33m 5625[2mms[22m[39m
+ [32mÔ£ô[39m tests/integration/merge_unfold_panel_selection_bug.test.ts[2m > [22mBug: merge_unfold panel selection (MCP team)[2m > [22mCORRECT BEHAVIOR: apply_unfold with canonical merged_part_id produces combined geometry[33m 4300[2mms[22m[39m
+ [32mÔ£ô[39m tests/integration/merge_unfold_panel_selection_bug.test.ts[2m > [22mBug: merge_unfold panel selection (MCP team)[2m > [22mACCEPTANCE: query_graph post-merge clearly identifies canonical unfold target[33m 3765[2mms[22m[39m
+ [32mÔ£ô[39m tests/integration/mcp_b.integration.test.ts[2m > [22mMCP Phase B integration[2m > [22mSTEP -> clean -> decompose -> synthesize_joints flow
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 98.55, -100)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (98.55, -100, 100)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 100, 98.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -100, -98.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-98.55, -100, -100)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -98.55, 100)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 73.55, -75)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (73.55, -75, 75)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 75, 73.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -75, -73.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-73.55, -75, -75)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -73.55, 75)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+ [32mÔ£ô[39m tests/integration/sys_jtbd_02_safety.integration.test.ts[2m > [22mSYS-JTBD-02 Safety Integration[2m > [22mrejects adhesive joint when fire_rated is true
+ [32mÔ£ô[39m tests/integration/sys_jtbd_02_safety.integration.test.ts[2m > [22mSYS-JTBD-02 Safety Integration[2m > [22mrejects plastic_fastener joint when fire_rated is true
+ [32mÔ£ô[39m tests/integration/sys_jtbd_02_safety.integration.test.ts[2m > [22mSYS-JTBD-02 Safety Integration[2m > [22mallows tab_slot joint when fire_rated is true (but fails with geometry error since panels are fake)[33m 1302[2mms[22m[39m
+ [32mÔ£ô[39m tests/integration/error_model.integration.test.ts[2m > [22mError Model Compliance[2m > [22mreturns structured error output for invalid inputs[33m 505[2mms[22m[39m
+ [32mÔ£ô[39m tests/integration/sys_jtbd_05_rollback.integration.test.ts[2m > [22mSYS-JTBD-05 Rollback Integration[2m > [22mrestores state correctly after rollback tool call[33m 1509[2mms[22m[39m
+ [31m├ù[39m tests/integration/sys_jtbd_01_decompose.integration.test.ts[2m > [22mSYS-JTBD-01 Full Decompose System Integration[2m > [22mruns STEP -> clean -> decompose -> joints -> unfold end-to-end[33m 1629[2mms[22m[39m
+[31m   ÔåÆ {"code":"GE_SHELL_NOT_FOUND","message":"Shell not found: 98c739c7-d88f-4bf1-8578-9b6bd2bf9a45","recoverable":false}[39m
+ [32mÔ£ô[39m tests/integration/build_shell_acute_fold.integration.test.ts[2m > [22mbuildShellFromFlatPattern: acute-angle refold (canonical)[2m > [22mfolds 90┬░ ÔåÆ Panel B stands vertical (+Z)[33m 1145[2mms[22m[39m
+ [32mÔ£ô[39m tests/integration/build_shell_acute_fold.integration.test.ts[2m > [22mbuildShellFromFlatPattern: acute-angle refold (canonical)[2m > [22mfolds 45┬░ ÔåÆ Panel B leans (X and Z both ~69mm)
+[90mstdout[2m | tests/integration/build_shell_acute_fold.integration.test.ts[2m > [22m[2mbuildShellFromFlatPattern: acute-angle refold (canonical)[2m > [22m[2mfolds 90┬░ ÔåÆ Panel B stands vertical (+Z)[22m[39m
+[acute 90] x[0.0..100.0] z[0.0..98.0]
+
+[90mstdout[2m | tests/integration/build_shell_acute_fold.integration.test.ts[2m > [22m[2mbuildShellFromFlatPattern: acute-angle refold (canonical)[2m > [22m[2mfolds 45┬░ ÔåÆ Panel B leans (X and Z both ~69mm)[22m[39m
+[acute 45] x[0.0..169.3] z[0.0..70.4]
+
+ [32mÔ£ô[39m tests/integration/md_rules.integration.test.ts[2m > [22mMD rules integration[2m > [22mloads config and validates intentional violations
+ [32mÔ£ô[39m tests/integration/md_rules.integration.test.ts[2m > [22mMD rules integration[2m > [22mblocks adhesive in fire-rated context
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 98.55, -100)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (98.55, -100, 100)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 100, 98.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -100, -98.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-98.55, -100, -100)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -98.55, 100)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 73.55, -75)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (73.55, -75, 75)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 75, 73.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -75, -73.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-73.55, -75, -75)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -73.55, 75)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+ [32mÔ£ô[39m tests/integration/merge_unfold_dxf_content.test.ts[2m > [22mapply_unfold dxf_content for merged panels[2m > [22mapply_unfold includes dxf_content in response for canonical merged panel[33m 3500[2mms[22m[39m
+[90mstdout[2m | tests/integration/merge_unfold_dxf_content.test.ts[2m > [22m[2mapply_unfold dxf_content for merged panels[2m > [22m[2mapply_unfold includes dxf_content in response for canonical merged panel[22m[39m
+Ô£ô apply_unfold response includes dxf_content (204 bytes)
+  Flat dimensions: 402.1├ù400.0mm
+  Bends: 1 with 1 bend lines
+
+ [32mÔ£ô[39m tests/integration/unfold_roundtrip.integration.test.ts[2m > [22mUnfold round-trip harness[2m > [22mCASE 1-app: merge of two perpendicular outer panels at app-default radius 1.0mm (regression for user report)[33m 5801[2mms[22m[39m
+ [31m├ù[39m tests/integration/unfold_roundtrip.integration.test.ts[2m > [22mUnfold round-trip harness[2m > [22mCASE 1: one merge of two perpendicular outer panels unfolds to 400├ù200 / 1 bend[33m 2020[2mms[22m[39m
+[31m   ÔåÆ expected undefined not to be undefined[39m
+ [32mÔ£ô[39m tests/integration/unfold_roundtrip.integration.test.ts[2m > [22mUnfold round-trip harness[2m > [22mCASE 2: chained merge of 3 mutually-perpendicular cube faces is correctly rejected[33m 4216[2mms[22m[39m
+ [31m├ù[39m tests/integration/unfold_roundtrip.integration.test.ts[2m > [22mUnfold round-trip harness[2m > [22mCASE 3: translate one panel by 0.05mm then merge ÔÇö sewing tolerance probe[33m 3560[2mms[22m[39m
+[31m   ÔåÆ {"code":"GE_SOLID_NOT_FOUND","message":"Entity not found in session: 3db1da64-886d-4e41-aa15-c1d65863cd1c","recoverable":false}[39m
+ [31m├ù[39m tests/integration/unfold_roundtrip.integration.test.ts[2m > [22mUnfold round-trip harness[2m > [22mCASE 4: all six paired-cube unfolds are 2:1 rectangles with central bend
+[31m   ÔåÆ {"code":"GE_SOLID_NOT_FOUND","message":"Solid/Shell not found: f745331f-5684-4075-84b8-4cad5259fce1","recoverable":false}[39m
+ [32mÔ£ô[39m tests/integration/unfold_roundtrip.integration.test.ts[2m > [22mUnfold round-trip harness[2m > [22mCASE 5a: asymmetric L (two cube faces, one offset along seam) unfolds to exactly 1 bend[33m 3705[2mms[22m[39m
+ [31m├ù[39m tests/integration/unfold_roundtrip.integration.test.ts[2m > [22mUnfold round-trip harness[2m > [22mCASE 5b: chained merge A+B+C with parallel A/C correctly rejects empty fuse
+[31m   ÔåÆ {"code":"GE_SHELL_NOT_FOUND","message":"Shell not found: a9f38216-73e4-4805-90d7-523e0112994f","recoverable":false}[39m
+[90mstdout[2m | tests/integration/unfold_roundtrip.integration.test.ts[2m > [22m[2mUnfold round-trip harness[2m > [22m[2mCASE 1-app: merge of two perpendicular outer panels at app-default radius 1.0mm (regression for user report)[22m[39m
+[CASE 1-app] flat=402.08915911463725├ù400mm bends=1 thickness=1
+
+[90mstdout[2m | tests/integration/unfold_roundtrip.integration.test.ts[2m > [22m[2mUnfold round-trip harness[2m > [22m[2mCASE 1: one merge of two perpendicular outer panels unfolds to 400├ù200 / 1 bend[22m[39m
+[CASE 1] all merge attempts failed: [
+  {
+    "pair": "+Y++X",
+    "code": "GE_SOLID_NOT_FOUND",
+    "message": "{\"code\":\"GE_SOLID_NOT_FOUND\",\"message\":\"Entity not found in session: caf6938b-6a0c-4ece-ba88-089ec62f111f\",\"recoverable\":false}"
+  },
+  {
+    "pair": "+Y++Z",
+    "code": "GE_SOLID_NOT_FOUND",
+    "message": "{\"code\":\"GE_SOLID_NOT_FOUND\",\"message\":\"Entity not found in session: caf6938b-6a0c-4ece-ba88-089ec62f111f\",\"recoverable\":false}"
+  },
+  {
+    "pair": "+Y+-Z",
+    "code": "GE_SOLID_NOT_FOUND",
+    "message": "{\"code\":\"GE_SOLID_NOT_FOUND\",\"message\":\"Entity not found in session: caf6938b-6a0c-4ece-ba88-089ec62f111f\",\"recoverable\":false}"
+  },
+  {
+    "pair": "+Y+-X",
+    "code": "GE_SOLID_NOT_FOUND",
+    "message": "{\"code\":\"GE_SOLID_NOT_FOUND\",\"message\":\"Entity not found in session: caf6938b-6a0c-4ece-ba88-089ec62f111f\",\"recoverable\":false}"
+  }
+]
+
+[90mstdout[2m | tests/integration/unfold_roundtrip.integration.test.ts[2m > [22m[2mUnfold round-trip harness[2m > [22m[2mCASE 3: translate one panel by 0.05mm then merge ÔÇö sewing tolerance probe[22m[39m
+[CASE 3] panel B 479960a8-d137-4440-8b09-eca1cc1f98da ÔåÆ translated 3db1da64-886d-4e41-aa15-c1d65863cd1c
+[CASE 3] merge after 0.05mm translate failed: {
+  code: [32m'GE_SOLID_NOT_FOUND'[39m,
+  message: [32m'{"code":"GE_SOLID_NOT_FOUND","message":"Entity not found in session: 3db1da64-886d-4e41-aa15-c1d65863cd1c","recoverable":false}'[39m,
+  recoverable: [33mfalse[39m,
+  suggestedTool: [90mundefined[39m
+}
+
+[90mstdout[2m | tests/integration/unfold_roundtrip.integration.test.ts[2m > [22m[2mUnfold round-trip harness[2m > [22m[2mCASE 5a: asymmetric L (two cube faces, one offset along seam) unfolds to exactly 1 bend[22m[39m
+[CASE 5] shift pB(X) by 25mm along Z, new id=066219b5-a69d-42f8-8709-dbe4b14cba08
+[CASE 5] flat=401.0├ù400.0mm bends=1 thickness=0.985
+
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ» Failed Suites 10 ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+
+ FAIL  tests/integration/assembly.integration.test.ts > Assembly Operations Integration Tests (Feature 006 US6)
+Error: connect ECONNREFUSED 127.0.0.1:3306
+ ÔØ» tests/integration/assembly.integration.test.ts:27:29
+     25|     if (SKIP_DOLT) return;
+     26| 
+     27|     adminConn = await mysql.createConnection({
+       |                             ^
+     28|       host: HOST,
+     29|       port: PORT,
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { errno: -4078, code: 'ECONNREFUSED', syscall: 'connect', address: '127.0.0.1', port: 3306, fatal: true }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[1/37]ÔÄ»
+
+ FAIL  tests/integration/booleans.integration.test.ts > Boolean Operations Integration Tests (Feature 006 US1)
+Error: connect ECONNREFUSED 127.0.0.1:3306
+ ÔØ» tests/integration/booleans.integration.test.ts:28:29
+     26|     if (SKIP_DOLT) return;
+     27| 
+     28|     adminConn = await mysql.createConnection({
+       |                             ^
+     29|       host: HOST,
+     30|       port: PORT,
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { errno: -4078, code: 'ECONNREFUSED', syscall: 'connect', address: '127.0.0.1', port: 3306, fatal: true }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[2/37]ÔÄ»
+
+ FAIL  tests/integration/direct_edits.integration.test.ts > Direct Edit Operations Integration Tests (Feature 006 US4)
+Error: connect ECONNREFUSED 127.0.0.1:3306
+ ÔØ» tests/integration/direct_edits.integration.test.ts:28:29
+     26|     if (SKIP_DOLT) return;
+     27| 
+     28|     adminConn = await mysql.createConnection({
+       |                             ^
+     29|       host: HOST,
+     30|       port: PORT,
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { errno: -4078, code: 'ECONNREFUSED', syscall: 'connect', address: '127.0.0.1', port: 3306, fatal: true }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[3/37]ÔÄ»
+
+ FAIL  tests/integration/dolt_smoke.integration.test.ts > Dolt smoke test
+Error: connect ECONNREFUSED 127.0.0.1:3306
+ ÔØ» tests/integration/dolt_smoke.integration.test.ts:25:29
+     23|   beforeAll(async () => {
+     24|     // Create a fresh isolated database for this run.
+     25|     adminConn = await mysql.createConnection({
+       |                             ^
+     26|       host: HOST,
+     27|       port: PORT,
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { errno: -4078, code: 'ECONNREFUSED', syscall: 'connect', address: '127.0.0.1', port: 3306, fatal: true }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[4/37]ÔÄ»
+
+ FAIL  tests/integration/dolt_smoke.integration.test.ts > Dolt smoke test
+TypeError: Cannot read properties of undefined (reading 'disconnect')
+ ÔØ» tests/integration/dolt_smoke.integration.test.ts:55:19
+     53| 
+     54|   afterAll(async () => {
+     55|     await adapter.disconnect();
+       |                   ^
+     56|     await adminConn.query(`DROP DATABASE IF EXISTS \`${DATABASE}\``);
+     57|     await adminConn.end();
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[5/37]ÔÄ»
+
+ FAIL  tests/integration/semantic_mapping.integration.test.ts > Semantic Mapping Layer ÔÇö Phase 2 (US1)
+Error: connect ECONNREFUSED 127.0.0.1:3306
+ ÔØ» tests/integration/semantic_mapping.integration.test.ts:31:29
+     29| 
+     30|   beforeAll(async () => {
+     31|     adminConn = await mysql.createConnection({
+       |                             ^
+     32|       host: HOST,
+     33|       port: PORT,
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { errno: -4078, code: 'ECONNREFUSED', syscall: 'connect', address: '127.0.0.1', port: 3306, fatal: true }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[6/37]ÔÄ»
+
+ FAIL  tests/integration/semantic_mapping.integration.test.ts > Semantic Mapping Layer ÔÇö Phase 2 (US1)
+TypeError: Cannot read properties of undefined (reading 'disconnect')
+ ÔØ» tests/integration/semantic_mapping.integration.test.ts:62:19
+     60| 
+     61|   afterAll(async () => {
+     62|     await adapter.disconnect();
+       |                   ^
+     63|     await adminConn.query(`DROP DATABASE IF EXISTS \`${DATABASE}\``);
+     64|     await adminConn.end();
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[7/37]ÔÄ»
+
+ FAIL  tests/integration/semantic_mapping.integration.test.ts > Semantic Mapping Layer ÔÇö Phase 3 US2 (remap after split)
+Error: connect ECONNREFUSED 127.0.0.1:3306
+ ÔØ» tests/integration/semantic_mapping.integration.test.ts:232:29
+    230| 
+    231|   beforeAll(async () => {
+    232|     adminConn = await mysql.createConnection({ host: HOST, port: PORT,ÔÇª
+       |                             ^
+    233|     await adminConn.query(`CREATE DATABASE IF NOT EXISTS \`${DATABASE_ÔÇª
+    234| 
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { errno: -4078, code: 'ECONNREFUSED', syscall: 'connect', address: '127.0.0.1', port: 3306, fatal: true }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[8/37]ÔÄ»
+
+ FAIL  tests/integration/semantic_mapping.integration.test.ts > Semantic Mapping Layer ÔÇö Phase 3 US2 (remap after split)
+TypeError: Cannot read properties of undefined (reading 'disconnect')
+ ÔØ» tests/integration/semantic_mapping.integration.test.ts:271:19
+    269| 
+    270|   afterAll(async () => {
+    271|     await adapter.disconnect();
+       |                   ^
+    272|     await adminConn.query(`DROP DATABASE IF EXISTS \`${DATABASE_US2}\`ÔÇª
+    273|     await adminConn.end();
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[9/37]ÔÄ»
+
+ FAIL  tests/integration/semantic_mapping.integration.test.ts > Semantic Mapping Layer ÔÇö Phase 3 US3 (spatial region refresh)
+Error: connect ECONNREFUSED 127.0.0.1:3306
+ ÔØ» tests/integration/semantic_mapping.integration.test.ts:363:29
+    361| 
+    362|   beforeAll(async () => {
+    363|     adminConn = await mysql.createConnection({ host: HOST, port: PORT,ÔÇª
+       |                             ^
+    364|     await adminConn.query(`CREATE DATABASE IF NOT EXISTS \`${DB3}\``);
+    365|     adapter = new DoltAdapter({ host: HOST, port: PORT, user: 'root', ÔÇª
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { errno: -4078, code: 'ECONNREFUSED', syscall: 'connect', address: '127.0.0.1', port: 3306, fatal: true }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[10/37]ÔÄ»
+
+ FAIL  tests/integration/semantic_mapping.integration.test.ts > Semantic Mapping Layer ÔÇö Phase 3 US3 (spatial region refresh)
+TypeError: Cannot read properties of undefined (reading 'disconnect')
+ ÔØ» tests/integration/semantic_mapping.integration.test.ts:387:19
+    385| 
+    386|   afterAll(async () => {
+    387|     await adapter.disconnect();
+       |                   ^
+    388|     await adminConn.query(`DROP DATABASE IF EXISTS \`${DB3}\``);
+    389|     await adminConn.end();
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[11/37]ÔÄ»
+
+ FAIL  tests/integration/semantic_mapping.integration.test.ts > Semantic Mapping Layer ÔÇö Phase 4 US4 (lineage + time travel)
+Error: connect ECONNREFUSED 127.0.0.1:3306
+ ÔØ» tests/integration/semantic_mapping.integration.test.ts:438:29
+    436| 
+    437|   beforeAll(async () => {
+    438|     adminConn = await mysql.createConnection({ host: HOST, port: PORT,ÔÇª
+       |                             ^
+    439|     await adminConn.query(`CREATE DATABASE IF NOT EXISTS \`${DB4}\``);
+    440|     adapter = new DoltAdapter({ host: HOST, port: PORT, user: 'root', ÔÇª
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { errno: -4078, code: 'ECONNREFUSED', syscall: 'connect', address: '127.0.0.1', port: 3306, fatal: true }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[12/37]ÔÄ»
+
+ FAIL  tests/integration/semantic_mapping.integration.test.ts > Semantic Mapping Layer ÔÇö Phase 4 US4 (lineage + time travel)
+TypeError: Cannot read properties of undefined (reading 'disconnect')
+ ÔØ» tests/integration/semantic_mapping.integration.test.ts:475:19
+    473| 
+    474|   afterAll(async () => {
+    475|     await adapter.disconnect();
+       |                   ^
+    476|     await adminConn.query(`DROP DATABASE IF EXISTS \`${DB4}\``);
+    477|     await adminConn.end();
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[13/37]ÔÄ»
+
+ FAIL  tests/integration/sew.integration.test.ts > Sewing Operations Integration Tests (Feature 006 US5)
+Error: connect ECONNREFUSED 127.0.0.1:3306
+ ÔØ» tests/integration/sew.integration.test.ts:27:29
+     25|     if (SKIP_DOLT) return;
+     26| 
+     27|     adminConn = await mysql.createConnection({
+       |                             ^
+     28|       host: HOST,
+     29|       port: PORT,
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { errno: -4078, code: 'ECONNREFUSED', syscall: 'connect', address: '127.0.0.1', port: 3306, fatal: true }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[14/37]ÔÄ»
+
+ FAIL  tests/integration/transforms.integration.test.ts > Geometric Transformations Integration Tests (Feature 006 US3)
+Error: connect ECONNREFUSED 127.0.0.1:3306
+ ÔØ» tests/integration/transforms.integration.test.ts:29:29
+     27|     if (SKIP_DOLT) return;
+     28| 
+     29|     adminConn = await mysql.createConnection({
+       |                             ^
+     30|       host: HOST,
+     31|       port: PORT,
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { errno: -4078, code: 'ECONNREFUSED', syscall: 'connect', address: '127.0.0.1', port: 3306, fatal: true }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[15/37]ÔÄ»
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ» Failed Tests 22 ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+
+ FAIL  tests/integration/cube_box_workflow.functional.test.ts > Cube Box Sheet Metal Workflow > decomposes a 200 mm hollow cube into panels, adjusts geometry, merges into L-assemblies, and adds flanges
+Unknown Error: target.normal must be an object with numeric x, y, z
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { code: 'GE_EXTEND_FAILED', recoverable: false, suggestedTool: undefined }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[16/37]ÔÄ»
+
+ FAIL  tests/integration/fuse_orientation_preserved.integration.test.ts > fuse_bodies: manufacturing plan + 3D placement > builds the correct flat plan AND places the fused body where the panels are
+Unknown Error: {"code":"GE_SHELL_NOT_FOUND","message":"Shell not found: 0587126c-79d3-453f-a075-7aebf4c7295d","recoverable":false}
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { code: 'GE_SHELL_NOT_FOUND', recoverable: false, suggestedTool: undefined }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[17/37]ÔÄ»
+
+ FAIL  tests/integration/fuse_shell_resolution.test.ts > Regression: fuse_bodies after translate_body > should resolve shell IDs correctly when fusing translated graph-backed parts
+Unknown Error: {"code":"GE_SOLID_NOT_FOUND","message":"Solid not found: 17120771-2604-4bfc-9b64-6c47e7957b79","recoverable":false}
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { code: 'GE_SOLID_NOT_FOUND', recoverable: false, suggestedTool: undefined }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[18/37]ÔÄ»
+
+ FAIL  tests/integration/fuse_shell_resolution.test.ts > Regression: fuse_bodies after translate_body > should handle multiple translated parts in fuse
+Unknown Error: {"code":"GE_SHELL_NOT_FOUND","message":"Shell/solid not found: 5763dd97-bbab-434f-8d26-fc3cf91efa96","recoverable":false}
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { code: 'GE_SHELL_NOT_FOUND', recoverable: false, suggestedTool: undefined }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[19/37]ÔÄ»
+
+ FAIL  tests/integration/fuse_unfold_graph_regression.test.ts > Regression: fuse after moved graph parts > should resolve shell IDs when fusing translated graph-backed parts
+Unknown Error: {"code":"GE_SHELL_NOT_FOUND","message":"Shell/solid not found: fc6f08e2-3581-4b71-ba3c-a19ec6ecee20","recoverable":false}
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { code: 'GE_SHELL_NOT_FOUND', recoverable: false, suggestedTool: undefined }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[20/37]ÔÄ»
+
+ FAIL  tests/integration/fuse_unfold_graph_regression.test.ts > Regression: fuse after moved graph parts > should preserve combined footprint when merging two perpendicular panels with a bend
+Unknown Error: {"code":"GE_SOLID_NOT_FOUND","message":"Solid/Shell not found: 80effbb2-30ac-407a-ab41-d12f854457d8","recoverable":false}
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { code: 'GE_SOLID_NOT_FOUND', recoverable: false, suggestedTool: undefined }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[21/37]ÔÄ»
+
+ FAIL  tests/integration/fuse_unfold_graph_regression.test.ts > Regression: fuse after moved graph parts > should produce a non-rectangular flat shape when a smaller same-thickness panel is fused as a protrusion
+Unknown Error: {"code":"GE_SOLID_NOT_FOUND","message":"Shell not found: e551938a-f11e-4690-b313-33c2f397ab38","recoverable":false}
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { code: 'GE_SOLID_NOT_FOUND', recoverable: false, suggestedTool: undefined }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[22/37]ÔÄ»
+
+ FAIL  tests/integration/interrogation.integration.test.ts > Topological Interrogation Integration Tests (Feature 006 US2) > measures distance and angles between faces
+Unknown Error: {"code":"GE_SOLID_NOT_FOUND","message":"Entity not found in session: 884066b7-9a0a-494f-8976-90febce53a30","recoverable":false}
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { code: 'GE_SOLID_NOT_FOUND', recoverable: false, suggestedTool: undefined }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[23/37]ÔÄ»
+
+ FAIL  tests/integration/interrogation.integration.test.ts > Topological Interrogation Integration Tests (Feature 006 US2) > explores topology on identical input deterministically
+Unknown Error: {"code":"GE_SOLID_NOT_FOUND","message":"Solid not found: 408d890d-880f-416b-a2bf-e06ca312831a","recoverable":false}
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { code: 'GE_SOLID_NOT_FOUND', recoverable: false, suggestedTool: undefined }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[24/37]ÔÄ»
+
+ FAIL  tests/integration/merge_orientation_preserved.integration.test.ts > merge_bodies_with_bend: 3D orientation is preserved > does not invert or rotate the part out of plane (fold stays in ÔêÆZ, Y preserved, Panel A in place)
+Unknown Error: {"code":"GE_SOLID_NOT_FOUND","message":"Entity not found in session: 356d67ec-70a8-461a-a109-0cf5d6ac0f6a","recoverable":false}
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { code: 'GE_SOLID_NOT_FOUND', recoverable: false, suggestedTool: undefined }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[25/37]ÔÄ»
+
+ FAIL  tests/integration/merge_protrusion_flat_layout.integration.test.ts > merge_bodies_with_bend: protrusion flat-pattern layout > uses fold-perpendicular (flatHeight) not fold-parallel (flatWidth) for each panel section
+Unknown Error: {"code":"GE_SHELL_NOT_FOUND","message":"Shell not found: 8b1b390a-668f-4ee5-92b9-fb410a6deb8d","recoverable":false}
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { code: 'GE_SHELL_NOT_FOUND', recoverable: false, suggestedTool: undefined }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[26/37]ÔÄ»
+
+ FAIL  tests/integration/sys_jtbd_01_decompose.integration.test.ts > SYS-JTBD-01 Full Decompose System Integration > runs STEP -> clean -> decompose -> joints -> unfold end-to-end
+Unknown Error: {"code":"GE_SHELL_NOT_FOUND","message":"Shell not found: 98c739c7-d88f-4bf1-8578-9b6bd2bf9a45","recoverable":false}
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { code: 'GE_SHELL_NOT_FOUND', recoverable: false, suggestedTool: undefined }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[27/37]ÔÄ»
+
+ FAIL  tests/integration/sys_jtbd_04_export_lifecycle.integration.test.ts > SYS-JTBD-04 Export Lifecycle Integration > verifies export lifecycle state transitions
+Unknown Error: {"code":"GE_UNFOLD_NOT_FOUND","message":"Unfold not found: 72f0e1ef-0423-43a4-9059-7ca3c97f1824","recoverable":false}
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { code: 'GE_UNFOLD_NOT_FOUND', recoverable: false, suggestedTool: undefined }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[28/37]ÔÄ»
+
+ FAIL  tests/integration/transaction_primitive.integration.test.ts > Transaction primitive (Feature 004 Phase 4) ÔÇö shape_history for all ops > split_body_by_plane appends shape_history to transaction
+Unknown Error: Shell UUID 'cube-solid' belongs to manufacturing-graph-tracked part 'cube-solid'. Raw plane splits on graph-tracked shells are not permitted. Use graph mutation tools instead.
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { code: 'GRAPH_INTEGRITY_ERROR', recoverable: true, suggestedTool: 'solve_geometry' }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[29/37]ÔÄ»
+
+ FAIL  tests/integration/transaction_primitive.integration.test.ts > Transaction primitive (Feature 004 Phase 4) ÔÇö shape_history for all ops > multiple ops accumulate shape_history in transaction
+Unknown Error: Shell UUID 'cube-solid' belongs to manufacturing-graph-tracked part 'cube-solid'. Raw face offsets on graph-tracked shells are not permitted. Use graph mutation tools instead.
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { code: 'GRAPH_INTEGRITY_ERROR', recoverable: true, suggestedTool: 'solve_geometry' }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[30/37]ÔÄ»
+
+ FAIL  tests/integration/unfold.integration.test.ts > Advanced Sheet Metal Unfolding Integration Tests > unfold merged perpendicular panels shows combined 400x200 flat dimensions and 1 bend
+AssertionError: expected 200 to be less than 10
+ ÔØ» tests/integration/unfold.integration.test.ts:196:38
+    194|     // Expect the combined unfolded flat size to be ~400x200 mm
+    195|     expect(Math.abs(maxDim - 400.0)).toBeLessThan(10.0);
+    196|     expect(Math.abs(minDim - 200.0)).toBeLessThan(10.0);
+       |                                      ^
+    197| 
+    198|     // It should have exactly 1 bend line in the middle
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[31/37]ÔÄ»
+
+ FAIL  tests/integration/unfold.integration.test.ts > Advanced Sheet Metal Unfolding Integration Tests > unfold of a 0-bend split panel returns dimensions matching the panel face, not a sliver
+Unknown Error: {"code":"GE_SOLID_NOT_FOUND","message":"Solid/Shell not found: 64a6c738-2651-41cf-a388-e9d28696435c","recoverable":false}
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { code: 'GE_SOLID_NOT_FOUND', recoverable: false, suggestedTool: undefined }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[32/37]ÔÄ»
+
+ FAIL  tests/integration/unfold_roundtrip.integration.test.ts > Unfold round-trip harness > CASE 1: one merge of two perpendicular outer panels unfolds to 400├ù200 / 1 bend
+AssertionError: expected undefined not to be undefined
+ ÔØ» tests/integration/unfold_roundtrip.integration.test.ts:259:22
+    257|       console.log('[CASE 1] all merge attempts failed:', JSON.stringifÔÇª
+    258|     }
+    259|     expect(mergedId).toBeDefined();
+       |                      ^
+    260|     expect(pickedPair).toBeDefined();
+    261|     expect(pickedUnionBbox).toBeDefined();
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[33/37]ÔÄ»
+
+ FAIL  tests/integration/unfold_roundtrip.integration.test.ts > Unfold round-trip harness > CASE 3: translate one panel by 0.05mm then merge ÔÇö sewing tolerance probe
+Unknown Error: {"code":"GE_SOLID_NOT_FOUND","message":"Entity not found in session: 3db1da64-886d-4e41-aa15-c1d65863cd1c","recoverable":false}
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { code: 'GE_SOLID_NOT_FOUND', recoverable: false, suggestedTool: undefined }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[34/37]ÔÄ»
+
+ FAIL  tests/integration/unfold_roundtrip.integration.test.ts > Unfold round-trip harness > CASE 4: all six paired-cube unfolds are 2:1 rectangles with central bend
+Unknown Error: {"code":"GE_SOLID_NOT_FOUND","message":"Solid/Shell not found: f745331f-5684-4075-84b8-4cad5259fce1","recoverable":false}
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { code: 'GE_SOLID_NOT_FOUND', recoverable: false, suggestedTool: undefined }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[35/37]ÔÄ»
+
+ FAIL  tests/integration/unfold_roundtrip.integration.test.ts > Unfold round-trip harness > CASE 5b: chained merge A+B+C with parallel A/C correctly rejects empty fuse
+Unknown Error: {"code":"GE_SHELL_NOT_FOUND","message":"Shell not found: a9f38216-73e4-4805-90d7-523e0112994f","recoverable":false}
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+Serialized Error: { code: 'GE_SHELL_NOT_FOUND', recoverable: false, suggestedTool: undefined }
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[36/37]ÔÄ»
+
+ FAIL  tests/integration/validate_assembly.integration.test.ts > Validate Assembly Integration Tests (Feature 009) > loads a multi-error assembly, asserts that all error categories are reported, applies recommended autofixes sequentially, and verifies assembly resolves to clean state (T021)
+AssertionError: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ÔØ» tests/integration/validate_assembly.integration.test.ts:338:31
+    336| 
+    337|     console.log('REPORT AFTER:', JSON.stringify(reportAfter, null, 2));
+    338|     expect(reportAfter.valid).toBe(true);
+       |                               ^
+    339|     expect(reportAfter.errors).toHaveLength(0);
+    340| 
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[37/37]ÔÄ»
+
+[2m Test Files [22m [1m[31m20 failed[39m[22m[2m | [22m[1m[32m16 passed[39m[22m[90m (36)[39m
+[2m      Tests [22m [1m[31m22 failed[39m[22m[2m | [22m[1m[32m133 passed[39m[22m[2m | [22m[33m1 skipped[39m[90m (197)[39m
+[2m   Start at [22m 14:55:36
+[2m   Duration [22m 21.83s[2m (transform 1.62s, setup 9ms, collect 13.06s, tests 111.64s, environment 10ms, prepare 8.31s)[22m
+
+JUNIT report written to C:/Projects/mcp-cad/docs/test-reports/vitest_results.xml

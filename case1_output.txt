@@ -1,0 +1,94 @@
+
+> mcp-cad-server@0.1.0 test
+> vitest run tests/integration/unfold_roundtrip.integration.test.ts -t CASE 1:
+
+The CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.
+
+[7m[1m[36m RUN [39m[22m[27m [36mv1.6.1[39m [90mC:/Projects/mcp-cad/ts[39m
+
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 98.55, -100)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (98.55, -100, 100)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, 100, 98.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -100, -98.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=200, dy=200, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-98.55, -100, -100)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-100, -98.55, 100)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=200, dy=200, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 73.55, -75)
+  N: (0, 1, 0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (73.55, -75, 75)
+  N: (1, 0, 0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, 75, 73.5)
+  N: (0, 0, 1)
+  U: (0, -1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -75, -73.5)
+  N: (-0, 0, -1)
+  U: (-0, 1, 0)
+  dx=150, dy=150, dz=2
+[DEBUG splitMode2] Box solid info:
+  origin: (-73.55, -75, -75)
+  N: (-1, -0, -0)
+  U: (0, 0, 1)
+  dx=150, dy=150, dz=1.95
+[DEBUG splitMode2] Box solid info:
+  origin: (-75, -73.55, 75)
+  N: (0, -1, -0)
+  U: (0, 0, -1)
+  dx=150, dy=150, dz=1.95
+[90mstdout[2m | tests/integration/unfold_roundtrip.integration.test.ts[2m > [22m[2mUnfold round-trip harness[2m > [22m[2mCASE 1: one merge of two perpendicular outer panels unfolds to 400├ù200 / 1 bend[22m[39m
+[CASE 1] flat=400.9896016858808├ù400mm bends=1 thickness=1
+
+ [31m├ù[39m tests/integration/unfold_roundtrip.integration.test.ts[2m > [22mUnfold round-trip harness[2m > [22mCASE 1: one merge of two perpendicular outer panels unfolds to 400├ù200 / 1 bend[33m 2141[2mms[22m[39m
+[31m   ÔåÆ expected 200 to be less than 10[39m
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ» Failed Tests 1 ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+
+ FAIL  tests/integration/unfold_roundtrip.integration.test.ts > Unfold round-trip harness > CASE 1: one merge of two perpendicular outer panels unfolds to 400├ù200 / 1 bend
+AssertionError: expected 200 to be less than 10
+ ÔØ» tests/integration/unfold_roundtrip.integration.test.ts:292:38
+    290|     expect(unfold.bend_count).toBe(1);
+    291|     expect(Math.abs(maxDim - 400.0)).toBeLessThan(10.0);
+    292|     expect(Math.abs(minDim - 200.0)).toBeLessThan(10.0);
+       |                                      ^
+    293|     // Regression for the "Thickness N/A" UI symptom ÔÇö handleApplyUnfoÔÇª
+    294|     // expose detectedThickness from the C++ engine.
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[1/1]ÔÄ»
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[33m6 skipped[39m[90m (7)[39m
+[2m   Start at [22m 14:57:28
+[2m   Duration [22m 4.39s[2m (transform 598ms, setup 0ms, collect 1.55s, tests 2.15s, environment 0ms, prepare 151ms)[22m
+
+JUNIT report written to C:/Projects/mcp-cad/docs/test-reports/vitest_results.xml

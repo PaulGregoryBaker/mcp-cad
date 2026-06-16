@@ -10,6 +10,9 @@ export default defineConfig({
         include: [
           'tests/manufacturing.test.ts',
           'tests/mcp.test.ts',
+          'tests/dxf_orientation.test.ts',
+          'tests/dxf_merge.unit.test.ts',
+          'tests/dxf_panel_frame_bbox.test.ts',
           'tests/rules.test.ts',
           'tests/bom.test.ts',
           'tests/assembly.test.ts',
@@ -18,6 +21,7 @@ export default defineConfig({
           'tests/export.test.ts',
            'tests/session.test.ts',
            'tests/config-schema.test.ts',
+           'tests/unit/fuse_preflight.unit.test.ts',
         ],
       },
       {
@@ -39,8 +43,12 @@ export default defineConfig({
         // memory across the full sequential run; without this the fork OOMs and
         // the C++ unordered_map for shells can be left in a partial-insert state,
         // causing GE_SHELL_NOT_FOUND on subsequently-allocated shell IDs.
+        // NOTE: glob covers ALL *.test.ts files in the integration folder so that
+        // files with non-.integration. suffixes (e.g. .functional., -workflow, etc.)
+        // also receive singleFork isolation and don't suffer C++ shared-state failures.
         name: 'integration',
-        include: ['tests/integration/**/*.integration.test.ts'],
+        include: ['tests/integration/**/*.test.ts'],
+        setupFiles: ['tests/setup/integration-reset.ts'],
         pool: 'forks',
         poolOptions: {
           forks: {
@@ -53,6 +61,7 @@ export default defineConfig({
         // E2E tests: validate MVP production path (INF-03 golden path)
         name: 'e2e',
         include: ['tests/e2e/integration_e2e.test.ts'],
+        setupFiles: ['tests/setup/integration-reset.ts'],
         // Standard STEP flows remain aligned with SC-005 (30s)
         testTimeout: 30_000,
       },
@@ -60,6 +69,7 @@ export default defineConfig({
         // Post-MVP Tier 3 stress scenario (Braai STL)
         name: 'e2e-braai',
         include: ['tests/e2e/**/braai-assembly.e2e.test.ts'],
+        setupFiles: ['tests/setup/integration-reset.ts'],
         testTimeout: 120_000,
       },
       {
@@ -68,6 +78,7 @@ export default defineConfig({
         // Run with: npx vitest run --project e2e-mesh-url-contract
         name: 'e2e-mesh-url-contract',
         include: ['tests/e2e/mesh-url-contract.e2e.test.ts'],
+        setupFiles: ['tests/setup/integration-reset.ts'],
         testTimeout: 30_000,
       },
     ],

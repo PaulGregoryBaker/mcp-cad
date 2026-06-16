@@ -6,6 +6,11 @@
  * Tasks: T002, T032
  */
 
+import type { PanelFrame } from '../dxf/orientation';
+export type { PanelFrame };
+import type { Placement2D } from '../dxf/merge';
+export type { Placement2D };
+
 // ─── Branded ID types ─────────────────────────────────────────────────────────
 
 /** Caller-supplied human-readable node identifier. Stable across Geometry Solves. */
@@ -36,6 +41,10 @@ export interface PanelNode {
   nominalThickness: number;     // mm
   flatWidth: number | null;     // mm — null before first Solve
   flatHeight: number | null;    // mm — null before first Solve
+  canonical: boolean;           // true if this is the canonical unfold target in a merged graph
+  shapeDxf: string | null;      // DXF content of flat panel outline & details; the source of truth manufacturing drawing; null before split_body_by_bends
+  panelFrame?: PanelFrame | null; // 3D orientation frame — DXF-aligned: u=DXF+X, v=DXF+Y, origin=3D point at DXF(0,0)
+  dxfPlacement?: Placement2D;   // 2D rigid transform: panel-local DXF coords → master merged flat coords; identity for root panels
 }
 
 export interface BendNode {
@@ -48,6 +57,7 @@ export interface BendNode {
   angle: number;                // degrees, 1–179 inclusive
   kFactor: number;              // 0 < k ≤ 1
   bendAllowance: number | null; // mm — computed by Solve; null before first Solve
+  bendZoneDxfX?: number;        // X coordinate (mm) in master merged flat where this bend zone starts
 }
 
 // ─── JoinNode params ──────────────────────────────────────────────────────────
@@ -166,6 +176,28 @@ export interface GeometrySolveResult {
   solveMs: number;
 }
 
+// ─── Graph-driven geometry reconstruction plan ───────────────────────────────
+
+export type GeometryRebuildStepType =
+  | 'BUILD_PANEL_FROM_DXF'
+  | 'THICKEN_PANEL'
+  | 'APPLY_BEND'
+  | 'APPLY_JOIN'
+  | 'APPLY_CUT'
+  | 'PLACE_IN_ASSEMBLY';
+
+export interface GeometryRebuildStep {
+  stepType: GeometryRebuildStepType;
+  nodeId: NodeId;
+  detail: Record<string, unknown>;
+}
+
+export interface GeometryRebuildPlan {
+  partId: string;
+  orderedNodeIds: NodeId[];
+  steps: GeometryRebuildStep[];
+}
+
 // ─── DRC types ────────────────────────────────────────────────────────────────
 
 export type DrcSeverity = 'ERROR' | 'WARNING';
@@ -225,6 +257,9 @@ export interface BendZone {
   offset: number;     // mm from panel A's near edge
   width: number;      // BA in mm
   nodeId: NodeId;
+  radius?: number;    // inner bend radius (mm)
+  kFactor?: number;   // neutral-axis factor 0 < k ≤ 1
+  angle?: number;     // bend angle in degrees
 }
 
 export interface FlatPatternDimensions {

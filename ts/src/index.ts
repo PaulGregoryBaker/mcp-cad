@@ -96,7 +96,11 @@ server.setRequestHandler(
   async (request: { params: { name: string; arguments?: Record<string, unknown> } }) => {
   try {
     const { dispatchTool } = await import('./mcp/tools.js');
-    const result = await dispatchTool(request.params.name, request.params.arguments ?? {}, config);
+    const toolArgs = request.params.arguments;
+    if (!toolArgs || typeof toolArgs !== 'object' || Array.isArray(toolArgs)) {
+      throw new Error('Tool call requires an explicit arguments object. Pass {} when no arguments are needed.');
+    }
+    const result = await dispatchTool(request.params.name, toolArgs, config);
     return {
       content: [{ type: 'text', text: JSON.stringify(result) }],
     };

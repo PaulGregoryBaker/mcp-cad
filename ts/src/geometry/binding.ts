@@ -19,6 +19,12 @@ import type {
   RivetHoleResult,
   UnfoldResult,
   DxfExportResult,
+  DxfSheetResult,
+  ThickenSheetResult,
+  ApplyBendResult,
+  NapiBendZoneSpec,
+  BuildShellFromFlatPatternResult,
+  PanelFrameResult,
   NestResult,
   RestoreResult,
   ClashReport,
@@ -80,6 +86,11 @@ export interface GeometryAddon {
   ): RivetHoleResult;
   unfoldShell(shellId: string, kFactor: number): UnfoldResult;
   exportDxf(unfoldId: string): DxfExportResult;
+  buildSheetFromDxf?(dxfContent: string): DxfSheetResult;
+  thickenSheet?(sheetId: string, thicknessMm: number): ThickenSheetResult;
+  applyBend?(panelAId: string, panelBId: string, innerRadiusMm: number, angleDeg: number, kFactor: number): ApplyBendResult;
+  buildShellFromFlatPattern?(dxfContent: string, bendZones: NapiBendZoneSpec[], thicknessMm: number, referenceShellId?: string): BuildShellFromFlatPatternResult;
+  getPanelFrame?(shellId: string): PanelFrameResult;
   exportGlb(shellId: string): Buffer;
   nestShells(
     unfoldIds: string[],
@@ -90,6 +101,7 @@ export interface GeometryAddon {
   restoreSnapshot(snapshotId: string): RestoreResult;
   clearSnapshot(snapshotId: string): void;
   clearSnapshots(): void;
+  clearState(): void;
   computeBoundingBox(entityId: string): BoundingBoxResult;
   computeMassProperties(entityId: string, properties?: string[]): MassPropertiesResult;
   measureDistance(entityA: string, entityB: string, measurementType: string): MeasureResult;
@@ -300,6 +312,26 @@ export class GeometryBinding {
     return this._addon ?? getAddon();
   }
 
+  hasBuildSheetFromDxf(): boolean {
+    return typeof this.addon.buildSheetFromDxf === 'function';
+  }
+
+  hasThickenSheet(): boolean {
+    return typeof this.addon.thickenSheet === 'function';
+  }
+
+  hasApplyBend(): boolean {
+    return typeof this.addon.applyBend === 'function';
+  }
+
+  hasBuildShellFromFlatPattern(): boolean {
+    return typeof this.addon.buildShellFromFlatPattern === 'function';
+  }
+
+  hasGetPanelFrame(): boolean {
+    return typeof this.addon.getPanelFrame === 'function';
+  }
+
   loadStep(filePath: string): string {
     try {
       return this.addon.loadStep(filePath);
@@ -399,6 +431,61 @@ export class GeometryBinding {
     }
   }
 
+  buildSheetFromDxf(dxfContent: string): DxfSheetResult {
+    if (!this.addon.buildSheetFromDxf) {
+      throw new Error('Geometry addon does not expose buildSheetFromDxf');
+    }
+    try {
+      return this.addon.buildSheetFromDxf(dxfContent);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  thickenSheet(sheetId: string, thicknessMm: number): ThickenSheetResult {
+    if (!this.addon.thickenSheet) {
+      throw new Error('Geometry addon does not expose thickenSheet');
+    }
+    try {
+      return this.addon.thickenSheet(sheetId, thicknessMm);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  applyBend(panelAId: string, panelBId: string, innerRadiusMm: number, angleDeg: number, kFactor: number): ApplyBendResult {
+    if (!this.addon.applyBend) {
+      throw new Error('Geometry addon does not expose applyBend');
+    }
+    try {
+      return this.addon.applyBend(panelAId, panelBId, innerRadiusMm, angleDeg, kFactor);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  buildShellFromFlatPattern(dxfContent: string, bendZones: NapiBendZoneSpec[], thicknessMm: number, referenceShellId?: string): BuildShellFromFlatPatternResult {
+    if (!this.addon.buildShellFromFlatPattern) {
+      throw new Error('Geometry addon does not expose buildShellFromFlatPattern');
+    }
+    try {
+      return this.addon.buildShellFromFlatPattern(dxfContent, bendZones, thicknessMm, referenceShellId ?? '');
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  getPanelFrame(shellId: string): PanelFrameResult {
+    if (!this.addon.getPanelFrame) {
+      throw new Error('Geometry addon does not expose getPanelFrame');
+    }
+    try {
+      return this.addon.getPanelFrame(shellId);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
   exportGlb(shellId: string): Buffer {
     try {
       return this.addon.exportGlb(shellId);
@@ -441,6 +528,10 @@ export class GeometryBinding {
 
   clearSnapshots(): void {
     this.addon.clearSnapshots();
+  }
+
+  clearState(): void {
+    this.addon.clearState();
   }
 
   computeBoundingBox(entityId: string): BoundingBoxResult {

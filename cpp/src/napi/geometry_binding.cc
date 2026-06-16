@@ -355,6 +355,150 @@ Napi::Value ExportDxf(const Napi::CallbackInfo& info) {
   return env.Undefined();
 }
 
+Napi::Value BuildSheetFromDxf(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsString()) {
+    Napi::TypeError::New(env, "buildSheetFromDxf(dxfContent: string)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string dxfContent = info[0].As<Napi::String>().Utf8Value();
+  TRY_GEOMETRY(env, {
+    DxfSheetResult res = svc().buildSheetFromDxf(dxfContent);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("sheetId", Napi::String::New(env, res.sheetId));
+    return result;
+  })
+  return env.Undefined();
+}
+
+Napi::Value ThickenSheet(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 2 || !info[0].IsString() || !info[1].IsNumber()) {
+    Napi::TypeError::New(env, "thickenSheet(sheetId: string, thicknessMm: number)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string sheetId = info[0].As<Napi::String>().Utf8Value();
+  double thicknessMm = info[1].As<Napi::Number>().DoubleValue();
+  TRY_GEOMETRY(env, {
+    ThickenSheetResult res = svc().thickenSheet(sheetId, thicknessMm);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("solidId", Napi::String::New(env, res.solidId));
+    return result;
+  })
+  return env.Undefined();
+}
+
+Napi::Value ApplyBend(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 5) {
+    Napi::TypeError::New(env, "applyBend(panelAId, panelBId, innerRadiusMm, angleDeg, kFactor)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
+  std::string panelAId = info[0].As<Napi::String>().Utf8Value();
+  std::string panelBId = info[1].As<Napi::String>().Utf8Value();
+  double innerRadiusMm = info[2].As<Napi::Number>().DoubleValue();
+  double angleDeg = info[3].As<Napi::Number>().DoubleValue();
+  double kFactor = info[4].As<Napi::Number>().DoubleValue();
+
+  TRY_GEOMETRY(env, {
+    ApplyBendResult res = svc().applyBend(panelAId, panelBId, innerRadiusMm, angleDeg, kFactor);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("mergedShellId", Napi::String::New(env, res.mergedShellId));
+    return result;
+  })
+  return env.Undefined();
+}
+
+Napi::Value BuildShellFromFlatPattern(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 3 || !info[0].IsString() || !info[1].IsArray() || !info[2].IsNumber()) {
+    Napi::TypeError::New(env,
+        "buildShellFromFlatPattern(dxfContent: string, bendZones: BendZoneSpec[], thicknessMm: number)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
+  std::string dxfContent = info[0].As<Napi::String>().Utf8Value();
+  Napi::Array zonesArr   = info[1].As<Napi::Array>();
+  double thicknessMm     = info[2].As<Napi::Number>().DoubleValue();
+
+  std::string referenceShellId;
+  if (info.Length() >= 4 && info[3].IsString())
+    referenceShellId = info[3].As<Napi::String>().Utf8Value();
+
+  std::vector<BendZoneSpec> bendZones;
+  for (uint32_t i = 0; i < zonesArr.Length(); ++i) {
+    Napi::Object obj = zonesArr.Get(i).As<Napi::Object>();
+    BendZoneSpec bz;
+    bz.offsetMm     = obj.Get("offsetMm").As<Napi::Number>().DoubleValue();
+    bz.widthMm      = obj.Get("widthMm").As<Napi::Number>().DoubleValue();
+    bz.angleDeg     = obj.Get("angleDeg").As<Napi::Number>().DoubleValue();
+    bz.innerRadiusMm = obj.Get("innerRadiusMm").As<Napi::Number>().DoubleValue();
+    bz.kFactor      = obj.Get("kFactor").As<Napi::Number>().DoubleValue();
+    // Optional world-space fold frame (defaults to 0 → C++ uses legacy face frame).
+    auto readOpt = [&](const char* key) -> double {
+      Napi::Value v = obj.Get(key);
+      return v.IsNumber() ? v.As<Napi::Number>().DoubleValue() : 0.0;
+    };
+    bz.foldNormalX = readOpt("foldNormalX");
+    bz.foldNormalY = readOpt("foldNormalY");
+    bz.foldNormalZ = readOpt("foldNormalZ");
+    bz.bendDirX    = readOpt("bendDirX");
+    bz.bendDirY    = readOpt("bendDirY");
+    bz.bendDirZ    = readOpt("bendDirZ");
+    bendZones.push_back(bz);
+  }
+
+  TRY_GEOMETRY(env, {
+    BuildShellFromFlatPatternResult res =
+        svc().buildShellFromFlatPattern(dxfContent, bendZones, thicknessMm, referenceShellId);
+    if (!res.ok) {
+      Napi::Error::New(env, res.errorCode + ": " + res.message).ThrowAsJavaScriptException();
+      return env.Undefined();
+    }
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("shellId", Napi::String::New(env, res.shellId));
+    return result;
+  })
+  return env.Undefined();
+}
+
+Napi::Value GetPanelFrame(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsString()) {
+    Napi::TypeError::New(env, "getPanelFrame(shellId: string)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string shellId = info[0].As<Napi::String>().Utf8Value();
+  TRY_GEOMETRY(env, {
+    PanelFrameResult res = svc().getPanelFrame(shellId);
+    if (!res.ok) {
+      Napi::Error::New(env, res.errorCode + ": " + res.message).ThrowAsJavaScriptException();
+      return env.Undefined();
+    }
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("originX", Napi::Number::New(env, res.originX));
+    result.Set("originY", Napi::Number::New(env, res.originY));
+    result.Set("originZ", Napi::Number::New(env, res.originZ));
+    result.Set("uX", Napi::Number::New(env, res.uX));
+    result.Set("uY", Napi::Number::New(env, res.uY));
+    result.Set("uZ", Napi::Number::New(env, res.uZ));
+    result.Set("vX", Napi::Number::New(env, res.vX));
+    result.Set("vY", Napi::Number::New(env, res.vY));
+    result.Set("vZ", Napi::Number::New(env, res.vZ));
+    result.Set("normalX", Napi::Number::New(env, res.normalX));
+    result.Set("normalY", Napi::Number::New(env, res.normalY));
+    result.Set("normalZ", Napi::Number::New(env, res.normalZ));
+    result.Set("uExtentMm", Napi::Number::New(env, res.uExtentMm));
+    result.Set("vExtentMm", Napi::Number::New(env, res.vExtentMm));
+    result.Set("thicknessMm", Napi::Number::New(env, res.thicknessMm));
+    return result;
+  })
+  return env.Undefined();
+}
+
 Napi::Value ExportGlb(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   if (info.Length() < 1 || !info[0].IsString()) {
@@ -450,6 +594,13 @@ Napi::Value RestoreSnapshot(const Napi::CallbackInfo& info) {
 
 Napi::Value ClearSnapshots(const Napi::CallbackInfo& info) {
   svc().clearSnapshots();
+  return info.Env().Undefined();
+}
+
+Napi::Value ClearState(const Napi::CallbackInfo& info) {
+  // Clear all accumulated OCCT state in-place (maps cleared, same service instance).
+  // In-place clear avoids shared_ptr destructor timing issues from service recreation.
+  svc().clearState();
   return info.Env().Undefined();
 }
 
@@ -1922,11 +2073,17 @@ void RegisterGeometryMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("addRivetHole",    Napi::Function::New(env, AddRivetHole));
   exports.Set("unfoldShell",     Napi::Function::New(env, UnfoldShell));
   exports.Set("exportDxf",       Napi::Function::New(env, ExportDxf));
-  exports.Set("exportGlb",       Napi::Function::New(env, ExportGlb));
+  exports.Set("buildSheetFromDxf", Napi::Function::New(env, BuildSheetFromDxf));
+  exports.Set("thickenSheet",    Napi::Function::New(env, ThickenSheet));
+  exports.Set("applyBend",                  Napi::Function::New(env, ApplyBend));
+  exports.Set("buildShellFromFlatPattern",  Napi::Function::New(env, BuildShellFromFlatPattern));
+  exports.Set("getPanelFrame",              Napi::Function::New(env, GetPanelFrame));
+  exports.Set("exportGlb",                  Napi::Function::New(env, ExportGlb));
   exports.Set("nestShells",      Napi::Function::New(env, NestShells));
   exports.Set("createSnapshot",        Napi::Function::New(env, CreateSnapshot));
   exports.Set("restoreSnapshot",       Napi::Function::New(env, RestoreSnapshot));
   exports.Set("clearSnapshots",        Napi::Function::New(env, ClearSnapshots));
+  exports.Set("clearState",            Napi::Function::New(env, ClearState));
   exports.Set("computeIntersections",  Napi::Function::New(env, ComputeIntersections));
   exports.Set("checkAssemblyClashes",  Napi::Function::New(env, CheckAssemblyClashes));
   exports.Set("computeGaps",           Napi::Function::New(env, ComputeGaps));

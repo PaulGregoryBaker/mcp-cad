@@ -169,13 +169,15 @@ describe('apply_unfold: output schema contract', () => {
 
 describe('apply_unfold: error model contract', () => {
   it('throws McpToolError with code when panel_id is missing', async () => {
+    // panel_id is optional (defaults to part_id). With an invalid transaction_id
+    // specified, the transaction check fires before geometry is reached.
     await expect(
       dispatchTool(
         'apply_unfold',
         { part_id: 'shell-1', material_id: 'mild_steel_1.5mm', transaction_id: 'tok-some' },
         config,
       ),
-    ).rejects.toMatchObject({ code: 'INTERNAL_ERROR' });
+    ).rejects.toMatchObject({ code: 'TRANSACTION_MISMATCH' });
   });
 
   it('throws McpToolError with code when material_id is missing', async () => {

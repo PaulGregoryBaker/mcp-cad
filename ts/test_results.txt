@@ -1,0 +1,65 @@
+
+> mcp-cad-server@0.1.0 test
+> vitest run
+
+The CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.
+
+[7m[1m[36m RUN [39m[22m[27m [36mv1.6.1[39m [90mC:/Projects/mcp-cad/ts[39m
+
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — map3dTo2d[2m > [22mprojects a point lying exactly on a horizontal panel to (0, 0)
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — map3dTo2d[2m > [22mprojects an offset point on a horizontal panel correctly
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — map3dTo2d[2m > [22mprojects a point on a vertical panel (XZ plane)
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — map3dTo2d[2m > [22mreturns GE_POINT_NOT_ON_PANEL for a point more than 0.1 mm off-surface
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — map3dTo2d[2m > [22mreturns GE_PANEL_NO_FRAME when no panel has a panelFrame
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — map3dTo2d[2m > [22mselects the panel whose surface is closest when multiple panels exist
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — map2dTo3d[2m > [22mreconstructs the 3D origin for 2D (0, 0) on a horizontal panel
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — map2dTo3d[2m > [22mreconstructs an offset 3D point from 2D coordinates
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — map2dTo3d[2m > [22mreturns GE_POINT_NOT_ON_PANEL for unknown panel ID
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — map2dTo3d[2m > [22mreturns GE_PANEL_NO_FRAME when panel has no panelFrame
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — round-trip accuracy[2m > [22mround-trip 3D→2D→3D has ≤ 0.1 mm error for a panel corner
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — round-trip accuracy[2m > [22mround-trip 2D→3D→2D has ≤ 0.1 mm error
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — round-trip: multiple 3D → 2D → 3D[2m > [22mconverts each reference 3D point to 2D and back within 0.1 mm
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — round-trip: multiple 2D → 3D → 2D[2m > [22mconverts each reference 2D point to 3D and back within 0.1 mm
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — round-trip: 3D → 2D, offset 10 mm in 2D, back to 3D[2m > [22ma 10 mm 2D displacement translates to 10 mm 3D displacement in the u direction
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — round-trip: 3D → 2D, offset 10 mm in 2D, back to 3D[2m > [22ma 10 mm 2D displacement in the v direction also translates correctly
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — round-trip: 2D → 3D, move 10 mm in 3D, back to 2D[2m > [22ma 10 mm 3D displacement in the u direction maps to 10 mm 2D displacement
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — round-trip: 2D → 3D, move 10 mm in 3D, back to 2D[2m > [22ma 10 mm 3D displacement in the v direction maps to 10 mm 2D displacement
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — dxfPlacement: Panel B with non-zero translation[2m > [22mpoint on Panel B maps to master flat x > aWidth + ba
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — dxfPlacement: Panel B with non-zero translation[2m > [22mpoint at u=aWidth+ba+10 maps into Panel B region
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — dxfPlacement: Panel B with non-zero translation[2m > [22mmap2dTo3d with Panel B dxfPlacement reconstructs panel-local coords
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — dxfPlacement: non-identity rotation (DXF-rotated panel)[2m > [22mmap2dTo3d inverts non-identity rotation matrix
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — dxfPlacement: non-identity rotation (DXF-rotated panel)[2m > [22mmap3dTo2d applies non-identity rotation to reach master flat
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — dxfPlacement: non-identity rotation (DXF-rotated panel)[2m > [22mround-trip with non-identity rotation stays within 0.1 mm
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — dxfPlacement: 3-panel chain round-trip[2m > [22mall three panel regions are reachable from 3D and stay within 0.1 mm round-trip
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — dxfPlacement: 3-panel chain round-trip[2m > [22mmap2dTo3d without panel_id selects correct panel from master flat coords
+ [32m✓[39m tests/unit/coordinate-map.unit.test.ts[2m > [22mcoordinate-map — round-trip: tilted panel (non-axis-aligned)[2m > [22mhandles a 45-degree rotated panel in XY plane
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22maddNode[2m > [22madds a PanelNode successfully
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22maddNode[2m > [22mthrows NODE_ID_ALREADY_EXISTS on duplicate
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22maddNode[2m > [22madds BendNode with edges wired correctly
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22maddNode[2m > [22mdetects cycle — not possible with BendNode model (both panels are upstreams)
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22maddNode[2m > [22mmarks added node dirty
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22mremoveNode[2m > [22mremoves an isolated node
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22mremoveNode[2m > [22mremoves a leaf node (BendNode) and cleans edges
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22mremoveNode[2m > [22mthrows REMOVE_WOULD_ORPHAN_NODES when BendNode references the node
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22mremoveNode[2m > [22mthrows NODE_NOT_FOUND for unknown id
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22mupdateNode[2m > [22mupdates node properties
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22mupdateNode[2m > [22msupports rename via newNodeId
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22mupdateNode[2m > [22mthrows NODE_NOT_FOUND for unknown node
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22mqueryNodes[2m > [22mreturns nodes in topological order (both panels before bend)
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22mqueryNodes[2m > [22mreturns all nodes in insertion order when topological=false
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22mtopologicalSort[2m > [22mreturns null for a cyclic graph (manually injected)
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22mtopologicalSort[2m > [22mreturns ordered array for an acyclic graph
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22mmarkDirty and getStaleWarning[2m > [22mgetStaleWarning returns null for a clean graph
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22mmarkDirty and getStaleWarning[2m > [22mgetStaleWarning returns a WARNING when dirty nodes exist
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22mmarkDirty and getStaleWarning[2m > [22mmarkDirty cascades downstream (to b1 which depends on p1)
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22mcomputeBendAllowance[2m > [22mcomputes BA correctly: π × (90/180) × (2 + 0.42 × 1.5) ≈ 3.632
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22mgetFlatPatternDimensions[2m > [22mreturns correct dimensions for a 2-panel/1-bend chain
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22mgetFlatPatternDimensions[2m > [22mreturns correct dimensions for a 3-panel/2-bend chain
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22mgetFlatPatternDimensions[2m > [22mreturns correct bend-zone offsets matching the formula
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mManufacturingGraph[2m > [22mgetFlatPatternDimensions[2m > [22mreturns null for panel without flat dimensions (null flatWidth)
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mqueryNodes and reset (T061)[2m > [22mqueryNodes(true) returns P1, B1, P2, B2, P3 in Kahn topological order
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mqueryNodes and reset (T061)[2m > [22mdirty_node_ids populated correctly when some nodes are dirty
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mqueryNodes and reset (T061)[2m > [22mreset() clears all state
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mupdateNode and removeNode (T064)[2m > [22mupdateNode renames a node ID and updates all edge references
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mupdateNode and removeNode (T064)[2m > [22mremoveNode on a BendNode marks both panels dirty
+ [32m✓[39m tests/manufacturing/graph/graph.test.ts[2m > [22mupdateNode and removeNode (T064)[2m > [22mREMOVE_WOULD_ORPHAN_NODES fires when PanelNode is still referenced by BendNode

@@ -1,0 +1,12 @@
+
+> mcp-cad-server@0.1.0 test:integration
+> vitest run --project integration
+
+The CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.
+
+[7m[1m[36m RUN [39m[22m[27m [36mv1.6.1[39m [90mC:/Projects/mcp-cad/ts[39m
+
+projects: integration
+watch exclude:  **/node_modules/**, **/dist/**
+
+No test files found, exiting with code 1

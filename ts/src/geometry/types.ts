@@ -123,6 +123,45 @@ export interface DxfExportResult {
   bboxHeightMm: number;
 }
 
+export interface DxfSheetResult {
+  sheetId: string;
+}
+
+export interface ThickenSheetResult {
+  solidId: string;
+}
+
+export interface ApplyBendResult {
+  mergedShellId: string;
+}
+
+export interface NapiBendZoneSpec {
+  offsetMm: number;
+  widthMm: number;
+  angleDeg: number;
+  innerRadiusMm: number;
+  kFactor: number;
+  // Optional world-space fold frame used to place the rebuilt shell on the correct
+  // side (canonical +X → bendDir, canonical +Z → foldNormal). When omitted, C++
+  // falls back to deriving the placement frame from the reference shell's face.
+  foldNormalX?: number; foldNormalY?: number; foldNormalZ?: number;
+  bendDirX?: number; bendDirY?: number; bendDirZ?: number;
+}
+
+export interface BuildShellFromFlatPatternResult {
+  shellId: string;
+}
+
+// Oriented panel frame P(x): local (u, v, n) → world via origin + u*U + v*V + n*N.
+// uExtent/vExtent are the true in-plane flat dimensions (tilt-independent).
+export interface PanelFrameResult {
+  originX: number; originY: number; originZ: number;
+  uX: number; uY: number; uZ: number;
+  vX: number; vY: number; vZ: number;
+  normalX: number; normalY: number; normalZ: number;
+  uExtentMm: number; vExtentMm: number; thicknessMm: number;
+}
+
 export interface NestPlacement {
   unfoldId: string;
   sheetIndex: number;

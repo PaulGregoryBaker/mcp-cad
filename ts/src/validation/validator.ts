@@ -34,7 +34,7 @@ export class ValidationEngine {
       partIds = session.getActiveShellIds();
     }
 
-    // 2. Fetch the sheet metal flags from params or default to empty
+    // 2. Default to empty sheet_metal_flags when not provided.
     const sheetMetalFlags = params.sheet_metal_flags ?? {};
 
     // 3. Gather database metadata & build semantic mapping

@@ -136,6 +136,8 @@ export async function bootstrapGraph(
       nominalThickness: defaultMaterial.thicknessMm,
       flatWidth: null,
       flatHeight: null,
+      canonical: true,  // Bootstrapped panels are canonical unfold targets
+      shapeDxf: null,   // Will be populated by split_body_by_bends or other operations
     };
 
     try {
