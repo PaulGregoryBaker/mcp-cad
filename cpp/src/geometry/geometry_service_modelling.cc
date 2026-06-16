@@ -122,6 +122,7 @@
 #include <gp_Ax3.hxx>
 
 #include "geometry_service_impl.hpp"
+#include "geometry_service_utils.hpp"
 
 // ─── Standard library ─────────────────────────────────────────────────────────
 #include <map>
@@ -146,38 +147,6 @@
 
 namespace mcp_cad {
 
-static std::string generateUUID() {
-  static std::random_device rd;
-  static std::mt19937_64 gen(rd());
-  static std::uniform_int_distribution<uint64_t> dist;
-
-  uint64_t hi = dist(gen);
-  uint64_t lo = dist(gen);
-
-  // Set version (4) and variant bits
-  hi = (hi & 0xFFFFFFFFFFFF0FFFULL) | 0x0000000000004000ULL;
-  lo = (lo & 0x3FFFFFFFFFFFFFFFULL) | 0x8000000000000000ULL;
-
-  std::ostringstream oss;
-  oss << std::hex << std::setfill('0')
-      << std::setw(8)  << (hi >> 32) << "-"
-      << std::setw(4)  << ((hi >> 16) & 0xFFFF) << "-"
-      << std::setw(4)  << (hi & 0xFFFF) << "-"
-      << std::setw(4)  << (lo >> 48) << "-"
-      << std::setw(12) << (lo & 0x0000FFFFFFFFFFFFULL);
-  return oss.str();
-}
-
-static long long nowMs() {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(
-             std::chrono::system_clock::now().time_since_epoch())
-      .count();
-}
-
-static std::string shapeId(const TopoDS_Shape& shape) {
-  return std::to_string(std::hash<TopoDS_Shape>{}(shape));
-}
-
 class GeometryModelling {
 public:
   explicit GeometryModelling(GeometryState& s) : s_(s) {}
@@ -186,20 +155,11 @@ public:
 
   FilletResult filletEdges(const ShellId& partId, const std::vector<std::string>& edgeIds, double radiusMm) {
     std::lock_guard<std::mutex> lock(s_.mutex);
-    TopoDS_Shape originalShape;
-    bool isSolid = false;
-    auto shellIt = s_.shells.find(partId);
-    auto solidIt = s_.solids.find(partId);
-    if (shellIt != s_.shells.end()) {
-      originalShape = shellIt->second.shape;
-    } else if (solidIt != s_.solids.end()) {
-      originalShape = solidIt->second.shape;
-      isSolid = true;
-    } else {
-      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell/solid not found: " + partId, false, "");
-    }
+    ResolvedShape resolved = resolveShellOrSolidIn(s_, partId, "Shell/solid not found: " + partId);
+    TopoDS_Shape originalShape = resolved.shape;
+    bool isSolid = resolved.isSolid;
 
-    SnapshotId token = createSnapshotLocked("before filletEdges on " + partId);
+    SnapshotId token = s_.createSnapshot("before filletEdges on " + partId);
 
     try {
       BRepFilletAPI_MakeFillet filletMaker(originalShape);
@@ -250,20 +210,11 @@ public:
 
   ChamferResult chamferEdges(const ShellId& partId, const std::vector<std::string>& edgeIds, double distanceMm) {
     std::lock_guard<std::mutex> lock(s_.mutex);
-    TopoDS_Shape originalShape;
-    bool isSolid = false;
-    auto shellIt = s_.shells.find(partId);
-    auto solidIt = s_.solids.find(partId);
-    if (shellIt != s_.shells.end()) {
-      originalShape = shellIt->second.shape;
-    } else if (solidIt != s_.solids.end()) {
-      originalShape = solidIt->second.shape;
-      isSolid = true;
-    } else {
-      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell/solid not found: " + partId, false, "");
-    }
+    ResolvedShape resolved = resolveShellOrSolidIn(s_, partId, "Shell/solid not found: " + partId);
+    TopoDS_Shape originalShape = resolved.shape;
+    bool isSolid = resolved.isSolid;
 
-    SnapshotId token = createSnapshotLocked("before chamferEdges on " + partId);
+    SnapshotId token = s_.createSnapshot("before chamferEdges on " + partId);
 
     try {
       BRepFilletAPI_MakeChamfer chamferMaker(originalShape);
@@ -314,20 +265,11 @@ public:
 
   SimplifyResult simplifyBody(const ShellId& partId, bool unifyFaces, bool unifyEdges) {
     std::lock_guard<std::mutex> lock(s_.mutex);
-    TopoDS_Shape originalShape;
-    bool isSolid = false;
-    auto shellIt = s_.shells.find(partId);
-    auto solidIt = s_.solids.find(partId);
-    if (shellIt != s_.shells.end()) {
-      originalShape = shellIt->second.shape;
-    } else if (solidIt != s_.solids.end()) {
-      originalShape = solidIt->second.shape;
-      isSolid = true;
-    } else {
-      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell/solid not found: " + partId, false, "");
-    }
+    ResolvedShape resolved = resolveShellOrSolidIn(s_, partId, "Shell/solid not found: " + partId);
+    TopoDS_Shape originalShape = resolved.shape;
+    bool isSolid = resolved.isSolid;
 
-    SnapshotId token = createSnapshotLocked("before simplifyBody on " + partId);
+    SnapshotId token = s_.createSnapshot("before simplifyBody on " + partId);
 
     try {
       ShapeUpgrade_UnifySameDomain unifier(originalShape, unifyEdges, unifyFaces);
@@ -388,20 +330,11 @@ public:
 
   HealExResult healGeometryEx(const ShellId& partId, bool fixTolerances, bool fixWires) {
     std::lock_guard<std::mutex> lock(s_.mutex);
-    TopoDS_Shape originalShape;
-    bool isSolid = false;
-    auto shellIt = s_.shells.find(partId);
-    auto solidIt = s_.solids.find(partId);
-    if (shellIt != s_.shells.end()) {
-      originalShape = shellIt->second.shape;
-    } else if (solidIt != s_.solids.end()) {
-      originalShape = solidIt->second.shape;
-      isSolid = true;
-    } else {
-      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell/solid not found: " + partId, false, "");
-    }
+    ResolvedShape resolved = resolveShellOrSolidIn(s_, partId, "Shell/solid not found: " + partId);
+    TopoDS_Shape originalShape = resolved.shape;
+    bool isSolid = resolved.isSolid;
 
-    SnapshotId token = createSnapshotLocked("before healGeometryEx on " + partId);
+    SnapshotId token = s_.createSnapshot("before healGeometryEx on " + partId);
 
     try {
       ShapeFix_Shape fixer(originalShape);
@@ -452,20 +385,11 @@ public:
 
   OffsetShapeResult offsetShape(const ShellId& partId, double offsetValue, double tolerance) {
     std::lock_guard<std::mutex> lock(s_.mutex);
-    TopoDS_Shape originalShape;
-    bool isSolid = false;
-    auto shellIt = s_.shells.find(partId);
-    auto solidIt = s_.solids.find(partId);
-    if (shellIt != s_.shells.end()) {
-      originalShape = shellIt->second.shape;
-    } else if (solidIt != s_.solids.end()) {
-      originalShape = solidIt->second.shape;
-      isSolid = true;
-    } else {
-      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell/solid not found: " + partId, false, "");
-    }
+    ResolvedShape resolved = resolveShellOrSolidIn(s_, partId, "Shell/solid not found: " + partId);
+    TopoDS_Shape originalShape = resolved.shape;
+    bool isSolid = resolved.isSolid;
 
-    SnapshotId token = createSnapshotLocked("before offsetShape on " + partId);
+    SnapshotId token = s_.createSnapshot("before offsetShape on " + partId);
 
     try {
       BRepOffsetAPI_MakeOffsetShape maker;
@@ -499,20 +423,11 @@ public:
 
   DeleteFaceResult deleteFace(const ShellId& partId, const std::vector<std::string>& faceIds, bool healRemaining) {
     std::lock_guard<std::mutex> lock(s_.mutex);
-    TopoDS_Shape originalShape;
-    bool isSolid = false;
-    auto shellIt = s_.shells.find(partId);
-    auto solidIt = s_.solids.find(partId);
-    if (shellIt != s_.shells.end()) {
-      originalShape = shellIt->second.shape;
-    } else if (solidIt != s_.solids.end()) {
-      originalShape = solidIt->second.shape;
-      isSolid = true;
-    } else {
-      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell/solid not found: " + partId, false, "");
-    }
+    ResolvedShape resolved = resolveShellOrSolidIn(s_, partId, "Shell/solid not found: " + partId);
+    TopoDS_Shape originalShape = resolved.shape;
+    bool isSolid = resolved.isSolid;
 
-    SnapshotId token = createSnapshotLocked("before deleteFace on " + partId);
+    SnapshotId token = s_.createSnapshot("before deleteFace on " + partId);
 
     try {
       std::set<std::string> facesToDelete(faceIds.begin(), faceIds.end());
@@ -610,7 +525,7 @@ public:
 
   SewResult sewFaces(const std::vector<std::string>& entityIds, double tolerance, bool makeSolid) {
     std::lock_guard<std::mutex> lock(s_.mutex);
-    SnapshotId token = createSnapshotLocked("before sewFaces");
+    SnapshotId token = s_.createSnapshot("before sewFaces");
 
     try {
       BRepBuilderAPI_Sewing sewer;
@@ -619,7 +534,7 @@ public:
 
       std::vector<TopoDS_Shape> inputShapes;
       for (const auto& id : entityIds) {
-        TopoDS_Shape shape = lookupEntityLocked(id);
+        TopoDS_Shape shape = lookupEntityIn(s_, id);
         sewer.Add(shape);
         inputShapes.push_back(shape);
       }
@@ -716,7 +631,7 @@ public:
     double gap = distCalc.Value();
     if (gap < 1e-6) {
       // Already touching — nothing to do; return part B unchanged.
-      SnapshotId token = createSnapshotLocked("closeGap (no-op) on " + partBId);
+      SnapshotId token = s_.createSnapshot("closeGap (no-op) on " + partBId);
       return CloseGapResult{partBId, 0.0, token};
     }
 
@@ -732,7 +647,7 @@ public:
     BRepBuilderAPI_Transform xform(shapeB, move, /*copy=*/true);
     TopoDS_Shape movedB = xform.Shape();
 
-    SnapshotId token = createSnapshotLocked("before closeGap on " + partBId);
+    SnapshotId token = s_.createSnapshot("before closeGap on " + partBId);
     itB->second.shape = movedB;
     return CloseGapResult{partBId, gap, token};
   }
@@ -751,7 +666,7 @@ public:
       throw GeometryError("GE_SHELL_NOT_FOUND", "Shell not found: " + partId, false, "");
     }
 
-    SnapshotId token = createSnapshotLocked("before extendFaceToTarget on " + partId);
+    SnapshotId token = s_.createSnapshot("before extendFaceToTarget on " + partId);
 
     try {
       // ── Resolve target shape early (needed for auto face-finding) ──────────
@@ -960,7 +875,7 @@ public:
       throw GeometryError("GE_OFFSET_FAILED", "distanceMm must not be zero", false, "");
     }
 
-    SnapshotId token = createSnapshotLocked("before offsetFace on " + partId);
+    SnapshotId token = s_.createSnapshot("before offsetFace on " + partId);
 
     try {
       // Find the face
@@ -1060,7 +975,7 @@ public:
       throw GeometryError("GE_FLANGE_FAILED", "bendRadiusMm must be positive", false, "");
     }
 
-    SnapshotId token = createSnapshotLocked("before addFlange on " + partId);
+    SnapshotId token = s_.createSnapshot("before addFlange on " + partId);
 
     try {
       // Find the edge
@@ -1184,7 +1099,7 @@ public:
       throw GeometryError("GE_SHELL_NOT_FOUND", "Shell not found: " + partId, false, "");
     }
 
-    SnapshotId token = createSnapshotLocked("before ripEdge on " + partId);
+    SnapshotId token = s_.createSnapshot("before ripEdge on " + partId);
 
     try {
       // Find the edge and confirm it is interior (shared by exactly 2 faces)
@@ -1281,80 +1196,6 @@ public:
   }
 
 private:
-  SnapshotId createSnapshotLocked(const std::string& label) {
-    GeometrySnapshot snap;
-    snap.snapshotId     = generateUUID();
-    snap.operationLabel = label;
-    snap.timestampMs    = nowMs();
-
-    for (const auto& kv : s_.solids)  snap.solidIds.push_back(kv.first);
-    for (const auto& kv : s_.shells)  snap.shellIds.push_back(kv.first);
-    for (const auto& kv : s_.unfolds) snap.unfoldIds.push_back(kv.first);
-
-    s_.snapshots[snap.snapshotId] = snap;
-    s_.snapshotSolids[snap.snapshotId] = s_.solids;
-    s_.snapshotShells[snap.snapshotId] = s_.shells;
-    s_.snapshotUnfolds[snap.snapshotId] = s_.unfolds;
-    s_.snapshotAssemblies[snap.snapshotId] = s_.assemblies;
-    return snap.snapshotId;
-  }
-
-  TopoDS_Shape lookupEntityLocked(const std::string& entityId) const {
-    auto solidIt = s_.solids.find(entityId);
-    if (solidIt != s_.solids.end()) {
-      return solidIt->second.shape;
-    }
-    auto shellIt = s_.shells.find(entityId);
-    if (shellIt != s_.shells.end()) {
-      return shellIt->second.shape;
-    }
-    for (const auto& kv : s_.solids) {
-      TopExp_Explorer faceExp(kv.second.shape, TopAbs_FACE);
-      for (; faceExp.More(); faceExp.Next()) {
-        const TopoDS_Shape& s = faceExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-      TopExp_Explorer edgeExp(kv.second.shape, TopAbs_EDGE);
-      for (; edgeExp.More(); edgeExp.Next()) {
-        const TopoDS_Shape& s = edgeExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-      TopExp_Explorer vertexExp(kv.second.shape, TopAbs_VERTEX);
-      for (; vertexExp.More(); vertexExp.Next()) {
-        const TopoDS_Shape& s = vertexExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-      TopExp_Explorer shellExp(kv.second.shape, TopAbs_SHELL);
-      for (; shellExp.More(); shellExp.Next()) {
-        const TopoDS_Shape& s = shellExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-    }
-    for (const auto& kv : s_.shells) {
-      TopExp_Explorer faceExp(kv.second.shape, TopAbs_FACE);
-      for (; faceExp.More(); faceExp.Next()) {
-        const TopoDS_Shape& s = faceExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-      TopExp_Explorer edgeExp(kv.second.shape, TopAbs_EDGE);
-      for (; edgeExp.More(); edgeExp.Next()) {
-        const TopoDS_Shape& s = edgeExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-      TopExp_Explorer vertexExp(kv.second.shape, TopAbs_VERTEX);
-      for (; vertexExp.More(); vertexExp.Next()) {
-        const TopoDS_Shape& s = vertexExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-      TopExp_Explorer shellExp(kv.second.shape, TopAbs_SHELL);
-      for (; shellExp.More(); shellExp.Next()) {
-        const TopoDS_Shape& s = shellExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-    }
-    throw GeometryError("GE_SOLID_NOT_FOUND", "Entity not found in session: " + entityId, false, "");
-  }
-
   GeometryState& s_;
 };
 

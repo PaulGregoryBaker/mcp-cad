@@ -15,6 +15,10 @@ import {
   requireString,
   requireStringArray,
   resolveTransactionContext,
+  buildMeshUrl,
+  buildMeshUrls,
+  resolveRollbackToken,
+  appendHistoryIfJoined,
 } from '../helpers.js';
 import { MaterialStore } from '../../manufacturing/material.js';
 import { isJointTypeAllowed } from '../../manufacturing/rules.js';
@@ -216,11 +220,10 @@ export function handleDecomposeVolume(args: Record<string, unknown>): unknown {
     });
   }
 
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     parts: shellIds.map((id) => ({
       id,
-      mesh_url: `${meshBaseUrl}/mesh/${id}.glb`,
+      mesh_url: buildMeshUrl(id),
     })),
     panel_ids: shellIds,
     panel_count: shellIds.length,
@@ -253,41 +256,33 @@ export function handleSynthesizeJoints(args: Record<string, unknown>, config: Ma
 
   const ctx = resolveTransactionContext(args);
 
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
-
   if (jointType === 'tab_slot') {
     const result = getGeometryBinding().addTabSlot(panelIds[0]!, panelIds[1]!, clearanceMm);
-    if (ctx.mode === 'join') {
-      transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
-    }
+    appendHistoryIfJoined(ctx, result.shape_history);
     return {
       modified_panel_ids: result.modifiedShellIds,
       joint_type_applied: jointType,
       kerf_offset_mm: result.kerfOffsetApplied,
-      rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
+      rollback_token: resolveRollbackToken(ctx, result.rollbackToken),
       shape_history: result.shape_history ?? [],
-      mesh_urls: (result.modifiedShellIds as string[]).map((id) => `${meshBaseUrl}/mesh/${id}.glb`),
+      mesh_urls: buildMeshUrls(result.modifiedShellIds as string[]),
     };
   }
 
   if (jointType === 'rivet') {
     const result = getGeometryBinding().addRivetHole(panelIds[0]!, 'auto', 0, 0, 4.0);
-    if (ctx.mode === 'join') {
-      transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
-    }
+    appendHistoryIfJoined(ctx, result.shape_history);
     return {
       modified_panel_ids: [result.modifiedShellId],
       joint_type_applied: jointType,
       kerf_offset_mm: clearanceMm,
-      rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
+      rollback_token: resolveRollbackToken(ctx, result.rollbackToken),
       shape_history: result.shape_history ?? [],
-      mesh_urls: [`${meshBaseUrl}/mesh/${result.modifiedShellId}.glb`],
+      mesh_urls: buildMeshUrls([result.modifiedShellId]),
     };
   }
 
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, []);
-  }
+  appendHistoryIfJoined(ctx, []);
 
   // weld and other types: snapshot + stub response
   const token = ctx.mode === 'implicit'
@@ -317,12 +312,11 @@ export function handleGenerateReliefs(args: Record<string, unknown>): unknown {
     rollbackToken = ctx.transactionId;
   }
 
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     modified_panel_id: panelId,
     relief_count: 4,  // placeholder; Phase C will use actual detection
     rollback_token: rollbackToken,
-    mesh_url: `${meshBaseUrl}/mesh/${panelId}.glb`,
+    mesh_url: buildMeshUrl(panelId),
   };
 }
 
@@ -343,15 +337,12 @@ export function handleReconstructCurvedBends(args: Record<string, unknown>): unk
 
   const result = getGeometryBinding().reconstructCurvedBends(partId);
   session.registerShell(result.solid_id);
-
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
-  }
+  appendHistoryIfJoined(ctx, result.shape_history);
 
   return {
     solid_id: result.solid_id,
     bends_replaced: result.bends_replaced,
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
+    rollback_token: resolveRollbackToken(ctx, result.rollback_token),
     shape_history: result.shape_history ?? [],
   };
 }

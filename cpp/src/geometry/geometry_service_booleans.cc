@@ -110,6 +110,7 @@
 #include <gp_Ax3.hxx>
 
 #include "geometry_service_impl.hpp"
+#include "geometry_service_utils.hpp"
 
 // ─── Standard library ─────────────────────────────────────────────────────────
 #include <map>
@@ -130,38 +131,6 @@
 #include <cstring>
 
 namespace mcp_cad {
-
-static std::string generateUUID() {
-  static std::random_device rd;
-  static std::mt19937_64 gen(rd());
-  static std::uniform_int_distribution<uint64_t> dist;
-
-  uint64_t hi = dist(gen);
-  uint64_t lo = dist(gen);
-
-  // Set version (4) and variant bits
-  hi = (hi & 0xFFFFFFFFFFFF0FFFULL) | 0x0000000000004000ULL;
-  lo = (lo & 0x3FFFFFFFFFFFFFFFULL) | 0x8000000000000000ULL;
-
-  std::ostringstream oss;
-  oss << std::hex << std::setfill('0')
-      << std::setw(8)  << (hi >> 32) << "-"
-      << std::setw(4)  << ((hi >> 16) & 0xFFFF) << "-"
-      << std::setw(4)  << (hi & 0xFFFF) << "-"
-      << std::setw(4)  << (lo >> 48) << "-"
-      << std::setw(12) << (lo & 0x0000FFFFFFFFFFFFULL);
-  return oss.str();
-}
-
-static long long nowMs() {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(
-             std::chrono::system_clock::now().time_since_epoch())
-      .count();
-}
-
-static std::string shapeId(const TopoDS_Shape& shape) {
-  return std::to_string(std::hash<TopoDS_Shape>{}(shape));
-}
 
 class GeometryBooleans {
 public:
@@ -185,7 +154,7 @@ public:
     // Pre-fuse gap check was removed to support Boolean fuse of disjoint (non-touching) solids
     // as per Feature 006 spec.md. Disjoint fuses are allowed and return success with disjoint=true.
 
-    SnapshotId token = createSnapshotLocked("before fuseBodies");
+    SnapshotId token = s_.createSnapshot("before fuseBodies");
 
     try {
       TopoDS_Shape currentShape = toolShapes[0];
@@ -313,7 +282,7 @@ public:
       toolShapes.push_back(it->second.shape);
     }
 
-    SnapshotId token = createSnapshotLocked("before cutBodies on " + blank);
+    SnapshotId token = s_.createSnapshot("before cutBodies on " + blank);
 
     try {
       TopoDS_Shape currentShape = blankShape;
@@ -375,7 +344,7 @@ public:
     TopoDS_Shape shapeA = itA->second.shape;
     TopoDS_Shape shapeB = itB->second.shape;
 
-    SnapshotId token = createSnapshotLocked("before intersectBodies on " + a + " and " + b);
+    SnapshotId token = s_.createSnapshot("before intersectBodies on " + a + " and " + b);
 
     try {
       BRepAlgoAPI_Common common(shapeA, shapeB);
@@ -420,24 +389,6 @@ public:
   }
 
 private:
-  SnapshotId createSnapshotLocked(const std::string& label) {
-    GeometrySnapshot snap;
-    snap.snapshotId     = generateUUID();
-    snap.operationLabel = label;
-    snap.timestampMs    = nowMs();
-
-    for (const auto& kv : s_.solids)  snap.solidIds.push_back(kv.first);
-    for (const auto& kv : s_.shells)  snap.shellIds.push_back(kv.first);
-    for (const auto& kv : s_.unfolds) snap.unfoldIds.push_back(kv.first);
-
-    s_.snapshots[snap.snapshotId] = snap;
-    s_.snapshotSolids[snap.snapshotId] = s_.solids;
-    s_.snapshotShells[snap.snapshotId] = s_.shells;
-    s_.snapshotUnfolds[snap.snapshotId] = s_.unfolds;
-    s_.snapshotAssemblies[snap.snapshotId] = s_.assemblies;
-    return snap.snapshotId;
-  }
-
   GeometryState& s_;
 };
 

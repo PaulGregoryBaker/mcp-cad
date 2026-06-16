@@ -5,7 +5,7 @@
  * and the LWPOLYLINE serialisation helper used throughout the sheet-metal pipeline.
  */
 
-import type { PanelFrame } from '../manufacturing/graph/types.js';
+import type { BendZone, CutNode, PanelFrame } from '../manufacturing/graph/types.js';
 import { computeDxfMergePlacement } from '../manufacturing/dxf/orientation.js';
 import { mergeDxfOutlines, parseFirstClosedPolyline, applyPlacement } from '../manufacturing/dxf/merge.js';
 
@@ -138,6 +138,126 @@ export function filterInvalidCutLines(
   }
 
   return result.join('\n');
+}
+
+// ─── Manufacturing-graph DXF generation ──────────────────────────────────────
+
+export function generateDxfFromManufacturingGraph(
+  flatWidthMm: number,
+  flatHeightMm: number,
+  _bendZones: BendZone[],
+  cutNodes: CutNode[],
+): string {
+  const lines: string[] = [];
+
+  // ─── DXF Header ───────────────────────────────────────────────────────────
+  lines.push(
+    '0',
+    'SECTION',
+    '2',
+    'HEADER',
+    '9',
+    '$ACADVER',
+    '1',
+    'AC1015',
+    '0',
+    'ENDSEC',
+  );
+
+  // ─── DXF Entities ─────────────────────────────────────────────────────────
+  lines.push(
+    '0',
+    'SECTION',
+    '2',
+    'ENTITIES',
+  );
+
+  // Panel outline: rectangle from (0,0) to (width,height)
+  lines.push(
+    '0',
+    'LWPOLYLINE',
+    '8',
+    '0', // layer
+    '90',
+    '4', // 4 vertices (closed rectangle)
+    '70',
+    '1', // closed polyline
+  );
+  // Vertex 1: (0, 0)
+  lines.push('10', '0.0', '20', '0.0');
+  // Vertex 2: (width, 0)
+  lines.push('10', flatWidthMm.toString(), '20', '0.0');
+  // Vertex 3: (width, height)
+  lines.push('10', flatWidthMm.toString(), '20', flatHeightMm.toString());
+  // Vertex 4: (0, height)
+  lines.push('10', '0.0', '20', flatHeightMm.toString());
+
+  // Cut profiles: circles, rectangles, polygons, freeform shapes
+  for (const cutNode of cutNodes) {
+    const profile = cutNode.profile;
+
+    if (profile.type === 'CIRCLE') {
+      const { centreX, centreY, radius } = profile;
+      lines.push(
+        '0',
+        'CIRCLE',
+        '8',
+        'CUTS',
+        '10',
+        centreX.toString(),
+        '20',
+        centreY.toString(),
+        '40',
+        radius.toString(),
+      );
+    } else if (profile.type === 'RECTANGLE') {
+      const { originX, originY, width, height } = profile;
+      lines.push(
+        '0',
+        'LWPOLYLINE',
+        '8',
+        'CUTS',
+        '90',
+        '4', // 4 vertices
+        '70',
+        '1', // closed
+      );
+      lines.push('10', originX.toString(), '20', originY.toString());
+      lines.push('10', (originX + width).toString(), '20', originY.toString());
+      lines.push('10', (originX + width).toString(), '20', (originY + height).toString());
+      lines.push('10', originX.toString(), '20', (originY + height).toString());
+    } else if (profile.type === 'POLYGON' || profile.type === 'FREEFORM') {
+      const { vertices } = profile;
+      lines.push(
+        '0',
+        'LWPOLYLINE',
+        '8',
+        'CUTS',
+        '90',
+        vertices.length.toString(),
+        '70',
+        '1', // closed for POLYGON, implicit closure for FREEFORM
+      );
+      for (const vertex of vertices) {
+        lines.push('10', vertex.x.toString(), '20', vertex.y.toString());
+      }
+    }
+  }
+
+  // ─── DXF Footer ───────────────────────────────────────────────────────────
+  lines.push(
+    '0',
+    'ENDSEC',
+    '0',
+    'EOF',
+  );
+
+  const dxfContent = lines.join('\n');
+
+  // VALIDATION: Remove any invalid internal cut lines (seam/corruption artifacts).
+  // A LINE is invalid if both endpoints are interior (not on panel edge).
+  // This permanently prevents seam lines from appearing in the DXF.
+  return filterInvalidCutLines(dxfContent, flatWidthMm, flatHeightMm);
 }
 
 // ─── Multi-panel DXF merge ────────────────────────────────────────────────────

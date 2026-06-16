@@ -22,10 +22,10 @@
 
 **Purpose**: Capture the pass/fail baseline and inventory all dead code *before* any file is changed. Nothing may be moved or deleted until this phase is complete.
 
-- [ ] T001 Run full integration test suite (`cd ts && npx jest --runInBand`) and save pass/fail counts to `specs/001-service-decomposition/baseline-results.txt`
-- [ ] T002 Compile C++ with unused-function warnings (`cmake --build` with `-DCMAKE_CXX_FLAGS="-Wunused-function"`) and pipe output to `specs/001-service-decomposition/dead-code.md` under a "C++ Unused Symbols" section
-- [ ] T003 Temporarily add `"noUnusedLocals": true, "noUnusedParameters": true` to `ts/tsconfig.json`, run `npx tsc --noEmit`, append TypeScript unused-symbol warnings to `specs/001-service-decomposition/dead-code.md` under a "TypeScript Unused Symbols" section, then revert `ts/tsconfig.json`
-- [ ] T004 Manual sweep of `cpp/src/geometry/geometry_service.cc` and `ts/src/mcp/tools.ts` for commented-out blocks, `// LEGACY`, `// OLD`, `// TODO remove` markers; append findings to `specs/001-service-decomposition/dead-code.md` under "Commented-Out / Legacy Blocks"
+- [X] T001 Run full integration test suite (`cd ts && npx jest --runInBand`) and save pass/fail counts to `specs/001-service-decomposition/baseline-results.txt`
+- [X] T002 Compile C++ with unused-function warnings (`cmake --build` with `-DCMAKE_CXX_FLAGS="-Wunused-function"`) and pipe output to `specs/001-service-decomposition/dead-code.md` under a "C++ Unused Symbols" section
+- [X] T003 Temporarily add `"noUnusedLocals": true, "noUnusedParameters": true` to `ts/tsconfig.json`, run `npx tsc --noEmit`, append TypeScript unused-symbol warnings to `specs/001-service-decomposition/dead-code.md` under a "TypeScript Unused Symbols" section, then revert `ts/tsconfig.json`
+- [X] T004 Manual sweep of `cpp/src/geometry/geometry_service.cc` and `ts/src/mcp/tools.ts` for commented-out blocks, `// LEGACY`, `// OLD`, `// TODO remove` markers; append findings to `specs/001-service-decomposition/dead-code.md` under "Commented-Out / Legacy Blocks"
 
 **Checkpoint**: `baseline-results.txt` and `dead-code.md` committed. No source files changed.
 
@@ -37,9 +37,9 @@
 
 **⚠️ CRITICAL**: No handler extraction (Phase 3) can begin until this phase is complete and tests pass.
 
-- [ ] T005 Create `ts/src/mcp/state.ts` and move into it from `ts/src/mcp/tools.ts`: `geometryBindingOverride`, `setGeometryBindingMock`, `getGeometryBinding`, `semanticStoreInstance`, `setSemanticStore`, `getSemanticStore`, `mcpManufacturingGraphs`, `mcpActivePart`, `mcpSolvers`, `initializeSolvers`, `findGraphOwner`, `createPart`, `getManufacturingGraph`, `setActivePart`, `deletePart`, `listParts`, `getGeometrySolver`, `getGraphFoldabilityChecker`, `resetMcpGraphStateForTests`, `registerTestPart` — all with their original export signatures
-- [ ] T006 Replace all moved declarations in `ts/src/mcp/tools.ts` with `import` statements from `./state.js`; confirm no remaining references to moved symbols exist inside `tools.ts` itself
-- [ ] T007 Run full test suite; confirm zero regressions against `baseline-results.txt` before proceeding
+- [X] T005 Create `ts/src/mcp/state.ts` and move into it from `ts/src/mcp/tools.ts`: `geometryBindingOverride`, `setGeometryBindingMock`, `getGeometryBinding`, `semanticStoreInstance`, `setSemanticStore`, `getSemanticStore`, `mcpManufacturingGraphs`, `mcpActivePart`, `mcpSolvers`, `initializeSolvers`, `findGraphOwner`, `createPart`, `getManufacturingGraph`, `setActivePart`, `deletePart`, `listParts`, `getGeometrySolver`, `getGraphFoldabilityChecker`, `resetMcpGraphStateForTests`, `registerTestPart` — all with their original export signatures
+- [X] T006 Replace all moved declarations in `ts/src/mcp/tools.ts` with `import` statements from `./state.js`; confirm no remaining references to moved symbols exist inside `tools.ts` itself
+- [X] T007 Run full test suite; confirm zero regressions against `baseline-results.txt` before proceeding
 
 **Checkpoint**: `state.ts` exists, `tools.ts` imports from it, tests green.
 
@@ -53,31 +53,31 @@
 
 ### Implementation for User Story 1
 
-- [ ] T008 Create directory `ts/src/mcp/handlers/` (add empty `.gitkeep` to track it)
-- [ ] T009 [US1] Create `ts/src/mcp/handlers/booleans.ts`: export `booleanDefinitions` array (schemas for `fuse_bodies`, `cut_bodies`, `intersect_bodies`) and handler functions `handleFuseBodies`, `handleCutBodies`, `handleIntersectBodies` moved from `tools.ts`
-- [ ] T010 [US1] Remove the three boolean handlers and their schemas from `tools.ts`; add `import` from `./handlers/booleans.js` in the `dispatchTool` switch; run tests
-- [ ] T011 [P] [US1] Create `ts/src/mcp/handlers/body-ops.ts`: export `bodyOpsDefinitions` (schemas for `clean_geometry`, `bounding_box`, `mass_properties`, `measure_distance`, `explore_topology`, `translate_body`, `rotate_body`, `mirror_body`, `scale_body`, `align_to_face`, `fillet_edges`, `chamfer_edges`, `simplify_body`, `heal_geometry_ex`, `offset_shape`, `delete_face`, `sew_faces`, `center_and_align_body`) and corresponding handler functions moved from `tools.ts`
-- [ ] T012 [US1] Remove body-ops handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
-- [ ] T013 [P] [US1] Create `ts/src/mcp/handlers/shape-ops.ts`: export `shapeOpsDefinitions` (schemas for `split_body_by_plane`, `merge_bodies_with_bend`, `close_gap`, `is_panel_valid`, `extend_face_to_target`, `offset_face`, `add_flange`, `rip_edge`, `compute_intersections`, `compute_gaps`, `trim_body_with_plane`, `check_boundary_compliance`, `split_body_by_bends`, `remove_protrusions`) and corresponding handler functions moved from `tools.ts`
-- [ ] T014 [US1] Remove shape-ops handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
-- [ ] T015 [P] [US1] Create `ts/src/mcp/handlers/manufacturing.ts`: export `manufacturingDefinitions` (schemas for `decompose_volume`, `synthesize_joints`, `generate_reliefs`, `validate_sheet_metal`, `reconstruct_curved_bends`, `evaluate_manufacturability`, `validate_bend_sequence`, `simulate_nesting`) and corresponding handler functions moved from `tools.ts`
-- [ ] T016 [US1] Remove manufacturing handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
-- [ ] T017 [P] [US1] Create `ts/src/mcp/handlers/unfold-export.ts`: export `unfoldExportDefinitions` (schemas for `apply_unfold`, `export_production_pack`, `get_export_job_status`, `get_export_job_result`) and corresponding handler functions moved from `tools.ts`
-- [ ] T018 [US1] Remove unfold-export handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
-- [ ] T019 [P] [US1] Create `ts/src/mcp/handlers/assembly.ts`: export `assemblyDefinitions` (schemas for `create_assembly_document`, `add_assembly_instance`, `mate_rigid`, `list_assembly_tree`, `validate_assembly`) and corresponding handler functions moved from `tools.ts`
-- [ ] T020 [US1] Remove assembly handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
-- [ ] T021 [P] [US1] Create `ts/src/mcp/handlers/transactions.ts`: export `transactionDefinitions` (schemas for `rollback`, `begin_transaction`, `commit_transaction`, `rollback_transaction`, `get_transaction_history`) and corresponding handler functions moved from `tools.ts`
-- [ ] T022 [US1] Remove transaction handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
-- [ ] T023 [P] [US1] Create `ts/src/mcp/handlers/semantic.ts`: export `semanticDefinitions` (schemas for `declare_semantic_entity`, `bind_semantic_entity`, `resolve_geometry`, `semantic_lineage`) and corresponding handler functions moved from `tools.ts`
-- [ ] T024 [US1] Remove semantic handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
-- [ ] T025 [P] [US1] Create `ts/src/mcp/handlers/graph.ts`: export `graphDefinitions` (schemas for `create_part`, `set_active_part`, `list_parts`, `delete_part`, `bootstrap_graph`, `add_bend`, `solve_geometry`, `check_foldability`, `query_graph`, `reset_graph`, `update_node`, `remove_node`, `add_join`, `add_cut`) and corresponding handler functions moved from `tools.ts`
-- [ ] T026 [US1] Remove graph handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
-- [ ] T027 [P] [US1] Create `ts/src/mcp/handlers/mapping.ts`: export `mappingDefinitions` (schemas for `map_3d_to_2d`, `map_2d_to_3d`) and handler functions `handleMapTo2D`, `handleMapTo3D` moved from `tools.ts`
-- [ ] T028 [US1] Remove mapping handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
-- [ ] T029 [US1] Create `ts/src/mcp/registry.ts`: import all `*Definitions` arrays from every handler module and export `getToolDefinitions(): object[]` that spreads them all into one array — replace the monolithic `getToolDefinitions()` block in `tools.ts` with an import from `./registry.js`
-- [ ] T030 [US1] Create `ts/src/mcp/dispatch.ts`: move `dispatchTool()` switch body into this file, importing handler functions from their respective `handlers/*.js` modules; update `tools.ts` to re-export `dispatchTool` from `./dispatch.js`
-- [ ] T031 [US1] Thin `ts/src/mcp/tools.ts` to a pure barrel: it should only re-export `getToolDefinitions` from `./registry.js`, `dispatchTool` from `./dispatch.js`, and test helpers from `./state.js`; the file must have no function implementations
-- [ ] T032 [US1] Verify: run full test suite; confirm `tools.ts` has fewer than 30 lines; confirm all baseline tests pass
+- [X] T008 Create directory `ts/src/mcp/handlers/` (add empty `.gitkeep` to track it)
+- [X] T009 [US1] Create `ts/src/mcp/handlers/booleans.ts`: export `booleanDefinitions` array (schemas for `fuse_bodies`, `cut_bodies`, `intersect_bodies`) and handler functions `handleFuseBodies`, `handleCutBodies`, `handleIntersectBodies` moved from `tools.ts`
+- [X] T010 [US1] Remove the three boolean handlers and their schemas from `tools.ts`; add `import` from `./handlers/booleans.js` in the `dispatchTool` switch; run tests
+- [X] T011 [P] [US1] Create `ts/src/mcp/handlers/body-ops.ts`: export `bodyOpsDefinitions` (schemas for `clean_geometry`, `bounding_box`, `mass_properties`, `measure_distance`, `explore_topology`, `translate_body`, `rotate_body`, `mirror_body`, `scale_body`, `align_to_face`, `fillet_edges`, `chamfer_edges`, `simplify_body`, `heal_geometry_ex`, `offset_shape`, `delete_face`, `sew_faces`, `center_and_align_body`) and corresponding handler functions moved from `tools.ts`
+- [X] T012 [US1] Remove body-ops handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
+- [X] T013 [P] [US1] Create `ts/src/mcp/handlers/shape-ops.ts`: export `shapeOpsDefinitions` (schemas for `split_body_by_plane`, `merge_bodies_with_bend`, `close_gap`, `is_panel_valid`, `extend_face_to_target`, `offset_face`, `add_flange`, `rip_edge`, `compute_intersections`, `compute_gaps`, `trim_body_with_plane`, `check_boundary_compliance`, `split_body_by_bends`, `remove_protrusions`) and corresponding handler functions moved from `tools.ts`
+- [X] T014 [US1] Remove shape-ops handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
+- [X] T015 [P] [US1] Create `ts/src/mcp/handlers/manufacturing.ts`: export `manufacturingDefinitions` (schemas for `decompose_volume`, `synthesize_joints`, `generate_reliefs`, `validate_sheet_metal`, `reconstruct_curved_bends`, `evaluate_manufacturability`, `validate_bend_sequence`, `simulate_nesting`) and corresponding handler functions moved from `tools.ts`
+- [X] T016 [US1] Remove manufacturing handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
+- [X] T017 [P] [US1] Create `ts/src/mcp/handlers/unfold-export.ts`: export `unfoldExportDefinitions` (schemas for `apply_unfold`, `export_production_pack`, `get_export_job_status`, `get_export_job_result`) and corresponding handler functions moved from `tools.ts`
+- [X] T018 [US1] Remove unfold-export handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
+- [X] T019 [P] [US1] Create `ts/src/mcp/handlers/assembly.ts`: export `assemblyDefinitions` (schemas for `create_assembly_document`, `add_assembly_instance`, `mate_rigid`, `list_assembly_tree`, `validate_assembly`) and corresponding handler functions moved from `tools.ts`
+- [X] T020 [US1] Remove assembly handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
+- [X] T021 [P] [US1] Create `ts/src/mcp/handlers/transactions.ts`: export `transactionDefinitions` (schemas for `rollback`, `begin_transaction`, `commit_transaction`, `rollback_transaction`, `get_transaction_history`) and corresponding handler functions moved from `tools.ts`
+- [X] T022 [US1] Remove transaction handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
+- [X] T023 [P] [US1] Create `ts/src/mcp/handlers/semantic.ts`: export `semanticDefinitions` (schemas for `declare_semantic_entity`, `bind_semantic_entity`, `resolve_geometry`, `semantic_lineage`) and corresponding handler functions moved from `tools.ts`
+- [X] T024 [US1] Remove semantic handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
+- [X] T025 [P] [US1] Create `ts/src/mcp/handlers/graph.ts`: export `graphDefinitions` (schemas for `create_part`, `set_active_part`, `list_parts`, `delete_part`, `bootstrap_graph`, `add_bend`, `solve_geometry`, `check_foldability`, `query_graph`, `reset_graph`, `update_node`, `remove_node`, `add_join`, `add_cut`) and corresponding handler functions moved from `tools.ts`
+- [X] T026 [US1] Remove graph handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
+- [X] T027 [P] [US1] Create `ts/src/mcp/handlers/mapping.ts`: export `mappingDefinitions` (schemas for `map_3d_to_2d`, `map_2d_to_3d`) and handler functions `handleMapTo2D`, `handleMapTo3D` moved from `tools.ts`
+- [X] T028 [US1] Remove mapping handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
+- [X] T029 [US1] Create `ts/src/mcp/registry.ts`: import all `*Definitions` arrays from every handler module and export `getToolDefinitions(): object[]` that spreads them all into one array — replace the monolithic `getToolDefinitions()` block in `tools.ts` with an import from `./registry.js`
+- [X] T030 [US1] Create `ts/src/mcp/dispatch.ts`: move `dispatchTool()` switch body into this file, importing handler functions from their respective `handlers/*.js` modules; update `tools.ts` to re-export `dispatchTool` from `./dispatch.js`
+- [X] T031 [US1] Thin `ts/src/mcp/tools.ts` to a pure barrel: it should only re-export `getToolDefinitions` from `./registry.js`, `dispatchTool` from `./dispatch.js`, and test helpers from `./state.js`; the file must have no function implementations
+- [X] T032 [US1] Verify: run full test suite; confirm `tools.ts` has fewer than 30 lines; confirm all baseline tests pass
 
 **Checkpoint**: `tools.ts` is a 30-line barrel. Every MCP tool's handler and schema live in a named module. Tests green.
 
@@ -119,11 +119,11 @@
 
 ### Implementation for User Story 3
 
-- [ ] T048 [US3] Audit all new C++ `.cc` files for duplicated `static` helper functions or repeated inline patterns (e.g., shape-to-string conversions, tolerance checks, error formatting); document each duplication in `specs/001-service-decomposition/dedup-report.md`
-- [ ] T049 [US3] Audit all TypeScript `handlers/*.ts` files for repeated argument-extraction patterns, repeated null-checks, repeated error-wrapping patterns; document in `specs/001-service-decomposition/dedup-report.md`
-- [ ] T050 [US3] For each C++ duplication in the report: move the shared helper into `geometry_service_core.cc` (or create `cpp/src/geometry/geometry_service_utils.cc` if helpers span more than 3 files) and update all callers; build and test after each consolidation
-- [ ] T051 [US3] For each TypeScript duplication in the report: extract the shared pattern into `ts/src/mcp/handlers/utils.ts` and update all callers; run tests after each consolidation
-- [ ] T052 [US3] Verify: run full test suite; confirm `dedup-report.md` shows zero remaining duplicates
+- [X] T048 [US3] Audit all new C++ `.cc` files for duplicated `static` helper functions or repeated inline patterns (e.g., shape-to-string conversions, tolerance checks, error formatting); document each duplication in `specs/001-service-decomposition/dedup-report.md`
+- [X] T049 [US3] Audit all TypeScript `handlers/*.ts` files for repeated argument-extraction patterns, repeated null-checks, repeated error-wrapping patterns; document in `specs/001-service-decomposition/dedup-report.md`
+- [X] T050 [US3] For each C++ duplication in the report: move the shared helper into `geometry_service_core.cc` (or create `cpp/src/geometry/geometry_service_utils.cc` if helpers span more than 3 files) and update all callers; build and test after each consolidation
+- [X] T051 [US3] For each TypeScript duplication in the report: extract the shared pattern into `ts/src/mcp/handlers/utils.ts` and update all callers; run tests after each consolidation
+- [X] T052 [US3] Verify: run full test suite; confirm `dedup-report.md` shows zero remaining duplicates
 
 **Checkpoint**: All identified duplicates consolidated. `dedup-report.md` closed. Tests green.
 
@@ -137,11 +137,11 @@
 
 ### Implementation for User Story 4
 
-- [ ] T053 [US4] Delete each C++ unused static function listed in `dead-code.md` from its new `.cc` home; build after each deletion to confirm nothing relied on it
-- [ ] T054 [P] [US4] Delete each TypeScript unused function listed in `dead-code.md` from its handler module; run `tsc --noEmit` after each deletion to confirm no callers exist
-- [ ] T055 [US4] Delete all commented-out code blocks from all new C++ `.cc` files (cross-reference "Commented-Out / Legacy Blocks" section in `dead-code.md`); build after each file
-- [ ] T056 [P] [US4] Delete all commented-out code blocks from all TypeScript handler modules; run `tsc --noEmit` after each file
-- [ ] T057 [US4] Run full test suite; confirm zero regressions; mark `dead-code.md` as resolved
+- [X] T053 [US4] Delete each C++ unused static function listed in `dead-code.md` from its new `.cc` home; build after each deletion to confirm nothing relied on it
+- [X] T054 [P] [US4] Delete each TypeScript unused function listed in `dead-code.md` from its handler module; run `tsc --noEmit` after each deletion to confirm no callers exist
+- [X] T055 [US4] Delete all commented-out code blocks from all new C++ `.cc` files (cross-reference "Commented-Out / Legacy Blocks" section in `dead-code.md`); build after each file
+- [X] T056 [P] [US4] Delete all commented-out code blocks from all TypeScript handler modules; run `tsc --noEmit` after each file
+- [X] T057 [US4] Run full test suite; confirm zero regressions; mark `dead-code.md` as resolved
 
 **Checkpoint**: `dead-code.md` fully resolved. Zero unused symbols remain in the geometry and MCP layers. Build and tests green.
 
@@ -151,11 +151,11 @@
 
 **Purpose**: Confirm all success criteria from the spec are met.
 
-- [ ] T058 [P] Run full integration test suite and confirm every test that passed at baseline still passes (SC-003: 100% parity); update `baseline-results.txt` with final run
-- [ ] T059 [P] Line-count audit: run `wc -l cpp/src/geometry/geometry_service_*.cc ts/src/mcp/handlers/*.ts ts/src/mcp/state.ts ts/src/mcp/registry.ts ts/src/mcp/dispatch.ts`; flag any file exceeding 1,000 lines for further review (target ceiling is 400 per SC-001)
-- [ ] T060 Discoverability check: for each operation name in the spec's SC-004 list ("boolean union", "unfold", "shell query", "assembly", "semantic", "graph"), verify by filename alone that the correct module can be identified within 60 seconds
-- [ ] T061 Count distinct source files added: confirm the geometry layer has at least 10 new `.cc` files and the MCP layer has at least 10 new modules (SC-005: at least 4 new files above current state — easily exceeded)
-- [ ] T062 Update `CLAUDE.md` speckit pointer to reflect that this refactor is complete; if a follow-on feature is active, point to its plan instead
+- [X] T058 [P] Run full integration test suite and confirm every test that passed at baseline still passes (SC-003: 100% parity); update `baseline-results.txt` with final run
+- [X] T059 [P] Line-count audit: run `wc -l cpp/src/geometry/geometry_service_*.cc ts/src/mcp/handlers/*.ts ts/src/mcp/state.ts ts/src/mcp/registry.ts ts/src/mcp/dispatch.ts`; flag any file exceeding 1,000 lines for further review (target ceiling is 400 per SC-001)
+- [X] T060 Discoverability check: for each operation name in the spec's SC-004 list ("boolean union", "unfold", "shell query", "assembly", "semantic", "graph"), verify by filename alone that the correct module can be identified within 60 seconds
+- [X] T061 Count distinct source files added: confirm the geometry layer has at least 10 new `.cc` files and the MCP layer has at least 10 new modules (SC-005: at least 4 new files above current state — easily exceeded)
+- [X] T062 Update `CLAUDE.md` speckit pointer to reflect that this refactor is complete; if a follow-on feature is active, point to its plan instead
 
 ---
 

@@ -68,6 +68,7 @@ endif()
 
 # ─── Geometry Engine Library ─────────────────────────────────────────────────
 add_library(geometry_engine STATIC
+  src/geometry/geometry_service_utils.cc
   src/geometry/geometry_service_core.cc
   src/geometry/geometry_service_booleans.cc
   src/geometry/geometry_service_transforms.cc

@@ -118,6 +118,7 @@
 #include <gp_Ax3.hxx>
 
 #include "geometry_service_impl.hpp"
+#include "geometry_service_utils.hpp"
 
 #include <map>
 #include <unordered_map>
@@ -138,38 +139,6 @@
 
 namespace mcp_cad {
 
-static std::string generateUUID() {
-  static std::random_device rd;
-  static std::mt19937_64 gen(rd());
-  static std::uniform_int_distribution<uint64_t> dist;
-
-  uint64_t hi = dist(gen);
-  uint64_t lo = dist(gen);
-
-  // Set version (4) and variant bits
-  hi = (hi & 0xFFFFFFFFFFFF0FFFULL) | 0x0000000000004000ULL;
-  lo = (lo & 0x3FFFFFFFFFFFFFFFULL) | 0x8000000000000000ULL;
-
-  std::ostringstream oss;
-  oss << std::hex << std::setfill('0')
-      << std::setw(8)  << (hi >> 32) << "-"
-      << std::setw(4)  << ((hi >> 16) & 0xFFFF) << "-"
-      << std::setw(4)  << (hi & 0xFFFF) << "-"
-      << std::setw(4)  << (lo >> 48) << "-"
-      << std::setw(12) << (lo & 0x0000FFFFFFFFFFFFULL);
-  return oss.str();
-}
-
-static long long nowMs() {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(
-             std::chrono::system_clock::now().time_since_epoch())
-      .count();
-}
-
-static std::string shapeId(const TopoDS_Shape& shape) {
-  return std::to_string(std::hash<TopoDS_Shape>{}(shape));
-}
-
 class GeometryMeasurement {
 public:
   explicit GeometryMeasurement(GeometryState& s) : s_(s) {}
@@ -177,7 +146,7 @@ public:
   BoundingBoxResult computeBoundingBox(const std::string& entityId) {
     std::lock_guard<std::mutex> lock(s_.mutex);
     try {
-      TopoDS_Shape shape = lookupEntityLocked(entityId);
+      TopoDS_Shape shape = lookupEntityIn(s_, entityId);
       Bnd_Box box;
       BRepBndLib::AddOptimal(shape, box);
       double xMin, yMin, zMin, xMax, yMax, zMax;
@@ -193,7 +162,7 @@ public:
   MassPropertiesResult computeMassProperties(const std::string& entityId, const std::vector<std::string>& properties) {
     std::lock_guard<std::mutex> lock(s_.mutex);
     try {
-      TopoDS_Shape shape = lookupEntityLocked(entityId);
+      TopoDS_Shape shape = lookupEntityIn(s_, entityId);
       MassPropertiesResult result;
       bool reqVol = false, reqSurf = false, reqCent = false, reqInert = false;
       if (properties.empty()) {
@@ -240,8 +209,8 @@ public:
   MeasureResult measureDistance(const std::string& entityA, const std::string& entityB, const std::string& measurementType) {
     std::lock_guard<std::mutex> lock(s_.mutex);
     try {
-      TopoDS_Shape shapeA = lookupEntityLocked(entityA);
-      TopoDS_Shape shapeB = lookupEntityLocked(entityB);
+      TopoDS_Shape shapeA = lookupEntityIn(s_, entityA);
+      TopoDS_Shape shapeB = lookupEntityIn(s_, entityB);
 
       if (measurementType == "angle") {
         if (shapeA.ShapeType() != TopAbs_FACE || shapeB.ShapeType() != TopAbs_FACE) {
@@ -285,7 +254,7 @@ public:
   ExploreResult exploreTopology(const std::string& entityId, const std::string& returnType) {
     std::lock_guard<std::mutex> lock(s_.mutex);
     try {
-      TopoDS_Shape shape = lookupEntityLocked(entityId);
+      TopoDS_Shape shape = lookupEntityIn(s_, entityId);
       ExploreResult result;
 
       TopAbs_ShapeEnum typeEnum;
@@ -613,62 +582,6 @@ public:
   }
 
 private:
-  TopoDS_Shape lookupEntityLocked(const std::string& entityId) const {
-    auto solidIt = s_.solids.find(entityId);
-    if (solidIt != s_.solids.end()) {
-      return solidIt->second.shape;
-    }
-    auto shellIt = s_.shells.find(entityId);
-    if (shellIt != s_.shells.end()) {
-      return shellIt->second.shape;
-    }
-    for (const auto& kv : s_.solids) {
-      TopExp_Explorer faceExp(kv.second.shape, TopAbs_FACE);
-      for (; faceExp.More(); faceExp.Next()) {
-        const TopoDS_Shape& s = faceExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-      TopExp_Explorer edgeExp(kv.second.shape, TopAbs_EDGE);
-      for (; edgeExp.More(); edgeExp.Next()) {
-        const TopoDS_Shape& s = edgeExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-      TopExp_Explorer vertexExp(kv.second.shape, TopAbs_VERTEX);
-      for (; vertexExp.More(); vertexExp.Next()) {
-        const TopoDS_Shape& s = vertexExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-      TopExp_Explorer shellExp(kv.second.shape, TopAbs_SHELL);
-      for (; shellExp.More(); shellExp.Next()) {
-        const TopoDS_Shape& s = shellExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-    }
-    for (const auto& kv : s_.shells) {
-      TopExp_Explorer faceExp(kv.second.shape, TopAbs_FACE);
-      for (; faceExp.More(); faceExp.Next()) {
-        const TopoDS_Shape& s = faceExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-      TopExp_Explorer edgeExp(kv.second.shape, TopAbs_EDGE);
-      for (; edgeExp.More(); edgeExp.Next()) {
-        const TopoDS_Shape& s = edgeExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-      TopExp_Explorer vertexExp(kv.second.shape, TopAbs_VERTEX);
-      for (; vertexExp.More(); vertexExp.Next()) {
-        const TopoDS_Shape& s = vertexExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-      TopExp_Explorer shellExp(kv.second.shape, TopAbs_SHELL);
-      for (; shellExp.More(); shellExp.Next()) {
-        const TopoDS_Shape& s = shellExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-    }
-    throw GeometryError("GE_SOLID_NOT_FOUND", "Entity not found in session: " + entityId, false, "");
-  }
-
   GeometryState& s_;
 };
 

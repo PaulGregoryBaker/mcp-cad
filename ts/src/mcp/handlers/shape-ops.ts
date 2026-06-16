@@ -10,23 +10,27 @@ import {
   MERGE_EDGE_ALIGNMENT_TOLERANCE_MM,
 } from '../state.js';
 import { session } from '../../geometry/session.js';
-import { transactionRegistry } from '../transactions.js';
 import {
   requireString,
   requireStringArray,
   requireObject,
   resolveTransactionContext,
+  buildMeshUrl,
+  buildMeshUrls,
+  resolveRollbackToken,
+  appendHistoryIfJoined,
 } from '../helpers.js';
 import {
   ringToLwpolylineDxf,
   normalizePanelDxfOrientation,
   filterInvalidCutLines,
+  generateDxfFromManufacturingGraph,
 } from '../dxf-helpers.js';
 import { computeDxfMergePlacement } from '../../manufacturing/dxf/orientation.js';
 import type { Placement2D } from '../../manufacturing/dxf/merge.js';
 import { mergeDxfOutlines, parseFirstClosedPolyline, applyPlacement } from '../../manufacturing/dxf/merge.js';
 import { toNodeId, computeBendAllowance } from '../../manufacturing/graph/types.js';
-import type { BendZone, CutNode, PanelFrame, PanelNode } from '../../manufacturing/graph/types.js';
+import type { PanelFrame, PanelNode } from '../../manufacturing/graph/types.js';
 import type { ManufacturingConfig } from '../../config/loader.js';
 
 // ─── Tool schemas ─────────────────────────────────────────────────────────────
@@ -493,124 +497,6 @@ function occtDxfToLwpolylineDxf(occtDxf: string): string | null {
   return dxfLines.join('\n');
 }
 
-function generateDxfFromManufacturingGraph(
-  flatWidthMm: number,
-  flatHeightMm: number,
-  _bendZones: BendZone[],
-  cutNodes: CutNode[],
-): string {
-  const lines: string[] = [];
-
-  // ─── DXF Header ───────────────────────────────────────────────────────────
-  lines.push(
-    '0',
-    'SECTION',
-    '2',
-    'HEADER',
-    '9',
-    '$ACADVER',
-    '1',
-    'AC1015',
-    '0',
-    'ENDSEC',
-  );
-
-  // ─── DXF Entities ─────────────────────────────────────────────────────────
-  lines.push(
-    '0',
-    'SECTION',
-    '2',
-    'ENTITIES',
-  );
-
-  // Panel outline: rectangle from (0,0) to (width,height)
-  lines.push(
-    '0',
-    'LWPOLYLINE',
-    '8',
-    '0', // layer
-    '90',
-    '4', // 4 vertices (closed rectangle)
-    '70',
-    '1', // closed polyline
-  );
-  // Vertex 1: (0, 0)
-  lines.push('10', '0.0', '20', '0.0');
-  // Vertex 2: (width, 0)
-  lines.push('10', flatWidthMm.toString(), '20', '0.0');
-  // Vertex 3: (width, height)
-  lines.push('10', flatWidthMm.toString(), '20', flatHeightMm.toString());
-  // Vertex 4: (0, height)
-  lines.push('10', '0.0', '20', flatHeightMm.toString());
-
-  // Cut profiles: circles, rectangles, polygons, freeform shapes
-  for (const cutNode of cutNodes) {
-    const profile = cutNode.profile;
-
-    if (profile.type === 'CIRCLE') {
-      const { centreX, centreY, radius } = profile;
-      lines.push(
-        '0',
-        'CIRCLE',
-        '8',
-        'CUTS',
-        '10',
-        centreX.toString(),
-        '20',
-        centreY.toString(),
-        '40',
-        radius.toString(),
-      );
-    } else if (profile.type === 'RECTANGLE') {
-      const { originX, originY, width, height } = profile;
-      lines.push(
-        '0',
-        'LWPOLYLINE',
-        '8',
-        'CUTS',
-        '90',
-        '4', // 4 vertices
-        '70',
-        '1', // closed
-      );
-      lines.push('10', originX.toString(), '20', originY.toString());
-      lines.push('10', (originX + width).toString(), '20', originY.toString());
-      lines.push('10', (originX + width).toString(), '20', (originY + height).toString());
-      lines.push('10', originX.toString(), '20', (originY + height).toString());
-    } else if (profile.type === 'POLYGON' || profile.type === 'FREEFORM') {
-      const { vertices } = profile;
-      lines.push(
-        '0',
-        'LWPOLYLINE',
-        '8',
-        'CUTS',
-        '90',
-        vertices.length.toString(),
-        '70',
-        '1', // closed for POLYGON, implicit closure for FREEFORM
-      );
-      for (const vertex of vertices) {
-        lines.push('10', vertex.x.toString(), '20', vertex.y.toString());
-      }
-    }
-  }
-
-  // ─── DXF Footer ───────────────────────────────────────────────────────────
-  lines.push(
-    '0',
-    'ENDSEC',
-    '0',
-    'EOF',
-  );
-
-  const dxfContent = lines.join('\n');
-
-  // VALIDATION: Remove any invalid internal cut lines (seam/corruption artifacts).
-  // A LINE is invalid if both endpoints are interior (not on panel edge).
-  // This permanently prevents seam lines from appearing in the DXF.
-  return filterInvalidCutLines(dxfContent, flatWidthMm, flatHeightMm);
-}
-
 // ─── Handler functions ────────────────────────────────────────────────────────
 
 export function handleSplitBodyByPlane(args: Record<string, unknown>): unknown {
@@ -635,18 +521,14 @@ export function handleSplitBodyByPlane(args: Record<string, unknown>): unknown {
 
   const ctx = resolveTransactionContext(args);
   const result = getGeometryBinding().splitBodyByPlane(partId, plane);
+  appendHistoryIfJoined(ctx, result.shape_history);
 
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
-  }
-
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     positive_shell_id: result.positiveShellId,
     negative_shell_id: result.negativeShellId,
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
-    positive_mesh_url: `${meshBaseUrl}/mesh/${result.positiveShellId}.glb`,
-    negative_mesh_url: `${meshBaseUrl}/mesh/${result.negativeShellId}.glb`,
+    rollback_token: resolveRollbackToken(ctx, result.rollbackToken),
+    positive_mesh_url: buildMeshUrl(result.positiveShellId),
+    negative_mesh_url: buildMeshUrl(result.negativeShellId),
     shape_history: result.shape_history ?? [],
   };
 }
@@ -1323,8 +1205,10 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
       const res = getGeometryBinding().mergeBodiesWithBend(shellAId as string, shellBId as string, targetEdges, bendRadius as number);
       mergedShellId = res.mergedShellId;
       shapeHistory = (res as unknown as { shape_history?: typeof shapeHistory }).shape_history ?? [];
-      rollbackToken = ctx.mode === 'join' ? ctx.transactionId
-                    : ((res as unknown as { rollbackToken?: string }).rollbackToken ?? snapshotId);
+      rollbackToken = resolveRollbackToken(
+        ctx,
+        (res as unknown as { rollbackToken?: string }).rollbackToken ?? snapshotId,
+      );
     }
   } catch (err) {
     // ── Rollback: restore C++ snapshot and saved graph state ──────────────────
@@ -1344,11 +1228,8 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
   }
 
   session.registerShell(mergedShellId);
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, shapeHistory as import('../transactions').ShapeHistoryRecord[]);
-  }
+  appendHistoryIfJoined(ctx, shapeHistory as import('../transactions').ShapeHistoryRecord[]);
 
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     merged_shell_id: mergedShellId,
     merged_part_id: mergedPartId,
@@ -1361,7 +1242,7 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
     hidden_shell_ids: [shellAId, shellBId],
     visibility_policy: 'show_only_recreated',
     rollback_token: rollbackToken,
-    mesh_url: `${meshBaseUrl}/mesh/${mergedShellId}.glb`,
+    mesh_url: buildMeshUrl(mergedShellId),
     shape_history: shapeHistory,
     // T020 / FR-003: edge alignment correction applied (null if panels were already aligned)
     edge_alignment_correction_mm: edgeAlignmentCorrectionMm,
@@ -1374,12 +1255,11 @@ export function handleCloseGap(args: Record<string, unknown>): unknown {
   const ctx = resolveTransactionContext(args);
   const result = getGeometryBinding().closeGap(partAId, partBId);
 
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     part_b_id: result.partBId,
     gap_closed_mm: result.gapClosedMm,
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
-    mesh_url: `${meshBaseUrl}/mesh/${result.partBId}.glb`,
+    rollback_token: resolveRollbackToken(ctx, result.rollbackToken),
+    mesh_url: buildMeshUrl(result.partBId),
   };
 }
 
@@ -1461,17 +1341,13 @@ export function handleExtendFaceToTarget(args: Record<string, unknown>): unknown
 
   // Register the modified shell immediately so it can be used in subsequent operations
   session.registerShell(result.modifiedShellId);
+  appendHistoryIfJoined(ctx, result.shape_history);
 
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
-  }
-
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     modified_shell_id: result.modifiedShellId,
     extension_distance_mm: result.extensionDistanceMm,
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
-    mesh_url: `${meshBaseUrl}/mesh/${result.modifiedShellId}.glb`,
+    rollback_token: resolveRollbackToken(ctx, result.rollbackToken),
+    mesh_url: buildMeshUrl(result.modifiedShellId),
     shape_history: result.shape_history ?? [],
   };
 }
@@ -1501,16 +1377,12 @@ export function handleOffsetFace(args: Record<string, unknown>): unknown {
 
   // Register the modified shell immediately so it can be used in subsequent operations
   session.registerShell(result.modifiedShellId);
+  appendHistoryIfJoined(ctx, result.shape_history);
 
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
-  }
-
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     modified_shell_id: result.modifiedShellId,
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
-    mesh_url: `${meshBaseUrl}/mesh/${result.modifiedShellId}.glb`,
+    rollback_token: resolveRollbackToken(ctx, result.rollbackToken),
+    mesh_url: buildMeshUrl(result.modifiedShellId),
     shape_history: result.shape_history ?? [],
   };
 }
@@ -1539,17 +1411,13 @@ export function handleAddFlange(args: Record<string, unknown>): unknown {
 
   // Register the modified shell immediately so it can be used in subsequent operations
   session.registerShell(result.modifiedShellId);
+  appendHistoryIfJoined(ctx, result.shape_history);
 
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
-  }
-
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     modified_shell_id: result.modifiedShellId,
     flange_feature_id: result.flangeFeatureId,
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
-    mesh_url: `${meshBaseUrl}/mesh/${result.modifiedShellId}.glb`,
+    rollback_token: resolveRollbackToken(ctx, result.rollbackToken),
+    mesh_url: buildMeshUrl(result.modifiedShellId),
     shape_history: result.shape_history ?? [],
   };
 }
@@ -1563,16 +1431,12 @@ export function handleRipEdge(args: Record<string, unknown>): unknown {
 
   // Register the modified shell immediately so it can be used in subsequent operations
   session.registerShell(result.modifiedShellId);
+  appendHistoryIfJoined(ctx, result.shape_history);
 
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
-  }
-
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     modified_shell_id: result.modifiedShellId,
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
-    mesh_url: `${meshBaseUrl}/mesh/${result.modifiedShellId}.glb`,
+    rollback_token: resolveRollbackToken(ctx, result.rollbackToken),
+    mesh_url: buildMeshUrl(result.modifiedShellId),
     shape_history: result.shape_history ?? [],
   };
 }
@@ -1651,16 +1515,12 @@ export function handleTrimBodyWithPlane(args: Record<string, unknown>): unknown 
 
   // Register the trimmed shell immediately so it can be used in subsequent operations
   session.registerShell(result.trimmedShellId);
+  appendHistoryIfJoined(ctx, result.shape_history);
 
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
-  }
-
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     trimmed_shell_id: result.trimmedShellId,
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
-    mesh_url: `${meshBaseUrl}/mesh/${result.trimmedShellId}.glb`,
+    rollback_token: resolveRollbackToken(ctx, result.rollbackToken),
+    mesh_url: buildMeshUrl(result.trimmedShellId),
     shape_history: result.shape_history ?? [],
   };
 }
@@ -1775,9 +1635,7 @@ export async function handleSplitBodyByBends(args: Record<string, unknown>): Pro
     session.registerShell(shellId);
   }
 
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
-  }
+  appendHistoryIfJoined(ctx, result.shape_history);
 
   // ARCHITECTURE CHANGE: Auto-create manufacturing graphs for each panel
   // Each panel gets its own part with auto-generated part_id
@@ -1972,7 +1830,6 @@ export async function handleSplitBodyByBends(args: Record<string, unknown>): Pro
   });
 
   const allIds = [...result.panel_ids, ...result.protrusion_ids];
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     panel_ids: result.panel_ids,
     panel_count: result.panel_ids.length,
@@ -1982,8 +1839,8 @@ export async function handleSplitBodyByBends(args: Record<string, unknown>): Pro
     protrusion_bboxes: result.protrusion_bboxes,
     protrusion_parents: result.protrusion_parents,
     detected_mode: result.detected_mode,
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
-    mesh_urls: allIds.map(id => `${meshBaseUrl}/mesh/${id}.glb`),
+    rollback_token: resolveRollbackToken(ctx, result.rollbackToken),
+    mesh_urls: buildMeshUrls(allIds),
     shape_history: result.shape_history ?? [],
     // Manufacturing graph creation results
     created_parts: createdParts,
@@ -2063,15 +1920,14 @@ export function handleRemoveProtrusions(args: Record<string, unknown>): unknown 
     createdProtrusionParts.push({ part_id: protPartId, panel_id: protrusionId });
   }
 
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   const allIds = [result.cleaned_part_id, ...result.protrusion_ids];
   return {
     cleaned_part_id: result.cleaned_part_id,
     protrusion_ids: result.protrusion_ids,
     protrusion_count: result.protrusion_count,
     protrusion_bboxes: result.protrusion_bboxes,
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
-    mesh_urls: allIds.map(id => `${meshBaseUrl}/mesh/${id}.glb`),
+    rollback_token: resolveRollbackToken(ctx, result.rollbackToken),
+    mesh_urls: buildMeshUrls(allIds),
     created_parts: createdProtrusionParts,
   };
 }

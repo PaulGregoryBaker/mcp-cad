@@ -118,6 +118,7 @@
 #include <gp_Ax3.hxx>
 
 #include "geometry_service_impl.hpp"
+#include "geometry_service_utils.hpp"
 #include "shape_history.hpp"
 
 // ─── Standard library ────────────────────────────────────────────────────────
@@ -139,56 +140,6 @@
 #include <cstring>
 
 namespace mcp_cad {
-
-// ─── UUID generator (simple, session-scoped) ─────────────────────────────────
-
-static std::string generateUUID() {
-  static std::random_device rd;
-  static std::mt19937_64 gen(rd());
-  static std::uniform_int_distribution<uint64_t> dist;
-
-  uint64_t hi = dist(gen);
-  uint64_t lo = dist(gen);
-
-  // Set version (4) and variant bits
-  hi = (hi & 0xFFFFFFFFFFFF0FFFULL) | 0x0000000000004000ULL;
-  lo = (lo & 0x3FFFFFFFFFFFFFFFULL) | 0x8000000000000000ULL;
-
-  std::ostringstream oss;
-  oss << std::hex << std::setfill('0')
-      << std::setw(8)  << (hi >> 32) << "-"
-      << std::setw(4)  << ((hi >> 16) & 0xFFFF) << "-"
-      << std::setw(4)  << (hi & 0xFFFF) << "-"
-      << std::setw(4)  << (lo >> 48) << "-"
-      << std::setw(12) << (lo & 0x0000FFFFFFFFFFFFULL);
-  return oss.str();
-}
-
-static long long nowMs() {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(
-             std::chrono::system_clock::now().time_since_epoch())
-      .count();
-}
-
-static std::string shapeId(const TopoDS_Shape& shape) {
-  return std::to_string(std::hash<TopoDS_Shape>{}(shape));
-}
-
-// ─── faceOutwardNormal ────────────────────────────────────────────────────────
-
-// Returns outward-pointing normal of a face at its UV centre.
-static gp_Vec faceOutwardNormal(const TopoDS_Face& f) {
-  Handle(Geom_Surface) surf = BRep_Tool::Surface(f);
-  if (surf.IsNull()) return gp_Vec(0, 0, 1);
-  Standard_Real u1, u2, v1, v2;
-  BRepTools::UVBounds(f, u1, u2, v1, v2);
-  gp_Pnt p; gp_Vec du, dv;
-  surf->D1((u1 + u2) * 0.5, (v1 + v2) * 0.5, p, du, dv);
-  gp_Vec n = du.Crossed(dv);
-  if (n.Magnitude() > 1e-10) n.Normalize();
-  if (f.Orientation() == TopAbs_REVERSED) n.Reverse();
-  return n;
-}
 
 // ─── Static classification helpers ───────────────────────────────────────────
 
@@ -496,7 +447,7 @@ public:
     }
 
     // Snapshot before mutation (Constitution Principle IV)
-    SnapshotId token = createSnapshotLocked("before booleanCut on " + solidId);
+    SnapshotId token = s_.createSnapshot("before booleanCut on " + solidId);
 
     try {
       gp_Pnt origin(ox, oy, oz);
@@ -590,7 +541,7 @@ public:
     // Clamp kerf to [0.1, 0.2] mm (Constitution Principle V)
     double kerf = std::clamp(kerfOffsetMm, 0.1, 0.2);
 
-    SnapshotId token = createSnapshotLocked("before addTabSlot");
+    SnapshotId token = s_.createSnapshot("before addTabSlot");
 
     try {
       // Tab-slot geometry generation:
@@ -630,7 +581,7 @@ public:
                           "Shell not found: " + shellId, false, "");
     }
 
-    SnapshotId token = createSnapshotLocked("before addRivetHole on " + shellId);
+    SnapshotId token = s_.createSnapshot("before addRivetHole on " + shellId);
 
     try {
       std::string holeId = generateUUID();
@@ -647,7 +598,7 @@ public:
 
   SnapshotId createSnapshot(const std::string& label) {
     std::lock_guard<std::mutex> lock(s_.mutex);
-    return createSnapshotLocked(label);
+    return s_.createSnapshot(label);
   }
 
   RestoreResult restoreSnapshot(const SnapshotId& snapshotId) {
@@ -707,163 +658,6 @@ private:
   GeometryState& s_;
 
   // ── Private helpers ───────────────────────────────────────────────────────
-
-  TopoDS_Shape lookupEntityLocked(const std::string& entityId) const {
-    auto solidIt = s_.solids.find(entityId);
-    if (solidIt != s_.solids.end()) {
-      return solidIt->second.shape;
-    }
-    auto shellIt = s_.shells.find(entityId);
-    if (shellIt != s_.shells.end()) {
-      return shellIt->second.shape;
-    }
-    for (const auto& kv : s_.solids) {
-      TopExp_Explorer faceExp(kv.second.shape, TopAbs_FACE);
-      for (; faceExp.More(); faceExp.Next()) {
-        const TopoDS_Shape& s = faceExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-      TopExp_Explorer edgeExp(kv.second.shape, TopAbs_EDGE);
-      for (; edgeExp.More(); edgeExp.Next()) {
-        const TopoDS_Shape& s = edgeExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-      TopExp_Explorer vertexExp(kv.second.shape, TopAbs_VERTEX);
-      for (; vertexExp.More(); vertexExp.Next()) {
-        const TopoDS_Shape& s = vertexExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-      TopExp_Explorer shellExp(kv.second.shape, TopAbs_SHELL);
-      for (; shellExp.More(); shellExp.Next()) {
-        const TopoDS_Shape& s = shellExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-    }
-    for (const auto& kv : s_.shells) {
-      TopExp_Explorer faceExp(kv.second.shape, TopAbs_FACE);
-      for (; faceExp.More(); faceExp.Next()) {
-        const TopoDS_Shape& s = faceExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-      TopExp_Explorer edgeExp(kv.second.shape, TopAbs_EDGE);
-      for (; edgeExp.More(); edgeExp.Next()) {
-        const TopoDS_Shape& s = edgeExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-      TopExp_Explorer vertexExp(kv.second.shape, TopAbs_VERTEX);
-      for (; vertexExp.More(); vertexExp.Next()) {
-        const TopoDS_Shape& s = vertexExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-      TopExp_Explorer shellExp(kv.second.shape, TopAbs_SHELL);
-      for (; shellExp.More(); shellExp.Next()) {
-        const TopoDS_Shape& s = shellExp.Current();
-        if (shapeId(s) == entityId) return s;
-      }
-    }
-    throw GeometryError("GE_SOLID_NOT_FOUND", "Entity not found in session: " + entityId, false, "");
-  }
-
-  SnapshotId createSnapshotLocked(const std::string& label) {
-    GeometrySnapshot snap;
-    snap.snapshotId     = generateUUID();
-    snap.operationLabel = label;
-    snap.timestampMs    = nowMs();
-
-    for (const auto& kv : s_.solids)  snap.solidIds.push_back(kv.first);
-    for (const auto& kv : s_.shells)  snap.shellIds.push_back(kv.first);
-    for (const auto& kv : s_.unfolds) snap.unfoldIds.push_back(kv.first);
-
-    s_.snapshots[snap.snapshotId]          = snap;
-    s_.snapshotSolids[snap.snapshotId]     = s_.solids;
-    s_.snapshotShells[snap.snapshotId]     = s_.shells;
-    s_.snapshotUnfolds[snap.snapshotId]    = s_.unfolds;
-    s_.snapshotAssemblies[snap.snapshotId] = s_.assemblies;
-    return snap.snapshotId;
-  }
-
-  ShellId findParentShellIdLocked(const std::string& subShapeId) const {
-    for (const auto& kv : s_.shells) {
-      if (kv.first == subShapeId) return kv.first;
-      TopExp_Explorer exp(kv.second.shape, TopAbs_FACE);
-      for (; exp.More(); exp.Next()) {
-        if (shapeId(exp.Current()) == subShapeId) return kv.first;
-      }
-      TopExp_Explorer expEdge(kv.second.shape, TopAbs_EDGE);
-      for (; expEdge.More(); expEdge.Next()) {
-        if (shapeId(expEdge.Current()) == subShapeId) return kv.first;
-      }
-    }
-    for (const auto& kv : s_.solids) {
-      if (kv.first == subShapeId) return kv.first;
-      TopExp_Explorer exp(kv.second.shape, TopAbs_FACE);
-      for (; exp.More(); exp.Next()) {
-        if (shapeId(exp.Current()) == subShapeId) return kv.first;
-      }
-      TopExp_Explorer expEdge(kv.second.shape, TopAbs_EDGE);
-      for (; expEdge.More(); expEdge.Next()) {
-        if (shapeId(expEdge.Current()) == subShapeId) return kv.first;
-      }
-    }
-    throw GeometryError("GE_SOLID_NOT_FOUND", "Parent shell/solid containing face/edge not found: " + subShapeId, false, "");
-  }
-
-  TransformResult applyTransformLocked(const ShellId& solidId, const gp_Trsf& trsf, bool keepOriginal, const std::string& opName) {
-    TopoDS_Shape originalShape;
-    bool isSolid = false;
-    auto shellIt = s_.shells.find(solidId);
-    auto solidIt = s_.solids.find(solidId);
-    if (shellIt != s_.shells.end()) {
-      originalShape = shellIt->second.shape;
-    } else if (solidIt != s_.solids.end()) {
-      originalShape = solidIt->second.shape;
-      isSolid = true;
-    } else {
-      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell/solid not found: " + solidId, false, "");
-    }
-
-    SnapshotId token = createSnapshotLocked("before " + opName + " on " + solidId);
-
-    try {
-      BRepBuilderAPI_Transform transformer(originalShape, trsf, Standard_True);
-      transformer.Build();
-      if (!transformer.IsDone()) {
-        throw GeometryError("GE_BOOLEAN_FAILURE", "Transform failed", true, "rollback");
-      }
-
-      TopoDS_Shape transformedShape = transformer.Shape();
-      BRepCheck_Analyzer checker(transformedShape);
-      if (!checker.IsValid()) {
-        throw GeometryError("GE_BOOLEAN_FAILURE", "Transformed shape is invalid", true, "rollback");
-      }
-
-      auto history = captureHistory(transformer, originalShape, [](const TopoDS_Shape& s) { return shapeId(s); }, opName);
-
-      if (!keepOriginal) {
-        if (isSolid) {
-          s_.solids.erase(solidId);
-        } else {
-          s_.shells.erase(solidId);
-        }
-      }
-
-      ShellId resultId = generateUUID();
-      if (isSolid) {
-        s_.solids[resultId] = SolidState{resultId, transformedShape};
-      } else {
-        s_.shells[resultId] = ShellState{resultId, "", transformedShape};
-      }
-
-      return TransformResult{resultId, token, std::move(history)};
-
-    } catch (const GeometryError&) {
-      throw;
-    } catch (const Standard_Failure& e) {
-      throw GeometryError("GE_BOOLEAN_FAILURE",
-                          std::string("OCCT exception during transform: ") + e.GetMessageString(),
-                          true, "rollback");
-    }
-  }
 
   void buildTopologyGraph(const TopoDS_Shape& shape, TopologyGraph& graph) {
     // ── Index faces ────────────────────────────────────────────────────────
@@ -946,18 +740,6 @@ private:
   static gp_Trsf locationToTrsf(const TopLoc_Location& loc) {
     if (loc.IsIdentity()) return gp_Trsf();
     return loc.Transformation();
-  }
-
-  static bool detectCycleDFS(int u, int p, const std::vector<std::vector<int>>& adj, std::vector<bool>& visited) {
-    visited[u] = true;
-    for (int v : adj[u]) {
-      if (!visited[v]) {
-        if (detectCycleDFS(v, u, adj, visited)) return true;
-      } else if (v != p) {
-        return true;
-      }
-    }
-    return false;
   }
 };
 

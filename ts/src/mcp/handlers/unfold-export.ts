@@ -8,132 +8,19 @@ import { throwError, ErrorCodes } from '../errors.js';
 import { getGeometryBinding, getManufacturingGraph } from '../state.js';
 import { session } from '../../geometry/session.js';
 import { jobQueue } from '../../geometry/jobs.js';
-import { transactionRegistry } from '../transactions.js';
-import { requireString, resolveTransactionContext } from '../helpers.js';
-import { filterInvalidCutLines } from '../dxf-helpers.js';
+import {
+  requireString,
+  resolveTransactionContext,
+  buildMeshUrl,
+  resolveRollbackToken,
+  appendHistoryIfJoined,
+} from '../helpers.js';
+import { filterInvalidCutLines, generateDxfFromManufacturingGraph } from '../dxf-helpers.js';
 import { MaterialStore } from '../../manufacturing/material.js';
 import type { BendZone } from '../../manufacturing/graph/types.js';
 import type { ManufacturingConfig } from '../../config/loader.js';
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
-
-function generateDxfFromManufacturingGraph(
-  flatWidthMm: number,
-  flatHeightMm: number,
-  _bendZones: import('../../manufacturing/graph/types').BendZone[],
-  cutNodes: import('../../manufacturing/graph/types').CutNode[],
-): string {
-  const lines: string[] = [];
-
-  // ─── DXF Header ───────────────────────────────────────────────────────────
-  lines.push(
-    '0',
-    'SECTION',
-    '2',
-    'HEADER',
-    '9',
-    '$ACADVER',
-    '1',
-    'AC1015',
-    '0',
-    'ENDSEC',
-  );
-
-  // ─── DXF Entities ─────────────────────────────────────────────────────────
-  lines.push(
-    '0',
-    'SECTION',
-    '2',
-    'ENTITIES',
-  );
-
-  // Panel outline: rectangle from (0,0) to (width,height)
-  lines.push(
-    '0',
-    'LWPOLYLINE',
-    '8',
-    '0', // layer
-    '90',
-    '4', // 4 vertices (closed rectangle)
-    '70',
-    '1', // closed polyline
-  );
-  // Vertex 1: (0, 0)
-  lines.push('10', '0.0', '20', '0.0');
-  // Vertex 2: (width, 0)
-  lines.push('10', flatWidthMm.toString(), '20', '0.0');
-  // Vertex 3: (width, height)
-  lines.push('10', flatWidthMm.toString(), '20', flatHeightMm.toString());
-  // Vertex 4: (0, height)
-  lines.push('10', '0.0', '20', flatHeightMm.toString());
-
-  // Cut profiles: circles, rectangles, polygons, freeform shapes
-  for (const cutNode of cutNodes) {
-    const profile = cutNode.profile;
-
-    if (profile.type === 'CIRCLE') {
-      const { centreX, centreY, radius } = profile;
-      lines.push(
-        '0',
-        'CIRCLE',
-        '8',
-        'CUTS',
-        '10',
-        centreX.toString(),
-        '20',
-        centreY.toString(),
-        '40',
-        radius.toString(),
-      );
-    } else if (profile.type === 'RECTANGLE') {
-      const { originX, originY, width, height } = profile;
-      lines.push(
-        '0',
-        'LWPOLYLINE',
-        '8',
-        'CUTS',
-        '90',
-        '4', // 4 vertices
-        '70',
-        '1', // closed
-      );
-      lines.push('10', originX.toString(), '20', originY.toString());
-      lines.push('10', (originX + width).toString(), '20', originY.toString());
-      lines.push('10', (originX + width).toString(), '20', (originY + height).toString());
-      lines.push('10', originX.toString(), '20', (originY + height).toString());
-    } else if (profile.type === 'POLYGON' || profile.type === 'FREEFORM') {
-      const { vertices } = profile;
-      lines.push(
-        '0',
-        'LWPOLYLINE',
-        '8',
-        'CUTS',
-        '90',
-        vertices.length.toString(),
-        '70',
-        '1', // closed for POLYGON, implicit closure for FREEFORM
-      );
-      for (const vertex of vertices) {
-        lines.push('10', vertex.x.toString(), '20', vertex.y.toString());
-      }
-    }
-  }
-
-  // ─── DXF Footer ───────────────────────────────────────────────────────────
-  lines.push(
-    '0',
-    'ENDSEC',
-    '0',
-    'EOF',
-  );
-
-  const dxfContent = lines.join('\n');
-
-  // VALIDATION: Remove any invalid internal cut lines (seam/corruption artifacts).
-  // A LINE is invalid if both endpoints are interior (not on panel edge).
-  // This permanently prevents seam lines from appearing in the DXF.
-  return filterInvalidCutLines(dxfContent, flatWidthMm, flatHeightMm);
-}
 
 /**
  * Extract bend lines from FlatPatternDimensions.
@@ -315,9 +202,7 @@ export function handleApplyUnfold(args: Record<string, unknown>, config: Manufac
     session.registerShell(result.improvedPartId);
   }
 
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
-  }
+  appendHistoryIfJoined(ctx, result.shape_history);
 
   // Compute graph-based flat dimensions — these are the preferred source of truth.
   // The manufacturing graph knows the panel dimensions analytically through BendNodes
@@ -424,7 +309,6 @@ export function handleApplyUnfold(args: Record<string, unknown>, config: Manufac
     // It is used for geometry recalculation, so it must be free of invalid artifacts.
   panelNode.shapeDxf = dxfContent;
 
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   const response: Record<string, unknown> = {
     part_id: partId,
     panel_id: panelId,
@@ -436,7 +320,7 @@ export function handleApplyUnfold(args: Record<string, unknown>, config: Manufac
     nominal_thickness_mm: result.detectedThickness ?? 0,
     bend_lines: bendLines,
     dxf_content: dxfContent,
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollbackToken,
+    rollback_token: resolveRollbackToken(ctx, result.rollbackToken),
     shape_history: result.shape_history ?? [],
   };
 
@@ -467,7 +351,7 @@ export function handleApplyUnfold(args: Record<string, unknown>, config: Manufac
 
   if (result.improvedPartId) {
     response['improved_part_id'] = result.improvedPartId;
-    response['improved_part_mesh_url'] = `${meshBaseUrl}/mesh/${result.improvedPartId}.glb`;
+    response['improved_part_mesh_url'] = buildMeshUrl(result.improvedPartId);
   }
   return response;
 }
