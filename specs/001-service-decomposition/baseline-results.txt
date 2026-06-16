@@ -1,0 +1,23 @@
+Baseline captured from: c:/Projects/mcp-cad/full_test_run_current.txt (dated Jun 9)
+Branch at baseline: 011-graph-driven-geometry
+
+Pre-existing failing integration tests (not caused by this refactor):
+  - sew.integration.test.ts
+  - transforms.integration.test.ts
+  - cube_box_workflow.functional.test.ts
+  - fuse_orientation_preserved.integration.test.ts
+  - fuse_shell_resolution.test.ts
+  - fuse_unfold_graph_regression.test.ts (2 cases)
+  - merge_orientation_preserved.integration.test.ts
+  - merge_protrusion_flat_layout.integration.test.ts
+  - sys_jtbd_01_decompose.integration.test.ts
+  - sys_jtbd_03_unfold_score.integration.test.ts
+  - sys_jtbd_04_export_lifecycle.integration.test.ts
+  - transaction_primitive.integration.test.ts (2 cases)
+  - unfold.integration.test.ts (2 cases)
+  - unfold_roundtrip.integration.test.ts (2 cases)
+  - validate_assembly.integration.test.ts
+
+Contract tests: all 10 passing (verified via tools-coverage.contract.test.ts spot check).
+
+Regression gate: refactor must not introduce failures in tests that were PASSING at baseline.
