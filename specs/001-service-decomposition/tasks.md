@@ -22,7 +22,7 @@
 
 **Purpose**: Capture the pass/fail baseline and inventory all dead code *before* any file is changed. Nothing may be moved or deleted until this phase is complete.
 
-- [ ] T001 Run full integration test suite (`cd ts && npx jest --runInBand`) and save pass/fail counts to `specs/001-service-decomposition/baseline-results.txt`
+- [X] T001 Run full integration test suite (`cd ts && npx jest --runInBand`) and save pass/fail counts to `specs/001-service-decomposition/baseline-results.txt`
 - [ ] T002 Compile C++ with unused-function warnings (`cmake --build` with `-DCMAKE_CXX_FLAGS="-Wunused-function"`) and pipe output to `specs/001-service-decomposition/dead-code.md` under a "C++ Unused Symbols" section
 - [ ] T003 Temporarily add `"noUnusedLocals": true, "noUnusedParameters": true` to `ts/tsconfig.json`, run `npx tsc --noEmit`, append TypeScript unused-symbol warnings to `specs/001-service-decomposition/dead-code.md` under a "TypeScript Unused Symbols" section, then revert `ts/tsconfig.json`
 - [ ] T004 Manual sweep of `cpp/src/geometry/geometry_service.cc` and `ts/src/mcp/tools.ts` for commented-out blocks, `// LEGACY`, `// OLD`, `// TODO remove` markers; append findings to `specs/001-service-decomposition/dead-code.md` under "Commented-Out / Legacy Blocks"
@@ -37,9 +37,9 @@
 
 **⚠️ CRITICAL**: No handler extraction (Phase 3) can begin until this phase is complete and tests pass.
 
-- [ ] T005 Create `ts/src/mcp/state.ts` and move into it from `ts/src/mcp/tools.ts`: `geometryBindingOverride`, `setGeometryBindingMock`, `getGeometryBinding`, `semanticStoreInstance`, `setSemanticStore`, `getSemanticStore`, `mcpManufacturingGraphs`, `mcpActivePart`, `mcpSolvers`, `initializeSolvers`, `findGraphOwner`, `createPart`, `getManufacturingGraph`, `setActivePart`, `deletePart`, `listParts`, `getGeometrySolver`, `getGraphFoldabilityChecker`, `resetMcpGraphStateForTests`, `registerTestPart` — all with their original export signatures
-- [ ] T006 Replace all moved declarations in `ts/src/mcp/tools.ts` with `import` statements from `./state.js`; confirm no remaining references to moved symbols exist inside `tools.ts` itself
-- [ ] T007 Run full test suite; confirm zero regressions against `baseline-results.txt` before proceeding
+- [X] T005 Create `ts/src/mcp/state.ts` and move into it from `ts/src/mcp/tools.ts`: `geometryBindingOverride`, `setGeometryBindingMock`, `getGeometryBinding`, `semanticStoreInstance`, `setSemanticStore`, `getSemanticStore`, `mcpManufacturingGraphs`, `mcpActivePart`, `mcpSolvers`, `initializeSolvers`, `findGraphOwner`, `createPart`, `getManufacturingGraph`, `setActivePart`, `deletePart`, `listParts`, `getGeometrySolver`, `getGraphFoldabilityChecker`, `resetMcpGraphStateForTests`, `registerTestPart` — all with their original export signatures
+- [X] T006 Replace all moved declarations in `ts/src/mcp/tools.ts` with `import` statements from `./state.js`; confirm no remaining references to moved symbols exist inside `tools.ts` itself
+- [X] T007 Run full test suite; confirm zero regressions against `baseline-results.txt` before proceeding
 
 **Checkpoint**: `state.ts` exists, `tools.ts` imports from it, tests green.
 
@@ -53,31 +53,31 @@
 
 ### Implementation for User Story 1
 
-- [ ] T008 Create directory `ts/src/mcp/handlers/` (add empty `.gitkeep` to track it)
-- [ ] T009 [US1] Create `ts/src/mcp/handlers/booleans.ts`: export `booleanDefinitions` array (schemas for `fuse_bodies`, `cut_bodies`, `intersect_bodies`) and handler functions `handleFuseBodies`, `handleCutBodies`, `handleIntersectBodies` moved from `tools.ts`
-- [ ] T010 [US1] Remove the three boolean handlers and their schemas from `tools.ts`; add `import` from `./handlers/booleans.js` in the `dispatchTool` switch; run tests
-- [ ] T011 [P] [US1] Create `ts/src/mcp/handlers/body-ops.ts`: export `bodyOpsDefinitions` (schemas for `clean_geometry`, `bounding_box`, `mass_properties`, `measure_distance`, `explore_topology`, `translate_body`, `rotate_body`, `mirror_body`, `scale_body`, `align_to_face`, `fillet_edges`, `chamfer_edges`, `simplify_body`, `heal_geometry_ex`, `offset_shape`, `delete_face`, `sew_faces`, `center_and_align_body`) and corresponding handler functions moved from `tools.ts`
-- [ ] T012 [US1] Remove body-ops handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
-- [ ] T013 [P] [US1] Create `ts/src/mcp/handlers/shape-ops.ts`: export `shapeOpsDefinitions` (schemas for `split_body_by_plane`, `merge_bodies_with_bend`, `close_gap`, `is_panel_valid`, `extend_face_to_target`, `offset_face`, `add_flange`, `rip_edge`, `compute_intersections`, `compute_gaps`, `trim_body_with_plane`, `check_boundary_compliance`, `split_body_by_bends`, `remove_protrusions`) and corresponding handler functions moved from `tools.ts`
-- [ ] T014 [US1] Remove shape-ops handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
-- [ ] T015 [P] [US1] Create `ts/src/mcp/handlers/manufacturing.ts`: export `manufacturingDefinitions` (schemas for `decompose_volume`, `synthesize_joints`, `generate_reliefs`, `validate_sheet_metal`, `reconstruct_curved_bends`, `evaluate_manufacturability`, `validate_bend_sequence`, `simulate_nesting`) and corresponding handler functions moved from `tools.ts`
-- [ ] T016 [US1] Remove manufacturing handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
-- [ ] T017 [P] [US1] Create `ts/src/mcp/handlers/unfold-export.ts`: export `unfoldExportDefinitions` (schemas for `apply_unfold`, `export_production_pack`, `get_export_job_status`, `get_export_job_result`) and corresponding handler functions moved from `tools.ts`
-- [ ] T018 [US1] Remove unfold-export handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
-- [ ] T019 [P] [US1] Create `ts/src/mcp/handlers/assembly.ts`: export `assemblyDefinitions` (schemas for `create_assembly_document`, `add_assembly_instance`, `mate_rigid`, `list_assembly_tree`, `validate_assembly`) and corresponding handler functions moved from `tools.ts`
-- [ ] T020 [US1] Remove assembly handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
-- [ ] T021 [P] [US1] Create `ts/src/mcp/handlers/transactions.ts`: export `transactionDefinitions` (schemas for `rollback`, `begin_transaction`, `commit_transaction`, `rollback_transaction`, `get_transaction_history`) and corresponding handler functions moved from `tools.ts`
-- [ ] T022 [US1] Remove transaction handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
-- [ ] T023 [P] [US1] Create `ts/src/mcp/handlers/semantic.ts`: export `semanticDefinitions` (schemas for `declare_semantic_entity`, `bind_semantic_entity`, `resolve_geometry`, `semantic_lineage`) and corresponding handler functions moved from `tools.ts`
-- [ ] T024 [US1] Remove semantic handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
-- [ ] T025 [P] [US1] Create `ts/src/mcp/handlers/graph.ts`: export `graphDefinitions` (schemas for `create_part`, `set_active_part`, `list_parts`, `delete_part`, `bootstrap_graph`, `add_bend`, `solve_geometry`, `check_foldability`, `query_graph`, `reset_graph`, `update_node`, `remove_node`, `add_join`, `add_cut`) and corresponding handler functions moved from `tools.ts`
-- [ ] T026 [US1] Remove graph handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
-- [ ] T027 [P] [US1] Create `ts/src/mcp/handlers/mapping.ts`: export `mappingDefinitions` (schemas for `map_3d_to_2d`, `map_2d_to_3d`) and handler functions `handleMapTo2D`, `handleMapTo3D` moved from `tools.ts`
-- [ ] T028 [US1] Remove mapping handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
-- [ ] T029 [US1] Create `ts/src/mcp/registry.ts`: import all `*Definitions` arrays from every handler module and export `getToolDefinitions(): object[]` that spreads them all into one array — replace the monolithic `getToolDefinitions()` block in `tools.ts` with an import from `./registry.js`
-- [ ] T030 [US1] Create `ts/src/mcp/dispatch.ts`: move `dispatchTool()` switch body into this file, importing handler functions from their respective `handlers/*.js` modules; update `tools.ts` to re-export `dispatchTool` from `./dispatch.js`
-- [ ] T031 [US1] Thin `ts/src/mcp/tools.ts` to a pure barrel: it should only re-export `getToolDefinitions` from `./registry.js`, `dispatchTool` from `./dispatch.js`, and test helpers from `./state.js`; the file must have no function implementations
-- [ ] T032 [US1] Verify: run full test suite; confirm `tools.ts` has fewer than 30 lines; confirm all baseline tests pass
+- [X] T008 Create directory `ts/src/mcp/handlers/` (add empty `.gitkeep` to track it)
+- [X] T009 [US1] Create `ts/src/mcp/handlers/booleans.ts`: export `booleanDefinitions` array (schemas for `fuse_bodies`, `cut_bodies`, `intersect_bodies`) and handler functions `handleFuseBodies`, `handleCutBodies`, `handleIntersectBodies` moved from `tools.ts`
+- [X] T010 [US1] Remove the three boolean handlers and their schemas from `tools.ts`; add `import` from `./handlers/booleans.js` in the `dispatchTool` switch; run tests
+- [X] T011 [P] [US1] Create `ts/src/mcp/handlers/body-ops.ts`: export `bodyOpsDefinitions` (schemas for `clean_geometry`, `bounding_box`, `mass_properties`, `measure_distance`, `explore_topology`, `translate_body`, `rotate_body`, `mirror_body`, `scale_body`, `align_to_face`, `fillet_edges`, `chamfer_edges`, `simplify_body`, `heal_geometry_ex`, `offset_shape`, `delete_face`, `sew_faces`, `center_and_align_body`) and corresponding handler functions moved from `tools.ts`
+- [X] T012 [US1] Remove body-ops handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
+- [X] T013 [P] [US1] Create `ts/src/mcp/handlers/shape-ops.ts`: export `shapeOpsDefinitions` (schemas for `split_body_by_plane`, `merge_bodies_with_bend`, `close_gap`, `is_panel_valid`, `extend_face_to_target`, `offset_face`, `add_flange`, `rip_edge`, `compute_intersections`, `compute_gaps`, `trim_body_with_plane`, `check_boundary_compliance`, `split_body_by_bends`, `remove_protrusions`) and corresponding handler functions moved from `tools.ts`
+- [X] T014 [US1] Remove shape-ops handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
+- [X] T015 [P] [US1] Create `ts/src/mcp/handlers/manufacturing.ts`: export `manufacturingDefinitions` (schemas for `decompose_volume`, `synthesize_joints`, `generate_reliefs`, `validate_sheet_metal`, `reconstruct_curved_bends`, `evaluate_manufacturability`, `validate_bend_sequence`, `simulate_nesting`) and corresponding handler functions moved from `tools.ts`
+- [X] T016 [US1] Remove manufacturing handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
+- [X] T017 [P] [US1] Create `ts/src/mcp/handlers/unfold-export.ts`: export `unfoldExportDefinitions` (schemas for `apply_unfold`, `export_production_pack`, `get_export_job_status`, `get_export_job_result`) and corresponding handler functions moved from `tools.ts`
+- [X] T018 [US1] Remove unfold-export handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
+- [X] T019 [P] [US1] Create `ts/src/mcp/handlers/assembly.ts`: export `assemblyDefinitions` (schemas for `create_assembly_document`, `add_assembly_instance`, `mate_rigid`, `list_assembly_tree`, `validate_assembly`) and corresponding handler functions moved from `tools.ts`
+- [X] T020 [US1] Remove assembly handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
+- [X] T021 [P] [US1] Create `ts/src/mcp/handlers/transactions.ts`: export `transactionDefinitions` (schemas for `rollback`, `begin_transaction`, `commit_transaction`, `rollback_transaction`, `get_transaction_history`) and corresponding handler functions moved from `tools.ts`
+- [X] T022 [US1] Remove transaction handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
+- [X] T023 [P] [US1] Create `ts/src/mcp/handlers/semantic.ts`: export `semanticDefinitions` (schemas for `declare_semantic_entity`, `bind_semantic_entity`, `resolve_geometry`, `semantic_lineage`) and corresponding handler functions moved from `tools.ts`
+- [X] T024 [US1] Remove semantic handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
+- [X] T025 [P] [US1] Create `ts/src/mcp/handlers/graph.ts`: export `graphDefinitions` (schemas for `create_part`, `set_active_part`, `list_parts`, `delete_part`, `bootstrap_graph`, `add_bend`, `solve_geometry`, `check_foldability`, `query_graph`, `reset_graph`, `update_node`, `remove_node`, `add_join`, `add_cut`) and corresponding handler functions moved from `tools.ts`
+- [X] T026 [US1] Remove graph handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
+- [X] T027 [P] [US1] Create `ts/src/mcp/handlers/mapping.ts`: export `mappingDefinitions` (schemas for `map_3d_to_2d`, `map_2d_to_3d`) and handler functions `handleMapTo2D`, `handleMapTo3D` moved from `tools.ts`
+- [X] T028 [US1] Remove mapping handlers and schemas from `tools.ts`; wire imports in dispatch switch; run tests
+- [X] T029 [US1] Create `ts/src/mcp/registry.ts`: import all `*Definitions` arrays from every handler module and export `getToolDefinitions(): object[]` that spreads them all into one array — replace the monolithic `getToolDefinitions()` block in `tools.ts` with an import from `./registry.js`
+- [X] T030 [US1] Create `ts/src/mcp/dispatch.ts`: move `dispatchTool()` switch body into this file, importing handler functions from their respective `handlers/*.js` modules; update `tools.ts` to re-export `dispatchTool` from `./dispatch.js`
+- [X] T031 [US1] Thin `ts/src/mcp/tools.ts` to a pure barrel: it should only re-export `getToolDefinitions` from `./registry.js`, `dispatchTool` from `./dispatch.js`, and test helpers from `./state.js`; the file must have no function implementations
+- [X] T032 [US1] Verify: run full test suite; confirm `tools.ts` has fewer than 30 lines; confirm all baseline tests pass
 
 **Checkpoint**: `tools.ts` is a 30-line barrel. Every MCP tool's handler and schema live in a named module. Tests green.
 

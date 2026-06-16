@@ -110,6 +110,7 @@
 #include <gp_Ax3.hxx>
 
 #include "geometry_service_impl.hpp"
+#include "geometry_service_utils.hpp"
 
 // ─── Standard library ─────────────────────────────────────────────────────────
 #include <map>
@@ -132,38 +133,6 @@
 
 namespace mcp_cad {
 
-static std::string generateUUID() {
-  static std::random_device rd;
-  static std::mt19937_64 gen(rd());
-  static std::uniform_int_distribution<uint64_t> dist;
-
-  uint64_t hi = dist(gen);
-  uint64_t lo = dist(gen);
-
-  // Set version (4) and variant bits
-  hi = (hi & 0xFFFFFFFFFFFF0FFFULL) | 0x0000000000004000ULL;
-  lo = (lo & 0x3FFFFFFFFFFFFFFFULL) | 0x8000000000000000ULL;
-
-  std::ostringstream oss;
-  oss << std::hex << std::setfill('0')
-      << std::setw(8)  << (hi >> 32) << "-"
-      << std::setw(4)  << ((hi >> 16) & 0xFFFF) << "-"
-      << std::setw(4)  << (hi & 0xFFFF) << "-"
-      << std::setw(4)  << (lo >> 48) << "-"
-      << std::setw(12) << (lo & 0x0000FFFFFFFFFFFFULL);
-  return oss.str();
-}
-
-static long long nowMs() {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(
-             std::chrono::system_clock::now().time_since_epoch())
-      .count();
-}
-
-static std::string shapeId(const TopoDS_Shape& shape) {
-  return std::to_string(std::hash<TopoDS_Shape>{}(shape));
-}
-
 class GeometrySheetMetal {
 public:
   explicit GeometrySheetMetal(GeometryState& s) : s_(s) {}
@@ -178,7 +147,7 @@ public:
       throw GeometryError("GE_SHELL_NOT_FOUND", "Shell not found: " + partId, false, "");
     }
 
-    SnapshotId token = createSnapshotLocked("before splitBodyByPlane on " + partId);
+    SnapshotId token = s_.createSnapshot("before splitBodyByPlane on " + partId);
 
     try {
       gp_Pnt origin(plane.originX, plane.originY, plane.originZ);
@@ -253,19 +222,6 @@ public:
 
   // ÔöÇÔöÇ Helpers ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
-  // Returns outward-pointing normal of a face at its UV centre.
-  static gp_Vec faceOutwardNormal(const TopoDS_Face& f) {
-    Handle(Geom_Surface) surf = BRep_Tool::Surface(f);
-    if (surf.IsNull()) return gp_Vec(0, 0, 1);
-    Standard_Real u1, u2, v1, v2;
-    BRepTools::UVBounds(f, u1, u2, v1, v2);
-    gp_Pnt p; gp_Vec du, dv;
-    surf->D1((u1 + u2) * 0.5, (v1 + v2) * 0.5, p, du, dv);
-    gp_Vec n = du.Crossed(dv);
-    if (n.Magnitude() > 1e-10) n.Normalize();
-    if (f.Orientation() == TopAbs_REVERSED) n.Reverse();
-    return n;
-  }
   static double computeDihedralAngle(const TopoDS_Face& fA,
                                       const TopoDS_Face& fB,
                                       const TopoDS_Edge& /*edge*/) {
@@ -1674,7 +1630,7 @@ public:
                           "angle_threshold_deg must be non-negative", true, "");
     }
 
-    SnapshotId token = createSnapshotLocked("before splitBodyByBends on " + partId);
+    SnapshotId token = s_.createSnapshot("before splitBodyByBends on " + partId);
 
     try {
       // Copy shape: protrusion extraction adds shells to s_.shells, which can
@@ -2056,7 +2012,7 @@ public:
       throw GeometryError("GE_PROTRUSION_LOOP_FAILED", "Null shape provided for protrusion removal", false, "");
     }
 
-    SnapshotId token = createSnapshotLocked("before removeProtrusions (loop_traversal) on " + partId);
+    SnapshotId token = s_.createSnapshot("before removeProtrusions (loop_traversal) on " + partId);
 
     try {
       // 1. Compute Center of Mass & Face Groups
@@ -2290,7 +2246,7 @@ public:
       }
     }
 
-    SnapshotId token = createSnapshotLocked("before removeProtrusions on " + partId);
+    SnapshotId token = s_.createSnapshot("before removeProtrusions on " + partId);
 
     try {
       double bxMin = 1e30, bxMax = -1e30;
@@ -2389,7 +2345,7 @@ public:
     }
 
     // Snapshot before mutation (Constitution Principle IV)
-    SnapshotId token = createSnapshotLocked("before trimBodyWithPlane on " + partId);
+    SnapshotId token = s_.createSnapshot("before trimBodyWithPlane on " + partId);
 
     try {
       gp_Pnt origin(plane.originX, plane.originY, plane.originZ);
@@ -2453,24 +2409,6 @@ public:
   }
 
 private:
-  SnapshotId createSnapshotLocked(const std::string& label) {
-    GeometrySnapshot snap;
-    snap.snapshotId     = generateUUID();
-    snap.operationLabel = label;
-    snap.timestampMs    = nowMs();
-
-    for (const auto& kv : s_.solids)  snap.solidIds.push_back(kv.first);
-    for (const auto& kv : s_.shells)  snap.shellIds.push_back(kv.first);
-    for (const auto& kv : s_.unfolds) snap.unfoldIds.push_back(kv.first);
-
-    s_.snapshots[snap.snapshotId] = snap;
-    s_.snapshotSolids[snap.snapshotId] = s_.solids;
-    s_.snapshotShells[snap.snapshotId] = s_.shells;
-    s_.snapshotUnfolds[snap.snapshotId] = s_.unfolds;
-    s_.snapshotAssemblies[snap.snapshotId] = s_.assemblies;
-    return snap.snapshotId;
-  }
-
   GeometryState& s_;
 };
 

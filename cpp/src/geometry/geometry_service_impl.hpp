@@ -89,6 +89,10 @@ struct GeometryState {
   std::unordered_map<SnapshotId, std::unordered_map<UnfoldId,   UnfoldState>> snapshotUnfolds;
   std::unordered_map<SnapshotId, std::unordered_map<AssemblyId, AssemblyState>> snapshotAssemblies;
   Handle(TDocStd_Application) app;
+
+  // Captures the current solids/shells/unfolds/assemblies into a new snapshot.
+  // Caller must hold `mutex`.
+  SnapshotId createSnapshot(const std::string& label);
 };
 
 // ─── GeometryServiceImpl (facade) ─────────────────────────────────────────────
