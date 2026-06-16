@@ -213,16 +213,9 @@ public:
 
   CurvedRebuildResult reconstructCurvedBends(const ShellId& partId) {
     std::lock_guard<std::mutex> lock(s_.mutex);
-    TopoDS_Shape originalShape;
-    bool isSolid = false;
-    if (auto sit = s_.shells.find(partId); sit != s_.shells.end()) {
-      originalShape = sit->second.shape;
-    } else if (auto itS = s_.solids.find(partId); itS != s_.solids.end()) {
-      originalShape = itS->second.shape;
-      isSolid = true;
-    } else {
-      throw GeometryError("GE_SOLID_NOT_FOUND", "Shell or solid not found: " + partId, false, "");
-    }
+    ResolvedShape resolved = resolveShellOrSolidIn(s_, partId, "Shell or solid not found: " + partId);
+    TopoDS_Shape originalShape = resolved.shape;
+    bool isSolid = resolved.isSolid;
 
     // Validate that it's sheet metal first
     SheetMetalValidationResult val = validateSheetMetalLocked(partId);

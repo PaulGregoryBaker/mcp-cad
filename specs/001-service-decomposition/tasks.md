@@ -23,9 +23,9 @@
 **Purpose**: Capture the pass/fail baseline and inventory all dead code *before* any file is changed. Nothing may be moved or deleted until this phase is complete.
 
 - [X] T001 Run full integration test suite (`cd ts && npx jest --runInBand`) and save pass/fail counts to `specs/001-service-decomposition/baseline-results.txt`
-- [ ] T002 Compile C++ with unused-function warnings (`cmake --build` with `-DCMAKE_CXX_FLAGS="-Wunused-function"`) and pipe output to `specs/001-service-decomposition/dead-code.md` under a "C++ Unused Symbols" section
-- [ ] T003 Temporarily add `"noUnusedLocals": true, "noUnusedParameters": true` to `ts/tsconfig.json`, run `npx tsc --noEmit`, append TypeScript unused-symbol warnings to `specs/001-service-decomposition/dead-code.md` under a "TypeScript Unused Symbols" section, then revert `ts/tsconfig.json`
-- [ ] T004 Manual sweep of `cpp/src/geometry/geometry_service.cc` and `ts/src/mcp/tools.ts` for commented-out blocks, `// LEGACY`, `// OLD`, `// TODO remove` markers; append findings to `specs/001-service-decomposition/dead-code.md` under "Commented-Out / Legacy Blocks"
+- [X] T002 Compile C++ with unused-function warnings (`cmake --build` with `-DCMAKE_CXX_FLAGS="-Wunused-function"`) and pipe output to `specs/001-service-decomposition/dead-code.md` under a "C++ Unused Symbols" section
+- [X] T003 Temporarily add `"noUnusedLocals": true, "noUnusedParameters": true` to `ts/tsconfig.json`, run `npx tsc --noEmit`, append TypeScript unused-symbol warnings to `specs/001-service-decomposition/dead-code.md` under a "TypeScript Unused Symbols" section, then revert `ts/tsconfig.json`
+- [X] T004 Manual sweep of `cpp/src/geometry/geometry_service.cc` and `ts/src/mcp/tools.ts` for commented-out blocks, `// LEGACY`, `// OLD`, `// TODO remove` markers; append findings to `specs/001-service-decomposition/dead-code.md` under "Commented-Out / Legacy Blocks"
 
 **Checkpoint**: `baseline-results.txt` and `dead-code.md` committed. No source files changed.
 
@@ -119,11 +119,11 @@
 
 ### Implementation for User Story 3
 
-- [ ] T048 [US3] Audit all new C++ `.cc` files for duplicated `static` helper functions or repeated inline patterns (e.g., shape-to-string conversions, tolerance checks, error formatting); document each duplication in `specs/001-service-decomposition/dedup-report.md`
-- [ ] T049 [US3] Audit all TypeScript `handlers/*.ts` files for repeated argument-extraction patterns, repeated null-checks, repeated error-wrapping patterns; document in `specs/001-service-decomposition/dedup-report.md`
-- [ ] T050 [US3] For each C++ duplication in the report: move the shared helper into `geometry_service_core.cc` (or create `cpp/src/geometry/geometry_service_utils.cc` if helpers span more than 3 files) and update all callers; build and test after each consolidation
-- [ ] T051 [US3] For each TypeScript duplication in the report: extract the shared pattern into `ts/src/mcp/handlers/utils.ts` and update all callers; run tests after each consolidation
-- [ ] T052 [US3] Verify: run full test suite; confirm `dedup-report.md` shows zero remaining duplicates
+- [X] T048 [US3] Audit all new C++ `.cc` files for duplicated `static` helper functions or repeated inline patterns (e.g., shape-to-string conversions, tolerance checks, error formatting); document each duplication in `specs/001-service-decomposition/dedup-report.md`
+- [X] T049 [US3] Audit all TypeScript `handlers/*.ts` files for repeated argument-extraction patterns, repeated null-checks, repeated error-wrapping patterns; document in `specs/001-service-decomposition/dedup-report.md`
+- [X] T050 [US3] For each C++ duplication in the report: move the shared helper into `geometry_service_core.cc` (or create `cpp/src/geometry/geometry_service_utils.cc` if helpers span more than 3 files) and update all callers; build and test after each consolidation
+- [X] T051 [US3] For each TypeScript duplication in the report: extract the shared pattern into `ts/src/mcp/handlers/utils.ts` and update all callers; run tests after each consolidation
+- [X] T052 [US3] Verify: run full test suite; confirm `dedup-report.md` shows zero remaining duplicates
 
 **Checkpoint**: All identified duplicates consolidated. `dedup-report.md` closed. Tests green.
 
@@ -137,11 +137,11 @@
 
 ### Implementation for User Story 4
 
-- [ ] T053 [US4] Delete each C++ unused static function listed in `dead-code.md` from its new `.cc` home; build after each deletion to confirm nothing relied on it
-- [ ] T054 [P] [US4] Delete each TypeScript unused function listed in `dead-code.md` from its handler module; run `tsc --noEmit` after each deletion to confirm no callers exist
-- [ ] T055 [US4] Delete all commented-out code blocks from all new C++ `.cc` files (cross-reference "Commented-Out / Legacy Blocks" section in `dead-code.md`); build after each file
-- [ ] T056 [P] [US4] Delete all commented-out code blocks from all TypeScript handler modules; run `tsc --noEmit` after each file
-- [ ] T057 [US4] Run full test suite; confirm zero regressions; mark `dead-code.md` as resolved
+- [X] T053 [US4] Delete each C++ unused static function listed in `dead-code.md` from its new `.cc` home; build after each deletion to confirm nothing relied on it
+- [X] T054 [P] [US4] Delete each TypeScript unused function listed in `dead-code.md` from its handler module; run `tsc --noEmit` after each deletion to confirm no callers exist
+- [X] T055 [US4] Delete all commented-out code blocks from all new C++ `.cc` files (cross-reference "Commented-Out / Legacy Blocks" section in `dead-code.md`); build after each file
+- [X] T056 [P] [US4] Delete all commented-out code blocks from all TypeScript handler modules; run `tsc --noEmit` after each file
+- [X] T057 [US4] Run full test suite; confirm zero regressions; mark `dead-code.md` as resolved
 
 **Checkpoint**: `dead-code.md` fully resolved. Zero unused symbols remain in the geometry and MCP layers. Build and tests green.
 
@@ -151,11 +151,11 @@
 
 **Purpose**: Confirm all success criteria from the spec are met.
 
-- [ ] T058 [P] Run full integration test suite and confirm every test that passed at baseline still passes (SC-003: 100% parity); update `baseline-results.txt` with final run
-- [ ] T059 [P] Line-count audit: run `wc -l cpp/src/geometry/geometry_service_*.cc ts/src/mcp/handlers/*.ts ts/src/mcp/state.ts ts/src/mcp/registry.ts ts/src/mcp/dispatch.ts`; flag any file exceeding 1,000 lines for further review (target ceiling is 400 per SC-001)
-- [ ] T060 Discoverability check: for each operation name in the spec's SC-004 list ("boolean union", "unfold", "shell query", "assembly", "semantic", "graph"), verify by filename alone that the correct module can be identified within 60 seconds
-- [ ] T061 Count distinct source files added: confirm the geometry layer has at least 10 new `.cc` files and the MCP layer has at least 10 new modules (SC-005: at least 4 new files above current state — easily exceeded)
-- [ ] T062 Update `CLAUDE.md` speckit pointer to reflect that this refactor is complete; if a follow-on feature is active, point to its plan instead
+- [X] T058 [P] Run full integration test suite and confirm every test that passed at baseline still passes (SC-003: 100% parity); update `baseline-results.txt` with final run
+- [X] T059 [P] Line-count audit: run `wc -l cpp/src/geometry/geometry_service_*.cc ts/src/mcp/handlers/*.ts ts/src/mcp/state.ts ts/src/mcp/registry.ts ts/src/mcp/dispatch.ts`; flag any file exceeding 1,000 lines for further review (target ceiling is 400 per SC-001)
+- [X] T060 Discoverability check: for each operation name in the spec's SC-004 list ("boolean union", "unfold", "shell query", "assembly", "semantic", "graph"), verify by filename alone that the correct module can be identified within 60 seconds
+- [X] T061 Count distinct source files added: confirm the geometry layer has at least 10 new `.cc` files and the MCP layer has at least 10 new modules (SC-005: at least 4 new files above current state — easily exceeded)
+- [X] T062 Update `CLAUDE.md` speckit pointer to reflect that this refactor is complete; if a follow-on feature is active, point to its plan instead
 
 ---
 

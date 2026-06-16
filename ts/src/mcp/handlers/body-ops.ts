@@ -1,13 +1,17 @@
 import { throwError, ErrorCodes } from '../errors.js';
 import { getGeometryBinding } from '../state.js';
 import { session } from '../../geometry/session.js';
-import { transactionRegistry } from '../transactions.js';
 import {
   requireString,
   requireStringArray,
+  requireNumberArray,
+  optBool,
   resolveTransactionContext,
-  resolveTargetToShell,
-  updatePanelBodyIdAfterTransform,
+  applyPerTargetTransform,
+  buildMeshUrl,
+  buildMeshUrls,
+  resolveRollbackToken,
+  appendHistoryIfJoined,
 } from '../helpers.js';
 
 export const bodyOpsDefinitions = [
@@ -384,7 +388,6 @@ export function handleCleanGeometry(args: Record<string, unknown>): unknown {
   }
 
   const topology = getGeometryBinding().getTopology(finalSolidId);
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     solid_id: finalSolidId,
     is_manifold: true,
@@ -392,7 +395,7 @@ export function handleCleanGeometry(args: Record<string, unknown>): unknown {
     issues_found: manifoldResult.issues.length,
     healed,
     rollback_token: rollbackToken,
-    mesh_url: `${meshBaseUrl}/mesh/${finalSolidId}.glb`,
+    mesh_url: buildMeshUrl(finalSolidId),
   };
 }
 
@@ -405,17 +408,14 @@ export function handleCenterAndAlignBody(args: Record<string, unknown>): unknown
 
   const result = getGeometryBinding().centerAndAlignBody(partId, ctx.transactionId);
   session.registerShell(result.solid_id);
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
-  }
+  appendHistoryIfJoined(ctx, result.shape_history);
 
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     solid_id: result.solid_id,
     centroid: result.centroid,
     rotation_matrix: result.rotation_matrix,
     rollback_token: ctx.transactionId,
-    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    mesh_url: buildMeshUrl(result.solid_id),
     shape_history: result.shape_history ?? [],
   };
 }
@@ -465,56 +465,36 @@ export function handleExploreTopology(args: Record<string, unknown>): unknown {
 
 export function handleTranslateBody(args: Record<string, unknown>): unknown {
   const targets = requireStringArray(args, 'targets');
-  const vec = args['vector'] as number[];
-  if (!Array.isArray(vec) || vec.length < 3) {
-    throwError(ErrorCodes.GE_BOOLEAN_FAILURE, 'vector must be an array of 3 numbers', false);
-  }
-  const keepOriginal = (args['keep_original'] as boolean | undefined) ?? false;
+  const vec = requireNumberArray(args, 'vector', 3);
+  const keepOriginal = optBool(args, 'keep_original', false);
   const ctx = resolveTransactionContext(args);
 
-  const results = [];
-  for (const target of targets) {
-    const { shellId, partGraph } = resolveTargetToShell(target);
-    const res = getGeometryBinding().translateBody(shellId, vec[0], vec[1], vec[2], keepOriginal);
-    results.push(res);
-    session.registerShell(res.solid_id);
-    if (ctx.mode === 'join') {
-      transactionRegistry.appendHistory(ctx.transactionId, res.shape_history ?? []);
-    }
-    updatePanelBodyIdAfterTransform(shellId, res.solid_id, partGraph, keepOriginal);
-  }
+  const results = applyPerTargetTransform(targets, ctx, keepOriginal, (shellId) =>
+    getGeometryBinding().translateBody(shellId, vec[0], vec[1], vec[2], keepOriginal),
+  );
 
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     solid_id: results.length === 1 ? results[0].solid_id : results[results.length - 1].solid_id,
     solid_ids: results.map((r) => r.solid_id),
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : results[0].rollback_token,
-    mesh_urls: results.map((r) => `${meshBaseUrl}/mesh/${r.solid_id}.glb`),
+    rollback_token: resolveRollbackToken(ctx, results[0].rollback_token),
+    mesh_urls: buildMeshUrls(results.map((r) => r.solid_id)),
     shape_history: results.flatMap((r) => r.shape_history ?? []),
   };
 }
 
 export function handleRotateBody(args: Record<string, unknown>): unknown {
   const targets = requireStringArray(args, 'targets');
-  const axisOrigin = args['axis_origin'] as number[];
-  const axisDirection = args['axis_direction'] as number[];
+  const axisOrigin = requireNumberArray(args, 'axis_origin', 3);
+  const axisDirection = requireNumberArray(args, 'axis_direction', 3);
   const angleDeg = args['angle_degrees'] as number;
-  if (!Array.isArray(axisOrigin) || axisOrigin.length < 3) {
-    throwError(ErrorCodes.GE_BOOLEAN_FAILURE, 'axis_origin must be an array of 3 numbers', false);
-  }
-  if (!Array.isArray(axisDirection) || axisDirection.length < 3) {
-    throwError(ErrorCodes.GE_BOOLEAN_FAILURE, 'axis_direction must be an array of 3 numbers', false);
-  }
   if (typeof angleDeg !== 'number') {
     throwError(ErrorCodes.GE_BOOLEAN_FAILURE, 'angle_degrees must be a number', false);
   }
-  const keepOriginal = (args['keep_original'] as boolean | undefined) ?? false;
+  const keepOriginal = optBool(args, 'keep_original', false);
   const ctx = resolveTransactionContext(args);
 
-  const results = [];
-  for (const target of targets) {
-    const { shellId, partGraph } = resolveTargetToShell(target);
-    const res = getGeometryBinding().rotateBody(
+  const results = applyPerTargetTransform(targets, ctx, keepOriginal, (shellId) =>
+    getGeometryBinding().rotateBody(
       shellId,
       axisOrigin[0],
       axisOrigin[1],
@@ -524,42 +504,27 @@ export function handleRotateBody(args: Record<string, unknown>): unknown {
       axisDirection[2],
       angleDeg,
       keepOriginal,
-    );
-    results.push(res);
-    session.registerShell(res.solid_id);
-    if (ctx.mode === 'join') {
-      transactionRegistry.appendHistory(ctx.transactionId, res.shape_history ?? []);
-    }
-    updatePanelBodyIdAfterTransform(shellId, res.solid_id, partGraph, keepOriginal);
-  }
+    ),
+  );
 
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     solid_id: results.length === 1 ? results[0].solid_id : results[results.length - 1].solid_id,
     solid_ids: results.map((r) => r.solid_id),
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : results[0].rollback_token,
-    mesh_urls: results.map((r) => `${meshBaseUrl}/mesh/${r.solid_id}.glb`),
+    rollback_token: resolveRollbackToken(ctx, results[0].rollback_token),
+    mesh_urls: buildMeshUrls(results.map((r) => r.solid_id)),
     shape_history: results.flatMap((r) => r.shape_history ?? []),
   };
 }
 
 export function handleMirrorBody(args: Record<string, unknown>): unknown {
   const targets = requireStringArray(args, 'targets');
-  const planeOrigin = args['plane_origin'] as number[];
-  const planeNormal = args['plane_normal'] as number[];
-  if (!Array.isArray(planeOrigin) || planeOrigin.length < 3) {
-    throwError(ErrorCodes.GE_BOOLEAN_FAILURE, 'plane_origin must be an array of 3 numbers', false);
-  }
-  if (!Array.isArray(planeNormal) || planeNormal.length < 3) {
-    throwError(ErrorCodes.GE_BOOLEAN_FAILURE, 'plane_normal must be an array of 3 numbers', false);
-  }
-  const keepOriginal = (args['keep_original'] as boolean | undefined) ?? false;
+  const planeOrigin = requireNumberArray(args, 'plane_origin', 3);
+  const planeNormal = requireNumberArray(args, 'plane_normal', 3);
+  const keepOriginal = optBool(args, 'keep_original', false);
   const ctx = resolveTransactionContext(args);
 
-  const results = [];
-  for (const target of targets) {
-    const { shellId, partGraph } = resolveTargetToShell(target);
-    const res = getGeometryBinding().mirrorBody(
+  const results = applyPerTargetTransform(targets, ctx, keepOriginal, (shellId) =>
+    getGeometryBinding().mirrorBody(
       shellId,
       planeOrigin[0],
       planeOrigin[1],
@@ -568,63 +533,37 @@ export function handleMirrorBody(args: Record<string, unknown>): unknown {
       planeNormal[1],
       planeNormal[2],
       keepOriginal,
-    );
-    results.push(res);
-    session.registerShell(res.solid_id);
-    if (ctx.mode === 'join') {
-      transactionRegistry.appendHistory(ctx.transactionId, res.shape_history ?? []);
-    }
-    updatePanelBodyIdAfterTransform(shellId, res.solid_id, partGraph, keepOriginal);
-  }
+    ),
+  );
 
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     solid_id: results.length === 1 ? results[0].solid_id : results[results.length - 1].solid_id,
     solid_ids: results.map((r) => r.solid_id),
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : results[0].rollback_token,
-    mesh_urls: results.map((r) => `${meshBaseUrl}/mesh/${r.solid_id}.glb`),
+    rollback_token: resolveRollbackToken(ctx, results[0].rollback_token),
+    mesh_urls: buildMeshUrls(results.map((r) => r.solid_id)),
     shape_history: results.flatMap((r) => r.shape_history ?? []),
   };
 }
 
 export function handleScaleBody(args: Record<string, unknown>): unknown {
   const targets = requireStringArray(args, 'targets');
-  const origin = args['origin'] as number[];
+  const origin = requireNumberArray(args, 'origin', 3);
   const scaleFactor = args['scale_factor'] as number;
-  if (!Array.isArray(origin) || origin.length < 3) {
-    throwError(ErrorCodes.GE_BOOLEAN_FAILURE, 'origin must be an array of 3 numbers', false);
-  }
   if (typeof scaleFactor !== 'number' || scaleFactor <= 0) {
     throwError(ErrorCodes.GE_SCALE_NON_UNIFORM, 'scale_factor must be a positive number', false);
   }
-  const keepOriginal = (args['keep_original'] as boolean | undefined) ?? false;
+  const keepOriginal = optBool(args, 'keep_original', false);
   const ctx = resolveTransactionContext(args);
 
-  const results = [];
-  for (const target of targets) {
-    const { shellId, partGraph } = resolveTargetToShell(target);
-    const res = getGeometryBinding().scaleBody(
-      shellId,
-      origin[0],
-      origin[1],
-      origin[2],
-      scaleFactor,
-      keepOriginal,
-    );
-    results.push(res);
-    session.registerShell(res.solid_id);
-    if (ctx.mode === 'join') {
-      transactionRegistry.appendHistory(ctx.transactionId, res.shape_history ?? []);
-    }
-    updatePanelBodyIdAfterTransform(shellId, res.solid_id, partGraph, keepOriginal);
-  }
+  const results = applyPerTargetTransform(targets, ctx, keepOriginal, (shellId) =>
+    getGeometryBinding().scaleBody(shellId, origin[0], origin[1], origin[2], scaleFactor, keepOriginal),
+  );
 
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     solid_id: results.length === 1 ? results[0].solid_id : results[results.length - 1].solid_id,
     solid_ids: results.map((r) => r.solid_id),
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : results[0].rollback_token,
-    mesh_urls: results.map((r) => `${meshBaseUrl}/mesh/${r.solid_id}.glb`),
+    rollback_token: resolveRollbackToken(ctx, results[0].rollback_token),
+    mesh_urls: buildMeshUrls(results.map((r) => r.solid_id)),
     shape_history: results.flatMap((r) => r.shape_history ?? []),
   };
 }
@@ -632,21 +571,18 @@ export function handleScaleBody(args: Record<string, unknown>): unknown {
 export function handleAlignToFace(args: Record<string, unknown>): unknown {
   const srcFace = requireString(args, 'source_face');
   const dstFace = requireString(args, 'destination_face');
-  const flipNormal = (args['flip_normal'] as boolean | undefined) ?? false;
-  const keepOriginal = (args['keep_original'] as boolean | undefined) ?? false;
+  const flipNormal = optBool(args, 'flip_normal', false);
+  const keepOriginal = optBool(args, 'keep_original', false);
   const ctx = resolveTransactionContext(args);
 
   const result = getGeometryBinding().alignToFace(srcFace, dstFace, flipNormal, keepOriginal);
   session.registerShell(result.solid_id);
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
-  }
+  appendHistoryIfJoined(ctx, result.shape_history);
 
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     solid_id: result.solid_id,
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
-    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    rollback_token: resolveRollbackToken(ctx, result.rollback_token),
+    mesh_url: buildMeshUrl(result.solid_id),
     shape_history: result.shape_history ?? [],
   };
 }
@@ -662,15 +598,12 @@ export function handleFilletEdges(args: Record<string, unknown>): unknown {
 
   const result = getGeometryBinding().filletEdges(partId, targets, radius);
   session.registerShell(result.solid_id);
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
-  }
+  appendHistoryIfJoined(ctx, result.shape_history);
 
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     solid_id: result.solid_id,
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
-    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    rollback_token: resolveRollbackToken(ctx, result.rollback_token),
+    mesh_url: buildMeshUrl(result.solid_id),
     shape_history: result.shape_history ?? [],
   };
 }
@@ -686,59 +619,50 @@ export function handleChamferEdges(args: Record<string, unknown>): unknown {
 
   const result = getGeometryBinding().chamferEdges(partId, targets, distance);
   session.registerShell(result.solid_id);
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
-  }
+  appendHistoryIfJoined(ctx, result.shape_history);
 
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     solid_id: result.solid_id,
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
-    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    rollback_token: resolveRollbackToken(ctx, result.rollback_token),
+    mesh_url: buildMeshUrl(result.solid_id),
     shape_history: result.shape_history ?? [],
   };
 }
 
 export function handleSimplifyBody(args: Record<string, unknown>): unknown {
   const partId = requireString(args, 'part_id');
-  const unifyFaces = (args['unify_faces'] as boolean | undefined) ?? true;
-  const unifyEdges = (args['unify_edges'] as boolean | undefined) ?? true;
+  const unifyFaces = optBool(args, 'unify_faces', true);
+  const unifyEdges = optBool(args, 'unify_edges', true);
   const ctx = resolveTransactionContext(args);
 
   const result = getGeometryBinding().simplifyBody(partId, unifyFaces, unifyEdges);
   session.registerShell(result.solid_id);
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
-  }
+  appendHistoryIfJoined(ctx, result.shape_history);
 
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     solid_id: result.solid_id,
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
-    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    rollback_token: resolveRollbackToken(ctx, result.rollback_token),
+    mesh_url: buildMeshUrl(result.solid_id),
     shape_history: result.shape_history ?? [],
   };
 }
 
 export function handleHealGeometryEx(args: Record<string, unknown>): unknown {
   const partId = requireString(args, 'part_id');
-  const fixTolerances = (args['fix_tolerances'] as boolean | undefined) ?? true;
-  const fixWires = (args['fix_wires'] as boolean | undefined) ?? true;
+  const fixTolerances = optBool(args, 'fix_tolerances', true);
+  const fixWires = optBool(args, 'fix_wires', true);
   const ctx = resolveTransactionContext(args);
 
   const result = getGeometryBinding().healGeometryEx(partId, fixTolerances, fixWires);
   session.registerShell(result.solid_id);
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
-  }
+  appendHistoryIfJoined(ctx, result.shape_history);
 
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     solid_id: result.solid_id,
     heal_complete: result.heal_complete,
     remaining_issues: result.remaining_issues,
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
-    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    rollback_token: resolveRollbackToken(ctx, result.rollback_token),
+    mesh_url: buildMeshUrl(result.solid_id),
     shape_history: result.shape_history ?? [],
   };
 }
@@ -754,15 +678,12 @@ export function handleOffsetShape(args: Record<string, unknown>): unknown {
 
   const result = getGeometryBinding().offsetShape(partId, offsetValue, tolerance);
   session.registerShell(result.solid_id);
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
-  }
+  appendHistoryIfJoined(ctx, result.shape_history);
 
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     solid_id: result.solid_id,
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
-    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    rollback_token: resolveRollbackToken(ctx, result.rollback_token),
+    mesh_url: buildMeshUrl(result.solid_id),
     shape_history: result.shape_history ?? [],
   };
 }
@@ -770,22 +691,19 @@ export function handleOffsetShape(args: Record<string, unknown>): unknown {
 export function handleDeleteFace(args: Record<string, unknown>): unknown {
   const partId = requireString(args, 'part_id');
   const targets = requireStringArray(args, 'targets');
-  const healRemaining = (args['heal_remaining'] as boolean | undefined) ?? true;
+  const healRemaining = optBool(args, 'heal_remaining', true);
   const ctx = resolveTransactionContext(args);
 
   const result = getGeometryBinding().deleteFace(partId, targets, healRemaining);
   for (const solidId of result.solid_ids) {
     session.registerShell(solidId);
   }
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
-  }
+  appendHistoryIfJoined(ctx, result.shape_history);
 
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     solid_ids: result.solid_ids,
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
-    mesh_urls: result.solid_ids.map((id) => `${meshBaseUrl}/mesh/${id}.glb`),
+    rollback_token: resolveRollbackToken(ctx, result.rollback_token),
+    mesh_urls: buildMeshUrls(result.solid_ids),
     shape_history: result.shape_history ?? [],
   };
 }
@@ -793,22 +711,19 @@ export function handleDeleteFace(args: Record<string, unknown>): unknown {
 export function handleSewFaces(args: Record<string, unknown>): unknown {
   const targets = requireStringArray(args, 'targets');
   const tolerance = (args['tolerance'] as number | undefined) ?? 1e-3;
-  const makeSolid = (args['make_solid'] as boolean | undefined) ?? false;
+  const makeSolid = optBool(args, 'make_solid', false);
   const ctx = resolveTransactionContext(args);
 
   const result = getGeometryBinding().sewFaces(targets, tolerance, makeSolid);
   session.registerShell(result.solid_id);
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
-  }
+  appendHistoryIfJoined(ctx, result.shape_history);
 
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     shell_id: result.solid_id,
     sew_complete: result.sew_complete,
     free_edges: result.free_edges,
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
-    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    rollback_token: resolveRollbackToken(ctx, result.rollback_token),
+    mesh_url: buildMeshUrl(result.solid_id),
     shape_history: result.shape_history ?? [],
   };
 }

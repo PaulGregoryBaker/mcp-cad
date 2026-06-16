@@ -56,3 +56,38 @@ results — vitest's "projects" config requires the integration project's
 args from multiple projects bypasses that and produces spurious GE_SOLID_NOT_FOUND /
 GE_SHELL_NOT_FOUND noise plus a much more reliable SIGSEGV trigger. Always use the
 unfiltered `npx vitest run` (or `--project=<name>`) for any future regression comparison.
+
+---
+
+T058 final verification (post T053-T057 dead-code audit, end of Phase 6):
+
+Along the way to T052 (see dedup-report.md), a real infra bug was found and fixed:
+`vitest.config.ts` used a `test.projects` key unsupported by the installed
+`vitest@1.6.1`, meaning `--project <name>` had matched zero tests for every
+project since the initial commit. Fixed via a new `vitest.workspace.ts`
+(`defineWorkspace()`), then the full suite was run through
+`ts/run-tests-sequential.ps1`, which executes each of the 64 test files in
+its own fully isolated `vitest` child process (full output in
+`ts/full-test-after-workspace-fix.log`).
+
+Result: **63/64 files passed.** Every single integration test file listed
+above as "pre-existing failing" at the Jun 9 baseline — sew, transforms,
+cube_box_workflow, fuse_orientation_preserved, fuse_shell_resolution,
+fuse_unfold_graph_regression, merge_orientation_preserved,
+merge_protrusion_flat_layout, sys_jtbd_01/03/04, transaction_primitive,
+unfold, unfold_roundtrip, validate_assembly — now **passes**. This is
+consistent with the root cause already identified above: those failures
+were native-singleton state bleed from long-lived shared forked processes,
+not real regressions. Running each file in its own process (rather than one
+singleFork process for the whole integration project) removes that bleed
+entirely, which is why they're stable now.
+
+The one remaining failure, `tests/unit/fuse_preflight.unit.test.ts` (2 of 8
+cases, the FR-005 `GRAPH_INTEGRITY_ERROR` guard for `cut_bodies`), is
+unrelated to this refactor — confirmed via `git stash` A/B test against the
+pre-dedup committed baseline (identical 2/8 failure either way); it belongs
+to feature 010-graph-driven-mutations, not 001-service-decomposition.
+
+SC-003 (100% parity: every baseline-passing test still passes): **met, with
+a net improvement** — zero new failures, and the previously-flaky integration
+set is now deterministically green. No further action needed for T058.

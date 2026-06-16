@@ -9,6 +9,8 @@ import { throwError, ErrorCodes } from './errors.js';
 import { transactionRegistry } from './transactions.js';
 import { getParts } from './state.js';
 import { ManufacturingGraph } from '../manufacturing/graph/graph.js';
+import { session } from '../geometry/session.js';
+import type { ShapeHistoryRecord } from '../geometry/types.js';
 
 // ─── Argument helpers ─────────────────────────────────────────────────────────
 
@@ -26,6 +28,18 @@ export function requireStringArray(args: Record<string, unknown>, key: string): 
     throwError(ErrorCodes.INTERNAL_ERROR, `Missing required array parameter: ${key}`, false);
   }
   return val as string[];
+}
+
+export function requireNumberArray(args: Record<string, unknown>, key: string, length: number): number[] {
+  const val = args[key];
+  if (!Array.isArray(val) || val.length < length) {
+    throwError(ErrorCodes.GE_BOOLEAN_FAILURE, `${key} must be an array of ${length} numbers`, false);
+  }
+  return val as number[];
+}
+
+export function optBool(args: Record<string, unknown>, key: string, defaultValue: boolean): boolean {
+  return (args[key] as boolean | undefined) ?? defaultValue;
 }
 
 export function requireObject(args: Record<string, unknown>, key: string): Record<string, unknown> {
@@ -140,4 +154,46 @@ export function updatePanelBodyIdAfterTransform(
       }
     }
   }
+}
+
+// ─── Mutating-op response helpers ─────────────────────────────────────────────
+
+export function buildMeshUrl(solidId: string): string {
+  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
+  return `${meshBaseUrl}/mesh/${solidId}.glb`;
+}
+
+export function buildMeshUrls(solidIds: string[]): string[] {
+  return solidIds.map(buildMeshUrl);
+}
+
+export function resolveRollbackToken(ctx: TransactionContext, fallbackToken: string): string {
+  return ctx.mode === 'join' ? ctx.transactionId : fallbackToken;
+}
+
+export function appendHistoryIfJoined(ctx: TransactionContext, history: ShapeHistoryRecord[] | undefined): void {
+  if (ctx.mode === 'join') {
+    transactionRegistry.appendHistory(ctx.transactionId, history ?? []);
+  }
+}
+
+// Applies a per-target mutating transform (translate/rotate/mirror/scale), handling
+// shell registration, transaction history, and manufacturing-graph bodyId bookkeeping
+// identically across all four callers.
+export function applyPerTargetTransform<T extends { solid_id: string; shape_history?: ShapeHistoryRecord[] }>(
+  targets: string[],
+  ctx: TransactionContext,
+  keepOriginal: boolean,
+  transformFn: (shellId: string) => T,
+): T[] {
+  const results: T[] = [];
+  for (const target of targets) {
+    const { shellId, partGraph } = resolveTargetToShell(target);
+    const res = transformFn(shellId);
+    results.push(res);
+    session.registerShell(res.solid_id);
+    appendHistoryIfJoined(ctx, res.shape_history);
+    updatePanelBodyIdAfterTransform(shellId, res.solid_id, partGraph, keepOriginal);
+  }
+  return results;
 }

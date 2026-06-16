@@ -220,18 +220,9 @@ public:
 
 private:
   TransformResult applyTransformLocked(const ShellId& solidId, const gp_Trsf& trsf, bool keepOriginal, const std::string& opName) {
-    TopoDS_Shape originalShape;
-    bool isSolid = false;
-    auto shellIt = s_.shells.find(solidId);
-    auto solidIt = s_.solids.find(solidId);
-    if (shellIt != s_.shells.end()) {
-      originalShape = shellIt->second.shape;
-    } else if (solidIt != s_.solids.end()) {
-      originalShape = solidIt->second.shape;
-      isSolid = true;
-    } else {
-      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell/solid not found: " + solidId, false, "");
-    }
+    ResolvedShape resolved = resolveShellOrSolidIn(s_, solidId, "Shell/solid not found: " + solidId);
+    TopoDS_Shape originalShape = resolved.shape;
+    bool isSolid = resolved.isSolid;
 
     SnapshotId token = s_.createSnapshot("before " + opName + " on " + solidId);
 

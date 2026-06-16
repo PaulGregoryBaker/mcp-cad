@@ -2331,18 +2331,9 @@ public:
                                    bool                keepPositiveSide) {
     std::lock_guard<std::mutex> lock(s_.mutex);
 
-    TopoDS_Shape originalShape;
-    bool isSolid = false;
-    auto shellIt = s_.shells.find(partId);
-    auto solidIt = s_.solids.find(partId);
-    if (shellIt != s_.shells.end()) {
-      originalShape = shellIt->second.shape;
-    } else if (solidIt != s_.solids.end()) {
-      originalShape = solidIt->second.shape;
-      isSolid = true;
-    } else {
-      throw GeometryError("GE_SHELL_NOT_FOUND", "Shell or solid not found: " + partId, false, "");
-    }
+    ResolvedShape resolved = resolveShellOrSolidIn(s_, partId, "Shell or solid not found: " + partId);
+    TopoDS_Shape originalShape = resolved.shape;
+    bool isSolid = resolved.isSolid;
 
     // Snapshot before mutation (Constitution Principle IV)
     SnapshotId token = s_.createSnapshot("before trimBodyWithPlane on " + partId);
@@ -2390,9 +2381,9 @@ public:
 
       // Replace the shape in-place
       if (isSolid) {
-        solidIt->second.shape = result;
+        s_.solids[partId].shape = result;
       } else {
-        shellIt->second.shape = result;
+        s_.shells[partId].shape = result;
       }
 
       auto history = captureHistory(cutter, inputForHistory,

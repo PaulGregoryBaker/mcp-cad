@@ -6,10 +6,18 @@ import {
   getParts,
   createPart,
 } from '../state.js';
-import { requireString, requireStringArray, resolveTransactionContext, resolveTargetToShell } from '../helpers.js';
+import {
+  requireString,
+  requireStringArray,
+  resolveTransactionContext,
+  resolveTargetToShell,
+  optBool,
+  buildMeshUrl,
+  resolveRollbackToken,
+  appendHistoryIfJoined,
+} from '../helpers.js';
 import { mergeInputDxfOutlines } from '../dxf-helpers.js';
 import { session } from '../../geometry/session.js';
-import { transactionRegistry } from '../transactions.js';
 import { ManufacturingGraph } from '../../manufacturing/graph/graph.js';
 import { toNodeId } from '../../manufacturing/graph/types.js';
 import type { PanelNode, PanelFrame } from '../../manufacturing/graph/types.js';
@@ -339,12 +347,7 @@ export function handleFuseBodies(args: Record<string, unknown>): unknown {
       }
 
       session.registerShell(fusedSolidId);
-      if (ctx.mode === 'join') {
-        transactionRegistry.appendHistory(
-          ctx.transactionId,
-          shapeHistoryData as import('../transactions.js').ShapeHistoryRecord[],
-        );
-      }
+      appendHistoryIfJoined(ctx, shapeHistoryData as import('../transactions.js').ShapeHistoryRecord[]);
     } catch (err) {
       getGeometryBinding().restoreSnapshot(snapshotId);
       if (fusedSolidId !== undefined) getParts().delete(fusedSolidId);
@@ -358,7 +361,6 @@ export function handleFuseBodies(args: Record<string, unknown>): unknown {
       throw err;
     }
 
-    const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
     return {
       solid_id: fusedSolidId,
       part_id: preservedPartId,
@@ -369,8 +371,8 @@ export function handleFuseBodies(args: Record<string, unknown>): unknown {
       visible_shell_id: fusedSolidId,
       hidden_shell_ids: shellIds,
       visibility_policy: 'show_only_recreated',
-      rollback_token: ctx.mode === 'join' ? ctx.transactionId : (rollbackToken ?? fusedSolidId),
-      mesh_url: `${meshBaseUrl}/mesh/${fusedSolidId}.glb`,
+      rollback_token: resolveRollbackToken(ctx, rollbackToken ?? fusedSolidId),
+      mesh_url: buildMeshUrl(fusedSolidId),
       shape_history: shapeHistoryData,
     };
   }
@@ -378,12 +380,8 @@ export function handleFuseBodies(args: Record<string, unknown>): unknown {
   // Fallback: no graphs involved; geometry-only fuse.
   const result = getGeometryBinding().fuseBodies(shellIds, fuzzyTolerance);
   session.registerShell(result.solid_id);
+  appendHistoryIfJoined(ctx, result.shape_history);
 
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
-  }
-
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     solid_id: result.solid_id,
     part_id: preservedPartId,
@@ -394,8 +392,8 @@ export function handleFuseBodies(args: Record<string, unknown>): unknown {
     visible_shell_id: result.solid_id,
     hidden_shell_ids: shellIds,
     visibility_policy: 'show_only_recreated',
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
-    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    rollback_token: resolveRollbackToken(ctx, result.rollback_token),
+    mesh_url: buildMeshUrl(result.solid_id),
     shape_history: result.shape_history ?? [],
   };
 }
@@ -403,21 +401,17 @@ export function handleFuseBodies(args: Record<string, unknown>): unknown {
 export function handleCutBodies(args: Record<string, unknown>): unknown {
   const blank = requireString(args, 'blank');
   const tools = requireStringArray(args, 'tools');
-  const keepTools = (args['keep_tools'] as boolean | undefined) ?? false;
+  const keepTools = optBool(args, 'keep_tools', false);
   const ctx = resolveTransactionContext(args);
 
   const result = getGeometryBinding().cutBodies(blank, tools, keepTools);
   session.registerShell(result.solid_id);
+  appendHistoryIfJoined(ctx, result.shape_history);
 
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
-  }
-
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     solid_id: result.solid_id,
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
-    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    rollback_token: resolveRollbackToken(ctx, result.rollback_token),
+    mesh_url: buildMeshUrl(result.solid_id),
     shape_history: result.shape_history ?? [],
   };
 }
@@ -429,16 +423,12 @@ export function handleIntersectBodies(args: Record<string, unknown>): unknown {
 
   const result = getGeometryBinding().intersectBodies(targetA, targetB);
   session.registerShell(result.solid_id);
+  appendHistoryIfJoined(ctx, result.shape_history);
 
-  if (ctx.mode === 'join') {
-    transactionRegistry.appendHistory(ctx.transactionId, result.shape_history ?? []);
-  }
-
-  const meshBaseUrl = `http://localhost:${process.env['MESH_PORT'] ?? '3001'}`;
   return {
     solid_id: result.solid_id,
-    rollback_token: ctx.mode === 'join' ? ctx.transactionId : result.rollback_token,
-    mesh_url: `${meshBaseUrl}/mesh/${result.solid_id}.glb`,
+    rollback_token: resolveRollbackToken(ctx, result.rollback_token),
+    mesh_url: buildMeshUrl(result.solid_id),
     shape_history: result.shape_history ?? [],
   };
 }
