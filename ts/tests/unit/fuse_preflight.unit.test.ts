@@ -135,9 +135,13 @@ describe('handleFuseBodies pre-flight: GE_FUSE_THICKNESS_MISMATCH', () => {
   });
 });
 
-// ─── FR-005: graph enforcement via cut_bodies guard ───────────────────────────
+// ─── cut_bodies passes through to C++ for graph-tracked panels (FR-005 guard removed) ──
+// The FR-005 guard was removed from cut_bodies (see ts/tests/integration/
+// fuse_shell_resolution.test.ts, commit 70ea213) because cut_bodies does not modify
+// graph metadata — it only does a boolean difference on raw geometry. These tests
+// confirm that pass-through behavior at the dispatch layer (with C++ mocked).
 
-describe('handleCutBodies: GRAPH_INTEGRITY_ERROR guard (FR-005)', () => {
+describe('handleCutBodies: graph-tracked shells pass through (FR-005 guard removed)', () => {
   beforeEach(() => {
     setGeometryBindingMock(mockAddon as GeometryAddon);
   });
@@ -146,16 +150,16 @@ describe('handleCutBodies: GRAPH_INTEGRITY_ERROR guard (FR-005)', () => {
     setGeometryBindingMock(undefined);
   });
 
-  it('throws GRAPH_INTEGRITY_ERROR when blank shell is graph-tracked', async () => {
+  it('does not throw GRAPH_INTEGRITY_ERROR when blank shell is graph-tracked', async () => {
     registerTestPart('part-guard-a', ['shell-guard-a']);
 
-    await expect(
-      dispatchTool('cut_bodies', {
-        blank: 'shell-guard-a',
-        tools: ['some-tool-shell'],
-        keep_tools: false,
-      }),
-    ).rejects.toMatchObject({ code: 'GRAPH_INTEGRITY_ERROR' });
+    const result = await dispatchTool('cut_bodies', {
+      blank: 'shell-guard-a',
+      tools: ['some-tool-shell'],
+      keep_tools: false,
+    });
+
+    expect(result).toHaveProperty('solid_id');
   });
 
   it('allows cut_bodies when blank shell is NOT graph-tracked', async () => {
@@ -172,15 +176,15 @@ describe('handleCutBodies: GRAPH_INTEGRITY_ERROR guard (FR-005)', () => {
     expect(result).toHaveProperty('solid_id');
   });
 
-  it('throws GRAPH_INTEGRITY_ERROR when a tool shell is graph-tracked', async () => {
+  it('does not throw GRAPH_INTEGRITY_ERROR when a tool shell is graph-tracked', async () => {
     registerTestPart('part-guard-b', ['shell-guard-b']);
 
-    await expect(
-      dispatchTool('cut_bodies', {
-        blank: 'some-blank-shell',
-        tools: ['shell-guard-b'],
-        keep_tools: false,
-      }),
-    ).rejects.toMatchObject({ code: 'GRAPH_INTEGRITY_ERROR' });
+    const result = await dispatchTool('cut_bodies', {
+      blank: 'some-blank-shell',
+      tools: ['shell-guard-b'],
+      keep_tools: false,
+    });
+
+    expect(result).toHaveProperty('solid_id');
   });
 });

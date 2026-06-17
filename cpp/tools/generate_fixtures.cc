@@ -13,6 +13,8 @@
  *   angle_bracket_15deg.stp    — L-bracket: two 100×200×1.5 mm panels at 15° dihedral
  *   angle_bracket_30deg.stp    — L-bracket: two 100×200×1.5 mm panels at 30° dihedral
  *   angle_bracket_45deg.stp    — L-bracket: two 100×200×1.5 mm panels at 45° dihedral
+ *   tab_bracket_90deg.stp      — 100×200mm panel + centered 100×100mm flange (T-shape flat)
+ *   l_bracket_corner_90deg.stp — 200×200mm panel + corner-flush 100×100mm flange (L-shape flat)
  *
  * Usage (from cpp/build-vcpkg/):
  *   generate_fixtures.exe ../tests/fixtures/
@@ -309,6 +311,79 @@ static bool genTabBracket90deg(const fs::path& outDir) {
   return writeStp(c2.Shape(), (outDir / "tab_bracket_90deg.stp").string());
 }
 
+/**
+ * l_bracket_corner_90deg.stp — two flat panels at 90° forming an L-shaped flat pattern.
+ *
+ * Panel A (small): 1.5×100×100 mm vertical flange (X: 200–201.5, Y: 0–100, Z: -100–0)
+ * Panel B (big):    200×200×1.5 mm horizontal plate (X: 0–200, Y: 0–200, Z: 0–1.5)
+ *
+ * Unlike tab_bracket_90deg (where the short flange is centered on the long panel's
+ * edge, producing a T-shape), here Panel A is flush with one END of Panel B's 200mm
+ * edge (yStart=0), producing an L-shape: the flat pattern fills X=[0,300] for
+ * y=[0,100] but only X=[0,200] for y=[100,200] — a missing 100×100mm corner notch.
+ *
+ * Construction: extrude a full 90° L-bracket (both panels 200mm) in Y, then cut the
+ * vertical flange at y=[100..200] to leave only the corner-flush 100mm of Panel A.
+ *
+ * After split_body_by_bends and merge_bodies_with_bend the flat pattern should be L-shaped:
+ *   y=200 ┌──────────┐
+ *         │ Panel B  │
+ *   y=100 │          ├──────────┐
+ *         │          │ Panel A  │
+ *   y=0   └──────────┴──────────┘
+ *         x=0        x=200      x=300
+ */
+static bool genLBracketCorner90deg(const fs::path& outDir) {
+  const double T      = 1.5;
+  const double LA     = 200.0;   // horizontal panel length
+  const double WA     = 200.0;   // horizontal panel width (full Y)
+  const double LB     = 100.0;   // vertical flange depth
+  const double WB     = 100.0;   // vertical flange width (partial Y, flush at y=0)
+  const double yStart = 0.0;     // flush with one end (corner) — produces L, not T
+
+  // 6-point cross-section in the XZ plane (Y=0), counter-clockwise.
+  // Inner corner at (LA, 0), outer top-right at (LA+T, T).
+  gp_Pnt P1(0.0,      0.0, 0.0);
+  gp_Pnt P2(LA,       0.0, 0.0);
+  gp_Pnt P3(LA,       0.0, -LB);
+  gp_Pnt P4(LA + T,   0.0, -LB);
+  gp_Pnt P5(LA + T,   0.0, T);
+  gp_Pnt P6(0.0,      0.0, T);
+
+  BRepBuilderAPI_MakeWire wireMaker;
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P1, P2).Edge());
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P2, P3).Edge());
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P3, P4).Edge());
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P4, P5).Edge());
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P5, P6).Edge());
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P6, P1).Edge());
+
+  if (!wireMaker.IsDone()) {
+    std::cerr << "L-bracket corner wire build failed\n";
+    return false;
+  }
+
+  BRepBuilderAPI_MakeFace faceMaker(wireMaker.Wire(), true);
+  if (!faceMaker.IsDone()) {
+    std::cerr << "L-bracket corner face build failed\n";
+    return false;
+  }
+
+  // Extrude the full L-section 200mm in Y → both panels are 200mm wide.
+  TopoDS_Shape fullBracket = BRepPrimAPI_MakePrism(faceMaker.Face(), gp_Vec(0.0, WA, 0.0)).Shape();
+
+  // Cut Panel A (vertical flange, z=[-LB..0]) down to the corner-flush 100mm of Y:
+  // remove y=[yStart+WB..WA] = [100..200] of the vertical portion.
+  TopoDS_Shape cutBox = BRepPrimAPI_MakeBox(gp_Pnt(LA, yStart + WB, -LB), T, WA - (yStart + WB), LB).Shape();
+  BRepAlgoAPI_Cut cutter(fullBracket, cutBox);
+  if (!cutter.IsDone()) {
+    std::cerr << "L-bracket corner cut failed\n";
+    return false;
+  }
+
+  return writeStp(cutter.Shape(), (outDir / "l_bracket_corner_90deg.stp").string());
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 int main(int argc, char* argv[]) {
@@ -341,6 +416,7 @@ int main(int argc, char* argv[]) {
   ok &= genAngleBracket(outDir, 30.0);
   ok &= genAngleBracket(outDir, 45.0);
   ok &= genTabBracket90deg(outDir);
+  ok &= genLBracketCorner90deg(outDir);
 
   if (ok) {
     std::cout << "All fixtures generated successfully.\n";
