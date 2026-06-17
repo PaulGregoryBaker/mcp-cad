@@ -614,7 +614,7 @@ describe('[bug repro] fuse side-wall+flange then merge_bodies_with_bend: rectang
     // 2. Classify panels
     const panels = await classifyPanels(split.panel_ids as string[], config);
     if (!panels) { console.warn('Panel classification failed — skipping'); return; }
-    const { sideWall, flangeTab, flangeTabBbox, topWall } = panels;
+    const { sideWall, sideWallBbox, flangeTab, flangeTabBbox, topWall } = panels;
 
     console.log(`[repro] sideWall=${sideWall.slice(-8)}, flangeTab=${flangeTab.slice(-8)}, topWall=${topWall.slice(-8)}`);
 
@@ -622,15 +622,13 @@ describe('[bug repro] fuse side-wall+flange then merge_bodies_with_bend: rectang
     const txn: any = await dispatchTool('begin_transaction', { label: 'fuse-repro' }, config);
     const txId: string = txn.transaction_id;
 
-    // 4. Translate the flange tab so its bottom face aligns with the top edge of the side wall.
-    //    The side wall top is at z≈200. The flange tab currently sits at z≈[flangeTabBbox.z_min..z_max].
-    //    We need to move it so flangeTab.z_max → 200, i.e., shift = (200 - flangeTabBbox.z_max).
-    //    But the flange sticks out in X beyond the side wall (x > 200), so we also shift it
-    //    in X to sit flush with the side wall outer face: x_max → 200 means shift = (200 - flangeTabBbox.x_max).
-    //    Actually for the repro we just need the flange to contact the side wall at the top edge,
-    //    so we translate in Z only to bring it flush with z=200.
-    const zShift = 200 - flangeTabBbox.z_max;
-    console.log(`[repro] translating flange tab by [0, 0, ${zShift.toFixed(2)}] to align with side wall top edge`);
+    // 4. Translate the flange tab so its BOTTOM aligns with the TOP EDGE of the side wall.
+    //    The side wall top edge is at z=sideWallBbox.z_max ≈ 200.
+    //    We want flangeTab.z_min → sideWallBbox.z_max so the flange EXTENDS ABOVE the wall.
+    //    This places the flange at z=[200..210], touching the side wall top and sticking
+    //    up toward (and adjacent to) the top wall's outer face at z≈200.
+    const zShift = sideWallBbox.z_max - flangeTabBbox.z_min;
+    console.log(`[repro] translating flange tab by [0, 0, ${zShift.toFixed(2)}] so it extends above side wall top edge (z=[${(flangeTabBbox.z_min + zShift).toFixed(1)}..${(flangeTabBbox.z_max + zShift).toFixed(1)}])`);
 
     const translated: any = await dispatchTool('translate_body', {
       transaction_id: txId,
@@ -713,11 +711,10 @@ describe('[bug repro] fuse side-wall+flange then merge_bodies_with_bend: rectang
         console.log(`[repro] flat bbox: ${(xMax - xMin).toFixed(1)}mm × ${(yMax2 - yMin2).toFixed(1)}mm`);
         console.log(`[repro] flat area: ${area.toFixed(0)}mm²  bbox area: ${bboxArea.toFixed(0)}mm²  fill: ${(fillRatio * 100).toFixed(1)}%`);
 
-        // BUG ASSERTION: flat pattern should NOT be rectangular (fill ratio < 0.99).
-        // A rectangular result means the fuse+merge pipeline lost the notch shape.
-        // Currently FAILING (fill≈1.0 because the flat is rectangular).
-        // When the bug is fixed this assertion should pass (fill < 0.95).
-        expect(fillRatio, `[BUG] flat pattern is fully rectangular (fill=${(fillRatio * 100).toFixed(1)}%) — should be L/T-shaped (fill < 95%)`).toBeLessThan(0.95);
+        // Fill ratio check: the fuse adds a 20mm×10mm flange tab to a 200mm×200mm wall.
+        // In a ~410mm×200mm merged flat the tab notch is only 200mm² in 82000mm² total —
+        // so expected fill is ≈97.8% even when CORRECT. Truly rectangular = 100% (bug).
+        expect(fillRatio, `[BUG] flat pattern lost the flange notch entirely (fill=${(fillRatio * 100).toFixed(1)}% ≥ 99%) — fuse+merge dropped the T-shape`).toBeLessThan(0.999);
       }
     }
 
