@@ -321,8 +321,24 @@ public:
         return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
                 "Bend zone must leave non-zero panels on both sides."};
 
-      std::string dxfA = makeDxfRect(xMin,    yMin, bendStart, yMax);
-      std::string dxfB = makeDxfRect(bendEnd, yMin, xMax,      yMax);
+      // Panel A's and Panel B's OWN Y-ranges — restricted to their own side of
+      // the bend zone (x <= bendStart for A, x >= bendEnd for B) — rather than
+      // the whole merged DXF's [yMin,yMax]. One side can be a fused/composite
+      // panel whose attached tab extends its own Y-range past the other side's;
+      // using the global range for BOTH rectangles would stretch the narrower
+      // (simple) panel out to match the wider (composite) one's extent, even
+      // though that panel's real flat pattern never reaches that far.
+      double yMinA = std::numeric_limits<double>::max(), yMaxA = -yMinA;
+      double yMinB = std::numeric_limits<double>::max(), yMaxB = -yMinB;
+      for (const auto& v : verts) {
+        if (v.first <= bendStart + 1e-6) { yMinA = std::min(yMinA, v.second); yMaxA = std::max(yMaxA, v.second); }
+        if (v.first >= bendEnd   - 1e-6) { yMinB = std::min(yMinB, v.second); yMaxB = std::max(yMaxB, v.second); }
+      }
+      if (yMinA > yMaxA) { yMinA = yMin; yMaxA = yMax; }  // no panel-A verts found: fall back
+      if (yMinB > yMaxB) { yMinB = yMin; yMaxB = yMax; }  // no panel-B verts found: fall back
+
+      std::string dxfA = makeDxfRect(xMin,    yMinA, bendStart, yMaxA);
+      std::string dxfB = makeDxfRect(bendEnd, yMinB, xMax,      yMaxB);
 
       DxfSheetResult    sheetA = buildSheetFromDxf(dxfA);
       ThickenSheetResult solA  = thickenSheet(sheetA.sheetId, thicknessMm);
@@ -337,7 +353,13 @@ public:
       // panels FUSE into one watertight body at ANY dihedral angle — not just 90°.
       // (Previously the rotated slabs shared only an edge at acute angles, so the
       //  Boolean fuse silently dropped Panel B and produced a flat result.)
-      const double extentY  = yMax - yMin;
+      // The bend connector only needs to span where A and B actually OVERLAP in
+      // Y (that's the real shared fold line); falling back to the full [yMin,yMax]
+      // when they don't overlap at all keeps this from degenerating to zero-width.
+      double sectorYMin = std::max(yMinA, yMinB);
+      double sectorYMax = std::min(yMaxA, yMaxB);
+      if (sectorYMax <= sectorYMin) { sectorYMin = yMin; sectorYMax = yMax; }
+      const double extentY  = sectorYMax - sectorYMin;
       const double thetaRad = bz.angleDeg * M_PI / 180.0;
 
       // 1. Position Panel B: translate left by widthMm so its left face abuts the
@@ -366,11 +388,12 @@ public:
       //    = thickness) that fills the wedge between Panel A's bend face (x=bendStart,
       //    z∈[0,t], pointing +Z) and Panel B's rotated bend face. Its two planar faces
       //    coincide with the panels' bend faces, so the fuse is watertight at any angle.
-      //    Axis is -Y (origin at yMax) so the sector sweeps from +Z toward −X, matching
-      //    Panel B's −angleDeg rotation.
+      //    Axis is -Y (origin at sectorYMax — the top of the A/B overlap range, see
+      //    above) so the sector sweeps from +Z toward −X, matching Panel B's
+      //    −angleDeg rotation.
       TopoDS_Shape bendSector;
       try {
-        gp_Ax2 sectorAxes(gp_Pnt(bendStart, yMax, 0.0), gp_Dir(0.0, -1.0, 0.0), gp_Dir(0.0, 0.0, 1.0));
+        gp_Ax2 sectorAxes(gp_Pnt(bendStart, sectorYMax, 0.0), gp_Dir(0.0, -1.0, 0.0), gp_Dir(0.0, 0.0, 1.0));
         bendSector = BRepPrimAPI_MakeCylinder(sectorAxes, thicknessMm, extentY, thetaRad).Solid();
       } catch (const Standard_Failure& e) {
         return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
@@ -416,9 +439,16 @@ public:
 
         const TopoDS_Shape& refShape = refIt->second.shape;
 
-        // Canonical panel A centroid (center of [xMin..bendStart]×[yMin..yMax]×[0..t]).
+        // Canonical panel A centroid (center of [xMin..bendStart]×[yMinA..yMaxA]×[0..t]).
+        // yMinA/yMaxA (computed above, alongside yMinB/yMaxB) are panel A's OWN
+        // Y-range — restricted to vertices with x <= bendStart — not the whole
+        // merged DXF's [yMin,yMax]. Panel B can have a different Y-extent than
+        // panel A (e.g. a fused/composite panel A whose attached tab extends
+        // past panel B's edge, or vice versa); using the whole-DXF range would
+        // let B's geometry skew where this anchor sits within A, throwing off
+        // the placement transform below by the mismatch.
         double canonCx = (xMin + bendStart) / 2.0;
-        double canonCy = (yMin + yMax)      / 2.0;
+        double canonCy = (yMinA + yMaxA)    / 2.0;
         double canonCz = thicknessMm        / 2.0;
 
         gp_Dir actualXDir, actualYDir, faceNormal;

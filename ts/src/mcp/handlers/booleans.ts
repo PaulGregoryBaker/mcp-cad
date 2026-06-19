@@ -16,7 +16,7 @@ import {
   resolveRollbackToken,
   appendHistoryIfJoined,
 } from '../helpers.js';
-import { mergeInputDxfOutlines } from '../dxf-helpers.js';
+import { mergeInputDxfOutlines, normalizePanelDxfOrientation } from '../dxf-helpers.js';
 import { session } from '../../geometry/session.js';
 import { ManufacturingGraph } from '../../manufacturing/graph/graph.js';
 import { toNodeId } from '../../manufacturing/graph/types.js';
@@ -260,9 +260,19 @@ export function handleFuseBodies(args: Record<string, unknown>): unknown {
       try {
         const merged = mergeInputDxfOutlines(panelDxfs, panelFrames, Math.max(nominalThickness * 2.5, 1));
         if (merged) {
-          shapeDxf = merged.mergedDxf;
-          flatWidth = merged.width;
-          flatHeight = merged.height;
+          // Simple split panels get their longer dimension placed on DXF X by
+          // normalizePanelDxfOrientation (called during their own unfold). The
+          // fused/merged DXF built above does NOT go through that step, so
+          // without this, a fused panel's flatWidth/flatHeight can end up not
+          // corresponding to DXF X/Y the way downstream code (e.g.
+          // merge_bodies_with_bend's foldAlongU-driven 90° rotation) assumes —
+          // applying the same normalization here keeps fused panels consistent
+          // with split ones.
+          const expectedWidth = Math.max(merged.width, merged.height);
+          const expectedHeight = Math.min(merged.width, merged.height);
+          shapeDxf = normalizePanelDxfOrientation(merged.mergedDxf, expectedWidth, expectedHeight);
+          flatWidth = expectedWidth;
+          flatHeight = expectedHeight;
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

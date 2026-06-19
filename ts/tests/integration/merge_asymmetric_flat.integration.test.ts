@@ -733,4 +733,387 @@ describe('[bug repro] fuse side-wall+flange then merge_bodies_with_bend: rectang
     // When the bug is fixed this assertion should pass.
     expect(isTilted, `[BUG] merged 3D shell is tilted — normal=(${pf.normalX.toFixed(4)}, ${pf.normalY.toFixed(4)}, ${pf.normalZ.toFixed(4)}) is not axis-aligned`).toBe(false);
   }, 120_000);
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // BUG REPRO #2: same as above, but the flange tab is ALSO shifted along the
+  // seam axis (Y) so it overhangs the side wall's Y edge before the fuse.
+  //
+  // The first repro test's flange stays centered in Y (y=[90..110], well inside
+  // the wall's y=[0..200]), so the fused panel's Y bbox is untouched and the
+  // seam-axis centroid offset between the fused panel and the top wall is
+  // trivially 0 — it never exercises the offset computation.
+  //
+  // Here the flange is pushed to y=[190..210], overhanging the wall's y=200
+  // edge by 10mm. The fused panel's FULL bbox is now y=[0..210], asymmetric
+  // relative to the top wall's y=[0..200] — exactly the shape of the user's
+  // reported bug (a fused composite panel whose attached tab skews its
+  // bounding-box centroid away from the real shared edge with the next panel,
+  // shifting panel B's position in the merged flat pattern by the skew amount).
+  //
+  // This checks the MERGED FLAT PATTERN dimensions directly (computed by
+  // mergeDxfOutlines in TypeScript from the graph-stored seamYOffset), which is
+  // exactly what the user's screenshots showed was wrong — independent of a
+  // separate, pre-existing 3D-placement quirk in buildShellFromFlatPattern's
+  // bend-zone reconstruction for irregular fused shapes (out of scope here).
+  // ──────────────────────────────────────────────────────────────────────────
+  it('[bug repro] fuse side-wall+flange (flange overhangs seam edge), then merge with top wall — no spurious seam offset', async () => {
+    const fixturePath = findFixture(fixtureName);
+    if (!fixturePath) { console.warn(`${fixtureName} missing — skipping`); return; }
+
+    const config = loadConfig(configPath);
+
+    const clean: any = await dispatchTool('clean_geometry', { file_path: fixturePath }, config);
+    const split: any = await dispatchTool('split_body_by_bends', {
+      part_id: clean.solid_id,
+      angle_threshold_deg: 45,
+      max_thickness_mm: 5.0,
+    }, config);
+    expect(split.panel_count, 'cube_with_flanges must split into 10 panels').toBe(10);
+
+    const panels = await classifyPanels(split.panel_ids as string[], config);
+    if (!panels) { console.warn('Panel classification failed — skipping'); return; }
+    const { sideWall, sideWallBbox, flangeTab, flangeTabBbox, topWall, topWallBbox } = panels;
+
+    const txn: any = await dispatchTool('begin_transaction', { label: 'fuse-repro-2' }, config);
+    const txId: string = txn.transaction_id;
+
+    // Translate the flange so it extends above the side wall's top edge (as before)
+    // AND overhangs the wall's Y-max edge by 10mm (the new asymmetric component).
+    const zShift = sideWallBbox.z_max - flangeTabBbox.z_min;
+    const yShift = (sideWallBbox.y_max + 10) - flangeTabBbox.y_max;
+    console.log(`[repro2] translating flange tab by [0, ${yShift.toFixed(2)}, ${zShift.toFixed(2)}]`);
+
+    const translated: any = await dispatchTool('translate_body', {
+      transaction_id: txId,
+      targets: [flangeTab],
+      vector: [0, yShift, zShift],
+      keep_original: false,
+    }, config);
+    const translatedFlangeId: string = translated.solid_id;
+
+    const fused: any = await dispatchTool('fuse_bodies', {
+      transaction_id: txId,
+      tools: [sideWall, translatedFlangeId],
+    }, config);
+    expect(fused.solid_id, 'fuse_bodies must return a solid_id').toBeDefined();
+    const fusedBbox: Bbox = await dispatchTool('bounding_box', { target: fused.solid_id }, config) as Bbox;
+
+    const unfoldFused: any = await dispatchTool('apply_unfold', {
+      transaction_id: txId,
+      part_id: fused.part_id,
+      panel_id: fused.part_id,
+      material_id: config.materials[0]!.id,
+    }, config);
+    const fusedFlatWidth = unfoldFused.graph_flat_width_mm ?? unfoldFused.flat_width_mm;
+    const fusedFlatHeight = unfoldFused.graph_flat_height_mm ?? unfoldFused.flat_height_mm;
+    console.log(`[repro2] fused flat pattern: ${fusedFlatWidth?.toFixed(1)}mm × ${fusedFlatHeight?.toFixed(1)}mm`);
+
+    let mergeError: unknown = null;
+    let merged: any = null;
+    try {
+      merged = await dispatchTool('merge_bodies_with_bend', {
+        transaction_id: txId,
+        part_a_id: fused.part_id,
+        part_b_id: topWall,
+        target_edges: ['all'],
+        bend_radius: 1.0,
+      }, config);
+    } catch (err) {
+      mergeError = err;
+      console.log(`[repro2] merge_bodies_with_bend threw: ${JSON.stringify(err, Object.getOwnPropertyNames(err as object))}`);
+    }
+    if (mergeError || !merged) {
+      console.warn('[repro2] merge failed — cannot verify flat pattern placement');
+      return;
+    }
+
+    const unfold: any = await dispatchTool('apply_unfold', {
+      transaction_id: txId,
+      part_id: merged.merged_part_id,
+      panel_id: merged.merged_part_id,
+      material_id: config.materials[0]!.id,
+    }, config);
+    const mergedFlatWidth = unfold.graph_flat_width_mm ?? unfold.flat_width_mm;
+    const mergedFlatHeight = unfold.graph_flat_height_mm ?? unfold.flat_height_mm;
+    console.log(`[repro2] merged flat pattern: ${mergedFlatWidth?.toFixed(1)}mm × ${mergedFlatHeight?.toFixed(1)}mm`);
+
+    // BUG ASSERTION: the merged flat pattern's height must be close to the LARGER
+    // of the two panels' own seam-axis extents (here, the fused panel's own flat
+    // height, ~203mm — the wall's 200mm plus the 3mm V-extent contributed by the
+    // overhanging flange tab). A spurious seam offset (the original bug, driven by
+    // the fused panel's full-bbox centroid being skewed by the overhanging tab)
+    // would inflate this by roughly the overhang amount (~10mm), since panel B
+    // gets shifted away from where it actually sits relative to panel A.
+    const expectedMergedHeight = Math.max(fusedFlatHeight, topWallBbox.y_max - topWallBbox.y_min);
+    const HEIGHT_TOL_MM = 5.0;
+    expect(
+      Math.abs(mergedFlatHeight - expectedMergedHeight),
+      `[BUG] merged flat height=${mergedFlatHeight?.toFixed(2)}mm, expected≈${expectedMergedHeight.toFixed(2)}mm ` +
+      `(a spurious seam offset from the overhanging flange tab would inflate this)`,
+    ).toBeLessThanOrEqual(HEIGHT_TOL_MM);
+
+    // The merged 3D shell's bbox must be close to the union of the (pre-merge)
+    // fused panel and top wall bboxes. A skewed full-bbox centroid feeding into
+    // the fold-direction/dihedral-angle computation (a second, deeper bug found
+    // alongside the seam-offset one) would tilt the merged shell away from this
+    // expected union, even when the flat-pattern placement above is correct.
+    const mergedBbox: Bbox = await dispatchTool('bounding_box', { target: merged.merged_shell_id }, config) as Bbox;
+    const expectedUnion = unionBbox(fusedBbox, topWallBbox);
+    console.log(`[repro2] merged 3D bbox:    ${fmt(mergedBbox)}`);
+    console.log(`[repro2] expected (union):  ${fmt(expectedUnion)}`);
+    const TOL_MM = 5.0;
+    const bounds: Array<keyof Bbox> = ['x_min', 'y_min', 'z_min', 'x_max', 'y_max', 'z_max'];
+    for (const k of bounds) {
+      const delta = Math.abs(mergedBbox[k] - expectedUnion[k]);
+      expect(delta,
+        `[BUG] Bound ${k}: expected≈${expectedUnion[k].toFixed(2)} got=${mergedBbox[k].toFixed(2)} Δ=${delta.toFixed(2)}mm (spurious fold-direction tilt)`)
+        .toBeLessThanOrEqual(TOL_MM);
+    }
+
+    const pf = getGeometryBinding().getPanelFrame(merged.merged_shell_id as string);
+    const axisAligned = (n: number) => Math.abs(Math.abs(n) - 1) < 1e-2 || Math.abs(n) < 1e-2;
+    const isTilted = ![pf.normalX, pf.normalY, pf.normalZ].every(axisAligned);
+    console.log(`[repro2] merged shell normal=(${pf.normalX.toFixed(4)}, ${pf.normalY.toFixed(4)}, ${pf.normalZ.toFixed(4)}) tilted=${isTilted}`);
+    expect(isTilted, `[BUG] merged 3D shell is tilted — normal=(${pf.normalX.toFixed(4)}, ${pf.normalY.toFixed(4)}, ${pf.normalZ.toFixed(4)})`).toBe(false);
+  }, 120_000);
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// MULTI-AXIS: the same fuse-then-merge scenario as above, repeated with the
+// fold axis aligned with each of world X, Y, and Z in turn. cube_with_flanges
+// has its own flange tab on all four side walls (+X, -X, +Y, -Y), so we reuse
+// the SAME fixture for all three orientations rather than needing per-axis
+// fixtures:
+//   - fold axis Y: fuse(+X wall, +X flange) merged with (+Z top wall)
+//   - fold axis X: fuse(+Y wall, +Y flange) merged with (+Z top wall)
+//   - fold axis Z: fuse(+X wall, +X flange) merged with (+Y wall, unfused —
+//     its own flange is left untouched/ignored, so only one side is composite)
+//
+// This exists because several of the bugs found in this area were tied to
+// the arbitrary SIGN of cross(nA, nB) (the fold axis), which can differ
+// depending on which world axis the two panels' normals happen to point
+// along — a fix validated against only one orientation can silently still be
+// broken for the other two.
+// ────────────────────────────────────────────────────────────────────────────
+describe('[multi-axis] fuse side-wall+flange then merge_bodies_with_bend: fold axis aligned with X / Y / Z', () => {
+  const fixtureName = 'cube_with_flanges.stp';
+
+  function ext(b: Bbox, axis: 'x' | 'y' | 'z'): number {
+    return b[`${axis}_max`] - b[`${axis}_min`];
+  }
+
+  afterEach(async () => {
+    const active = transactionRegistry.getActive();
+    if (active) {
+      try { await dispatchTool('rollback_transaction', { transaction_id: active.id }, loadConfig(configPath)); }
+      catch { /* best effort */ }
+    }
+  });
+
+  interface AllFaces {
+    plusXWall: string; plusXWallBbox: Bbox;
+    plusXFlange: string; plusXFlangeBbox: Bbox;
+    plusYWall: string; plusYWallBbox: Bbox;
+    plusYFlange: string; plusYFlangeBbox: Bbox;
+    topWall: string; topWallBbox: Bbox;
+  }
+
+  async function classifyAllFaces(panelIds: string[], cfg: ReturnType<typeof loadConfig>): Promise<AllFaces | null> {
+    const bboxes: Array<{ id: string; bbox: Bbox }> = [];
+    for (const id of panelIds) {
+      const bbox = await dispatchTool('bounding_box', { target: id }, cfg) as Bbox;
+      bboxes.push({ id, bbox });
+    }
+
+    const topWallEntry = bboxes.find(({ bbox }) =>
+      ext(bbox, 'z') < 5 && ext(bbox, 'x') > 150 && ext(bbox, 'y') > 150 && bbox.z_min > 150);
+    const plusXWallEntry = bboxes.find(({ bbox }) =>
+      ext(bbox, 'x') < 5 && ext(bbox, 'y') > 150 && ext(bbox, 'z') > 150 && bbox.x_min > 150);
+    const plusYWallEntry = bboxes.find(({ bbox }) =>
+      ext(bbox, 'y') < 5 && ext(bbox, 'x') > 150 && ext(bbox, 'z') > 150 && bbox.y_min > 150);
+    const plusXFlangeEntry = bboxes.find(({ bbox, id }) =>
+      id !== plusXWallEntry?.id && id !== topWallEntry?.id &&
+      bbox.x_min > 195 && ext(bbox, 'y') < 50 && ext(bbox, 'z') < 50);
+    const plusYFlangeEntry = bboxes.find(({ bbox, id }) =>
+      id !== plusYWallEntry?.id && id !== topWallEntry?.id && id !== plusXFlangeEntry?.id &&
+      bbox.y_min > 195 && ext(bbox, 'x') < 50 && ext(bbox, 'z') < 50);
+
+    if (!topWallEntry || !plusXWallEntry || !plusYWallEntry || !plusXFlangeEntry || !plusYFlangeEntry) {
+      console.warn('[classify-all] could not identify required faces:', {
+        topWall: !!topWallEntry, plusXWall: !!plusXWallEntry, plusYWall: !!plusYWallEntry,
+        plusXFlange: !!plusXFlangeEntry, plusYFlange: !!plusYFlangeEntry,
+      });
+      return null;
+    }
+
+    return {
+      plusXWall: plusXWallEntry.id, plusXWallBbox: plusXWallEntry.bbox,
+      plusXFlange: plusXFlangeEntry.id, plusXFlangeBbox: plusXFlangeEntry.bbox,
+      plusYWall: plusYWallEntry.id, plusYWallBbox: plusYWallEntry.bbox,
+      plusYFlange: plusYFlangeEntry.id, plusYFlangeBbox: plusYFlangeEntry.bbox,
+      topWall: topWallEntry.id, topWallBbox: topWallEntry.bbox,
+    };
+  }
+
+  interface AxisCase {
+    foldAxis: 'X' | 'Y' | 'Z';
+    pick: (f: AllFaces) => {
+      wallId: string; wallBbox: Bbox;
+      flangeId: string; flangeBbox: Bbox;
+      simpleId: string; simpleBbox: Bbox;
+    };
+  }
+
+  const cases: AxisCase[] = [
+    {
+      foldAxis: 'Y',
+      pick: (f) => ({
+        wallId: f.plusXWall, wallBbox: f.plusXWallBbox,
+        flangeId: f.plusXFlange, flangeBbox: f.plusXFlangeBbox,
+        simpleId: f.topWall, simpleBbox: f.topWallBbox,
+      }),
+    },
+    {
+      foldAxis: 'X',
+      pick: (f) => ({
+        wallId: f.plusYWall, wallBbox: f.plusYWallBbox,
+        flangeId: f.plusYFlange, flangeBbox: f.plusYFlangeBbox,
+        simpleId: f.topWall, simpleBbox: f.topWallBbox,
+      }),
+    },
+    {
+      foldAxis: 'Z',
+      pick: (f) => ({
+        wallId: f.plusXWall, wallBbox: f.plusXWallBbox,
+        flangeId: f.plusXFlange, flangeBbox: f.plusXFlangeBbox,
+        simpleId: f.plusYWall, simpleBbox: f.plusYWallBbox,
+      }),
+    },
+  ];
+
+  // Cross every axis case with BOTH argument orders. merge_bodies_with_bend treats
+  // part_a_id and part_b_id very differently — referenceShellId for the 3D
+  // reconstruction is always shellAId, and the placement formula is driven by
+  // panelNodeA's effective flat width, not B's. A fix validated only with the
+  // composite (fused) panel as A could still be broken when it's passed as B.
+  const orders: Array<'compositeFirst' | 'simpleFirst'> = ['compositeFirst', 'simpleFirst'];
+  const allCases = cases.flatMap((c) => orders.map((order) => ({ ...c, order })));
+
+  it.each(allCases)('fold axis $foldAxis ($order): fuse wall+flange, then merge_bodies_with_bend', async ({ foldAxis, pick, order }) => {
+    const fixturePath = findFixture(fixtureName);
+    if (!fixturePath) { console.warn(`${fixtureName} missing — skipping`); return; }
+    const config = loadConfig(configPath);
+
+    const clean: any = await dispatchTool('clean_geometry', { file_path: fixturePath }, config);
+    const split: any = await dispatchTool('split_body_by_bends', {
+      part_id: clean.solid_id,
+      angle_threshold_deg: 45,
+      max_thickness_mm: 5.0,
+    }, config);
+    expect(split.panel_count, 'cube_with_flanges must split into 10 panels').toBe(10);
+
+    const faces = await classifyAllFaces(split.panel_ids as string[], config);
+    if (!faces) { console.warn(`[multi-axis ${tag}] classification failed — skipping`); return; }
+    const { wallId, wallBbox, flangeId, flangeBbox, simpleId, simpleBbox } = pick(faces);
+    const tag = `${foldAxis}/${order}`;
+
+    const txn: any = await dispatchTool('begin_transaction', { label: `multi-axis-${tag}` }, config);
+    const txId: string = txn.transaction_id;
+
+    // Extend the wall's flange tab to overhang the wall's top (Z) edge — the same
+    // construction used by the single-axis repro tests above, just applied to
+    // whichever wall/flange pair this axis case selected.
+    const zShift = wallBbox.z_max - flangeBbox.z_min;
+    const translated: any = await dispatchTool('translate_body', {
+      transaction_id: txId,
+      targets: [flangeId],
+      vector: [0, 0, zShift],
+      keep_original: false,
+    }, config);
+    const translatedFlangeId: string = translated.solid_id;
+
+    const fused: any = await dispatchTool('fuse_bodies', {
+      transaction_id: txId,
+      tools: [wallId, translatedFlangeId],
+    }, config);
+    expect(fused.solid_id, `[multi-axis ${tag}] fuse_bodies must return a solid_id`).toBeDefined();
+    const fusedBbox: Bbox = await dispatchTool('bounding_box', { target: fused.solid_id }, config) as Bbox;
+
+    const unfoldFused: any = await dispatchTool('apply_unfold', {
+      transaction_id: txId,
+      part_id: fused.part_id,
+      panel_id: fused.part_id,
+      material_id: config.materials[0]!.id,
+    }, config);
+    const fusedFlatWidth = unfoldFused.graph_flat_width_mm ?? unfoldFused.flat_width_mm;
+    const fusedFlatHeight = unfoldFused.graph_flat_height_mm ?? unfoldFused.flat_height_mm;
+    console.log(`[multi-axis ${tag}] fused flat pattern: ${fusedFlatWidth?.toFixed(1)}mm × ${fusedFlatHeight?.toFixed(1)}mm`);
+
+    const partAId = order === 'compositeFirst' ? fused.part_id : simpleId;
+    const partBId = order === 'compositeFirst' ? simpleId : fused.part_id;
+
+    let mergeError: unknown = null;
+    let merged: any = null;
+    try {
+      merged = await dispatchTool('merge_bodies_with_bend', {
+        transaction_id: txId,
+        part_a_id: partAId,
+        part_b_id: partBId,
+        target_edges: ['all'],
+        bend_radius: 1.0,
+      }, config);
+    } catch (err) {
+      mergeError = err;
+      console.log(`[multi-axis ${tag}] merge_bodies_with_bend threw: ${JSON.stringify(err, Object.getOwnPropertyNames(err as object))}`);
+    }
+    expect(mergeError, `[multi-axis ${tag}] merge_bodies_with_bend must not throw`).toBeNull();
+    if (!merged) return;
+
+    const unfold: any = await dispatchTool('apply_unfold', {
+      transaction_id: txId,
+      part_id: merged.merged_part_id,
+      panel_id: merged.merged_part_id,
+      material_id: config.materials[0]!.id,
+    }, config);
+    const w = unfold.graph_flat_width_mm ?? unfold.flat_width_mm;
+    const h = unfold.graph_flat_height_mm ?? unfold.flat_height_mm;
+    console.log(`[multi-axis ${tag}] merged flat pattern: ${w?.toFixed(1)}mm × ${h?.toFixed(1)}mm`);
+
+    expect(unfold.dxf_content, `[multi-axis ${tag}] apply_unfold must return dxf_content`).toBeTruthy();
+    const ring = parseFirstClosedPolyline(unfold.dxf_content as string);
+    const area = polygonArea(ring);
+    let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
+    for (const [x, y] of ring) {
+      if (x < xMin) xMin = x; if (x > xMax) xMax = x;
+      if (y < yMin) yMin = y; if (y > yMax) yMax = y;
+    }
+    const bboxArea = (xMax - xMin) * (yMax - yMin);
+    const fillRatio = bboxArea > 0 ? area / bboxArea : 1;
+    console.log(`[multi-axis ${tag}] flat bbox ${(xMax - xMin).toFixed(1)}mm × ${(yMax - yMin).toFixed(1)}mm  fill=${(fillRatio * 100).toFixed(1)}%`);
+
+    // BUG ASSERTION: the flange tab must still show up as a notch — a fully
+    // rectangular result (fill≈100%) means the merge dropped the protrusion shape.
+    expect(fillRatio,
+      `[multi-axis ${tag}] [BUG] flat pattern is fully rectangular (fill=${(fillRatio * 100).toFixed(1)}%) — lost the flange notch`)
+      .toBeLessThan(0.999);
+
+    const mergedBbox: Bbox = await dispatchTool('bounding_box', { target: merged.merged_shell_id }, config) as Bbox;
+    const expectedUnion = unionBbox(fusedBbox, simpleBbox);
+    console.log(`[multi-axis ${tag}] merged 3D bbox:   ${fmt(mergedBbox)}`);
+    console.log(`[multi-axis ${tag}] expected (union): ${fmt(expectedUnion)}`);
+    const TOL_MM = 5.0;
+    const bounds: Array<keyof Bbox> = ['x_min', 'y_min', 'z_min', 'x_max', 'y_max', 'z_max'];
+    for (const k of bounds) {
+      const delta = Math.abs(mergedBbox[k] - expectedUnion[k]);
+      expect(delta,
+        `[multi-axis ${tag}] [BUG] Bound ${k}: expected≈${expectedUnion[k].toFixed(2)} got=${mergedBbox[k].toFixed(2)} Δ=${delta.toFixed(2)}mm`)
+        .toBeLessThanOrEqual(TOL_MM);
+    }
+
+    const pf = getGeometryBinding().getPanelFrame(merged.merged_shell_id as string);
+    const axisAligned = (n: number) => Math.abs(Math.abs(n) - 1) < 1e-2 || Math.abs(n) < 1e-2;
+    const isTilted = ![pf.normalX, pf.normalY, pf.normalZ].every(axisAligned);
+    console.log(`[multi-axis ${tag}] merged shell normal=(${pf.normalX.toFixed(4)}, ${pf.normalY.toFixed(4)}, ${pf.normalZ.toFixed(4)}) tilted=${isTilted}`);
+    expect(isTilted, `[multi-axis ${tag}] [BUG] merged 3D shell is tilted — normal=(${pf.normalX.toFixed(4)}, ${pf.normalY.toFixed(4)}, ${pf.normalZ.toFixed(4)})`).toBe(false);
+  }, 120_000);
 });

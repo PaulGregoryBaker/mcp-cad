@@ -818,6 +818,29 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
   ];
   const dAB: [number, number, number] = [cB[0] - cA[0], cB[1] - cA[1], cB[2] - cA[2]];
 
+  // Zero out dAB's component along the fold/seam axis (cross(nA, nB)). dAB only
+  // exists to derive bendDir/foldNormal/the dihedral angle — the fold direction
+  // and angle of a straight bend line are, physically, entirely independent of
+  // where along that line the two panels sit (a 90° corner is 90° regardless of
+  // how far the bend extends or whether the panels are flush at one end). Using
+  // the raw full-bbox centroid difference leaks a spurious seam-axis component
+  // into dAB whenever panel A is a fused/composite shape (e.g. a wall with an
+  // attached protrusion tab extending its bbox along the seam) — its centroid
+  // shifts away from the true shared edge with B even though that shift has
+  // nothing to do with the fold direction, tilting bendDir and skewing the
+  // computed dihedral angle away from the panels' true 90°. Removing the
+  // seam-axis component entirely (rather than trying to compute a "corrected"
+  // replacement value) sidesteps any sign ambiguity in the cross product.
+  if (foldAxisNorm > 1e-6) {
+    const foldUnit: [number, number, number] = [
+      foldAxisVec[0] / foldAxisNorm, foldAxisVec[1] / foldAxisNorm, foldAxisVec[2] / foldAxisNorm,
+    ];
+    const seamComponent = dAB[0] * foldUnit[0] + dAB[1] * foldUnit[1] + dAB[2] * foldUnit[2];
+    dAB[0] -= seamComponent * foldUnit[0];
+    dAB[1] -= seamComponent * foldUnit[1];
+    dAB[2] -= seamComponent * foldUnit[2];
+  }
+
   // Normalised panel normals (axis only — sign is arbitrary from the cross product,
   // so every use below is sign-independent by construction).
   const nAu: [number, number, number] = normA > 1e-9 ? [nA[0] / normA, nA[1] / normA, nA[2] / normA] : [0, 0, 1];
@@ -965,23 +988,54 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
     // Along this axis, find the centroid difference between A and B — this is the Y offset.
     const MERGE_OVERLAP_MM = 0.1;
 
-    // Seam axis: the common edge direction. For perp panels nA×nB gives the seam direction.
-    const seamAxis: [number, number, number] = [
-      nA[1] * nB[2] - nA[2] * nB[1],
-      nA[2] * nB[0] - nA[0] * nB[2],
-      nA[0] * nB[1] - nA[1] * nB[0],
-    ];
-    const seamAxisLen = Math.hypot(seamAxis[0], seamAxis[1], seamAxis[2]);
-    const seamOffset = seamAxisLen > 0.001
+    // Seam axis: the common edge direction (already computed above as foldAxisVec
+    // = cross(nA, nB)).
+    const seamOffset = foldAxisNorm > 1e-6
       ? (() => {
-          // Center of A and B along the seam axis
-          const centASeam = (bboxA3d.x_min + bboxA3d.x_max) / 2 * seamAxis[0] / seamAxisLen
-                          + (bboxA3d.y_min + bboxA3d.y_max) / 2 * seamAxis[1] / seamAxisLen
-                          + (bboxA3d.z_min + bboxA3d.z_max) / 2 * seamAxis[2] / seamAxisLen;
-          const centBSeam = (bboxB3d.x_min + bboxB3d.x_max) / 2 * seamAxis[0] / seamAxisLen
-                          + (bboxB3d.y_min + bboxB3d.y_max) / 2 * seamAxis[1] / seamAxisLen
-                          + (bboxB3d.z_min + bboxB3d.z_max) / 2 * seamAxis[2] / seamAxisLen;
-          return centBSeam - centASeam;
+          const seamUnit: [number, number, number] = [
+            foldAxisVec[0] / foldAxisNorm, foldAxisVec[1] / foldAxisNorm, foldAxisVec[2] / foldAxisNorm,
+          ];
+          const projectBboxRange = (b: typeof bboxA3d): { min: number; max: number } => {
+            const axes: Array<[number, number, number]> = [
+              [b.x_min, b.x_max, seamUnit[0]],
+              [b.y_min, b.y_max, seamUnit[1]],
+              [b.z_min, b.z_max, seamUnit[2]],
+            ];
+            let min = 0, max = 0;
+            for (const [lo, hi, a] of axes) {
+              if (a >= 0) { min += lo * a; max += hi * a; }
+              else { min += hi * a; max += lo * a; }
+            }
+            return { min, max };
+          };
+          const rangeA = projectBboxRange(bboxA3d);
+          const rangeB = projectBboxRange(bboxB3d);
+          // Each panel's flat DXF is independently normalized to start at local (0,0)
+          // (see normalizeDxfOrigin below), i.e. local origin = world bbox-MIN along
+          // the seam axis. To re-align the two flat patterns the way they actually
+          // sit in 3D, panel B's placement must be shifted by exactly the difference
+          // between the two panels' own bbox-MIN positions along the seam — NOT their
+          // centroid (Bug 1: centroid breaks for a fused/composite panel whose
+          // attached tab pulls the centroid away from the true shared edge).
+          //
+          // Bbox-MIN alone isn't fully robust either: it depends on which end of
+          // the seam axis got selected as "min" for THIS panel (driven by
+          // foldAlongU's rotation state), and a composite panel's appendage can
+          // happen to sit on exactly that end too, contaminating the min just as
+          // badly as it would the centroid. The distinguishing signal is
+          // CONTAINMENT: when one panel's seam-axis range fully contains the
+          // other's, the extra reach belongs to an appendage that isn't part of
+          // THIS shared edge at all (e.g. a wall+tab fused panel whose tab
+          // reaches past the plain panel it's now being merged with) — anchor to
+          // the contained (simple) panel's own range, giving offset 0. When
+          // neither contains the other, it's a genuine partial overlap/shift
+          // between two non-composite panels (validated by CASE 5a in
+          // unfold_roundtrip.integration.test.ts: two equal-size panels
+          // deliberately offset 25mm along the seam) — use the bbox-min
+          // difference, which correctly preserves that real shift.
+          const aContainsB = rangeA.min <= rangeB.min + 1e-6 && rangeB.max <= rangeA.max + 1e-6;
+          const bContainsA = rangeB.min <= rangeA.min + 1e-6 && rangeA.max <= rangeB.max + 1e-6;
+          return (aContainsB || bContainsA) ? 0 : rangeB.min - rangeA.min;
         })()
       : 0;
     seamYOffset = seamOffset;
