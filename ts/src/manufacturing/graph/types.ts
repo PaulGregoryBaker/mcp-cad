@@ -44,6 +44,12 @@ export interface PanelNode {
   canonical: boolean;           // true if this is the canonical unfold target in a merged graph
   shapeDxf: string | null;      // DXF content of flat panel outline & details; the source of truth manufacturing drawing; null before split_body_by_bends
   panelFrame?: PanelFrame | null; // 3D orientation frame — DXF-aligned: u=DXF+X, v=DXF+Y, origin=3D point at DXF(0,0)
+  // World-space offset (dot(point, panelFrame's N)) of this panel's true
+  // material midplane — captured once from the panel's own geometry when it
+  // was created (split_body_by_bends / apply_unfold), via measurePanelThickness.
+  // Source-of-truth placement data: later rebuilds (fuse_bodies,
+  // merge_bodies_with_bend) read this instead of re-measuring a live shell.
+  midplaneOffsetMm?: number | null;
   dxfPlacement?: Placement2D;   // 2D rigid transform: panel-local DXF coords → master merged flat coords; identity for root panels
 }
 

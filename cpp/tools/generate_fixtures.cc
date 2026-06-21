@@ -15,6 +15,13 @@
  *   angle_bracket_45deg.stp    — L-bracket: two 100×200×1.5 mm panels at 45° dihedral
  *   tab_bracket_90deg.stp      — 100×200mm panel + centered 100×100mm flange (T-shape flat)
  *   l_bracket_corner_90deg.stp — 200×200mm panel + corner-flush 100×100mm flange (L-shape flat)
+ *   unequal_leg_bracket_90deg.stp — two SIMPLE (non-composite) perpendicular panels of
+ *                                deliberately different leg lengths (100mm × 100mm and
+ *                                100mm × 30mm, sharing the full 100mm edge) — used to
+ *                                catch orientation/axis-swap bugs in merge_bodies_with_bend:
+ *                                an axis swap would show up as a clearly-wrong combined
+ *                                dimension (130mm landing on the wrong world axis), unlike
+ *                                near-square fixtures where a swap is hard to detect.
  *
  * Usage (from cpp/build-vcpkg/):
  *   generate_fixtures.exe ../tests/fixtures/
@@ -384,6 +391,61 @@ static bool genLBracketCorner90deg(const fs::path& outDir) {
   return writeStp(cutter.Shape(), (outDir / "l_bracket_corner_90deg.stp").string());
 }
 
+/**
+ * unequal_leg_bracket_90deg.stp — two simple, non-composite panels at a sharp
+ * 90° dihedral, with DELIBERATELY UNEQUAL leg lengths sharing the full common
+ * edge (no asymmetric Y-extent, no protrusions/fuse complexity at all):
+ *
+ * Panel A: 100mm × 100mm  (x=[0,100], z=[0,T])
+ * Panel B: 100mm × 30mm   (x=[100,100+T], z=[-30,T])  — the SHORT leg
+ * Both extruded the SAME 100mm in Y, so the only asymmetry is leg length.
+ *
+ * Purpose: catch orientation/axis-swap bugs in merge_bodies_with_bend. With
+ * near-square fixtures (200×200 etc.) a U/V axis swap is invisible — both
+ * axes measure ~200mm either way. Here, swapping which world axis the
+ * combined 130mm (100 + 30 fold-perpendicular reach) lands on is immediately
+ * visible: the correct merged 3D bbox extends 130mm along ONE specific axis
+ * (matching panel A's own outward direction) and exactly 100mm along the
+ * seam axis — get the orientation wrong and those numbers land on the wrong
+ * axes, or a dimension comes out as 100 where 110 was expected.
+ */
+static bool genUnequalLegBracket90deg(const fs::path& outDir) {
+  const double T  = 1.5;
+  const double LA = 100.0;  // long leg (panel A) length
+  const double LB = 30.0;   // short leg (panel B) length
+  const double W  = 100.0;  // extrusion width (Y) — SAME for both legs, no cutting needed
+
+  // 6-point cross-section in the XZ plane (Y=0), counter-clockwise.
+  gp_Pnt P1(0.0,      0.0, 0.0);
+  gp_Pnt P2(LA,       0.0, 0.0);
+  gp_Pnt P3(LA,       0.0, -LB);
+  gp_Pnt P4(LA + T,   0.0, -LB);
+  gp_Pnt P5(LA + T,   0.0, T);
+  gp_Pnt P6(0.0,      0.0, T);
+
+  BRepBuilderAPI_MakeWire wireMaker;
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P1, P2).Edge());
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P2, P3).Edge());
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P3, P4).Edge());
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P4, P5).Edge());
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P5, P6).Edge());
+  wireMaker.Add(BRepBuilderAPI_MakeEdge(P6, P1).Edge());
+
+  if (!wireMaker.IsDone()) {
+    std::cerr << "Unequal-leg bracket wire build failed\n";
+    return false;
+  }
+
+  BRepBuilderAPI_MakeFace faceMaker(wireMaker.Wire(), true);
+  if (!faceMaker.IsDone()) {
+    std::cerr << "Unequal-leg bracket face build failed\n";
+    return false;
+  }
+
+  TopoDS_Shape prism = BRepPrimAPI_MakePrism(faceMaker.Face(), gp_Vec(0.0, W, 0.0)).Shape();
+  return writeStp(prism, (outDir / "unequal_leg_bracket_90deg.stp").string());
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 int main(int argc, char* argv[]) {
@@ -417,6 +479,7 @@ int main(int argc, char* argv[]) {
   ok &= genAngleBracket(outDir, 45.0);
   ok &= genTabBracket90deg(outDir);
   ok &= genLBracketCorner90deg(outDir);
+  ok &= genUnequalLegBracket90deg(outDir);
 
   if (ok) {
     std::cout << "All fixtures generated successfully.\n";

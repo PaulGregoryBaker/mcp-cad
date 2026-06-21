@@ -19,6 +19,7 @@ import {
   buildMeshUrls,
   resolveRollbackToken,
   appendHistoryIfJoined,
+  measurePanelMidplaneOffsetMm,
 } from '../helpers.js';
 import {
   ringToLwpolylineDxf,
@@ -349,38 +350,24 @@ export const shapeOpsDefinitions = [
 
 // ─── Private helpers (used only within this module) ───────────────────────────
 
-function computeDxfAlignedFrame(shellId: string, isRotated: boolean): PanelFrame {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let pf: any;
-  try {
-    pf = getGeometryBinding().getPanelFrame(shellId);
-  } catch {
-    throwError(
-      ErrorCodes.GE_PANEL_FRAME_FAILED,
-      `Shell ${shellId} has no planar faces; cannot derive panel frame.`,
-      false,
-      'clean_geometry',
-    );
-  }
-
-  if (!isRotated) {
-    return {
-      origin: [pf.originX, pf.originY, pf.originZ],
-      u: [pf.uX, pf.uY, pf.uZ],
-      v: [pf.vX, pf.vY, pf.vZ],
-    };
-  }
+// Re-expresses a panel's STORED frame (graph data — never a live shell query)
+// so DXF+X aligns with the fold-perpendicular direction. isRotated=true means
+// the panel's natural u-axis is along the FOLD direction rather than
+// perpendicular to it, so the DXF itself gets rotated 90° (rotateDxf90)
+// elsewhere — this must rotate the frame the SAME way, or placement and DXF
+// content disagree on which world direction is DXF+X.
+function computeDxfAlignedFrame(frame: PanelFrame, uExtentMm: number, isRotated: boolean): PanelFrame {
+  if (!isRotated) return frame;
 
   // isRotated=true: DXF was rotated 90° CCW so fold-perp → DXF+X, neg fold-parallel → DXF+Y.
-  // The point at DXF(0,0) is the corner: face.origin + uExtentMm * face.u.
+  // The point at DXF(0,0) is the corner: frame.origin + uExtentMm * frame.u.
+  const [ox, oy, oz] = frame.origin;
+  const [ux, uy, uz] = frame.u;
+  const [vx, vy, vz] = frame.v;
   return {
-    origin: [
-      pf.originX + pf.uExtentMm * pf.uX,
-      pf.originY + pf.uExtentMm * pf.uY,
-      pf.originZ + pf.uExtentMm * pf.uZ,
-    ],
-    u: [pf.vX, pf.vY, pf.vZ],
-    v: [-pf.uX, -pf.uY, -pf.uZ],
+    origin: [ox + uExtentMm * ux, oy + uExtentMm * uy, oz + uExtentMm * uz],
+    u: [vx, vy, vz],
+    v: [-ux, -uy, -uz],
   };
 }
 
@@ -693,10 +680,28 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
       );
     }
 
-    // Derive natural face frame (isRotated=false) for fold-axis computation.
-    // foldAlongU_A/B is computed later using this frame, then DXF-aligned frames
-    // are stored on the merged graph nodes.
-    const derived = computeDxfAlignedFrame(panelNode.bodyId as string, false);
+    // Derive natural face frame for fold-axis computation — a live shell query,
+    // but only because panelNode.panelFrame is missing entirely (should only
+    // happen for panels created before this field existed); once derived, it's
+    // stored back on the node so every later read uses graph data only.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let pf: any;
+    try {
+      pf = getGeometryBinding().getPanelFrame(panelNode.bodyId as string);
+    } catch {
+      throwError(
+        ErrorCodes.GE_PANEL_FRAME_FAILED,
+        `Shell ${panelNode.bodyId} has no planar faces; cannot derive panel frame.`,
+        false,
+        'clean_geometry',
+      );
+    }
+    const derived: PanelFrame = {
+      origin: [pf.originX, pf.originY, pf.originZ],
+      u: [pf.uX, pf.uY, pf.uZ],
+      v: [pf.vX, pf.vY, pf.vZ],
+      vExtentMm: pf.vExtentMm,
+    };
     panelNode.panelFrame = derived;
     return derived;
   };
@@ -887,6 +892,12 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
   let rotationMatrix: [[number, number], [number, number]];
   let translation: [number, number];
   let seamYOffset = 0;
+  // Overlap used to guarantee robust polygon-union connectivity at each seam
+  // (touching-but-not-overlapping edges can register as disconnected under
+  // floating-point noise). Derived from the neutral-axis offset (kFactor *
+  // thickness) rather than a fixed constant, so it scales with the panel's
+  // actual material properties instead of an arbitrary magic number.
+  const MERGE_OVERLAP_MM = kFactorDefault * thickness;
 
   if (normalsNearlyParallel && panelNodeA.flatWidth === null) {
     // Coplanar merges (no graph-recorded flatWidth, so not from a split) must satisfy contact tolerance strictly.
@@ -986,7 +997,6 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
     // Y translation: seam-axis offset (panel B may be shifted along the seam relative to A).
     // Compute seam axis = cross product of the two panel normals.
     // Along this axis, find the centroid difference between A and B — this is the Y offset.
-    const MERGE_OVERLAP_MM = 0.1;
 
     // Seam axis: the common edge direction (already computed above as foldAxisVec
     // = cross(nA, nB)).
@@ -1100,9 +1110,44 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
     ? (foldAlongU_B ? rotateDxf90(normalizeDxfOrigin(panelNodeB.shapeDxf)) : normalizeDxfOrigin(panelNodeB.shapeDxf))
     : '';
 
+  // The flat-pattern gap between Panel A's rectangle and Panel B's placed
+  // rectangle is the bend-allowance zone (width = ba): real, continuous sheet
+  // material in the unfolded flat pattern, not empty space. mergeDxfOutlines's
+  // gap-nudge (meant to auto-correct small UNINTENTIONAL misalignments, per the
+  // "misalignment less than panel thickness gets adjusted" rule) cannot tell
+  // this deliberate ba-wide gap apart from one of those — and silently
+  // collapses it, shrinking Panel B's reconstructed length by ~ba. Bridging the
+  // gap with an explicit bend-allowance rectangle keeps A/bridge/B contiguous
+  // (overlapping by MERGE_OVERLAP_MM at each seam) so the union always connects
+  // on its own, without ever invoking the nudge.
+  // Y-range matches the union of A/B's own seam extents exactly — no padding,
+  // since the bridge already shares that Y-range with A and B verbatim. Only
+  // the X-edges (where the actual gap is) need the overlap to guarantee
+  // connectivity; padding Y too would inflate the merged outline's seam-axis
+  // dimension beyond the panels' real shared width.
+  const bridgeYRange = (() => {
+    const ringAForBridge = parseFirstClosedPolyline(panelADxfForMerge);
+    const ringBForBridge = parseFirstClosedPolyline(panelBDxfForMerge);
+    let yMinA = Infinity, yMaxA = -Infinity, yMinB = Infinity, yMaxB = -Infinity;
+    for (const [, y] of ringAForBridge) { yMinA = Math.min(yMinA, y); yMaxA = Math.max(yMaxA, y); }
+    for (const [, y] of ringBForBridge) { yMinB = Math.min(yMinB, y); yMaxB = Math.max(yMaxB, y); }
+    return {
+      min: Math.min(yMinA, yMinB + seamYOffset),
+      max: Math.max(yMaxA, yMaxB + seamYOffset),
+    };
+  })();
+  const bendZoneBridgeDxf = ringToLwpolylineDxf([
+    [effectiveAFlatWidth - MERGE_OVERLAP_MM, bridgeYRange.min],
+    [effectiveAFlatWidth + ba + MERGE_OVERLAP_MM, bridgeYRange.min],
+    [effectiveAFlatWidth + ba + MERGE_OVERLAP_MM, bridgeYRange.max],
+    [effectiveAFlatWidth - MERGE_OVERLAP_MM, bridgeYRange.max],
+  ]);
+
   let preflightMerge: ReturnType<typeof mergeDxfOutlines>;
   try {
-    preflightMerge = mergeDxfOutlines(panelADxfForMerge, panelBDxfForMerge, {
+    const identityPlacement = { rotationMatrix: [[1, 0], [0, 1]] as [[number, number], [number, number]], translation: [0, 0] as [number, number] };
+    const aPlusBridge = mergeDxfOutlines(panelADxfForMerge, bendZoneBridgeDxf, identityPlacement);
+    preflightMerge = mergeDxfOutlines(aPlusBridge.mergedDxf, panelBDxfForMerge, {
       rotationMatrix,
       translation,
     });
@@ -1153,8 +1198,10 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
 
   // DXF-aligned frames for the merged graph nodes.
   // foldAlongU_A/B are now known — compute DXF-aligned frames (accounting for rotateDxf90).
-  const frameADxf = computeDxfAlignedFrame(shellAId as string, foldAlongU_A);
-  const frameBDxf = computeDxfAlignedFrame(shellBId as string, foldAlongU_B);
+  // frameA/frameB (and flatWidth, the U-extent at the time they were captured)
+  // are graph data already established by ensurePanelFrame above.
+  const frameADxf = computeDxfAlignedFrame(frameA, panelNodeA.flatWidth ?? 0, foldAlongU_A);
+  const frameBDxf = computeDxfAlignedFrame(frameB, panelNodeB.flatWidth ?? 0, foldAlongU_B);
 
   // Panel A: dxfPlacement = identity (origin of the merged flat)
   const dxfPlacementA: Placement2D = { rotationMatrix: [[1, 0], [0, 1]], translation: [0, 0] };
@@ -1231,14 +1278,54 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
 
   // ── Step 2: C++ call — rebuild from manufacturing graph, then place ──────────
   // buildShellFromFlatPattern reconstructs the 3D shape from the DXF (source of
-  // truth). It accepts an optional referenceShellId so C++ can compute the
-  // placement transform from the original panel A's face frame.
+  // truth). Placement uses an explicit world anchor for panel A — its own
+  // oriented-bbox centre, computed from STORED graph data (panelFrame,
+  // flatWidth/flatHeight, midplaneOffsetMm) — never a live shell query.
   let mergedShellId: string;
   let shapeHistory: unknown[] = [];
   let rollbackToken: string = snapshotId;
 
   try {
     if (mergedDxf && getGeometryBinding().hasBuildShellFromFlatPattern()) {
+      // Anchor: world position of the merged flat-pattern's own local (0,0,0)
+      // — panel A occupies local x∈[0..effectiveAFlatWidth] by the merge's
+      // own DXF convention, so local (0,0,0) IS panel A's own DXF(0,0) corner.
+      // frameA's own (u, v) are an orthogonal in-plane basis, but bendDir
+      // (this merge's actual local-X direction) was derived independently
+      // (from panel B's relative position) and getPanelFrame's u/v signs are
+      // an arbitrary tie-break — so bendDir can align with +u, -u, +v, or -v.
+      // Pick whichever raw axis bendDir is closer to, then correct origin to
+      // the FAR corner along that axis (and independently along the
+      // perpendicular axis vs actualYDir) whenever the sign disagrees — the
+      // same origin-shift-on-flip correction used for the reflection bug in
+      // computeDxfMergePlacement. All from graph data (frameA, flatWidth,
+      // flatHeight); no live shell query.
+      const actualYDir: [number, number, number] = [
+        foldNormal[1] * bendDir[2] - foldNormal[2] * bendDir[1],
+        foldNormal[2] * bendDir[0] - foldNormal[0] * bendDir[2],
+        foldNormal[0] * bendDir[1] - foldNormal[1] * bendDir[0],
+      ];
+      const dot3 = (a: [number, number, number], b: [number, number, number]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+      const dotBendRawU = dot3(bendDir, frameA.u);
+      const dotBendRawV = dot3(bendDir, frameA.v);
+      const bendAlignsWithRawU = Math.abs(dotBendRawU) >= Math.abs(dotBendRawV);
+      const xAxis = bendAlignsWithRawU ? frameA.u : frameA.v;
+      const xExt = bendAlignsWithRawU ? (panelNodeA.flatWidth ?? 0) : (panelNodeA.flatHeight ?? 0);
+      const xSign = (bendAlignsWithRawU ? dotBendRawU : dotBendRawV) >= 0 ? 1 : -1;
+      const yAxisRaw = bendAlignsWithRawU ? frameA.v : frameA.u;
+      const yExt = bendAlignsWithRawU ? (panelNodeA.flatHeight ?? 0) : (panelNodeA.flatWidth ?? 0);
+      const ySign = dot3(actualYDir, yAxisRaw) >= 0 ? 1 : -1;
+      let anchorPoint: [number, number, number] = [...frameA.origin];
+      if (xSign < 0) {
+        anchorPoint = [anchorPoint[0] + xExt * xAxis[0], anchorPoint[1] + xExt * xAxis[1], anchorPoint[2] + xExt * xAxis[2]];
+      }
+      if (ySign < 0) {
+        anchorPoint = [anchorPoint[0] + yExt * yAxisRaw[0], anchorPoint[1] + yExt * yAxisRaw[1], anchorPoint[2] + yExt * yAxisRaw[2]];
+      }
+      const anchor = {
+        anchorX: anchorPoint[0], anchorY: anchorPoint[1], anchorZ: anchorPoint[2],
+        hasAnchor: true,
+      };
       const bendZones = effectiveAFlatWidth
         ? [{
             offsetMm: effectiveAFlatWidth,
@@ -1251,9 +1338,10 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
             // a face-normal sign (which previously inverted the fold).
             foldNormalX: foldNormal[0], foldNormalY: foldNormal[1], foldNormalZ: foldNormal[2],
             bendDirX: bendDir[0], bendDirY: bendDir[1], bendDirZ: bendDir[2],
+            ...anchor,
           }]
         : [];
-      const res = getGeometryBinding().buildShellFromFlatPattern(mergedDxf, bendZones, thickness, shellAId as string);
+      const res = getGeometryBinding().buildShellFromFlatPattern(mergedDxf, bendZones, thickness);
       mergedShellId = res.shellId;
     } else {
       const res = getGeometryBinding().mergeBodiesWithBend(shellAId as string, shellBId as string, targetEdges, bendRadius as number);
@@ -1666,15 +1754,35 @@ export async function handleSplitBodyByBends(args: Record<string, unknown>): Pro
   const maxThicknessMm = typeof args['max_thickness_mm'] === 'number'
     ? args['max_thickness_mm']
     : 5.0;
-  const defaultThicknessMm = typeof args['default_thickness_mm'] === 'number'
-    ? args['default_thickness_mm']
-    : 1.0;
   const maxRecursionDepth = typeof args['max_recursion_depth'] === 'number'
     ? Math.max(0, Math.round(args['max_recursion_depth']))
     : 1;
 
   if (threshold < 0) {
     throwError(ErrorCodes.GE_DECOMPOSE_BY_BENDS_FAILED, 'angle_threshold_deg must be non-negative', true);
+  }
+
+  // default_thickness_mm: only matters to splitBodyByBends itself when the
+  // input is a genuinely thin shell with no real 3D thickness to find (it
+  // gets extruded by this amount). When the input already has real
+  // thickness, this value is irrelevant to the split, and overridden below
+  // anyway by measuring the result.
+  const defaultThicknessMm = typeof args['default_thickness_mm'] === 'number'
+    ? args['default_thickness_mm']
+    : 1.0;
+  // Did the caller explicitly choose a thickness? If so, that choice wins
+  // outright for every resulting panel/protrusion below — no measurement.
+  const callerProvidedThickness = typeof args['default_thickness_mm'] === 'number';
+
+  // Measure the whole, INTACT part now, before splitBodyByBends consumes
+  // partId below. Folded into the vote computed after splitting (see there
+  // for why a single measurement on its own isn't reliable enough).
+  let wholePartThicknessMm = 0;
+  if (!callerProvidedThickness) {
+    try {
+      const measured = getGeometryBinding().measurePanelThickness(partId);
+      if (measured.ok && measured.thickness_mm > 0) wholePartThicknessMm = measured.thickness_mm;
+    } catch { /* leave unmeasured */ }
   }
 
   const ctx = resolveTransactionContext(args);
@@ -1690,6 +1798,37 @@ export async function handleSplitBodyByBends(args: Record<string, unknown>): Pro
   }
 
   appendHistoryIfJoined(ctx, result.shape_history);
+
+  // Resolve the single, shared nominalThickness for every resulting
+  // panel/protrusion below (a sheet-metal part has one uniform thickness by
+  // definition). Take the MEDIAN of: the whole-part measurement, plus
+  // measurePanelThickness on each individual result. No single one of these
+  // is reliable alone — split_body_by_bends's thin-solid-mode extraction can
+  // leave a thin sliver artifact at a panel's cut boundary (from an
+  // attached feature like a flange, or the bend line itself) that a
+  // closest-anti-parallel-pair search mistakes for the real thickness on
+  // THAT one panel — but such an artifact is specific to whichever panel
+  // happens to have been cut that way, not shared across the whole part, so
+  // it never has enough votes to beat the genuine, uniform thickness shared
+  // by the whole part and every other panel.
+  let resolvedThicknessMm = defaultThicknessMm;
+  if (!callerProvidedThickness) {
+    const measurements: number[] = [];
+    if (wholePartThicknessMm > 0) measurements.push(wholePartThicknessMm);
+    for (const id of [...result.panel_ids, ...result.protrusion_ids]) {
+      try {
+        const measured = getGeometryBinding().measurePanelThickness(id);
+        if (measured.ok && measured.thickness_mm > 0) measurements.push(measured.thickness_mm);
+      } catch { /* leave out of the vote */ }
+    }
+    if (measurements.length > 0) {
+      measurements.sort((a, b) => a - b);
+      const mid = Math.floor(measurements.length / 2);
+      resolvedThicknessMm = measurements.length % 2 === 0
+        ? (measurements[mid - 1]! + measurements[mid]!) / 2
+        : measurements[mid]!;
+    }
+  }
 
   // ARCHITECTURE CHANGE: Auto-create manufacturing graphs for each panel
   // Each panel gets its own part with auto-generated part_id
@@ -1735,7 +1874,9 @@ export async function handleSplitBodyByBends(args: Record<string, unknown>): Pro
       origin: [_pf.originX, _pf.originY, _pf.originZ],
       u: [_pf.uX, _pf.uY, _pf.uZ],
       v: [_pf.vX, _pf.vY, _pf.vZ],
+      vExtentMm: _pf.vExtentMm,
     };
+    const panelMidplaneOffsetMm = measurePanelMidplaneOffsetMm(panelId, [_pf.normalX, _pf.normalY, _pf.normalZ]);
 
     // Critical: Panel node creation must succeed. No fallback allowed.
     // If this fails, it indicates a malformed geometry or data corruption.
@@ -1774,12 +1915,13 @@ export async function handleSplitBodyByBends(args: Record<string, unknown>): Pro
       bodyId: toBodyId(panelId),
       dirty: true,
       materialType: 'default',
-      nominalThickness: defaultThicknessMm,
+      nominalThickness: resolvedThicknessMm,
       flatWidth: panelFlatWidth,
       flatHeight: panelFlatHeight,
       canonical: true,  // Split panels are canonical unfold targets
       shapeDxf: panelShapeDxf,
       panelFrame: panelFrame ?? undefined,
+      midplaneOffsetMm: panelMidplaneOffsetMm,
       dxfPlacement: { rotationMatrix: [[1, 0], [0, 1]], translation: [0, 0] },
     });
     createdParts.push({ part_id: partId, panel_id: panelId });
@@ -1801,6 +1943,7 @@ export async function handleSplitBodyByBends(args: Record<string, unknown>): Pro
     let protFlatWidth: number | null = null;
     let protFlatHeight: number | null = null;
     let protrusionFrame: import('../../manufacturing/dxf/orientation').PanelFrame | null = null;
+    let protMidplaneOffsetMm: number | null = null;
 
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1811,7 +1954,9 @@ export async function handleSplitBodyByBends(args: Record<string, unknown>): Pro
         origin: [ppf.originX, ppf.originY, ppf.originZ],
         u: [ppf.uX, ppf.uY, ppf.uZ],
         v: [ppf.vX, ppf.vY, ppf.vZ],
+        vExtentMm: ppf.vExtentMm,
       };
+      protMidplaneOffsetMm = measurePanelMidplaneOffsetMm(protrusionId, [ppf.normalX, ppf.normalY, ppf.normalZ]);
     } catch {
       // Non-planar protrusion (boss, tube): fall back to bbox for dimensions, no frame.
       const bbox = result.protrusion_bboxes?.[pi];
@@ -1856,12 +2001,13 @@ export async function handleSplitBodyByBends(args: Record<string, unknown>): Pro
       bodyId: toBodyId(protrusionId),
       dirty: true,
       materialType: 'default',
-      nominalThickness: defaultThicknessMm,
+      nominalThickness: resolvedThicknessMm,
       flatWidth: protFlatWidth,
       flatHeight: protFlatHeight,
       canonical: true,  // Protrusions are canonical unfold targets
       shapeDxf: protrusionShapeDxf,
       panelFrame: protrusionFrame ?? undefined,
+      midplaneOffsetMm: protMidplaneOffsetMm,
       dxfPlacement: { rotationMatrix: [[1, 0], [0, 1]], translation: [0, 0] },
     });
     createdParts.push({ part_id: protPartId, panel_id: protrusionId });

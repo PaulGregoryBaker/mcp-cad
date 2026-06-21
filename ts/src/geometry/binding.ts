@@ -23,6 +23,7 @@ import type {
   ThickenSheetResult,
   ApplyBendResult,
   NapiBendZoneSpec,
+  FlatPanelPlacement,
   BuildShellFromFlatPatternResult,
   PanelFrameResult,
   NestResult,
@@ -61,6 +62,7 @@ import type {
   CurvedRebuildResult,
   CloseGapResult,
   PanelValidationResult,
+  PanelThicknessResult,
 } from './types';
 
 // ─── Addon interface ──────────────────────────────────────────────────────────
@@ -89,7 +91,7 @@ export interface GeometryAddon {
   buildSheetFromDxf?(dxfContent: string): DxfSheetResult;
   thickenSheet?(sheetId: string, thicknessMm: number): ThickenSheetResult;
   applyBend?(panelAId: string, panelBId: string, innerRadiusMm: number, angleDeg: number, kFactor: number): ApplyBendResult;
-  buildShellFromFlatPattern?(dxfContent: string, bendZones: NapiBendZoneSpec[], thicknessMm: number, referenceShellId?: string): BuildShellFromFlatPatternResult;
+  buildShellFromFlatPattern?(dxfContent: string, bendZones: NapiBendZoneSpec[], thicknessMm: number, explicitPlacement?: FlatPanelPlacement): BuildShellFromFlatPatternResult;
   getPanelFrame?(shellId: string): PanelFrameResult;
   exportGlb(shellId: string): Buffer;
   nestShells(
@@ -249,6 +251,7 @@ export interface GeometryAddon {
   listAssemblyTree(assemblyId: string): ListAssemblyResult;
   validateSheetMetal(partId: string): SheetMetalValidationResult;
   reconstructCurvedBends(partId: string): CurvedRebuildResult;
+  measurePanelThickness(shellId: string): PanelThicknessResult;
 }
 
 export const kerfOffsetMm = {
@@ -464,12 +467,12 @@ export class GeometryBinding {
     }
   }
 
-  buildShellFromFlatPattern(dxfContent: string, bendZones: NapiBendZoneSpec[], thicknessMm: number, referenceShellId?: string): BuildShellFromFlatPatternResult {
+  buildShellFromFlatPattern(dxfContent: string, bendZones: NapiBendZoneSpec[], thicknessMm: number, explicitPlacement?: FlatPanelPlacement): BuildShellFromFlatPatternResult {
     if (!this.addon.buildShellFromFlatPattern) {
       throw new Error('Geometry addon does not expose buildShellFromFlatPattern');
     }
     try {
-      return this.addon.buildShellFromFlatPattern(dxfContent, bendZones, thicknessMm, referenceShellId ?? '');
+      return this.addon.buildShellFromFlatPattern(dxfContent, bendZones, thicknessMm, explicitPlacement);
     } catch (err) {
       throw toStructuredError(err);
     }
@@ -998,6 +1001,14 @@ export class GeometryBinding {
   validateSheetMetal(partId: string): SheetMetalValidationResult {
     try {
       return this.addon.validateSheetMetal(partId);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  measurePanelThickness(shellId: string): PanelThicknessResult {
+    try {
+      return this.addon.measurePanelThickness(shellId);
     } catch (err) {
       throw toStructuredError(err);
     }

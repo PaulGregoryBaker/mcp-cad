@@ -141,11 +141,29 @@ export interface NapiBendZoneSpec {
   angleDeg: number;
   innerRadiusMm: number;
   kFactor: number;
-  // Optional world-space fold frame used to place the rebuilt shell on the correct
-  // side (canonical +X → bendDir, canonical +Z → foldNormal). When omitted, C++
-  // falls back to deriving the placement frame from the reference shell's face.
+  // World-space fold frame used to place the rebuilt shell on the correct side
+  // (canonical +X → bendDir, canonical +Z → foldNormal) — manufacturing-graph
+  // data only; there is no live-shell fallback.
   foldNormalX?: number; foldNormalY?: number; foldNormalZ?: number;
   bendDirX?: number; bendDirY?: number; bendDirZ?: number;
+  // World-space anchor: panel A's own oriented-bbox centre, computed from its
+  // stored panelFrame + flat extents + midplaneOffsetMm. The flat centroid of
+  // panel A's region in the merged DXF maps to this point.
+  hasAnchor?: boolean;
+  anchorX?: number; anchorY?: number; anchorZ?: number;
+}
+
+// Explicit placement frame for buildShellFromFlatPattern's coplanar (no bend
+// zones) path. world = origin + x*U + y*V + (z - t/2)*N + nCentreMm*N. All
+// values come from the manufacturing graph (a panel's stored panelFrame +
+// midplaneOffsetMm) — there is no live-shell fallback when hasFrame is false.
+export interface FlatPanelPlacement {
+  hasFrame: boolean;
+  originX: number; originY: number; originZ: number;
+  uX: number; uY: number; uZ: number;
+  vX: number; vY: number; vZ: number;
+  normalX: number; normalY: number; normalZ: number;
+  nCentreMm: number;
 }
 
 export interface BuildShellFromFlatPatternResult {
@@ -405,6 +423,25 @@ export interface SheetMetalValidationResult {
   nominal_thickness: number;
   can_flatten: boolean;
   validation_errors: string[];
+}
+
+// Dominant Face Method: thickness = distance between the shape's single
+// largest planar face and its best anti-parallel, overlapping partner.
+export interface PanelThicknessResult {
+  ok: boolean;
+  thickness_mm: number;
+  midplane_offset_mm: number;
+  // The dominant face's own outward normal that midplane_offset_mm was
+  // projected onto — an arbitrary tie-break between a panel's two near-equal-
+  // area skins. Callers re-expressing the offset along a DIFFERENT reference
+  // normal (e.g. a panel frame's own N) must check
+  // dot(dominant_normal, theirNormal) and negate midplane_offset_mm when
+  // negative.
+  dominant_normal_x: number;
+  dominant_normal_y: number;
+  dominant_normal_z: number;
+  error_code: string;
+  message: string;
 }
 
 export interface GapSewResult {

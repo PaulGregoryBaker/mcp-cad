@@ -213,13 +213,16 @@ export function handleFuseBodies(args: Record<string, unknown>): unknown {
     const toBodyIdLocal = (s: string): import('../../manufacturing/graph/types.js').BodyId =>
       s as import('../../manufacturing/graph/types.js').BodyId;
 
+    // All placement data (frame, flat extents, midplane offset) comes straight
+    // from each panel's STORED PanelNode — captured once when the panel was
+    // created (split_body_by_bends / apply_unfold) — never from a live shell
+    // query. The manufacturing graph is the source of truth.
     const panelDxfs: (string | null)[] = [];
     const panelFrames: (PanelFrame | null)[] = [];
+    const panelMidplaneOffsets: (number | null)[] = [];
+    const panelAreas: number[] = [];
     let allInputsHaveDimensions = tools.length === graphPartIds.length;
     let combinedThickness = 0;
-
-    const shellByTool = new Map<string, string>();
-    tools.forEach((t, i) => { if (shellIds[i]) shellByTool.set(t, shellIds[i]!); });
 
     for (const pid of [preservedPartId, ...sourcePartIds]) {
       const g = savedParts.get(pid);
@@ -231,24 +234,38 @@ export function handleFuseBodies(args: Record<string, unknown>): unknown {
         if (node.type === 'PanelNode' && node.canonical !== false) {
           const pn = node as PanelNode;
           panelDxfs.push(pn.shapeDxf ?? null);
-          let frame: PanelFrame | null = pn.panelFrame ?? null;
-          const shellId = shellByTool.get(pid);
-          if (shellId && getGeometryBinding().hasGetPanelFrame()) {
-            try {
-              const pf = getGeometryBinding().getPanelFrame(shellId);
-              frame = {
-                origin: [pf.originX, pf.originY, pf.originZ],
-                u: [pf.uX, pf.uY, pf.uZ],
-                v: [pf.vX, pf.vY, pf.vZ],
-              };
-            } catch { /* keep stored frame */ }
-          }
-          panelFrames.push(frame);
+          panelFrames.push(pn.panelFrame ?? null);
+          panelMidplaneOffsets.push(pn.midplaneOffsetMm ?? null);
+          panelAreas.push((pn.flatWidth ?? 0) * (pn.flatHeight ?? 0));
           combinedThickness = Math.max(combinedThickness, pn.nominalThickness);
           if (!pn.shapeDxf) allInputsHaveDimensions = false;
           break;
         }
       }
+    }
+
+    // The 2D merge (below) and the 3D rebuild's placement both need ONE shared
+    // reference panel — the merged DXF is expressed in that panel's stored
+    // frame, and the rebuild positions the result using that same panel's
+    // stored midplane offset. Always anchoring on panelDxfs[0]/tools[0]
+    // (whichever the caller happened to list first) breaks when tools[0] is a
+    // SMALL attached feature (e.g. a welded-on flange) rather than the
+    // dominant base panel: the flange's own thickness midpoint sits at a
+    // different offset along the shared normal than the base panel's true
+    // material, so the whole fused result would get centred on the small
+    // feature's depth instead of the base sheet's. Picking the LARGEST-area
+    // panel as the reference (regardless of tools[] order) keeps the
+    // placement anchored on the dominant base panel every time.
+    let bestPanelIdx = 0;
+    for (let i = 1; i < panelAreas.length; i++) {
+      if (panelAreas[i]! > panelAreas[bestPanelIdx]!) bestPanelIdx = i;
+    }
+    if (bestPanelIdx !== 0) {
+      const swap = <T,>(arr: T[]): void => { const tmp = arr[0]!; arr[0] = arr[bestPanelIdx]!; arr[bestPanelIdx] = tmp; };
+      swap(panelDxfs);
+      swap(panelFrames);
+      swap(panelMidplaneOffsets);
+      swap(panelAreas);
     }
 
     const nominalThickness = combinedThickness > 0 ? combinedThickness : 1.0;
@@ -325,7 +342,28 @@ export function handleFuseBodies(args: Record<string, unknown>): unknown {
     try {
       const gb = getGeometryBinding();
       if (shapeDxf !== null && gb.hasBuildShellFromFlatPattern()) {
-        const res = gb.buildShellFromFlatPattern(shapeDxf, [], nominalThickness, shellIds[0]);
+        // Explicit placement frame for the dominant (largest-area) panel,
+        // built entirely from its STORED graph data (panelFrames[0] /
+        // panelMidplaneOffsets[0], reordered above) — no live shell query.
+        const refFrame = panelFrames[0];
+        let explicitPlacement: import('../../geometry/types.js').FlatPanelPlacement | undefined;
+        if (refFrame) {
+          const [ux, uy, uz] = refFrame.u;
+          const [vx, vy, vz] = refFrame.v;
+          const nx = uy * vz - uz * vy;
+          const ny = uz * vx - ux * vz;
+          const nz = ux * vy - uy * vx;
+          const nLen = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+          explicitPlacement = {
+            hasFrame: true,
+            originX: refFrame.origin[0], originY: refFrame.origin[1], originZ: refFrame.origin[2],
+            uX: ux, uY: uy, uZ: uz,
+            vX: vx, vY: vy, vZ: vz,
+            normalX: nx / nLen, normalY: ny / nLen, normalZ: nz / nLen,
+            nCentreMm: panelMidplaneOffsets[0] ?? 0,
+          };
+        }
+        const res = gb.buildShellFromFlatPattern(shapeDxf, [], nominalThickness, explicitPlacement);
         fusedSolidId = res.shellId;
       } else if (shapeDxf !== null && gb.hasBuildSheetFromDxf() && gb.hasThickenSheet()) {
         const sheetResult = gb.buildSheetFromDxf!(shapeDxf);

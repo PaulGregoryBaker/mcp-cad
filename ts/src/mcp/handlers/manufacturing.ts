@@ -19,6 +19,7 @@ import {
   buildMeshUrls,
   resolveRollbackToken,
   appendHistoryIfJoined,
+  measurePanelMidplaneOffsetMm,
 } from '../helpers.js';
 import { MaterialStore } from '../../manufacturing/material.js';
 import { isJointTypeAllowed } from '../../manufacturing/rules.js';
@@ -179,6 +180,7 @@ export function handleDecomposeVolume(args: Record<string, unknown>): unknown {
     let flatHeight: number | null = null;
     let panelFrame: PanelFrame | null = null;
     let nominalThickness = 1.0;
+    let midplaneOffsetMm: number | null = null;
     try {
       // getPanelFrame gives accurate OCCT face frame + dimensions for planar shells.
       // For non-planar decomposed solids it may throw; fall back to bbox for dims only.
@@ -190,7 +192,9 @@ export function handleDecomposeVolume(args: Record<string, unknown>): unknown {
         origin: [pf.originX, pf.originY, pf.originZ],
         u: [pf.uX, pf.uY, pf.uZ],
         v: [pf.vX, pf.vY, pf.vZ],
+        vExtentMm: pf.vExtentMm,
       };
+      midplaneOffsetMm = measurePanelMidplaneOffsetMm(shellId, [pf.normalX, pf.normalY, pf.normalZ]);
     } catch {
       try {
         const bbox = getGeometryBinding().computeBoundingBox(shellId);
@@ -216,6 +220,7 @@ export function handleDecomposeVolume(args: Record<string, unknown>): unknown {
       canonical: true,
       shapeDxf: null,
       panelFrame: panelFrame ?? undefined,
+      midplaneOffsetMm,
       dxfPlacement: { rotationMatrix: [[1, 0], [0, 1]], translation: [0, 0] },
     });
   }

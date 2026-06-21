@@ -67,4 +67,9 @@ ResolvedShape resolveShellOrSolidIn(const GeometryState& state, const std::strin
 // check, T-junction detection, and bend-loop cycle detection.
 SheetMetalValidationResult validateSheetMetalShape(const TopoDS_Shape& shape);
 
+// Dominant Face Method: thickness = perpendicular distance between the
+// shape's single largest planar face and its best anti-parallel, overlapping
+// partner. See the definition in geometry_service_utils.cc for rationale.
+PanelThicknessResult measurePanelThickness(const TopoDS_Shape& shape);
+
 }  // namespace mcp_cad

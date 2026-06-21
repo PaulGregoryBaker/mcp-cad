@@ -156,7 +156,7 @@ public:
       const std::string& dxfContent,
       const std::vector<BendZoneSpec>& bendZones,
       double thicknessMm,
-      const std::string& referenceShellId = "") override;
+      const FlatPanelPlacementSpec& explicitPlacement = FlatPanelPlacementSpec{}) override;
 
   PanelFrameResult getPanelFrame(const std::string& shellId) override;
 
@@ -282,6 +282,7 @@ public:
   // ── Sheet metal validation ────────────────────────────────────────────────
   SheetMetalValidationResult validateSheetMetal(const ShellId& partId) override;
   CurvedRebuildResult        reconstructCurvedBends(const ShellId& partId) override;
+  PanelThicknessResult       measurePanelThickness(const ShellId& shellId) override;
 
 private:
   GeometryState state_;

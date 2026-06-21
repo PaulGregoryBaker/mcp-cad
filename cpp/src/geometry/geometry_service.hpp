@@ -105,6 +105,36 @@ struct SheetMetalValidationResult {
   std::vector<std::string> validationErrors;
 };
 
+// Dominant-face thickness measurement: finds the single largest planar face
+// and its best anti-parallel, overlapping partner, and reports the
+// perpendicular distance between that one pair — no averaging across other
+// (possibly spurious) matched pairs. See measurePanelThickness() for the
+// rationale versus validateSheetMetal's area-weighted multi-pair average.
+struct PanelThicknessResult {
+  bool        ok          = false;
+  double      thicknessMm = 0.0;
+  // Midpoint between the dominant face and its matched partner, projected
+  // onto the dominant face's own normal — the panel's true midplane offset
+  // along that normal. NOT the same as averaging the panel's full vertex
+  // range along the normal: a panel that retains a corner-overlap sliver
+  // from an adjacent panel at a bend (or, here, from a stacked feature like
+  // a welded-on flange) has vertices reaching past its own true thickness,
+  // which biases a naive (min+max)/2 toward whatever it's attached to.
+  double      midplaneOffsetMm = 0.0;
+  // The dominant face's own outward normal that midplaneOffsetMm was projected
+  // onto. A panel's two opposing skins have near-equal area, so which one OCCT's
+  // face-enumeration order happens to find first (and so which becomes
+  // "dominant") is arbitrary — callers projecting along a DIFFERENT reference
+  // normal (e.g. a panel frame's own N, which may point either way) must check
+  // dot(dominantNormal, theirNormal) and negate midplaneOffsetMm when it's
+  // negative, or the offset ends up expressed in the wrong sign convention.
+  double      dominantNormalX = 0.0;
+  double      dominantNormalY = 0.0;
+  double      dominantNormalZ = 0.0;
+  std::string errorCode;
+  std::string message;
+};
+
 struct GapSewResult {
   ShellId                         solidId;
   bool                            sewComplete      = false;
@@ -126,12 +156,21 @@ struct BendZoneSpec {
   double angleDeg;
   double innerRadiusMm;
   double kFactor;
-  // Optional world-space fold frame for placement. When foldNormal is non-zero,
-  // the rebuilt shell is placed with canonical +X → bendDir and canonical +Z →
-  // foldNormal, so the fold lands on the same side as the original geometry.
-  // When zero (default), placement falls back to the reference-shell face frame.
+  // World-space fold frame for placement: the rebuilt shell is placed with
+  // canonical +X → bendDir and canonical +Z → foldNormal, so the fold lands
+  // on the same side as the original geometry. Required (along with
+  // hasAnchor below) for placement to happen at all — there is no live-shell
+  // fallback; the manufacturing graph (panel A's stored panelFrame) is the
+  // only source for these directions.
   double foldNormalX = 0.0, foldNormalY = 0.0, foldNormalZ = 0.0;
   double bendDirX = 0.0, bendDirY = 0.0, bendDirZ = 0.0;
+  // World-space anchor: panel A's own oriented-bbox centre (its stored
+  // panelFrame.origin + half its flat extents along U/V + its own measured
+  // midplane offset along N). The flat centroid of panel A's region within
+  // the merged DXF maps to this point. Computed once from graph data by the
+  // caller — never derived from a live shell.
+  bool   hasAnchor = false;
+  double anchorX = 0.0, anchorY = 0.0, anchorZ = 0.0;
 };
 
 struct BuildShellFromFlatPatternResult {
@@ -139,6 +178,28 @@ struct BuildShellFromFlatPatternResult {
   bool        ok        = false;
   std::string errorCode;
   std::string message;
+};
+
+// Explicit placement frame for the bendZones-empty (coplanar) branch of
+// buildShellFromFlatPattern. When hasFrame is true, the rebuilt sheet is
+// positioned using ONLY these graph-supplied values — no live shell lookup
+// (getPanelFrame / measurePanelThickness on referenceShellId) is performed.
+// This is the manufacturing-graph-as-source-of-truth path: the panel's
+// (origin, U, V, N) and its true material midplane offset along N
+// (nCentreMm, the world-space dot(point, N) at the centre of the panel's
+// thickness) are captured ONCE when the panel is first created and stored on
+// its PanelNode, so every later rebuild reuses that stored data instead of
+// re-deriving it from whichever 3D shell happens to be passed as
+// referenceShellId. When hasFrame is false (default), behaviour is
+// unchanged: placement falls back to deriving the frame from
+// referenceShellId's live shape.
+struct FlatPanelPlacementSpec {
+  bool   hasFrame = false;
+  double originX = 0.0, originY = 0.0, originZ = 0.0;
+  double uX = 1.0, uY = 0.0, uZ = 0.0;
+  double vX = 0.0, vY = 1.0, vZ = 0.0;
+  double normalX = 0.0, normalY = 0.0, normalZ = 1.0;
+  double nCentreMm = 0.0;
 };
 
 // Oriented panel frame derived from a shell's largest planar face. This is the
@@ -571,7 +632,7 @@ public:
       const std::string&            dxfContent,
       const std::vector<BendZoneSpec>& bendZones,
       double                        thicknessMm,
-      const std::string&            referenceShellId = "") = 0;
+      const FlatPanelPlacementSpec& explicitPlacement = FlatPanelPlacementSpec{}) = 0;
 
   // Derive a panel's oriented local→world frame P(x) from its largest planar
   // face. Used at panel-creation time so flat dimensions come from the true
@@ -703,6 +764,7 @@ public:
   // ── Feature 007-sheet-metal-unfolding ───────────────────────────────────────
   virtual SheetMetalValidationResult validateSheetMetal(const ShellId& partId) = 0;
   virtual CurvedRebuildResult        reconstructCurvedBends(const ShellId& partId) = 0;
+  virtual PanelThicknessResult       measurePanelThickness(const ShellId& shellId) = 0;
 };
 
 }  // namespace mcp_cad

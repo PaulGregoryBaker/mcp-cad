@@ -21,6 +21,7 @@ import type {
 import { computeBendAllowance } from './types';
 import type { ManufacturingGraph } from './graph';
 import type { GeometryAddon } from '../../geometry/binding';
+import type { FlatPanelPlacement } from '../../geometry/types';
 
 // ─── Geometry binding interface (subset used by the solver) ───────────────────
 
@@ -54,12 +55,14 @@ export interface GeometryBinding {
   /** Thicken a planar sheet into a solid panel. */
   thickenSheet?(sheetId: string, thicknessMm: number): { solidId: string };
   /**
-   * Rebuild a panel solid from a flat-pattern DXF and place it at the
-   * reference shell's 3D position. Preferred over buildSheetFromDxf+thickenSheet
-   * because it preserves the panel's original world-space orientation, keeping
-   * panelFrame normals and fold-direction vectors valid for subsequent merges.
+   * Rebuild a panel solid from a flat-pattern DXF and place it using an
+   * explicit world-space frame — manufacturing-graph data (the panel's own
+   * stored panelFrame + midplaneOffsetMm), never a live shell query. Preferred
+   * over buildSheetFromDxf+thickenSheet because it preserves the panel's
+   * original world-space orientation, keeping panelFrame normals and
+   * fold-direction vectors valid for subsequent merges.
    */
-  buildShellFromFlatPattern?(dxfContent: string, bendZones: unknown[], thicknessMm: number, referenceShellId: string): { shellId: string };
+  buildShellFromFlatPattern?(dxfContent: string, bendZones: unknown[], thicknessMm: number, explicitPlacement?: FlatPanelPlacement): { shellId: string };
   /** Apply a bend between two panel solids/shells and return merged body. */
   applyBend?(panelAId: string, panelBId: string, innerRadiusMm: number, angleDeg: number, kFactor: number): { mergedShellId: string };
 }
@@ -96,8 +99,8 @@ export function addonToBinding(addon: GeometryAddon): GeometryBinding {
       ? (sheetId, thicknessMm) => addon.thickenSheet!(sheetId, thicknessMm)
       : undefined,
     buildShellFromFlatPattern: addon.buildShellFromFlatPattern
-      ? (dxf, _bendZones, thickness, refShellId) =>
-          addon.buildShellFromFlatPattern!(dxf, [], thickness, refShellId)
+      ? (dxf, _bendZones, thickness, explicitPlacement) =>
+          addon.buildShellFromFlatPattern!(dxf, [], thickness, explicitPlacement)
       : undefined,
     applyBend: addon.applyBend
       ? (panelAId, panelBId, innerRadiusMm, angleDeg, kFactor) =>
@@ -329,14 +332,29 @@ export class GeometrySolver {
         // Graph-first reconstruction path:
         // shapeDxf (2D drawing) → rebuilt 3D solid placed at the original shell's position.
         if (node.shapeDxf && node.shapeDxf.trim().length > 0) {
-          // Preferred: buildShellFromFlatPattern with referenceShellId.
+          // Preferred: buildShellFromFlatPattern with an explicit placement
+          // built from the panel's OWN stored panelFrame + midplaneOffsetMm.
           // This places the rebuilt panel at the SAME 3D position as the original shell,
           // keeping panelFrame normals valid for subsequent merge_bodies_with_bend fold
           // direction computation. Without this, both rebuilt panels land at the XY-plane
           // origin, making the fold-direction cross product degenerate (zero vector).
-          if (binding.buildShellFromFlatPattern && node.bodyId !== null) {
+          if (binding.buildShellFromFlatPattern && node.bodyId !== null && node.panelFrame) {
+            const [ux, uy, uz] = node.panelFrame.u;
+            const [vx, vy, vz] = node.panelFrame.v;
+            const nx = uy * vz - uz * vy;
+            const ny = uz * vx - ux * vz;
+            const nz = ux * vy - uy * vx;
+            const nLen = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+            const explicitPlacement: FlatPanelPlacement = {
+              hasFrame: true,
+              originX: node.panelFrame.origin[0], originY: node.panelFrame.origin[1], originZ: node.panelFrame.origin[2],
+              uX: ux, uY: uy, uZ: uz,
+              vX: vx, vY: vy, vZ: vz,
+              normalX: nx / nLen, normalY: ny / nLen, normalZ: nz / nLen,
+              nCentreMm: node.midplaneOffsetMm ?? node.nominalThickness / 2,
+            };
             const result = binding.buildShellFromFlatPattern(
-              node.shapeDxf, [], node.nominalThickness, node.bodyId as string,
+              node.shapeDxf, [], node.nominalThickness, explicitPlacement,
             );
             return { newBodyId: result.shellId as BodyId, panelBodyUpdates: noUpdates };
           }

@@ -4,6 +4,13 @@ export interface PanelFrame {
   origin: Vec3;
   u: Vec3;
   v: Vec3;
+  // Panel's own extent along v (mm). Needed to correct origin when the
+  // moving panel's normal must be flipped to avoid a mirrored 2D placement
+  // (see the anti-parallel-normal branch in computeDxfMergePlacement below).
+  // Optional for backward compatibility with callers that don't track it
+  // (e.g. merge_bodies_with_bend's DXF-aligned frames); those callers simply
+  // don't get the origin correction.
+  vExtentMm?: number;
 }
 
 export interface OrientationOptions {
@@ -99,7 +106,38 @@ export function computeDxfMergePlacement(
   }
 
   const ref = toOrthonormalFrame(reference, eps);
-  const mov = toOrthonormalFrame(moving, eps);
+  let mov = toOrthonormalFrame(moving, eps);
+
+  // getPanelFrame picks a panel's largest planar face to build its frame from.
+  // A thin, symmetric panel (e.g. a flat flange tab) has two equal-area faces
+  // with opposite outward normals, so which one gets picked — and therefore
+  // which way the panel's reported normal points — is an arbitrary tie-break,
+  // not a meaningful choice. When that leaves the moving panel's normal
+  // anti-parallel to the reference's (rather than parallel, as two genuinely
+  // coplanar panels should be), u/v/n no longer form a frame consistent with
+  // the reference's own outward direction: the rotation matrix below comes
+  // out as a REFLECTION (determinant -1) instead of a rotation (+1), mirroring
+  // the moving panel's outline when it's merged into the reference's 2D space.
+  // Flipping v (and so n) re-expresses the moving panel from its OTHER,
+  // equal-area face — physically the same panel, just consistent with the
+  // reference's side of the contact — restoring a proper rotation.
+  //
+  // origin is the panel's (u1,v1) MINIMUM corner under the ORIGINAL v
+  // direction (see getPanelFrame). Flipping v's sign without relocating
+  // origin would leave it sitting at the MAXIMUM corner under the new v —
+  // offsetting the whole panel by its own height (vExtentMm) along the
+  // flipped axis. Shifting origin to origin + vExtentMm*v (the old MAXIMUM
+  // corner, which becomes the new MINIMUM corner once v is negated) keeps
+  // the moving panel's outline anchored at the same physical location.
+  if (dot(mov.n, ref.n) < 0) {
+    const vExt = moving.vExtentMm ?? 0;
+    const flippedOrigin: Vec3 = [
+      mov.origin[0] + vExt * mov.v[0],
+      mov.origin[1] + vExt * mov.v[1],
+      mov.origin[2] + vExt * mov.v[2],
+    ];
+    mov = { origin: flippedOrigin, u: mov.u, v: [-mov.v[0], -mov.v[1], -mov.v[2]], n: [-mov.n[0], -mov.n[1], -mov.n[2]] };
+  }
 
   // Moving basis expressed in reference panel coordinates.
   const ux = dot(mov.u, ref.u);

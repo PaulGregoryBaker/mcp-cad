@@ -211,6 +211,12 @@ public:
     return validateSheetMetalLocked(partId);
   }
 
+  PanelThicknessResult measurePanelThickness(const ShellId& shellId) {
+    std::lock_guard<std::mutex> lock(s_.mutex);
+    ResolvedShape resolved = resolveShellOrSolidIn(s_, shellId, "Shell or solid not found: " + shellId);
+    return mcp_cad::measurePanelThickness(resolved.shape);
+  }
+
   CurvedRebuildResult reconstructCurvedBends(const ShellId& partId) {
     std::lock_guard<std::mutex> lock(s_.mutex);
     ResolvedShape resolved = resolveShellOrSolidIn(s_, partId, "Shell or solid not found: " + partId);
@@ -530,6 +536,10 @@ SheetMetalValidationResult GeometryServiceImpl::validateSheetMetal(const ShellId
 
 CurvedRebuildResult GeometryServiceImpl::reconstructCurvedBends(const ShellId& partId) {
   return GeometryValidation(state_).reconstructCurvedBends(partId);
+}
+
+PanelThicknessResult GeometryServiceImpl::measurePanelThickness(const ShellId& shellId) {
+  return GeometryValidation(state_).measurePanelThickness(shellId);
 }
 
 }  // namespace mcp_cad

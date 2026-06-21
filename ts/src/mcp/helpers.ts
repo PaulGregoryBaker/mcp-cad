@@ -7,10 +7,38 @@
 
 import { throwError, ErrorCodes } from './errors.js';
 import { transactionRegistry } from './transactions.js';
-import { getParts } from './state.js';
+import { getParts, getGeometryBinding } from './state.js';
 import { ManufacturingGraph } from '../manufacturing/graph/graph.js';
 import { session } from '../geometry/session.js';
 import type { ShapeHistoryRecord } from '../geometry/types.js';
+
+// ─── Panel midplane offset (manufacturing-graph placement data) ──────────────
+
+// Measures a panel's true-material midplane offset along ITS OWN frame normal,
+// once, at panel-creation time — stored on the PanelNode (midplaneOffsetMm) so
+// later rebuilds (fuse_bodies, merge_bodies_with_bend) never need to re-measure
+// the live shell. measurePanelThickness's own dominant-face normal is an
+// arbitrary tie-break between a panel's two near-equal-area skins and may
+// point opposite to the panel's OWN reported frame normal; re-expressing the
+// offset along that frame normal (negating when they disagree) keeps the
+// stored value consistent with how the rest of the graph uses panelFrame.
+export function measurePanelMidplaneOffsetMm(
+  shellId: string,
+  frameNormal: [number, number, number],
+): number | null {
+  try {
+    const pt = getGeometryBinding().measurePanelThickness(shellId);
+    if (!pt.ok) return null;
+    const dot =
+      pt.dominant_normal_x * frameNormal[0] +
+      pt.dominant_normal_y * frameNormal[1] +
+      pt.dominant_normal_z * frameNormal[2];
+    const sign = dot >= 0 ? 1 : -1;
+    return sign * pt.midplane_offset_mm;
+  } catch {
+    return null;
+  }
+}
 
 // ─── Argument helpers ─────────────────────────────────────────────────────────
 
