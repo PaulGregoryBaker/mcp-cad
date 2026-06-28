@@ -28,6 +28,7 @@ import { validateBendSequence } from '../../manufacturing/bend_sequence.js';
 import type { FeatureSet } from '../../manufacturing/feature.js';
 import { toNodeId } from '../../manufacturing/graph/types.js';
 import type { PanelFrame } from '../../manufacturing/graph/types.js';
+import { napiFrameToPanelFrame } from '../../manufacturing/dxf/orientation.js';
 import type { ManufacturingConfig } from '../../config/loader.js';
 
 // ─── Tool definitions ─────────────────────────────────────────────────────────
@@ -188,13 +189,7 @@ export function handleDecomposeVolume(args: Record<string, unknown>): unknown {
       nominalThickness = pf.thicknessMm > 0 ? pf.thicknessMm : 1.0;
       flatWidth = pf.uExtentMm;
       flatHeight = pf.vExtentMm;
-      panelFrame = {
-        origin: [pf.originX, pf.originY, pf.originZ],
-        u: [pf.uX, pf.uY, pf.uZ],
-        v: [pf.vX, pf.vY, pf.vZ],
-        vExtentMm: pf.vExtentMm,
-        normal: [pf.normalX, pf.normalY, pf.normalZ],
-      };
+      panelFrame = napiFrameToPanelFrame(pf);
       midplaneOffsetMm = measurePanelMidplaneOffsetMm(shellId, [pf.normalX, pf.normalY, pf.normalZ]);
     } catch {
       try {

@@ -108,6 +108,14 @@ function matMul2x2Vec(m: [[number, number], [number, number]], x: number, y: num
   return [m[0][0] * x + m[0][1] * y, m[1][0] * x + m[1][1] * y];
 }
 
+/** Invert a dxfPlacement: master flat coords → this panel's own local (lx, ly). */
+function invertDxfPlacement(dxfPlacement: Placement2D | undefined, point2d: [number, number]): [number, number] {
+  if (!dxfPlacement) return point2d;
+  const R_inv = transpose2x2(dxfPlacement.rotationMatrix);
+  const [tx, ty] = dxfPlacement.translation;
+  return matMul2x2Vec(R_inv, point2d[0] - tx, point2d[1] - ty);
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
@@ -218,17 +226,7 @@ export function map2dTo3d(
     const panelNode = node;
     if (!panelNode.panelFrame) continue;
 
-    // Invert dxfPlacement: R^T * (point2d - t) = panel-local coords
-    let lx: number;
-    let ly: number;
-    if (panelNode.dxfPlacement) {
-      const R_inv = transpose2x2(panelNode.dxfPlacement.rotationMatrix);
-      const [tx, ty] = panelNode.dxfPlacement.translation;
-      [lx, ly] = matMul2x2Vec(R_inv, point2d[0] - tx, point2d[1] - ty);
-    } else {
-      lx = point2d[0];
-      ly = point2d[1];
-    }
+    const [lx, ly] = invertDxfPlacement(panelNode.dxfPlacement, point2d);
 
     // Region bounds check: local (lx, ly) in [0, flatWidth] × [0, flatHeight]
     const inBounds =
@@ -259,16 +257,7 @@ export function map2dTo3d(
       };
     }
     // Panel found but point not in region — still reconstruct (legacy behaviour)
-    let lx: number;
-    let ly: number;
-    if (node.dxfPlacement) {
-      const R_inv = transpose2x2(node.dxfPlacement.rotationMatrix);
-      const [tx, ty] = node.dxfPlacement.translation;
-      [lx, ly] = matMul2x2Vec(R_inv, point2d[0] - tx, point2d[1] - ty);
-    } else {
-      lx = point2d[0];
-      ly = point2d[1];
-    }
+    const [lx, ly] = invertDxfPlacement(node.dxfPlacement, point2d);
     const point3d = unprojectFromPanel(lx, ly, node.panelFrame);
     return { point3d, errorMm: 0 };
   }

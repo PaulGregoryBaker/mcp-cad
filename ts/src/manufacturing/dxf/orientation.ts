@@ -1,3 +1,5 @@
+import type { PanelFrameResult } from '../../geometry/types';
+
 export type Vec3 = [number, number, number];
 
 export interface PanelFrame {
@@ -19,6 +21,17 @@ export interface PanelFrame {
   // midplaneOffsetMm (which was measured against THIS normal) in a placement
   // transform — must use this stored field, not recompute via cross(u, v).
   normal?: Vec3;
+}
+
+/** Converts a raw NAPI getPanelFrame() result into the manufacturing-domain PanelFrame shape. */
+export function napiFrameToPanelFrame(pf: PanelFrameResult): PanelFrame {
+  return {
+    origin: [pf.originX, pf.originY, pf.originZ],
+    u: [pf.uX, pf.uY, pf.uZ],
+    v: [pf.vX, pf.vY, pf.vZ],
+    vExtentMm: pf.vExtentMm,
+    normal: [pf.normalX, pf.normalY, pf.normalZ],
+  };
 }
 
 export interface OrientationOptions {
