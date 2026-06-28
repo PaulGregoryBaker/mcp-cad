@@ -1,8 +1,14 @@
 import { throwError, ErrorCodes } from '../errors.js';
-import { getGeometryBinding, tryGetSemanticStore } from '../state.js';
+import { getGeometryBinding, tryGetSemanticStore, snapshotParts, restorePartsSnapshot, type PartsSnapshot } from '../state.js';
 import { requireString } from '../helpers.js';
 import { transactionRegistry } from '../transactions.js';
 import { MappingLayer } from '../../semantic/mapping_layer.js';
+
+// Manufacturing-graph snapshots, keyed by transaction_id — kept alongside
+// (not inside) TransactionRegistry to avoid a circular import between
+// manufacturing/graph/graph.ts (which already imports transactionRegistry)
+// and mcp/state.ts (which owns the graph map being snapshotted).
+const _graphSnapshots = new Map<string, PartsSnapshot>();
 
 export const transactionDefinitions = [
   {
@@ -80,6 +86,7 @@ export async function handleBeginTransaction(args: Record<string, unknown>): Pro
   const product = typeof args.product === 'string' ? args.product : undefined;
   const snapshotId = getGeometryBinding().createSnapshot(label);
   const txn = await transactionRegistry.begin(label, snapshotId, product);
+  _graphSnapshots.set(txn.id, snapshotParts());
   return {
     transaction_id: txn.id,
     status: txn.state,
@@ -127,6 +134,7 @@ export async function handleCommitTransaction(args: Record<string, unknown>): Pr
 
   const txn = await transactionRegistry.commit(transactionId);
   getGeometryBinding().clearSnapshots();
+  _graphSnapshots.delete(transactionId);
   return { transaction_id: txn.id, status: txn.state, label: txn.label };
 }
 
@@ -155,6 +163,17 @@ export async function handleRollbackTransaction(args: Record<string, unknown>): 
     const snapshotMissing =
       maybeCode.code === 'GE_SNAPSHOT_NOT_FOUND' || /Snapshot not found/i.test(maybeCode.message ?? '');
     if (!snapshotMissing) throw err;
+  }
+
+  // Restore the manufacturing graph alongside the geometry kernel's shells —
+  // without this, a graph-producing tool (fuse_bodies, merge_bodies_with_bend,
+  // etc.) run inside this transaction leaves its graph-side effects in place
+  // even though the 3D geometry just got rolled back, desyncing the two and
+  // making a subsequent retry of the same call take a different code path.
+  const graphSnapshot = _graphSnapshots.get(transactionId);
+  if (graphSnapshot) {
+    restorePartsSnapshot(graphSnapshot);
+    _graphSnapshots.delete(transactionId);
   }
 
   const txn = await transactionRegistry.rollback(transactionId);

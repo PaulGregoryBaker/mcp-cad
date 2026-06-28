@@ -284,7 +284,6 @@ public:
         }
       }
 
-
       // If no planar faces, fall back to simple bounding box
       if (planarFacesWithArea.empty()) {
         Bnd_Box bbox;

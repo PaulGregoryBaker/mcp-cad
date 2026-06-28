@@ -64,6 +64,19 @@ export interface BendNode {
   kFactor: number;              // 0 < k ≤ 1
   bendAllowance: number | null; // mm — computed by Solve; null before first Solve
   bendZoneDxfX?: number;        // X coordinate (mm) in master merged flat where this bend zone starts
+  // The exact world-space fold placement basis merge_bodies_with_bend computed
+  // at merge time (from live 3D bbox queries on the two input shells, which
+  // are gone by the time anything downstream runs) — captured here so the
+  // bend can be regenerated from graph data alone (apply_unfold +
+  // buildShellFromFlatPattern), without re-deriving bendDir/foldNormal/anchor
+  // from shells that no longer exist. bendDir/foldNormal are the (possibly
+  // payload-flipped) vectors actually sent to buildShellFromFlatPattern, not
+  // necessarily the original physically-derived ones used elsewhere in this
+  // function — they're the ones that correctly place THIS shapeDxf.
+  foldNormal?: [number, number, number];
+  bendDir?: [number, number, number];
+  anchor?: [number, number, number];
+  bHingeOffsetMm?: number;
 }
 
 // ─── JoinNode params ──────────────────────────────────────────────────────────

@@ -193,6 +193,7 @@ export function handleDecomposeVolume(args: Record<string, unknown>): unknown {
         u: [pf.uX, pf.uY, pf.uZ],
         v: [pf.vX, pf.vY, pf.vZ],
         vExtentMm: pf.vExtentMm,
+        normal: [pf.normalX, pf.normalY, pf.normalZ],
       };
       midplaneOffsetMm = measurePanelMidplaneOffsetMm(shellId, [pf.normalX, pf.normalY, pf.normalZ]);
     } catch {

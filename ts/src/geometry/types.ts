@@ -151,6 +151,13 @@ export interface NapiBendZoneSpec {
   // panel A's region in the merged DXF maps to this point.
   hasAnchor?: boolean;
   anchorX?: number; anchorY?: number; anchorZ?: number;
+  // How far Panel B's TRUE hinge edge sits inside its own flat pattern, past
+  // its near/glue edge — zero (default) when B's hinge IS its own DXF
+  // origin. Nonzero when B is a composite panel with material continuing
+  // past its hinge with A (e.g. a flange tab overhanging a wall's own bend
+  // line): B's DXF origin then sits at its far/free edge instead, and this
+  // tells the fold where the true pivot is within B's own flat extent.
+  bHingeOffsetMm?: number;
 }
 
 // Explicit placement frame for buildShellFromFlatPattern's coplanar (no bend

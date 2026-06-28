@@ -171,6 +171,18 @@ struct BendZoneSpec {
   // caller — never derived from a live shell.
   bool   hasAnchor = false;
   double anchorX = 0.0, anchorY = 0.0, anchorZ = 0.0;
+  // How far Panel B's TRUE hinge edge sits inside its own flat pattern,
+  // measured from B's local x=0 (its DXF origin) along B's local-x axis.
+  // Zero (the default) means B's hinge is at its own origin — the case
+  // every other caller already assumes. Nonzero when B is a composite
+  // panel with material continuing PAST its hinge with A (e.g. a flange
+  // tab fused onto a wall, overhanging past the wall's own bend line) — B's
+  // own DXF origin then sits at its FAR/free edge instead, with the true
+  // hinge an interior point of its flat pattern. The fold must still rotate
+  // ALL of B as one rigid piece (it physically is one), just pivoting at
+  // this offset instead of at B's origin — both the near and far sides of
+  // the true hinge then land correctly on either side of it.
+  double bHingeOffsetMm = 0.0;
 };
 
 struct BuildShellFromFlatPatternResult {

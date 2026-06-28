@@ -74,15 +74,18 @@ function polygonArea(ring: Array<[number, number]>): number {
 //   5. expect: flat pattern is L-shaped; merged 3D shell occupies the same
 //      footprint as the (fused panel ∪ inner top wall) before the merge.
 //
-// KNOWN REMAINING ISSUE (as of branch 012): both orderings below still show a
-// small (~2-3mm) 3D placement residual — much smaller than the original
-// ~11.5mm bug, but not yet zero. Root cause is believed to be a SEPARATE,
-// not-yet-fixed mechanism from the seam-axis seamYOffset bug that WAS fixed
-// (see project_seam_offset_fix memory): when the fused panel's asymmetric
-// appendage lands on the FOLD-PERPENDICULAR axis rather than the seam axis,
-// an analogous contamination still occurs. See merge_asymmetric_flat's
-// multi-axis 'Y'/'X' ('simpleFirst') cases for an isolated, smaller-fixture
-// repro of the same residual mechanism.
+// FIXED (012-accurate-coord-mapping): both orderings used to show a small
+// (~1-1.33mm) 3D placement residual. Root cause turned out to be in
+// fuse_bodies itself (step 3, not the later merge_bodies_with_bend): the
+// inner wall here is a perfect 148x148 square, so normalizePanelDxfOrientation
+// rotates the merged DXF 90 degrees to keep its longer dimension on DXF+X —
+// and the reference placement frame used to rebuild the 3D shape from that
+// (rotated) DXF was derived assuming the merged outline's bbox starts at
+// (0, 0), which doesn't hold whenever the other input's footprint extends in
+// the reference panel's negative direction. See booleans.ts's `merged.height
+// > merged.width` branch and project_fuse_chained_merge_and_undo_redo_fix
+// memory for the full derivation. Fixing that incidentally resolved this
+// test's residual too — both orderings now pass with zero KNOWN ISSUE gap.
 // ────────────────────────────────────────────────────────────────────────────
 describe('[repro] testcube.step: protrusion shifted to coplanar wall edge, fused, merged with inner top', () => {
   afterEach(async () => {
@@ -192,6 +195,14 @@ describe('[repro] testcube.step: protrusion shifted to coplanar wall edge, fused
     }, config);
     console.log(`[testcube ${order}] fused flat: ${unfoldFused.flat_width_mm?.toFixed(1)} x ${unfoldFused.flat_height_mm?.toFixed(1)}mm`);
 
+    // Ground-truth pre-merge volumes (measured directly on the already-built
+    // 3D shells, not estimated from flat-pattern area) — sheet-metal volume
+    // is conserved through bending, so fusedVolume + innerTopVolume should
+    // closely match the merged shell's own volume.
+    const fusedMassProps: any = await dispatchTool('mass_properties', { target: fused.solid_id, properties: ['volume'] }, config);
+    const innerTopMassProps: any = await dispatchTool('mass_properties', { target: innerTop, properties: ['volume'] }, config);
+    console.log(`[testcube ${order}] pre-merge volumes: fused=${fusedMassProps.volume?.toFixed(1)}mm3 innerTop=${innerTopMassProps.volume?.toFixed(1)}mm3 sum=${(fusedMassProps.volume + innerTopMassProps.volume).toFixed(1)}mm3`);
+
     const partAId = order === 'compositeFirst' ? fused.part_id : innerTop;
     const partBId = order === 'compositeFirst' ? innerTop : fused.part_id;
 
@@ -211,6 +222,37 @@ describe('[repro] testcube.step: protrusion shifted to coplanar wall edge, fused
     }
     expect(mergeError, `[testcube ${order}] merge_bodies_with_bend must not throw`).toBeNull();
     if (!merged) return;
+
+    // Volume check: bbox + axis-aligned-normal can both pass for a DEGENERATE
+    // (e.g. sheared) shape that happens to share the same bbox as a proper
+    // two-face bent bracket — neither check verifies actual shape topology.
+    // Ground truth: sheet-metal volume is conserved through bending, so the
+    // merged shell's volume should match the SUM of the two inputs' own
+    // (already-measured, not estimated) volumes.
+    const massProps: any = await dispatchTool('mass_properties', {
+      target: merged.merged_shell_id, properties: ['volume'],
+    }, config);
+    const expectedVolume = fusedMassProps.volume + innerTopMassProps.volume;
+    console.log(`[testcube ${order}] merged volume: actual=${massProps.volume?.toFixed(1)}mm3 expected≈${expectedVolume.toFixed(1)}mm3`);
+    const volumeRatio = massProps.volume / expectedVolume;
+    expect(volumeRatio, `[testcube ${order}] [BUG] merged shell volume=${massProps.volume?.toFixed(1)}mm3 doesn't match expected≈${expectedVolume.toFixed(1)}mm3 (ratio=${volumeRatio.toFixed(3)}) — shape may be degenerate/sheared despite matching bbox`)
+      .toBeGreaterThan(0.9);
+    expect(volumeRatio, `[testcube ${order}] [BUG] merged shell volume=${massProps.volume?.toFixed(1)}mm3 doesn't match expected≈${expectedVolume.toFixed(1)}mm3 (ratio=${volumeRatio.toFixed(3)}) — shape may be degenerate/sheared despite matching bbox`)
+      .toBeLessThan(1.1);
+
+    // Does the GLB mesh export (what the Form.AI.tion viewport actually
+    // renders) succeed on the REAL geometry, or silently fall back to the
+    // crude topology-estimated box in mesh/server.ts's synthesizeShellGlb?
+    let glbError: unknown = null;
+    let glb: Buffer | null = null;
+    try {
+      glb = getGeometryBinding().exportGlb(merged.merged_shell_id as string);
+    } catch (err) {
+      glbError = err;
+      console.log(`[testcube ${order}] exportGlb threw: ${JSON.stringify(err, Object.getOwnPropertyNames(err as object))}`);
+    }
+    console.log(`[testcube ${order}] exportGlb: ${glbError ? 'THREW (would fall back to crude box approximation)' : `succeeded, ${glb?.length} bytes`}`);
+    expect(glbError, `[testcube ${order}] [BUG] exportGlb threw for the merged shape — the viewport would silently render the crude topology-estimated box fallback instead of the real geometry`).toBeNull();
 
     const unfold: any = await dispatchTool('apply_unfold', {
       transaction_id: txId,
@@ -239,7 +281,6 @@ describe('[repro] testcube.step: protrusion shifted to coplanar wall edge, fused
 
     // ASSERTION 2 (user): merged 3D part occupies the same footprint as the
     // pre-merge (fused panel ∪ inner top wall) — i.e. nothing shifted/tilted.
-    // KNOWN ISSUE: still fails by ~2-3mm as of branch 012 (see file header).
     const mergedBbox: Bbox = await dispatchTool('bounding_box', { target: merged.merged_shell_id }, config) as Bbox;
     const expectedUnion = unionBbox(fusedBbox, innerTopBbox);
     console.log(`[testcube ${order}] merged 3D bbox:   ${fmt(mergedBbox)}`);
@@ -249,7 +290,7 @@ describe('[repro] testcube.step: protrusion shifted to coplanar wall edge, fused
     for (const k of bounds) {
       const delta = Math.abs(mergedBbox[k] - expectedUnion[k]);
       expect(delta,
-        `[testcube ${order}] [KNOWN ISSUE] Bound ${k}: expected≈${expectedUnion[k].toFixed(2)} got=${mergedBbox[k].toFixed(2)} Δ=${delta.toFixed(2)}mm`)
+        `[testcube ${order}] [BUG] Bound ${k}: expected≈${expectedUnion[k].toFixed(2)} got=${mergedBbox[k].toFixed(2)} Δ=${delta.toFixed(2)}mm`)
         .toBeLessThanOrEqual(TOL_MM);
     }
 

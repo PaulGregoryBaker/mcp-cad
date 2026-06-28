@@ -46,6 +46,34 @@ export class ManufacturingGraph {
     this.coplanarityThresholdDeg = coplanarityThresholdDeg;
   }
 
+  /**
+   * Deep copy, independent of `this` — every node, edge set, and the
+   * insertion-order list are cloned, not shared, so mutating either copy
+   * afterwards never affects the other. Used to snapshot graph state
+   * alongside the geometry kernel's own snapshot (see begin_transaction /
+   * rollback_transaction) — without this, rolling back a transaction
+   * restores the 3D shells but leaves the manufacturing graph (this class)
+   * stuck in its post-mutation state, silently desyncing the two.
+   */
+  cloneDeep(): ManufacturingGraph {
+    const clone = new ManufacturingGraph(this.sessionId, this.coplanarityThresholdDeg);
+    clone.rootPanelId = this.rootPanelId;
+    for (const [id, node] of this.nodes) {
+      clone.nodes.set(id, structuredClone(node));
+    }
+    for (const [id, set] of this.edges) {
+      clone.edges.set(id, new Set(set));
+    }
+    for (const [id, set] of this.reverseEdges) {
+      clone.reverseEdges.set(id, new Set(set));
+    }
+    for (const id of this.dirtyNodes) {
+      clone.dirtyNodes.add(id);
+    }
+    clone.insertionOrder = [...this.insertionOrder];
+    return clone;
+  }
+
   // ─── Topological sort (Kahn's algorithm) ───────────────────────────────────
 
   /**

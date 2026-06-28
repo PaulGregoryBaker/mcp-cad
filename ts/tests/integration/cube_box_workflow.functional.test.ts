@@ -188,17 +188,63 @@ function buildMockAddon(): GeometryAddon {
       can_flatten: true,
       validation_errors: [],
     })),
-    getPanelFrame: vi.fn((_id: string) => ({
-      originX: 0, originY: 0, originZ: 0,
-      uX: 1, uY: 0, uZ: 0,
-      vX: 0, vY: 1, vZ: 0,
-      normalX: 0, normalY: 0, normalZ: 1,
-      uExtentMm: 200, vExtentMm: 200, thicknessMm: 1.0,
-    })),
-    computeBoundingBox: vi.fn(() => ({
-      x_min: 0, y_min: 0, z_min: 0,
-      x_max: 200, y_max: 200, z_max: 1,
-    })),
+    // Distinct, genuinely-perpendicular frames/bboxes per cube face — merge_bodies_with_bend
+    // needs a real (non-degenerate) fold axis between any two merged panels, which a single
+    // shared stub frame for every id cannot provide (cross(normal, normal) = 0 for any pair).
+    // IDs derived from splitBodyByPlane's mock ('${id}-pos'/'${id}-neg'): top='cube-solid-pos',
+    // front='cube-solid-neg-pos', back='cube-solid-neg-neg-pos', bottom='cube-solid-neg-neg-neg'.
+    getPanelFrame: vi.fn((id: string) => {
+      if (id.endsWith('-neg-neg-pos')) {
+        // back panel: normal +Y
+        return {
+          originX: 0, originY: 200, originZ: 0,
+          uX: 1, uY: 0, uZ: 0,
+          vX: 0, vY: 0, vZ: -1,
+          normalX: 0, normalY: 1, normalZ: 0,
+          uExtentMm: 200, vExtentMm: 200, thicknessMm: 1.0,
+        };
+      }
+      if (id.endsWith('-neg-neg-neg')) {
+        // bottom panel: normal -Z
+        return {
+          originX: 0, originY: 0, originZ: 0,
+          uX: 1, uY: 0, uZ: 0,
+          vX: 0, vY: -1, vZ: 0,
+          normalX: 0, normalY: 0, normalZ: -1,
+          uExtentMm: 200, vExtentMm: 200, thicknessMm: 1.0,
+        };
+      }
+      if (id.endsWith('-neg-pos')) {
+        // front panel: normal -Y
+        return {
+          originX: 0, originY: 0, originZ: 0,
+          uX: 1, uY: 0, uZ: 0,
+          vX: 0, vY: 0, vZ: 1,
+          normalX: 0, normalY: -1, normalZ: 0,
+          uExtentMm: 200, vExtentMm: 200, thicknessMm: 1.0,
+        };
+      }
+      // top panel (and anything else): normal +Z
+      return {
+        originX: 0, originY: 0, originZ: 0,
+        uX: 1, uY: 0, uZ: 0,
+        vX: 0, vY: 1, vZ: 0,
+        normalX: 0, normalY: 0, normalZ: 1,
+        uExtentMm: 200, vExtentMm: 200, thicknessMm: 1.0,
+      };
+    }),
+    computeBoundingBox: vi.fn((id: string) => {
+      if (id.endsWith('-neg-neg-pos')) {
+        return { x_min: 0, y_min: 199, z_min: 0, x_max: 200, y_max: 200, z_max: 200 }; // back
+      }
+      if (id.endsWith('-neg-neg-neg')) {
+        return { x_min: 0, y_min: 0, z_min: 0, x_max: 200, y_max: 200, z_max: 1 }; // bottom
+      }
+      if (id.endsWith('-neg-pos')) {
+        return { x_min: 0, y_min: 0, z_min: 0, x_max: 200, y_max: 1, z_max: 200 }; // front
+      }
+      return { x_min: 0, y_min: 0, z_min: 199, x_max: 200, y_max: 200, z_max: 200 }; // top (and default)
+    }),
   };
 }
 

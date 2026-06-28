@@ -11,6 +11,14 @@ export interface PanelFrame {
   // (e.g. merge_bodies_with_bend's DXF-aligned frames); those callers simply
   // don't get the origin correction.
   vExtentMm?: number;
+  // The panel's TRUE outward normal, as originally reported by getPanelFrame.
+  // NOT always recoverable as cross(u, v): getPanelFrame swaps U/V to keep U
+  // the longer in-plane axis, and that swap can flip the sign of u×v relative
+  // to the face's actual normal (u×v = -normal exactly when the swap happened).
+  // Any caller needing "this panel's normal" — e.g. to express a stored
+  // midplaneOffsetMm (which was measured against THIS normal) in a placement
+  // transform — must use this stored field, not recompute via cross(u, v).
+  normal?: Vec3;
 }
 
 export interface OrientationOptions {

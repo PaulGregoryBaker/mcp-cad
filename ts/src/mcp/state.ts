@@ -238,6 +238,40 @@ export function getParts(): Map<string, ManufacturingGraph> {
   return _parts;
 }
 
+// ─── Manufacturing graph snapshot/restore (transaction support) ──────────────
+//
+// begin_transaction/rollback_transaction snapshot and restore the GEOMETRY
+// KERNEL's state (see GeometryBinding.createSnapshot/restoreSnapshot), but
+// that says nothing about the manufacturing graph above — a separate,
+// TypeScript-side Map mutated by every graph-producing tool (split_body_by_bends,
+// fuse_bodies, merge_bodies_with_bend, translate_body's panelFrame refresh,
+// etc). Without also snapshotting THIS, rolling back a transaction restores
+// the 3D shells but leaves the graph permanently stuck in its post-mutation
+// state (e.g. a fused panel's source PanelNodes stay deleted) — so a
+// subsequent "redo" of the same tool call sees no graph data for its inputs
+// and silently falls back to a different, graph-unaware code path.
+
+export interface PartsSnapshot {
+  parts: Map<string, ManufacturingGraph>;
+  activePartId: string | undefined;
+}
+
+export function snapshotParts(): PartsSnapshot {
+  const cloned = new Map<string, ManufacturingGraph>();
+  for (const [partId, graph] of _parts) {
+    cloned.set(partId, graph.cloneDeep());
+  }
+  return { parts: cloned, activePartId: _activePartId };
+}
+
+export function restorePartsSnapshot(snapshot: PartsSnapshot): void {
+  _parts.clear();
+  for (const [partId, graph] of snapshot.parts) {
+    _parts.set(partId, graph.cloneDeep());
+  }
+  _activePartId = snapshot.activePartId;
+}
+
 // ─── Test helper ─────────────────────────────────────────────────────────────
 
 export function registerTestPart(partId: string, panelBodyIds: string[] = [], shapeDxf?: string): void {

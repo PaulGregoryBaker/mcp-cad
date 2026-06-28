@@ -81,18 +81,34 @@ export function normalizePanelDxfOrientation(
 
 // ─── Seam-line filtering ──────────────────────────────────────────────────────
 
-function isPointOnPanelEdge(
-  x: number | null,
-  y: number | null,
+// A LINE is part of the panel's true outer boundary only if it runs ENTIRELY
+// along one of the four sides — both endpoints on the SAME side, not just
+// "each endpoint touches some side or other". A line from (149,0) to
+// (149,150) on a 151×150 panel has one endpoint on the bottom edge and the
+// other on the top edge — checking endpoints independently (the previous
+// approach) calls that "valid" even though the line itself cuts straight
+// through the interior. This is exactly the artifact merge_bodies_with_bend's
+// own bend-zone bridge construction leaves behind at the bend boundary
+// (confirmed via a real exported flat pattern: a full-height vertical LINE
+// on the CUT layer sitting right at the fold, rendering as a visible cut
+// line where there should only be a fold) — filterInvalidCutLines is the
+// permanent guard against exactly this, so it must actually catch it.
+function isLineOnPanelBoundary(
+  x1: number | null,
+  y1: number | null,
+  x2: number | null,
+  y2: number | null,
   widthMm: number,
   heightMm: number,
 ): boolean {
-  if (x === null || y === null) return false;
+  if (x1 === null || y1 === null || x2 === null || y2 === null) return false;
   const eps = 0.01;
-  if (Math.abs(y) < eps && x >= -eps && x <= widthMm + eps) return true;
-  if (Math.abs(y - heightMm) < eps && x >= -eps && x <= widthMm + eps) return true;
-  if (Math.abs(x) < eps && y >= -eps && y <= heightMm + eps) return true;
-  if (Math.abs(x - widthMm) < eps && y >= -eps && y <= heightMm + eps) return true;
+  const inRangeX = (x: number) => x >= -eps && x <= widthMm + eps;
+  const inRangeY = (y: number) => y >= -eps && y <= heightMm + eps;
+  if (Math.abs(y1) < eps && Math.abs(y2) < eps && inRangeX(x1) && inRangeX(x2)) return true;
+  if (Math.abs(y1 - heightMm) < eps && Math.abs(y2 - heightMm) < eps && inRangeX(x1) && inRangeX(x2)) return true;
+  if (Math.abs(x1) < eps && Math.abs(x2) < eps && inRangeY(y1) && inRangeY(y2)) return true;
+  if (Math.abs(x1 - widthMm) < eps && Math.abs(x2 - widthMm) < eps && inRangeY(y1) && inRangeY(y2)) return true;
   return false;
 }
 
@@ -125,9 +141,7 @@ export function filterInvalidCutLines(
         i += 2;
       }
 
-      const isValid =
-        isPointOnPanelEdge(x1, y1, panelWidthMm, panelHeightMm) ||
-        isPointOnPanelEdge(x2, y2, panelWidthMm, panelHeightMm);
+      const isValid = isLineOnPanelBoundary(x1, y1, x2, y2, panelWidthMm, panelHeightMm);
       if (isValid) {
         for (const line of entityLines) result.push(line);
       }
@@ -262,30 +276,61 @@ export function generateDxfFromManufacturingGraph(
 
 // ─── Multi-panel DXF merge ────────────────────────────────────────────────────
 
+export interface MergeInputDxfResult {
+  mergedDxf: string;
+  width: number;
+  height: number;
+  // The merged outline's bbox minimum corner, in panel 0's OWN (un-rotated)
+  // DXF coordinate system. NOT guaranteed to be (0, 0): panel 0's own DXF is
+  // used as-is as the merge's starting coordinate system (its (0,0) is
+  // wherever panel 0's own DXF happened to put it), and the other panel can
+  // land at negative coordinates relative to it (e.g. a protrusion attached
+  // on panel 0's "low" edge). Callers that need to re-derive a 3D placement
+  // frame for a ROTATED version of this DXF (see normalizePanelDxfOrientation)
+  // must use this, not assume (0, 0).
+  bboxMinX: number;
+  bboxMinY: number;
+  // Original-array indices (into the panelDxfs passed in) of any panel whose
+  // outline turned out to be FULLY CONTAINED within the accumulated footprint
+  // at the point it was processed — i.e. it added no new footprint at all.
+  // A 2D outline union can only ever represent extended footprint; material
+  // stacked on top of another panel in the thickness direction (e.g. a
+  // doubler/reinforcement patch) is invisible to it. The caller uses this
+  // list to additionally 3D-fuse that panel's own reconstructed solid onto
+  // the result, which is the only way to represent that material at all.
+  containedOriginalIndices: number[];
+}
+
 export function mergeInputDxfOutlines(
   panelDxfs: (string | null)[],
   panelFrames?: (PanelFrame | null)[],
   contactToleranceMm = 5,
-): { mergedDxf: string; width: number; height: number } | null {
+): MergeInputDxfResult | null {
   const identity = {
     rotationMatrix: [[1, 0], [0, 1]] as [[number, number], [number, number]],
     translation: [0, 0] as [number, number],
   };
 
-  const items: Array<{ dxf: string; frame: PanelFrame | null }> = [];
+  const items: Array<{ dxf: string; frame: PanelFrame | null; originalIndex: number }> = [];
   for (let i = 0; i < panelDxfs.length; i++) {
     const d = panelDxfs[i];
-    if (d && d.trim().length > 0) items.push({ dxf: d, frame: panelFrames?.[i] ?? null });
+    if (d && d.trim().length > 0) items.push({ dxf: d, frame: panelFrames?.[i] ?? null, originalIndex: i });
   }
   if (items.length === 0) return null;
   if (items.length === 1) {
     const metrics = mergeDxfOutlines(items[0]!.dxf, items[0]!.dxf, identity).metrics;
-    return { mergedDxf: items[0]!.dxf, width: metrics.bbox.width, height: metrics.bbox.height };
+    return {
+      mergedDxf: items[0]!.dxf, width: metrics.bbox.width, height: metrics.bbox.height,
+      bboxMinX: metrics.bbox.xMin, bboxMinY: metrics.bbox.yMin, containedOriginalIndices: [],
+    };
   }
 
   const frame0 = items[0]!.frame;
   let merged = items[0]!.dxf;
-  let accumWidth = mergeDxfOutlines(merged, merged, identity).metrics.bbox.width;
+  let accumMetrics = mergeDxfOutlines(merged, merged, identity).metrics;
+  let accumWidth = accumMetrics.bbox.width;
+  let accumArea = accumMetrics.areaMm2;
+  const containedOriginalIndices: number[] = [];
 
   for (let i = 1; i < items.length; i++) {
     let placement: { rotationMatrix: [[number, number], [number, number]]; translation: [number, number] } = {
@@ -297,8 +342,26 @@ export function mergeInputDxfOutlines(
       placement = { rotationMatrix: p.rotationMatrix, translation: p.translation };
     }
     const result = mergeDxfOutlines(merged, items[i]!.dxf, placement);
+
+    // If the union's area didn't grow beyond the accumulated outline so far
+    // (within tolerance), this item's footprint was fully contained in it —
+    // skip folding it into `merged` (it has nothing to add to the 2D
+    // outline) and keep accumulating later items against the unchanged
+    // outline instead. The tolerance is a small fraction of THIS ITEM's own
+    // area, not the (often much larger) accumulated outline's — a small
+    // panel that genuinely extends the footprint by its own small area must
+    // not be mistaken for "contained" just because that area happens to be
+    // tiny relative to a big base panel.
+    const itemArea = mergeDxfOutlines(items[i]!.dxf, items[i]!.dxf, identity).metrics.areaMm2;
+    const AREA_GROWTH_TOL_MM2 = Math.max(0.5, itemArea * 0.02);
+    if (result.metrics.areaMm2 <= accumArea + AREA_GROWTH_TOL_MM2) {
+      containedOriginalIndices.push(items[i]!.originalIndex);
+      continue;
+    }
+
     merged = result.mergedDxf;
     accumWidth = result.metrics.bbox.width;
+    accumArea = result.metrics.areaMm2;
   }
 
   const finalMetrics = mergeDxfOutlines(merged, merged, identity).metrics;
@@ -306,5 +369,8 @@ export function mergeInputDxfOutlines(
   const finalHeight = finalMetrics.bbox.height;
 
   const cleanedMerged = filterInvalidCutLines(merged, finalWidth, finalHeight);
-  return { mergedDxf: cleanedMerged, width: finalWidth, height: finalHeight };
+  return {
+    mergedDxf: cleanedMerged, width: finalWidth, height: finalHeight,
+    bboxMinX: finalMetrics.bbox.xMin, bboxMinY: finalMetrics.bbox.yMin, containedOriginalIndices,
+  };
 }

@@ -183,9 +183,6 @@ public:
       return {"", false, "GE_BUILD_FROM_PATTERN_FAILED", "Thickness must be > 0."};
     if (dxfContent.empty())
       return {"", false, "GE_BUILD_FROM_PATTERN_FAILED", "DXF content is empty."};
-    if (bendZones.size() > 1)
-      return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
-              "Only 0 or 1 bend zones are supported."};
 
     // Parse layer-0 LWPOLYLINE vertices from DXF.
     // Accumulates vertices from ALL layer-0 polylines so that a merged DXF
@@ -284,8 +281,20 @@ public:
         return {sol.solidId, true, "", ""};
       }
 
-      // Single bend zone
-      const BendZoneSpec& bz = bendZones[0];
+      // N sequential bend zones (N=1 is the common case — a plain A+B merge —
+      // but N>1 happens when Panel A is itself the result of an earlier
+      // merge_bodies_with_bend: A's own prior bend has to be re-folded HERE
+      // too, alongside the new one, or it gets silently flattened — A's
+      // entire DXF content would otherwise be built as ONE flat rectangle,
+      // discarding whatever dihedral A's own sub-panels already had).
+      // Zones are processed in DXF-local-X order (sorted defensively — the
+      // caller is expected to already sort them, since offsetMm is measured
+      // absolutely from the whole DXF's xMin, not cumulatively from the
+      // previous zone).
+      std::vector<BendZoneSpec> zones = bendZones;
+      std::sort(zones.begin(), zones.end(),
+                [](const BendZoneSpec& a, const BendZoneSpec& b) { return a.offsetMm < b.offsetMm; });
+      const size_t N = zones.size();
 
       auto verts = parseDxfVerts(dxfContent);
       if (verts.size() < 3)
@@ -299,96 +308,81 @@ public:
         yMin = std::min(yMin, v.second); yMax = std::max(yMax, v.second);
       }
 
-      double bendStart = xMin + bz.offsetMm;
-      double bendEnd   = xMin + bz.offsetMm + bz.widthMm;
-
-      if (bz.offsetMm < 0.0 || bendEnd > xMax + 1e-6)
-        return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
-                "Bend zone extends beyond DXF flat-pattern bounds."};
-      if (bz.offsetMm < 1e-6 || (xMax - bendEnd) < 1e-6)
-        return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
-                "Bend zone must leave non-zero panels on both sides."};
-
-      // Panel A's and Panel B's OWN Y-ranges — restricted to their own side of
-      // the bend zone (x <= bendStart for A, x >= bendEnd for B) — rather than
-      // the whole merged DXF's [yMin,yMax]. One side can be a fused/composite
-      // panel whose attached tab extends its own Y-range past the other side's;
-      // using the global range for BOTH rectangles would stretch the narrower
-      // (simple) panel out to match the wider (composite) one's extent, even
-      // though that panel's real flat pattern never reaches that far.
-      double yMinA = std::numeric_limits<double>::max(), yMaxA = -yMinA;
-      double yMinB = std::numeric_limits<double>::max(), yMaxB = -yMinB;
-      for (const auto& v : verts) {
-        if (v.first <= bendStart + 1e-6) { yMinA = std::min(yMinA, v.second); yMaxA = std::max(yMaxA, v.second); }
-        if (v.first >= bendEnd   - 1e-6) { yMinB = std::min(yMinB, v.second); yMaxB = std::max(yMaxB, v.second); }
+      // Per-zone bend boundaries and per-segment (N+1 flat panels between/
+      // around the zones) X-ranges, all absolute (measured from xMin).
+      std::vector<double> bendStart(N), bendEnd(N);
+      for (size_t i = 0; i < N; i++) {
+        bendStart[i] = xMin + zones[i].offsetMm;
+        bendEnd[i]   = bendStart[i] + zones[i].widthMm;
       }
-      if (yMinA > yMaxA) { yMinA = yMin; yMaxA = yMax; }  // no panel-A verts found: fall back
-      if (yMinB > yMaxB) { yMinB = yMin; yMaxB = yMax; }  // no panel-B verts found: fall back
+      std::vector<double> segStart(N + 1), segEnd(N + 1);
+      segStart[0] = xMin;
+      for (size_t i = 0; i < N; i++) { segEnd[i] = bendStart[i]; segStart[i + 1] = bendEnd[i]; }
+      segEnd[N] = xMax;
 
-      std::string dxfA = makeDxfRect(xMin,    yMinA, bendStart, yMaxA);
-      std::string dxfB = makeDxfRect(bendEnd, yMinB, xMax,      yMaxB);
+      for (size_t i = 0; i < N; i++) {
+        if (zones[i].offsetMm < 0.0 || bendEnd[i] > xMax + 1e-6)
+          return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
+                  "Bend zone extends beyond DXF flat-pattern bounds."};
+      }
+      for (size_t k = 0; k <= N; k++) {
+        if (segEnd[k] - segStart[k] < 1e-6)
+          return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
+                  "Bend zone(s) must leave non-zero panels on every side (zones may not overlap)."};
+      }
 
-      DxfSheetResult    sheetA = buildSheetFromDxf(dxfA);
-      ThickenSheetResult solA  = thickenSheet(sheetA.sheetId, thicknessMm);
-
-      DxfSheetResult    sheetB = buildSheetFromDxf(dxfB);
-      ThickenSheetResult solB  = thickenSheet(sheetB.sheetId, thicknessMm);
-
-      // Panel B is at x=[bendEnd..xMax] in the flat layout; Panel A is at x=[xMin..bendStart].
-      // The gap between them is bz.widthMm (the developed bend-arc length).
+      // Each segment's OWN Y-range — restricted to its own X-span — rather
+      // than the whole merged DXF's [yMin,yMax]. Any segment can be a fused/
+      // composite panel whose attached tab extends its own Y-range past a
+      // neighbour's; using the global range for every rectangle would
+      // stretch a narrower (simple) segment out to match a wider
+      // (composite) one's extent, even though that segment's real flat
+      // pattern never reaches that far.
       //
-      // Re-fold into 3D, then bridge the seam with an explicit bend solid so the
-      // panels FUSE into one watertight body at ANY dihedral angle — not just 90°.
-      // (Previously the rotated slabs shared only an edge at acute angles, so the
-      //  Boolean fuse silently dropped Panel B and produced a flat result.)
-      // The bend connector only needs to span where A and B actually OVERLAP in
-      // Y (that's the real shared fold line); falling back to the full [yMin,yMax]
-      // when they don't overlap at all keeps this from degenerating to zero-width.
-      double sectorYMin = std::max(yMinA, yMinB);
-      double sectorYMax = std::min(yMaxA, yMaxB);
-      if (sectorYMax <= sectorYMin) { sectorYMin = yMin; sectorYMax = yMax; }
-      const double extentY  = sectorYMax - sectorYMin;
-      const double thetaRad = bz.angleDeg * M_PI / 180.0;
-
-      // 1. Position Panel B: translate left by widthMm so its left face abuts the
-      //    bend at x=bendStart, then rotate -angleDeg about the Y hinge at (bendStart,*,0).
-      auto itAsolid = s_.shells.find(solA.solidId);
-      auto itBsolid = s_.shells.find(solB.solidId);
-      if (itAsolid == s_.shells.end() || itBsolid == s_.shells.end())
-        return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
-                "Internal: thickened panel shells not found for refold."};
-
-      TopoDS_Shape shapeA = itAsolid->second.shape;
-      TopoDS_Shape shapeB;
-      {
-        gp_Trsf transTrsf;
-        transTrsf.SetTranslation(gp_Vec(-bz.widthMm, 0.0, 0.0));
-        TopoDS_Shape translatedB =
-            BRepBuilderAPI_Transform(itBsolid->second.shape, transTrsf, true).Shape();
-
-        gp_Ax1 bendAxis(gp_Pnt(bendStart, 0.0, 0.0), gp_Dir(0.0, 1.0, 0.0));
-        gp_Trsf rotTrsf;
-        rotTrsf.SetRotation(bendAxis, -thetaRad);
-        shapeB = BRepBuilderAPI_Transform(translatedB, rotTrsf, true).Shape();
+      // Checks EDGES (consecutive vertex pairs, including the closing edge),
+      // not individual vertices: for a MIDDLE segment (N>1, both its
+      // boundaries interior to the overall outline — e.g. re-folding a
+      // chained merge's own prior bend alongside a new one), polygon
+      // union/clipping is free to omit vertices exactly at that segment's
+      // boundary entirely if the polygon is straight through there (no
+      // direction change needed) — confirmed via a real 3-panel chain
+      // repro: a segment's boundary vertices were completely absent from
+      // the final outline, so vertex-containment alone found only an
+      // unrelated few-mm sliver from nearby bend-zone corner points instead
+      // of the segment's true ~150mm extent. An edge whose X-SPAN overlaps
+      // the segment's range must pass THROUGH it (the polygon boundary is
+      // piecewise-linear), so its endpoints' Y values are valid samples of
+      // the segment's true extent even when no vertex sits inside the range.
+      std::vector<double> segYMin(N + 1, std::numeric_limits<double>::max());
+      std::vector<double> segYMax(N + 1, -std::numeric_limits<double>::max());
+      for (size_t vi = 0; vi < verts.size(); vi++) {
+        const auto& v0 = verts[vi];
+        const auto& v1 = verts[(vi + 1) % verts.size()];
+        const double edgeXMin = std::min(v0.first, v1.first);
+        const double edgeXMax = std::max(v0.first, v1.first);
+        for (size_t k = 0; k <= N; k++) {
+          if (edgeXMax >= segStart[k] - 1e-6 && edgeXMin <= segEnd[k] + 1e-6) {
+            segYMin[k] = std::min({segYMin[k], v0.second, v1.second});
+            segYMax[k] = std::max({segYMax[k], v0.second, v1.second});
+          }
+        }
+      }
+      for (size_t k = 0; k <= N; k++) {
+        if (segYMin[k] > segYMax[k]) { segYMin[k] = yMin; segYMax[k] = yMax; }  // no edges found: fall back
       }
 
-      // 2. Bend connector: a solid cylindrical sector (apex on the z=0 hinge, radius
-      //    = thickness) that fills the wedge between Panel A's bend face (x=bendStart,
-      //    z∈[0,t], pointing +Z) and Panel B's rotated bend face. Its two planar faces
-      //    coincide with the panels' bend faces, so the fuse is watertight at any angle.
-      //    Axis is -Y (origin at sectorYMax — the top of the A/B overlap range, see
-      //    above) so the sector sweeps from +Z toward −X, matching Panel B's
-      //    −angleDeg rotation.
-      TopoDS_Shape bendSector;
-      try {
-        gp_Ax2 sectorAxes(gp_Pnt(bendStart, sectorYMax, 0.0), gp_Dir(0.0, -1.0, 0.0), gp_Dir(0.0, 0.0, 1.0));
-        bendSector = BRepPrimAPI_MakeCylinder(sectorAxes, thicknessMm, extentY, thetaRad).Solid();
-      } catch (const Standard_Failure& e) {
-        return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
-                std::string("Failed to build bend connector: ") + e.GetMessageString()};
+      std::vector<TopoDS_Shape> segShapes(N + 1);
+      for (size_t k = 0; k <= N; k++) {
+        std::string dxfSeg = makeDxfRect(segStart[k], segYMin[k], segEnd[k], segYMax[k]);
+        DxfSheetResult     sheet = buildSheetFromDxf(dxfSeg);
+        ThickenSheetResult sol   = thickenSheet(sheet.sheetId, thicknessMm);
+        auto itSolid = s_.shells.find(sol.solidId);
+        if (itSolid == s_.shells.end())
+          return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
+                  "Internal: thickened panel shell not found for refold."};
+        segShapes[k] = itSolid->second.shape;
       }
 
-      // 3. Fuse A + connector + B into one solid.
       auto fuseTwo = [](const TopoDS_Shape& s1, const TopoDS_Shape& s2) -> TopoDS_Shape {
         BRepAlgoAPI_Fuse f(s1, s2);
         f.SetFuzzyValue(0.15);
@@ -396,12 +390,82 @@ public:
         if (!f.IsDone() || f.Shape().IsNull()) return TopoDS_Shape();
         return f.Shape();
       };
-      TopoDS_Shape ab = fuseTwo(shapeA, bendSector);
-      if (ab.IsNull())
-        return {"", false, "GE_BUILD_FROM_PATTERN_FAILED", "Fuse (Panel A + bend) failed."};
-      TopoDS_Shape merged = fuseTwo(ab, shapeB);
-      if (merged.IsNull())
-        return {"", false, "GE_BUILD_FROM_PATTERN_FAILED", "Fuse (+ Panel B) failed."};
+
+      // Cumulative per-segment transforms: CT[0] is identity (segment 0,
+      // like Panel A in the original single-zone version, never moves).
+      // CT[k+1] = CT[k] applied AFTER zone k's own fold (translate so the
+      // true hinge — bz.bHingeOffsetMm inside the near segment's own flat
+      // pattern, past its near/glue edge at bendEnd — lands at the bend
+      // line, then rotate -angleDeg about the Y hinge at (bendStart,*,0),
+      // both still expressed in the ORIGINAL/flat frame) — i.e. each new
+      // fold is computed relative to its own (already-correctly-folded)
+      // near segment, then carried along by everything that segment
+      // already accumulated. This is exactly like folding a paper strip:
+      // each crease is folded in the strip's OWN current local frame, and
+      // the whole already-folded flap moves together with it.
+      std::vector<gp_Trsf> cumulative(N + 1);
+      cumulative[0] = gp_Trsf();
+      for (size_t i = 0; i < N; i++) {
+        const BendZoneSpec& bz = zones[i];
+        const double thetaRad = bz.angleDeg * M_PI / 180.0;
+
+        gp_Trsf transTrsf;
+        transTrsf.SetTranslation(gp_Vec(-(bz.widthMm + bz.bHingeOffsetMm), 0.0, 0.0));
+        gp_Ax1 bendAxis(gp_Pnt(bendStart[i], 0.0, 0.0), gp_Dir(0.0, 1.0, 0.0));
+        gp_Trsf rotTrsf;
+        rotTrsf.SetRotation(bendAxis, -thetaRad);
+        gp_Trsf zoneFold = rotTrsf.Multiplied(transTrsf); // translate, then rotate, in original/flat coords
+
+        cumulative[i + 1] = cumulative[i].Multiplied(zoneFold); // apply this zone's fold first, then everything segment i already carries
+      }
+
+      // Build the final assembly strictly LEFT TO RIGHT (segment 0, zone 0's
+      // connector, segment 1, zone 1's connector, segment 2, ...) — the same
+      // pairwise fuse order the original single-zone code used (Panel A,
+      // then the bend connector, then Panel B), generalized. Boolean union
+      // is associative in principle, but OCCT's fuzzy Boolean is a
+      // numerical operation whose exact result CAN depend on grouping —
+      // matching the original order exactly for N=1 keeps that case
+      // byte-for-byte equivalent instead of just "topologically the same."
+      TopoDS_Shape merged = segShapes[0];
+      for (size_t i = 0; i < N; i++) {
+        // Bend connector for zone i: a solid cylindrical sector (apex on the
+        // z=0 hinge, radius = thickness) that fills the wedge between
+        // segment i's bend face (x=bendStart[i], z∈[0,t], pointing +Z) and
+        // segment i+1's (about-to-be-folded) rotated bend face. Built
+        // directly in the ORIGINAL/flat frame — its own geometry already IS
+        // the rotation, swept through angleDeg — then carried by
+        // cumulative[i] (the same transform segment i itself already has)
+        // since it's rigidly attached to segment i's side. Only needs to
+        // span where segments i and i+1 actually OVERLAP in Y (the real
+        // shared fold line, using their ORIGINAL, pre-fold Y-ranges);
+        // falling back to the full [yMin,yMax] when they don't overlap at
+        // all keeps this from degenerating to zero-width.
+        const BendZoneSpec& bz = zones[i];
+        const double thetaRad = bz.angleDeg * M_PI / 180.0;
+        double sectorYMin = std::max(segYMin[i], segYMin[i + 1]);
+        double sectorYMax = std::min(segYMax[i], segYMax[i + 1]);
+        if (sectorYMax <= sectorYMin) { sectorYMin = yMin; sectorYMax = yMax; }
+        const double extentY = sectorYMax - sectorYMin;
+
+        TopoDS_Shape bendSector;
+        try {
+          gp_Ax2 sectorAxes(gp_Pnt(bendStart[i], sectorYMax, 0.0), gp_Dir(0.0, -1.0, 0.0), gp_Dir(0.0, 0.0, 1.0));
+          bendSector = BRepPrimAPI_MakeCylinder(sectorAxes, thicknessMm, extentY, thetaRad).Solid();
+        } catch (const Standard_Failure& e) {
+          return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
+                  std::string("Failed to build bend connector: ") + e.GetMessageString()};
+        }
+        TopoDS_Shape placedConnector = BRepBuilderAPI_Transform(bendSector, cumulative[i], true).Shape();
+        TopoDS_Shape placedNextSeg = BRepBuilderAPI_Transform(segShapes[i + 1], cumulative[i + 1], true).Shape();
+
+        merged = fuseTwo(merged, placedConnector);
+        if (merged.IsNull())
+          return {"", false, "GE_BUILD_FROM_PATTERN_FAILED", "Fuse (+ bend connector) failed."};
+        merged = fuseTwo(merged, placedNextSeg);
+        if (merged.IsNull())
+          return {"", false, "GE_BUILD_FROM_PATTERN_FAILED", "Fuse (+ next panel segment) failed."};
+      }
 
       // Connectivity guard: a proper refold is a single solid.
       {
@@ -419,7 +483,13 @@ public:
       // ── Placement ────────────────────────────────────────────────────────────
       // Position the canonical merged shell using the EXPLICIT fold frame and
       // world anchor the caller supplies (manufacturing-graph data, captured
-      // once when panel A was created) — no live shell lookup.
+      // once when panel A was created) — no live shell lookup. Uses the LAST
+      // zone in X-sorted order — by convention the outermost/most-recently-
+      // added bend, whose foldNormal/bendDir/anchor describe where the WHOLE
+      // assembly's local (0,0,0) (segment 0's own DXF origin) sits in world
+      // space. For the single-zone case this is the only entry, so behaviour
+      // is unchanged.
+      const BendZoneSpec& bz = zones.back();
       const double fnLen = std::sqrt(bz.foldNormalX * bz.foldNormalX +
                                      bz.foldNormalY * bz.foldNormalY +
                                      bz.foldNormalZ * bz.foldNormalZ);
@@ -491,7 +561,7 @@ public:
     // Largest planar face defines the panel plane.
     double maxArea = 0.0;
     gp_Ax3 bestAx3;
-    Standard_Real u1 = 0, u2 = 0, v1 = 0, v2 = 0;
+    TopoDS_Face bestFace;
     bool found = false;
     for (TopExp_Explorer fExp(shape, TopAbs_FACE); fExp.More(); fExp.Next()) {
       TopoDS_Face face = TopoDS::Face(fExp.Current());
@@ -503,7 +573,7 @@ public:
       if (area > maxArea) {
         maxArea = area;
         bestAx3 = surf.Plane().Position();
-        BRepTools::UVBounds(face, u1, u2, v1, v2);
+        bestFace = face;
         found = true;
       }
     }
@@ -515,22 +585,55 @@ public:
     }
 
     gp_Pnt loc   = bestAx3.Location();
-    gp_Dir xdir  = bestAx3.XDirection();
-    gp_Dir ydir  = bestAx3.YDirection();
     gp_Dir ndir  = bestAx3.Direction();
 
-    // True in-plane extents (independent of world-space tilt).
-    double extX = u2 - u1;
-    double extY = v2 - v1;
+    // Derive U from the panel's own boundary rather than OCCT's internal plane
+    // parameterization: align it with the longest edge of the outer wire. For
+    // a rectangle this coincides with the longer side (same result as before).
+    // For a general (non-rectangular, e.g. faceted-surface) quad, the plane's
+    // own parametric U/V bear no relationship to any real edge of the panel —
+    // using them produces a flat-pattern frame whose axes don't correspond to
+    // the panel's actual near/far edges, which corrupts bend-zone placement in
+    // merge_bodies_with_bend for such panels. Aligning to a real edge fixes
+    // this at the source.
+    std::vector<gp_Pnt> ring;
+    for (BRepTools_WireExplorer wExp(BRepTools::OuterWire(bestFace), bestFace); wExp.More(); wExp.Next()) {
+      ring.push_back(BRep_Tool::Pnt(wExp.CurrentVertex()));
+    }
+    const size_t ringN = ring.size();
+    gp_Dir U = ndir.IsParallel(gp_Dir(1, 0, 0), 0.99) ? gp_Dir(0, 1, 0) : gp_Dir(1, 0, 0);
+    double bestEdgeLen2 = -1.0;
+    for (size_t i = 0; ringN >= 2 && i < ringN; i++) {
+      const gp_Pnt& p0 = ring[i];
+      const gp_Pnt& p1 = ring[(i + 1) % ringN];
+      gp_Vec edge(p0, p1);
+      double len2 = edge.SquareMagnitude();
+      if (len2 > bestEdgeLen2 && len2 > 1e-12) {
+        bestEdgeLen2 = len2;
+        U = gp_Dir(edge);
+      }
+    }
+    gp_Dir V(ndir.Crossed(U));
 
-    // Corner at (u1, v1) in world = the panel-local origin.
-    gp_Pnt corner(loc.XYZ() + xdir.XYZ() * u1 + ydir.XYZ() * v1);
+    // True in-plane extents, by projecting the actual boundary onto (U, V) —
+    // independent of OCCT's plane parameterization or world-space tilt.
+    double uMin = 0, uMax = 0, vMin = 0, vMax = 0;
+    bool firstP = true;
+    for (const gp_Pnt& p : ring) {
+      gp_Vec rel(loc, p);
+      double pu = rel.Dot(gp_Vec(U.XYZ()));
+      double pv = rel.Dot(gp_Vec(V.XYZ()));
+      if (firstP) { uMin = uMax = pu; vMin = vMax = pv; firstP = false; }
+      else {
+        uMin = std::min(uMin, pu); uMax = std::max(uMax, pu);
+        vMin = std::min(vMin, pv); vMax = std::max(vMax, pv);
+      }
+    }
+    double uExt = uMax - uMin;
+    double vExt = vMax - vMin;
 
-    // Choose U = longer in-plane extent, V = shorter (matches flatWidth/flatHeight).
-    gp_Dir U, V;
-    double uExt, vExt;
-    if (extX >= extY) { U = xdir; uExt = extX; V = ydir; vExt = extY; }
-    else              { U = ydir; uExt = extY; V = xdir; vExt = extX; }
+    // Corner at (uMin, vMin) in world = the panel-local origin.
+    gp_Pnt corner(loc.XYZ() + U.XYZ() * uMin + V.XYZ() * vMin);
 
     // Thickness = extent of the shell along the plane normal.
     double nMin = 0.0, nMax = 0.0; bool firstV = true;
@@ -1171,6 +1274,7 @@ public:
               true, "rollback");
           }
           BRepAlgoAPI_Cut applyOuterOp(filletInput, outerCutOp.Shape());
+          applyOuterOp.SetFuzzyValue(0.15);
           applyOuterOp.Build();
           if (!applyOuterOp.IsDone() || applyOuterOp.Shape().IsNull()) {
             throw GeometryError("GE_MERGE_FAILED",
@@ -1178,26 +1282,45 @@ public:
               true, "rollback");
           }
           result = applyOuterOp.Shape();
-          // Post-cut cleanup: BRepAlgoAPI_Cut can leave tiny artifact solids at
-          // near-degenerate corners when the cut-box edge exactly coincides with
-          // a seam face of a previously-fused input (e.g. panel+protrusion merged
-          // before this merge step). Discard solids whose volume is <1% of the
-          // largest — these are numerical artifacts from the Boolean op, not
-          // real material.
+          // Post-cut: BRepAlgoAPI_Cut can leave the body split into multiple
+          // solids when the cut-box edge coincides with a seam face of a
+          // previously-fused input (e.g. panel+protrusion merged before this
+          // merge step) and severs that seam — the relief is a 2D corner
+          // profile applied across the panel's full bend-axis extent, so it
+          // necessarily touches material at the panel's far end regardless of
+          // what is attached there. A solid <1% of the largest is genuine
+          // numerical noise from the Boolean op and is discarded. Anything at
+          // or above that threshold is real, severed material (e.g. the
+          // protrusion) and is kept as-is — the downstream unfold groups
+          // faces by coplanarity, not by solid membership, so a compound of
+          // disconnected-but-coplanar solids unfolds correctly.
           {
-            TopoDS_Solid largestSolid;
+            std::vector<TopoDS_Solid> solids;
+            std::vector<double> volumes;
             double largestVol = -1.0;
-            int solidCnt = 0;
             for (TopExp_Explorer ex(result, TopAbs_SOLID); ex.More(); ex.Next()) {
               TopoDS_Solid s = TopoDS::Solid(ex.Current());
               GProp_GProps gp;
               BRepGProp::VolumeProperties(s, gp);
               double vol = std::abs(gp.Mass());
-              solidCnt++;
-              if (vol > largestVol) { largestVol = vol; largestSolid = s; }
+              solids.push_back(s);
+              volumes.push_back(vol);
+              if (vol > largestVol) largestVol = vol;
             }
-            if (solidCnt > 1 && !largestSolid.IsNull()) {
-              result = largestSolid;
+            if (solids.size() > 1) {
+              std::vector<TopoDS_Solid> kept;
+              for (size_t i = 0; i < solids.size(); ++i) {
+                if (volumes[i] >= 0.01 * largestVol) kept.push_back(solids[i]);
+              }
+              if (kept.size() == 1) {
+                result = kept[0];
+              } else {
+                BRep_Builder bb;
+                TopoDS_Compound cmp;
+                bb.MakeCompound(cmp);
+                for (const auto& s : kept) bb.Add(cmp, s);
+                result = cmp;
+              }
             }
           }
         } else {

@@ -106,10 +106,15 @@ function buildMockAddon(): GeometryAddon {
     trimBodyWithPlane: vi.fn((id: string) => ({ trimmedShellId: id, rollbackToken: snap() })),
     addRelief: vi.fn((id: string) => ({ modifiedShellId: id, rollbackToken: snap() })),
     checkBoundaryCompliance: vi.fn(() => ({ envelopeId: 'std', compliant: true, violations: [] })),
-    computeBoundingBox: vi.fn(() => ({
-      x_min: 0, y_min: 0, z_min: 0,
-      x_max: 100, y_max: 100, z_max: 100,
-    })),
+    // 'a'/'b' get distinct, perpendicular frames/bboxes — merge_bodies_with_bend's
+    // TS handler computes a real fold axis from cross(normalA, normalB) before
+    // ever reaching the (mocked) C++ call below; identical frames for both ids
+    // would make that axis degenerate (zero) for any merge, which it now
+    // correctly rejects rather than silently proceeding.
+    computeBoundingBox: vi.fn((id: string) => {
+      if (id === 'b') return { x_min: 0, y_min: 0, z_min: 0, x_max: 100, y_max: 1, z_max: 100 };
+      return { x_min: 0, y_min: 0, z_min: 0, x_max: 100, y_max: 100, z_max: 1 };
+    }),
     closeGap: vi.fn((a: string, b: string) => ({
       partBId: b, gapClosedMm: 0,
     })),
@@ -130,13 +135,24 @@ function buildMockAddon(): GeometryAddon {
       validation_errors: [],
     })),
 
-    getPanelFrame: vi.fn((_id: string) => ({
-      originX: 0, originY: 0, originZ: 0,
-      uX: 1, uY: 0, uZ: 0,
-      vX: 0, vY: 1, vZ: 0,
-      normalX: 0, normalY: 0, normalZ: 1,
-      uExtentMm: 100, vExtentMm: 100, thicknessMm: 1.0,
-    })),
+    getPanelFrame: vi.fn((id: string) => {
+      if (id === 'b') {
+        return {
+          originX: 0, originY: 0, originZ: 0,
+          uX: 1, uY: 0, uZ: 0,
+          vX: 0, vY: 0, vZ: 1,
+          normalX: 0, normalY: -1, normalZ: 0,
+          uExtentMm: 100, vExtentMm: 100, thicknessMm: 1.0,
+        };
+      }
+      return {
+        originX: 0, originY: 0, originZ: 0,
+        uX: 1, uY: 0, uZ: 0,
+        vX: 0, vY: 1, vZ: 0,
+        normalX: 0, normalY: 0, normalZ: 1,
+        uExtentMm: 100, vExtentMm: 100, thicknessMm: 1.0,
+      };
+    }),
 
     // Expose `cleared` to tests so they can assert clearSnapshots was called.
     _wasCleared: () => cleared,

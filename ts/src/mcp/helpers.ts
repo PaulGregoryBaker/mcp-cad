@@ -40,6 +40,61 @@ export function measurePanelMidplaneOffsetMm(
   }
 }
 
+// Re-derives a panel's frame + midplane offset on its CURRENT shell — used
+// immediately after a rigid transform (translate/rotate/mirror/scale) moves
+// it, so the graph's stored placement data stays correct for that shell going
+// forward. This is the one-time, at-the-moment-of-change discovery the
+// manufacturing graph is built from; once stored, no downstream consumer
+// (fuse_bodies, merge_bodies_with_bend) re-queries the shell.
+//
+// expectedFlatWidth/expectedFlatHeight (the panel's OWN flatWidth/flatHeight,
+// set when its shapeDxf was created) correct a real desync: getPanelFrame's
+// live query always picks U as the longer in-plane axis, independent of
+// whichever axis was actually called U when shapeDxf was built (a
+// hand-specified frame, or a DXF-aligned frame from an earlier merge/fuse
+// don't necessarily follow that same convention). A transform that doesn't
+// change the panel's shape at all can still see this fresh query swap U/V
+// relative to the panel's previously-stored convention — and since shapeDxf
+// is never regenerated on transform, that silently desyncs panelFrame from
+// the DXF it's supposed to place, corrupting any later fuse/merge that reads
+// both. Comparing the live query's own uExtentMm/vExtentMm against the
+// panel's stored flat dimensions detects the swap and corrects it back.
+export function refreshPanelFrame(
+  shellId: string,
+  expectedFlatWidth?: number | null,
+  expectedFlatHeight?: number | null,
+): { origin: [number, number, number]; u: [number, number, number]; v: [number, number, number]; vExtentMm: number; normal: [number, number, number]; midplaneOffsetMm: number | null } | null {
+  try {
+    const pf = getGeometryBinding().getPanelFrame(shellId);
+    let u: [number, number, number] = [pf.uX, pf.uY, pf.uZ];
+    let v: [number, number, number] = [pf.vX, pf.vY, pf.vZ];
+    let vExtentMm = pf.vExtentMm;
+
+    if (
+      expectedFlatWidth != null && expectedFlatHeight != null &&
+      Math.abs(expectedFlatWidth - expectedFlatHeight) > 1e-6
+    ) {
+      const asIsError = Math.abs(pf.uExtentMm - expectedFlatWidth) + Math.abs(pf.vExtentMm - expectedFlatHeight);
+      const swappedError = Math.abs(pf.uExtentMm - expectedFlatHeight) + Math.abs(pf.vExtentMm - expectedFlatWidth);
+      if (swappedError < asIsError) {
+        [u, v] = [v, u];
+        vExtentMm = pf.uExtentMm;
+      }
+    }
+
+    const frame = {
+      origin: [pf.originX, pf.originY, pf.originZ] as [number, number, number],
+      u, v,
+      vExtentMm,
+      normal: [pf.normalX, pf.normalY, pf.normalZ] as [number, number, number],
+    };
+    const midplaneOffsetMm = measurePanelMidplaneOffsetMm(shellId, [pf.normalX, pf.normalY, pf.normalZ]);
+    return { ...frame, midplaneOffsetMm };
+  } catch {
+    return null;
+  }
+}
+
 // ─── Argument helpers ─────────────────────────────────────────────────────────
 
 export function requireString(args: Record<string, unknown>, key: string): string {
@@ -147,17 +202,29 @@ export function updatePanelBodyIdAfterTransform(
   if (keepOriginal) return;
   if (newShellId === oldShellId) return;
 
-  const toBodyId = (s: string) => s as import('../manufacturing/graph/types.js').BodyId;
   const oldBodyId = oldShellId as import('../manufacturing/graph/types.js').BodyId;
-  const newBodyId = toBodyId(newShellId);
+  const newBodyId = newShellId as import('../manufacturing/graph/types.js').BodyId;
+
+  // The transform moved the shell, so the OLD panelFrame/midplaneOffsetMm are
+  // stale. Re-derive them on the NEW shell right now — graph data must stay
+  // correct for whoever's bodyId this becomes, since nothing downstream
+  // (fuse_bodies, merge_bodies_with_bend) queries the live shell itself. Find
+  // the matching node FIRST so its stored flatWidth/flatHeight (the
+  // convention shapeDxf was actually built with) can be passed to
+  // refreshPanelFrame to correct any U/V swap in the fresh query.
+  const applyRefresh = (pn: import('../manufacturing/graph/types.js').PanelNode): void => {
+    const refreshed = refreshPanelFrame(newShellId, pn.flatWidth, pn.flatHeight);
+    pn.bodyId = newBodyId;
+    pn.panelFrame = refreshed;
+    pn.midplaneOffsetMm = refreshed?.midplaneOffsetMm ?? null;
+  };
 
   if (partGraph) {
     for (const node of partGraph.nodes.values()) {
       if (node.type === 'PanelNode') {
         const pn = node as import('../manufacturing/graph/types.js').PanelNode;
         if (pn.bodyId === oldBodyId) {
-          pn.bodyId = newBodyId;
-          pn.panelFrame = null;
+          applyRefresh(pn);
           break;
         }
       }
@@ -171,8 +238,7 @@ export function updatePanelBodyIdAfterTransform(
         if (node.type === 'PanelNode') {
           const pn = node as import('../manufacturing/graph/types.js').PanelNode;
           if (pn.bodyId === oldBodyId) {
-            pn.bodyId = newBodyId;
-            pn.panelFrame = null;
+            applyRefresh(pn);
             if (!getParts().has(newShellId)) {
               getParts().set(newShellId, graph);
             }

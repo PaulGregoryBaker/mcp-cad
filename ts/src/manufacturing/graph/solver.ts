@@ -341,9 +341,18 @@ export class GeometrySolver {
           if (binding.buildShellFromFlatPattern && node.bodyId !== null && node.panelFrame) {
             const [ux, uy, uz] = node.panelFrame.u;
             const [vx, vy, vz] = node.panelFrame.v;
-            const nx = uy * vz - uz * vy;
-            const ny = uz * vx - ux * vz;
-            const nz = ux * vy - uy * vx;
+            // Use the panel's STORED normal — never recompute via cross(u, v).
+            // getPanelFrame swaps U/V to keep U the longer in-plane axis, and
+            // that swap can flip the sign of u×v relative to the face's
+            // actual normal. midplaneOffsetMm was measured against the
+            // STORED normal, so a differently-signed re-derivation here would
+            // silently place the panel on the wrong side.
+            let [nx, ny, nz] = node.panelFrame.normal ?? [0, 0, 0];
+            if (nx === 0 && ny === 0 && nz === 0) {
+              nx = uy * vz - uz * vy;
+              ny = uz * vx - ux * vz;
+              nz = ux * vy - uy * vx;
+            }
             const nLen = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
             const explicitPlacement: FlatPanelPlacement = {
               hasFrame: true,

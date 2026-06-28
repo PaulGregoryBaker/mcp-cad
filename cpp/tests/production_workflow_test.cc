@@ -628,22 +628,38 @@ TEST_CASE("Regression: testcube inner-panel with protrusion produces correct fla
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Regression: protrusion extending toward the bend produces correct flat.
+// Regression: protrusion fused perpendicular to the bend produces correct flat.
 //
 // Models the actual app workflow using testcube geometry (1mm walls throughout).
 // From the SCAD source:
 //   inner cube: 150×150×150 minus 148×148×148  → 1mm walls at ±74 to ±75
 //   flange 3:   translate([0,75,-75]) cube([1,24,150])  → x=[0,1], y=[75,99]
 //
-// The user translates flange 3 to align with the right inner wall (panel7) and
-// fuses them.  The protrusion extends toward the bend (y>74, same side as
-// panel6), NOT away from it like the earlier testcube_workflow test.
+// An earlier version of this test fused flange 3 onto panel7 along y=[75,99]
+// — i.e. with its fuse seam AT y=75, the exact plane of panel6's outer face
+// and thus the bend's outer-corner relief zone. That is geometrically
+// invalid: the corner-cut's most aggressive removal happens exactly at the
+// true sharp corner (the bend line itself, y=75 here), tapering to nothing
+// only deep inside the panel — true for ANY fillet radius > 0. A seam lying
+// in that same plane will always be severed by a non-zero-radius bend, no
+// matter how the corner-cut is constructed; this is the sheet-metal-design
+// rule that a feature's fuse line can't sit in the bend's own relief plane.
+// (The OTHER protrusion regression test in this file enforces the same rule
+// by keeping its protrusion on the opposite, unaffected side of the panel.)
+//
+// The fix: fuse the protrusion's seam perpendicular to the bend axis (a
+// constant-Z plane, since the bend axis runs along Z here) instead of
+// parallel to it, meeting the bend line at its own corner/endpoint (z=75 —
+// the panel's top edge). The bend's corner relief operates over the overlap
+// of the two input Z-ranges, which stays [-75,75] (bounded by panel6's own
+// Z-extent) — entirely below z=75, so the relief never touches the
+// protrusion at all.
 //
 // All geometry constructed directly to match the original 1mm nominal thickness.
 // (splitBodyByBends returns 1.45mm panels which is an error; bypass it here.)
 //
-// Expected flat: panelY_main + BA + panelY_arm ≈ 174 + 2.4 + 150 ≈ 326mm × 150mm
-// Buggy flat:  ≈ 151 × 174mm  (protrusion severed by corner cut, second arm lost)
+// Expected flat: (panelY_A + BA + panelY_B) × max(panelZ_A, panelZ_B)
+//              ≈ (150 + 2.4 + 150) × 174 ≈ 302mm × 174mm
 // ─────────────────────────────────────────────────────────────────────────────
 TEST_CASE("Regression: same-side protrusion produces correct flat",
           "[prod][regression][protrusion][real_protrusion]") {
@@ -652,9 +668,10 @@ TEST_CASE("Regression: same-side protrusion produces correct flat",
   // Geometry matching the SCAD inner cube (1mm walls):
   //   panel7: right inner wall  x=[74,75], y=[-75,75],  z=[-75,75]  (1×150×150mm)
   //   panel6: top  inner wall   x=[-75,75], y=[74,75],  z=[-75,75]  (150×1×150mm)
-  //   protrusion: flange 3 translated to align with panel7's x range
-  //               x=[74,75],  y=[75,99],   z=[-75,75]  (1×24×150mm)
-  //               — extends TOWARD the bend at y≈74–75
+  //   protrusion: flange 3, re-oriented so its fuse seam is perpendicular to
+  //               the bend axis (Z), meeting the bend line at its own top
+  //               corner (z=75) instead of lying in the bend's relief plane.
+  //               x=[74,75],  y=[-75,75],  z=[75,99]  (1×150×24mm)
 
   const double T   = 1.0;   // nominal wall/flange thickness (mm)
   const double HL  = 75.0;  // inner cube half-size (mm)
@@ -680,21 +697,22 @@ TEST_CASE("Regression: same-side protrusion produces correct flat",
   ShellId panel6 = makeStep(
     BRepPrimAPI_MakeBox(gp_Pnt(-HL, HL - T, -HL), 2*HL, T, 2*HL).Shape(), "p6");
 
-  // protrusion: x=[74,75], y=[75,99], z=[-75,75]  (same side as bend)
+  // protrusion: x=[74,75], y=[-75,75], z=[75,99]  (fuse seam perpendicular to
+  // the bend axis, meeting the bend line's top corner at z=75)
   ShellId prot = makeStep(
-    BRepPrimAPI_MakeBox(gp_Pnt(HL - T, HL, -HL), T, EXT, 2*HL).Shape(), "pr");
+    BRepPrimAPI_MakeBox(gp_Pnt(HL - T, -HL, HL), T, 2*HL, EXT).Shape(), "pr");
 
   auto bbP7 = svc->computeBoundingBox(panel7);
   auto bbP6 = svc->computeBoundingBox(panel6);
   auto bbPr = svc->computeBoundingBox(prot);
   std::cout << "[REGRESSION real_protrusion] panel7 x=[" << bbP7.xMin << "," << bbP7.xMax
-            << "] y=[" << bbP7.yMin << "," << bbP7.yMax << "]\n";
+            << "] z=[" << bbP7.zMin << "," << bbP7.zMax << "]\n";
   std::cout << "[REGRESSION real_protrusion] panel6 y=[" << bbP6.yMin << "," << bbP6.yMax
             << "] x=[" << bbP6.xMin << "," << bbP6.xMax << "]\n";
   std::cout << "[REGRESSION real_protrusion] prot   x=[" << bbPr.xMin << "," << bbPr.xMax
-            << "] y=[" << bbPr.yMin << "," << bbPr.yMax << "]\n";
+            << "] z=[" << bbPr.zMin << "," << bbPr.zMax << "]\n";
 
-  // fuse panel7 + protrusion → flat plate x=[74,75], y=[-75,99] (1×174×150mm)
+  // fuse panel7 + protrusion → flat plate x=[74,75], z=[-75,99] (1×150×174mm)
   FuseResult fused = svc->fuseBodies({panel7, prot}, 0.15);
   REQUIRE_FALSE(fused.solidId.empty());
 
@@ -703,7 +721,7 @@ TEST_CASE("Regression: same-side protrusion produces correct flat",
             << " x=[" << bbFused.xMin << "," << bbFused.xMax << "]"
             << " y=[" << bbFused.yMin << "," << bbFused.yMax << "]"
             << " z=[" << bbFused.zMin << "," << bbFused.zMax << "]\n";
-  REQUIRE(std::abs((bbFused.yMax - bbFused.yMin) - (2*HL + EXT)) < 1.0); // ≈174mm
+  REQUIRE(std::abs((bbFused.zMax - bbFused.zMin) - (2*HL + EXT)) < 1.0); // ≈174mm
 
   // merge fused panel + panel6 at 90° with 1mm bend radius
   MergeBodyResult merged = svc->mergeBodiesWithBend(fused.solidId, panel6, {"all"}, 1.0);
@@ -720,16 +738,21 @@ TEST_CASE("Regression: same-side protrusion produces correct flat",
   REQUIRE(unfold.bendCount == 1);
 
   // Expected flat:
-  //   arm A total (panel + protrusion): 150 + 24 = 174mm
-  //   arm B (panel6): 150mm
-  //   bend allowance (R=1, t=1): (1 + 0.5) * π/2 ≈ 2.36mm
-  //   total long side ≈ 174 + 150 + 2.36 ≈ 326mm
+  //   combined length (perpendicular to the bend, in-plane): panel7's own
+  //   length (150) + BA + panel6's own length (150) — the protrusion no
+  //   longer contributes to this dimension, since it extends panel7's
+  //   HEIGHT instead.
+  //   height (along the bend axis): max(panel7+prot's Z-extent ≈174,
+  //   panel6's Z-extent ≈150) ≈ 174mm — the corner relief is bounded by the
+  //   overlap of both inputs' Z-ranges (≈150, panel6's own extent), so it
+  //   never reaches into the protrusion's z=[75,99] region.
   double BA      = (1.0 + T / 2.0) * M_PI / 2.0;
-  double expLong = (2*HL + EXT) + 2*HL + BA;  // ≈326mm
+  double expLong = 2*HL + 2*HL + BA;        // ≈302mm
+  double expHigh = 2*HL + EXT;              // ≈174mm
   const double tol = 10.0;
 
   CHECK(std::abs(flatMax - expLong) < tol);
-  CHECK(std::abs(flatMin - 2*HL)   < tol);
+  CHECK(std::abs(flatMin - expHigh) < tol);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -452,6 +452,7 @@ Napi::Value BuildShellFromFlatPattern(const Napi::CallbackInfo& info) {
     bz.anchorX = readOpt("anchorX");
     bz.anchorY = readOpt("anchorY");
     bz.anchorZ = readOpt("anchorZ");
+    bz.bHingeOffsetMm = readOpt("bHingeOffsetMm");
     bendZones.push_back(bz);
   }
 
