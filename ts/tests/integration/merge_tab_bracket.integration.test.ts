@@ -157,14 +157,14 @@ describe('merge_bodies_with_bend: tab_bracket_90deg asymmetric seam T-shaped fla
 
     const { mergedPartId, txId } = r;
 
-    const unfold: any = await dispatchTool('apply_unfold', {
+    const unfold: any = await dispatchTool('get_unfold', {
       transaction_id: txId,
       part_id: mergedPartId,
       panel_id: mergedPartId,
       material_id: config.materials[0]!.id,
     }, config);
 
-    expect(unfold, 'apply_unfold must return a result').toBeDefined();
+    expect(unfold, 'get_unfold must return a result').toBeDefined();
     expect(typeof unfold.dxf_content).toBe('string');
 
     const ring = parseFirstClosedPolyline(unfold.dxf_content as string);
@@ -203,7 +203,7 @@ describe('merge_bodies_with_bend: tab_bracket_90deg asymmetric seam T-shaped fla
 
     const { mergedPartId, txId } = r;
 
-    const unfold: any = await dispatchTool('apply_unfold', {
+    const unfold: any = await dispatchTool('get_unfold', {
       transaction_id: txId,
       part_id: mergedPartId,
       panel_id: mergedPartId,

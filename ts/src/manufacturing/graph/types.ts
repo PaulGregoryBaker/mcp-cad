@@ -44,9 +44,10 @@ export interface PanelNode {
   canonical: boolean;           // true if this is the canonical unfold target in a merged graph
   shapeDxf: string | null;      // DXF content of flat panel outline & details; the source of truth manufacturing drawing; null before split_body_by_bends
   panelFrame?: PanelFrame | null; // 3D orientation frame — DXF-aligned: u=DXF+X, v=DXF+Y, origin=3D point at DXF(0,0)
+  flatFrame?: PanelFrame | null;  // Flat coordinate frame for merged panels — u=fold-perp, v=seam, origin=flat DXF(0,0) in world. Set only after merge_bodies_with_bend; used for 4-point 3D→2D mapping in subsequent merges.
   // World-space offset (dot(point, panelFrame's N)) of this panel's true
   // material midplane — captured once from the panel's own geometry when it
-  // was created (split_body_by_bends / apply_unfold), via measurePanelThickness.
+  // was created (split_body_by_bends / get_unfold), via measurePanelThickness.
   // Source-of-truth placement data: later rebuilds (fuse_bodies,
   // merge_bodies_with_bend) read this instead of re-measuring a live shell.
   midplaneOffsetMm?: number | null;
@@ -67,7 +68,7 @@ export interface BendNode {
   // The exact world-space fold placement basis merge_bodies_with_bend computed
   // at merge time (from live 3D bbox queries on the two input shells, which
   // are gone by the time anything downstream runs) — captured here so the
-  // bend can be regenerated from graph data alone (apply_unfold +
+  // bend can be regenerated from graph data alone (get_unfold +
   // buildShellFromFlatPattern), without re-deriving bendDir/foldNormal/anchor
   // from shells that no longer exist. bendDir/foldNormal are the (possibly
   // payload-flipped) vectors actually sent to buildShellFromFlatPattern, not

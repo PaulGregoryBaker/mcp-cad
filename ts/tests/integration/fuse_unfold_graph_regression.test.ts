@@ -55,7 +55,7 @@ describe('T025: Graph-first fuse round-trip (SC-006, SC-007)', () => {
     expect(split2.panel_ids.length).toBeGreaterThanOrEqual(1);
     const panelB = split2.panel_ids[0] as string;
 
-    // Fuse without apply_unfold first — panelFrame is null, coplanarity check is bypassed.
+    // Fuse without get_unfold first — panelFrame is null, coplanarity check is bypassed.
     // Both panels from the same fixture have equal nominalThickness, so thickness check passes.
     const txn: any = await dispatchTool('begin_transaction', { label: 't025_fuse_unfold' }, config);
     const txId = txn.transaction_id as string;
@@ -72,8 +72,8 @@ describe('T025: Graph-first fuse round-trip (SC-006, SC-007)', () => {
     expect(fused.preserved_part_id).toBe(panelA);
     expect(fused.consumed_part_ids).toContain(panelB);
 
-    // apply_unfold on the fused part should return dxf_content
-    const unfold: any = await dispatchTool('apply_unfold', {
+    // get_unfold on the fused part should return dxf_content
+    const unfold: any = await dispatchTool('get_unfold', {
       transaction_id: txId,
       part_id: fused.part_id,
       panel_id: fused.part_id,
@@ -128,7 +128,7 @@ describe('Regression: fuse after moved graph parts', () => {
   it('should preserve combined footprint when merging two perpendicular panels with a bend', async () => {
     // Mirrors the UI scenario shown in the screenshot:
     // testcube → split_by_bends → two 200×200mm outer panels at 90°
-    // → merge_bodies_with_bend → apply_unfold
+    // → merge_bodies_with_bend → get_unfold
     // Expected flat: ~401.6×200mm (200 + 200 + bend allowance), 1 bend.
     // DXF outline (source of truth) must match those dimensions.
 
@@ -171,13 +171,13 @@ describe('Regression: fuse after moved graph parts', () => {
     const txId = txn.transaction_id as string;
 
     // Unfold both panels first so merge_bodies_with_bend has shapeDxf to work with.
-    await dispatchTool('apply_unfold', {
+    await dispatchTool('get_unfold', {
       transaction_id: txId,
       part_id: panelA.id,
       panel_id: panelA.id,
       material_id: 'mild_steel_1.5mm',
     }, config);
-    await dispatchTool('apply_unfold', {
+    await dispatchTool('get_unfold', {
       transaction_id: txId,
       part_id: panelB!.id,
       panel_id: panelB!.id,
@@ -196,7 +196,7 @@ describe('Regression: fuse after moved graph parts', () => {
 
     const mergedPartId = merge.merged_part_id as string;
 
-    const unfold: any = await dispatchTool('apply_unfold', {
+    const unfold: any = await dispatchTool('get_unfold', {
       transaction_id: txId,
       part_id: mergedPartId,
       panel_id: mergedPartId,
@@ -331,7 +331,7 @@ describe('Regression: fuse after moved graph parts', () => {
       tools: [panelA, moved.solid_id as string],
     }, config);
 
-    const unfold: any = await dispatchTool('apply_unfold', {
+    const unfold: any = await dispatchTool('get_unfold', {
       transaction_id: txId,
       part_id: fused.part_id,
       panel_id: fused.part_id,

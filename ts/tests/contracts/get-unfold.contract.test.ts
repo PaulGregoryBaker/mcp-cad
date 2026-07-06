@@ -1,6 +1,6 @@
 /**
- * Contract test: apply_unfold tool output schema.
- * Asserts apply_unfold returns required fields with correct types.
+ * Contract test: get_unfold tool output schema.
+ * Asserts get_unfold returns required fields with correct types.
  *
  * Task: T150
  */
@@ -84,16 +84,16 @@ const config: ManufacturingConfig = {
   environmental: { fireRated: false, marineGrade: false, highVibration: false },
 };
 
-// ─── apply_unfold schema contract ─────────────────────────────────────────────
+// ─── get_unfold schema contract ─────────────────────────────────────────────
 
-describe('apply_unfold: output schema contract', () => {
+describe('get_unfold: output schema contract', () => {
   let binding: GeometryBinding;
   let txnId: string;
 
   beforeEach(async () => {
     binding = new GeometryBinding(mockAddon);
     setGeometryBindingMock(binding);
-    // Register a shell in the session so apply_unfold doesn't throw SHELL_NOT_FOUND
+    // Register a shell in the session so get_unfold doesn't throw SHELL_NOT_FOUND
     binding.booleanCut('solid-1', { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: 0 });
     registerTestPart('shell-1', ['shell-1']);
 
@@ -112,7 +112,7 @@ describe('apply_unfold: output schema contract', () => {
 
   it('result has required fields: unfold_id, flat_width_mm, flat_height_mm, k_factor_used, bend_count', async () => {
     const result = await dispatchTool(
-      'apply_unfold',
+      'get_unfold',
       { part_id: 'shell-1', panel_id: 'shell-1', material_id: 'mild_steel_1.5mm', transaction_id: txnId },
       config,
     ) as Record<string, unknown>;
@@ -126,7 +126,7 @@ describe('apply_unfold: output schema contract', () => {
 
   it('k_factor_used reflects material default when not overridden', async () => {
     const result = await dispatchTool(
-      'apply_unfold',
+      'get_unfold',
       { part_id: 'shell-1', panel_id: 'shell-1', material_id: 'mild_steel_1.5mm', transaction_id: txnId },
       config,
     ) as Record<string, unknown>;
@@ -136,7 +136,7 @@ describe('apply_unfold: output schema contract', () => {
 
   it('k_factor_used respects override when provided', async () => {
     const result = await dispatchTool(
-      'apply_unfold',
+      'get_unfold',
       { part_id: 'shell-1', panel_id: 'shell-1', material_id: 'mild_steel_1.5mm', k_factor: 0.42, transaction_id: txnId },
       config,
     ) as Record<string, unknown>;
@@ -147,7 +147,7 @@ describe('apply_unfold: output schema contract', () => {
   it('throws structured error for unknown material_id', async () => {
     await expect(
       dispatchTool(
-        'apply_unfold',
+        'get_unfold',
         { part_id: 'shell-1', panel_id: 'shell-1', material_id: 'unknown_material', transaction_id: txnId },
         config,
       ),
@@ -156,7 +156,7 @@ describe('apply_unfold: output schema contract', () => {
 
   it('includes rollback_token in response', async () => {
     const result = await dispatchTool(
-      'apply_unfold',
+      'get_unfold',
       { part_id: 'shell-1', panel_id: 'shell-1', material_id: 'mild_steel_1.5mm', transaction_id: txnId },
       config,
     ) as Record<string, unknown>;
@@ -165,15 +165,15 @@ describe('apply_unfold: output schema contract', () => {
   });
 });
 
-// ─── apply_unfold error model ──────────────────────────────────────────────────
+// ─── get_unfold error model ──────────────────────────────────────────────────
 
-describe('apply_unfold: error model contract', () => {
+describe('get_unfold: error model contract', () => {
   it('throws McpToolError with code when panel_id is missing', async () => {
     // panel_id is optional (defaults to part_id). With an invalid transaction_id
     // specified, the transaction check fires before geometry is reached.
     await expect(
       dispatchTool(
-        'apply_unfold',
+        'get_unfold',
         { part_id: 'shell-1', material_id: 'mild_steel_1.5mm', transaction_id: 'tok-some' },
         config,
       ),
@@ -183,7 +183,7 @@ describe('apply_unfold: error model contract', () => {
   it('throws McpToolError with code when material_id is missing', async () => {
     await expect(
       dispatchTool(
-        'apply_unfold',
+        'get_unfold',
         { part_id: 'shell-1', panel_id: 'shell-1', transaction_id: 'tok-some' },
         config,
       ),
@@ -193,7 +193,7 @@ describe('apply_unfold: error model contract', () => {
   it('throws McpToolError with code when part_id is missing', async () => {
     await expect(
       dispatchTool(
-        'apply_unfold',
+        'get_unfold',
         { panel_id: 'shell-1', material_id: 'mild_steel_1.5mm', transaction_id: 'tok-some' },
         config,
       ),
@@ -203,7 +203,7 @@ describe('apply_unfold: error model contract', () => {
   it('throws McpToolError with code when transaction_id is missing', async () => {
     await expect(
       dispatchTool(
-        'apply_unfold',
+        'get_unfold',
         { part_id: 'shell-1', panel_id: 'shell-1', material_id: 'mild_steel_1.5mm' },
         config,
       ),

@@ -34,7 +34,7 @@ import {
   handleEvaluateManufacturability, handleValidateBendSequence, handleSimulateNesting,
 } from './handlers/manufacturing.js';
 import {
-  handleApplyUnfold, handleExportProductionPack,
+  handleGetUnfold, handleExportProductionPack,
   handleGetExportJobStatus, handleGetExportJobResult,
 } from './handlers/unfold-export.js';
 import {
@@ -145,8 +145,8 @@ export async function dispatchTool(
       case 'reconstruct_curved_bends':
         return handleReconstructCurvedBends(args);
 
-      case 'apply_unfold':
-        return handleApplyUnfold(args, config);
+      case 'get_unfold':
+        return handleGetUnfold(args, config);
 
       case 'evaluate_manufacturability':
         return handleEvaluateManufacturability(args, config);

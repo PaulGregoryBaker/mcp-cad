@@ -185,6 +185,10 @@ export interface PanelFrameResult {
   vX: number; vY: number; vZ: number;
   normalX: number; normalY: number; normalZ: number;
   uExtentMm: number; vExtentMm: number; thicknessMm: number;
+  // Outer-wire boundary, already projected onto (u, v) and shifted local to
+  // origin — each point lies in [0,uExtentMm] x [0,vExtentMm]. Self-consistent
+  // by construction with origin/u/v/extents above.
+  ring: Array<{ x: number; y: number }>;
 }
 
 export interface NestPlacement {

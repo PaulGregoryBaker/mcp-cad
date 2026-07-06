@@ -68,11 +68,11 @@ describe('merge_bodies_with_bend edge alignment (BUG-03)', () => {
     // Unfold each panel to get shapeDxf
     const [panelA, panelB] = splitResult.panel_ids;
     try {
-      await dispatchTool('apply_unfold', {
+      await dispatchTool('get_unfold', {
         part_id: panelA, panel_id: panelA,
         material_id: 'mild_steel_1mm', transaction_id: 'test-txn-1',
       }, config);
-      await dispatchTool('apply_unfold', {
+      await dispatchTool('get_unfold', {
         part_id: panelB, panel_id: panelB,
         material_id: 'mild_steel_1mm', transaction_id: 'test-txn-2',
       }, config);
@@ -122,7 +122,7 @@ describe('merge_bodies_with_bend edge alignment (BUG-03)', () => {
 
     // Apply unfold to both panels
     try {
-      await dispatchTool('apply_unfold', {
+      await dispatchTool('get_unfold', {
         part_id: panelA, panel_id: panelA,
         material_id: 'mild_steel_1mm', transaction_id: 'test-txn-3',
       }, config);
@@ -131,7 +131,7 @@ describe('merge_bodies_with_bend edge alignment (BUG-03)', () => {
     }
 
     // Translate panel B significantly beyond the tolerance (3 mm offset)
-    await dispatchTool('apply_unfold', {
+    await dispatchTool('get_unfold', {
       part_id: panelB, panel_id: panelB,
       material_id: 'mild_steel_1mm', transaction_id: 'test-txn-4',
     }, config).catch(() => {});

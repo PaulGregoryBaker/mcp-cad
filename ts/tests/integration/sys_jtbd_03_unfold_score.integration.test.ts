@@ -89,22 +89,22 @@ describe('SYS-JTBD-03 Unfold and Score Integration', () => {
 
       registerTestPart(panelId, [panelId]);
 
-      // 3. apply_unfold
+      // 3. get_unfold
       try {
-        unfold = await dispatchTool('apply_unfold', {
+        unfold = await dispatchTool('get_unfold', {
           part_id: panelId,
           panel_id: panelId,
           material_id: config.materials[0]!.id,
           transaction_id: txn.transaction_id,
         }, config) as any;
         // eslint-disable-next-line no-console
-        console.log(`[UnfoldScoreTest] Iter ${i} apply_unfold result:`, unfold);
+        console.log(`[UnfoldScoreTest] Iter ${i} get_unfold result:`, unfold);
         if (!unfold || unfold.flat_width_mm === undefined || unfold.flat_height_mm === undefined) {
-          throw new Error('apply_unfold did not return flat pattern dimensions');
+          throw new Error('get_unfold did not return flat pattern dimensions');
         }
       } catch (err) {
         // eslint-disable-next-line no-console
-        console.error(`[UnfoldScoreTest] Iter ${i} apply_unfold failed:`, err);
+        console.error(`[UnfoldScoreTest] Iter ${i} get_unfold failed:`, err);
         throw err;
       }
 

@@ -136,6 +136,7 @@ function buildMockAddon(): GeometryAddon {
     })),
 
     getPanelFrame: vi.fn((id: string) => {
+      const ring = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }];
       if (id === 'b') {
         return {
           originX: 0, originY: 0, originZ: 0,
@@ -143,6 +144,7 @@ function buildMockAddon(): GeometryAddon {
           vX: 0, vY: 0, vZ: 1,
           normalX: 0, normalY: -1, normalZ: 0,
           uExtentMm: 100, vExtentMm: 100, thicknessMm: 1.0,
+          ring,
         };
       }
       return {
@@ -151,6 +153,7 @@ function buildMockAddon(): GeometryAddon {
         vX: 0, vY: 1, vZ: 0,
         normalX: 0, normalY: 0, normalZ: 1,
         uExtentMm: 100, vExtentMm: 100, thicknessMm: 1.0,
+        ring,
       };
     }),
 
@@ -557,6 +560,13 @@ describe('Transaction primitive (Feature 004 Phase 4) — shape_history for all 
         mergedShellId: 'merged', rollbackToken: snap(),
         shape_history: [histRec('mergeBodiesWithBend')],
       })),
+      // fuseBodies is used by merge_bodies_with_bend's live-fuse path (all merges).
+      fuseBodies: vi.fn(() => ({
+        solid_id: 'merged',
+        disjoint: false,
+        rollback_token: snap(),
+        shape_history: [histRec('fuseBodies')],
+      })),
       extendFaceToTarget: vi.fn((id: string) => ({
         modifiedShellId: id, extensionDistanceMm: 5.0, rollbackToken: snap(),
         shape_history: [histRec('extendFaceToTarget')],
@@ -700,10 +710,13 @@ describe('Transaction primitive (Feature 004 Phase 4) — shape_history for all 
     expect(res.shape_history).toHaveLength(0);
   });
 
-  it('apply_unfold returns empty shape_history (stub)', async () => {
-    registerTestPart('shell-1', ['shell-1']);
+  it('get_unfold returns empty shape_history (stub)', async () => {
+    // Provide a minimal shapeDxf — get_unfold now reads from the graph
+    // (not from the 3D shell), so the test panel needs flat-pattern data.
+    const minimalDxf = '0\nSECTION\n2\nENTITIES\n0\nLWPOLYLINE\n8\n0\n90\n4\n70\n1\n10\n0\n20\n0\n10\n100\n20\n0\n10\n100\n20\n100\n10\n0\n20\n100\n0\nENDSEC\n0\nEOF';
+    registerTestPart('shell-1', ['shell-1'], minimalDxf);
     const begin = (await dispatchTool('begin_transaction', { label: 'p4', product: 'x' }, config)) as { transaction_id: string };
-    const res = (await dispatchTool('apply_unfold', {
+    const res = (await dispatchTool('get_unfold', {
       transaction_id: begin.transaction_id,
       part_id: 'shell-1',
       panel_id: 'shell-1', material_id: 'mild_steel_1.5mm',

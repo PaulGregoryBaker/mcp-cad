@@ -187,7 +187,7 @@ describe('[repro] testcube.step: protrusion shifted to coplanar wall edge, fused
     const fusedBbox: Bbox = await dispatchTool('bounding_box', { target: fused.solid_id }, config) as Bbox;
     console.log(`[testcube ${order}] fused panel bbox: ${fmt(fusedBbox)}`);
 
-    const unfoldFused: any = await dispatchTool('apply_unfold', {
+    const unfoldFused: any = await dispatchTool('get_unfold', {
       transaction_id: txId,
       part_id: fused.part_id,
       panel_id: fused.part_id,
@@ -254,7 +254,7 @@ describe('[repro] testcube.step: protrusion shifted to coplanar wall edge, fused
     console.log(`[testcube ${order}] exportGlb: ${glbError ? 'THREW (would fall back to crude box approximation)' : `succeeded, ${glb?.length} bytes`}`);
     expect(glbError, `[testcube ${order}] [BUG] exportGlb threw for the merged shape — the viewport would silently render the crude topology-estimated box fallback instead of the real geometry`).toBeNull();
 
-    const unfold: any = await dispatchTool('apply_unfold', {
+    const unfold: any = await dispatchTool('get_unfold', {
       transaction_id: txId,
       part_id: merged.merged_part_id,
       panel_id: merged.merged_part_id,
@@ -262,7 +262,7 @@ describe('[repro] testcube.step: protrusion shifted to coplanar wall edge, fused
     }, config);
     console.log(`[testcube ${order}] merged flat: ${unfold.flat_width_mm?.toFixed(1)} x ${unfold.flat_height_mm?.toFixed(1)}mm`);
 
-    expect(unfold.dxf_content, `[testcube ${order}] apply_unfold must return dxf_content`).toBeTruthy();
+    expect(unfold.dxf_content, `[testcube ${order}] get_unfold must return dxf_content`).toBeTruthy();
     const ring = parseFirstClosedPolyline(unfold.dxf_content as string);
     const area = polygonArea(ring);
     let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;

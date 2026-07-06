@@ -261,7 +261,7 @@ export function handleFuseBodies(args: Record<string, unknown>): unknown {
 
     // All placement data (frame, flat extents, midplane offset) comes straight
     // from each panel's STORED PanelNode — captured once when the panel was
-    // created (split_body_by_bends / apply_unfold) — never from a live shell
+    // created (split_body_by_bends / get_unfold) — never from a live shell
     // query. The manufacturing graph is the source of truth.
     const panelDxfs: (string | null)[] = [];
     const panelFrames: (PanelFrame | null)[] = [];

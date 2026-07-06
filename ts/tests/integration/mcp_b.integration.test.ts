@@ -71,7 +71,7 @@ describe('MCP Phase B integration', () => {
 
     // Phase C: extend with unfold step (SYS-JTBD-01 partial — T084)
     const unfold = (await dispatchTool(
-      'apply_unfold',
+      'get_unfold',
       {
         part_id: decompose.panel_ids[0],
         panel_id: decompose.panel_ids[0],

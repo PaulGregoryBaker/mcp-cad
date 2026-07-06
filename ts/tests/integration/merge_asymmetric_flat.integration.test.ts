@@ -124,14 +124,14 @@ describe('merge_bodies_with_bend: angle_bracket_45deg flat pattern + 3D placemen
 
     const { bboxA, bboxB, mergedPartId, txId } = r;
 
-    const unfold: any = await dispatchTool('apply_unfold', {
+    const unfold: any = await dispatchTool('get_unfold', {
       transaction_id: txId,
       part_id: mergedPartId,
       panel_id: mergedPartId,
       material_id: config.materials[0]!.id,
     }, config);
 
-    expect(unfold, 'apply_unfold must return a result').toBeDefined();
+    expect(unfold, 'get_unfold must return a result').toBeDefined();
     expect(typeof unfold.dxf_content).toBe('string');
 
     const ring = parseFirstClosedPolyline(unfold.dxf_content as string);
@@ -274,14 +274,14 @@ describe('merge_bodies_with_bend: l_bracket_corner_90deg L-shaped flat pattern (
 
     const { mergedPartId, txId } = r;
 
-    const unfold: any = await dispatchTool('apply_unfold', {
+    const unfold: any = await dispatchTool('get_unfold', {
       transaction_id: txId,
       part_id: mergedPartId,
       panel_id: mergedPartId,
       material_id: config.materials[0]!.id,
     }, config);
 
-    expect(unfold, 'apply_unfold must return a result').toBeDefined();
+    expect(unfold, 'get_unfold must return a result').toBeDefined();
     expect(typeof unfold.dxf_content).toBe('string');
 
     const ring = parseFirstClosedPolyline(unfold.dxf_content as string);
@@ -469,7 +469,7 @@ describe('merge_bodies_with_bend: l_bracket_corner_90deg L-shaped flat pattern (
     let unfold: any = null;
     let unfoldError: unknown = null;
     try {
-      unfold = await dispatchTool('apply_unfold', {
+      unfold = await dispatchTool('get_unfold', {
         transaction_id: txId,
         part_id: merged.merged_part_id,
         panel_id: merged.merged_part_id,
@@ -480,7 +480,7 @@ describe('merge_bodies_with_bend: l_bracket_corner_90deg L-shaped flat pattern (
     }
 
     if (unfoldError) {
-      console.log(`[translate-repro] apply_unfold threw: ${JSON.stringify(unfoldError, Object.getOwnPropertyNames(unfoldError as object))}`);
+      console.log(`[translate-repro] get_unfold threw: ${JSON.stringify(unfoldError, Object.getOwnPropertyNames(unfoldError as object))}`);
       return;
     }
 
@@ -648,7 +648,7 @@ describe('[bug repro] fuse side-wall+flange then merge_bodies_with_bend: rectang
     console.log(`[repro] fused panel=${fused.solid_id.slice(-8)}, part=${(fused.part_id as string).slice(-8)}`);
 
     // Inspect the fused flat pattern
-    const unfoldFused: any = await dispatchTool('apply_unfold', {
+    const unfoldFused: any = await dispatchTool('get_unfold', {
       transaction_id: txId,
       part_id: fused.part_id,
       panel_id: fused.part_id,
@@ -686,7 +686,7 @@ describe('[bug repro] fuse side-wall+flange then merge_bodies_with_bend: rectang
     console.log(`[repro] merged shell=${merged.merged_shell_id}, part=${merged.merged_part_id}`);
 
     // 7. Inspect flat pattern — BUG: expect rectangular but should be T/L-shaped
-    const unfold: any = await dispatchTool('apply_unfold', {
+    const unfold: any = await dispatchTool('get_unfold', {
       transaction_id: txId,
       part_id: merged.merged_part_id,
       panel_id: merged.merged_part_id,
@@ -798,7 +798,7 @@ describe('[bug repro] fuse side-wall+flange then merge_bodies_with_bend: rectang
     expect(fused.solid_id, 'fuse_bodies must return a solid_id').toBeDefined();
     const fusedBbox: Bbox = await dispatchTool('bounding_box', { target: fused.solid_id }, config) as Bbox;
 
-    const unfoldFused: any = await dispatchTool('apply_unfold', {
+    const unfoldFused: any = await dispatchTool('get_unfold', {
       transaction_id: txId,
       part_id: fused.part_id,
       panel_id: fused.part_id,
@@ -827,7 +827,7 @@ describe('[bug repro] fuse side-wall+flange then merge_bodies_with_bend: rectang
       return;
     }
 
-    const unfold: any = await dispatchTool('apply_unfold', {
+    const unfold: any = await dispatchTool('get_unfold', {
       transaction_id: txId,
       part_id: merged.merged_part_id,
       panel_id: merged.merged_part_id,
@@ -1039,7 +1039,7 @@ describe('[multi-axis] fuse side-wall+flange then merge_bodies_with_bend: fold a
     expect(fused.solid_id, `[multi-axis ${tag}] fuse_bodies must return a solid_id`).toBeDefined();
     const fusedBbox: Bbox = await dispatchTool('bounding_box', { target: fused.solid_id }, config) as Bbox;
 
-    const unfoldFused: any = await dispatchTool('apply_unfold', {
+    const unfoldFused: any = await dispatchTool('get_unfold', {
       transaction_id: txId,
       part_id: fused.part_id,
       panel_id: fused.part_id,
@@ -1069,7 +1069,7 @@ describe('[multi-axis] fuse side-wall+flange then merge_bodies_with_bend: fold a
     expect(mergeError, `[multi-axis ${tag}] merge_bodies_with_bend must not throw`).toBeNull();
     if (!merged) return;
 
-    const unfold: any = await dispatchTool('apply_unfold', {
+    const unfold: any = await dispatchTool('get_unfold', {
       transaction_id: txId,
       part_id: merged.merged_part_id,
       panel_id: merged.merged_part_id,
@@ -1079,7 +1079,7 @@ describe('[multi-axis] fuse side-wall+flange then merge_bodies_with_bend: fold a
     const h = unfold.graph_flat_height_mm ?? unfold.flat_height_mm;
     console.log(`[multi-axis ${tag}] merged flat pattern: ${w?.toFixed(1)}mm × ${h?.toFixed(1)}mm`);
 
-    expect(unfold.dxf_content, `[multi-axis ${tag}] apply_unfold must return dxf_content`).toBeTruthy();
+    expect(unfold.dxf_content, `[multi-axis ${tag}] get_unfold must return dxf_content`).toBeTruthy();
     const ring = parseFirstClosedPolyline(unfold.dxf_content as string);
     const area = polygonArea(ring);
     let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;

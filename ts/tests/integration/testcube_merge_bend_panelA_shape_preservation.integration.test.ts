@@ -163,7 +163,13 @@ describe('[diagnostic] merge_bodies_with_bend: does panel A\'s own (composite/no
     // The recovered region should be EXACTLY panel A's pre-merge shape —
     // same bbox, same volume — since part A never rotates and the probe
     // fully contains (with margin) only panel A's own world-space region.
-    const TOL_MM = 1.0;
+    // 1.0mm is the intended tolerance; +1e-6 absorbs pure floating-point
+    // noise from the underlying OCCT boolean ops (confirmed: this delta sits
+    // exactly at the 1.0mm boundary by construction, and can land a few
+    // ulps on either side depending on unrelated upstream computation order
+    // — observed 1.0000000000000284 after an unrelated change reordered an
+    // input polygon's vertices).
+    const TOL_MM = 1.0 + 1e-6;
     for (const k of ['x_min', 'x_max', 'y_min', 'y_max', 'z_min', 'z_max'] as const) {
       const delta = Math.abs(intersectedBbox[k] - preMergeBbox[k]);
       expect(delta,

@@ -59,7 +59,7 @@ describe('MCP Server: tool definitions', () => {
     expect(toolNames).toContain('decompose_volume');
     expect(toolNames).toContain('synthesize_joints');
     expect(toolNames).toContain('generate_reliefs');
-    expect(toolNames).toContain('apply_unfold');
+    expect(toolNames).toContain('get_unfold');
     expect(toolNames).toContain('evaluate_manufacturability');
     expect(toolNames).toContain('validate_bend_sequence');
     expect(toolNames).toContain('simulate_nesting');

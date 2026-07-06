@@ -29,6 +29,7 @@ import type { FeatureSet } from '../../manufacturing/feature.js';
 import { toNodeId } from '../../manufacturing/graph/types.js';
 import type { PanelFrame } from '../../manufacturing/graph/types.js';
 import { napiFrameToPanelFrame } from '../../manufacturing/dxf/orientation.js';
+import { ringToLwpolylineDxf } from '../../mcp/dxf-helpers.js';
 import type { ManufacturingConfig } from '../../config/loader.js';
 
 // ─── Tool definitions ─────────────────────────────────────────────────────────
@@ -171,7 +172,7 @@ export function handleDecomposeVolume(args: Record<string, unknown>): unknown {
   }
 
   // Auto-create manufacturing graphs for each decomposed shell so that
-  // apply_unfold works uniformly after decompose_volume (same as split_body_by_bends).
+  // get_unfold works uniformly after decompose_volume (same as split_body_by_bends).
   const toBodyId = (s: string) => s as import('../../manufacturing/graph/types').BodyId;
   for (const shellId of shellIds) {
     if (getParts().has(shellId)) continue;  // already registered (e.g. from a previous decompose)
@@ -182,6 +183,7 @@ export function handleDecomposeVolume(args: Record<string, unknown>): unknown {
     let panelFrame: PanelFrame | null = null;
     let nominalThickness = 1.0;
     let midplaneOffsetMm: number | null = null;
+    let panelShapeDxf: string | null = null;
     try {
       // getPanelFrame gives accurate OCCT face frame + dimensions for planar shells.
       // For non-planar decomposed solids it may throw; fall back to bbox for dims only.
@@ -191,6 +193,15 @@ export function handleDecomposeVolume(args: Record<string, unknown>): unknown {
       flatHeight = pf.vExtentMm;
       panelFrame = napiFrameToPanelFrame(pf);
       midplaneOffsetMm = measurePanelMidplaneOffsetMm(shellId, [pf.normalX, pf.normalY, pf.normalZ]);
+      // Build shapeDxf from the ring — same as split_body_by_bends. The
+      // manufacturing graph is the source of truth; get_unfold reads from it
+      // rather than deriving 2D from the 3D shell.
+      if (pf.ring.length >= 3) {
+        const ring: Array<[number, number]> = pf.ring.map((p) => [p.x, p.y]);
+        const xMin = Math.min(...ring.map(([x]) => x));
+        const yMin = Math.min(...ring.map(([, y]) => y));
+        panelShapeDxf = ringToLwpolylineDxf(ring.map(([x, y]) => [x - xMin, y - yMin] as [number, number]));
+      }
     } catch {
       try {
         const bbox = getGeometryBinding().computeBoundingBox(shellId);
@@ -214,7 +225,7 @@ export function handleDecomposeVolume(args: Record<string, unknown>): unknown {
       flatWidth,
       flatHeight,
       canonical: true,
-      shapeDxf: null,
+      shapeDxf: panelShapeDxf,
       panelFrame: panelFrame ?? undefined,
       midplaneOffsetMm,
       dxfPlacement: { rotationMatrix: [[1, 0], [0, 1]], translation: [0, 0] },

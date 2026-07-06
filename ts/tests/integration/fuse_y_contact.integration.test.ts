@@ -94,7 +94,7 @@ describe('fuse_bodies: Y-direction DXF adjacency (Bug 1 reproducer)', () => {
 
     expect(fused.solid_id, 'fuse_bodies must return a solid_id').toBeDefined();
 
-    const unfold: any = await dispatchTool('apply_unfold', {
+    const unfold: any = await dispatchTool('get_unfold', {
       transaction_id: txId,
       part_id: fused.part_id,
       panel_id: fused.part_id,

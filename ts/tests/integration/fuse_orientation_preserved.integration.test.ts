@@ -94,7 +94,7 @@ describe('fuse_bodies: manufacturing plan + 3D placement', () => {
     expect(fused.solid_id).toBeDefined();
 
     // ── (1) Manufacturing plan: graph flat pattern is the source of truth ──────
-    const unfold: any = await dispatchTool('apply_unfold', {
+    const unfold: any = await dispatchTool('get_unfold', {
       transaction_id: txId, part_id: fused.part_id, panel_id: fused.part_id,
       material_id: 'mild_steel_1.5mm',
     }, config);

@@ -87,7 +87,7 @@ describe('merge_bodies_with_bend: protrusion flat-pattern layout', () => {
     expect(merged.merged_part_id).toBe(panelA);
 
     // Apply unfold to get the merged flat-pattern dimensions
-    const unfold: any = await dispatchTool('apply_unfold', {
+    const unfold: any = await dispatchTool('get_unfold', {
       part_id: merged.preserved_part_id,
       panel_id: merged.preserved_part_id,
       material_id: config.materials[0]!.id,

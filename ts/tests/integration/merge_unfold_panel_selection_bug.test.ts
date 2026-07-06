@@ -1,10 +1,10 @@
 /**
- * Reproduction test for merge_bodies_with_bend → apply_unfold panel selection bug.
+ * Reproduction test for merge_bodies_with_bend → get_unfold panel selection bug.
  *
  * This test demonstrates:
- * 1. BROKEN: apply_unfold with wrong panel ID (stale panel A node)
+ * 1. BROKEN: get_unfold with wrong panel ID (stale panel A node)
  *    → returns flat pattern for panel A only, zero bends
- * 2. CORRECT: apply_unfold with canonical merged panel ID
+ * 2. CORRECT: get_unfold with canonical merged panel ID
  *    → returns combined flat pattern, one bend
  *
  * The bug occurs when UI selects a non-canonical panel node after querying
@@ -34,7 +34,7 @@ afterEach(async () => {
 });
 
 describe('Bug: merge_unfold panel selection (MCP team)', () => {
-  it('DEMONSTRATES BUG FIX: apply_unfold NOW REJECTS stale panel A with clear error message', async () => {
+  it('DEMONSTRATES BUG FIX: get_unfold NOW REJECTS stale panel A with clear error message', async () => {
     const fixturePath = getFixturePath('testcube.step');
     const clean: any = await dispatchTool('clean_geometry', { file_path: fixturePath }, config);
 
@@ -91,14 +91,14 @@ describe('Bug: merge_unfold panel selection (MCP team)', () => {
 
     let unfoldError: any;
     try {
-      await dispatchTool('apply_unfold', {
+      await dispatchTool('get_unfold', {
         part_id: merged.merged_part_id,
         panel_id: wrongPanelNode.id,  // ← Non-canonical panel
         material_id: config.materials[0]!.id,
         transaction_id: txn.transaction_id,
       }, config);
       // Should not reach here
-      throw new Error('apply_unfold should have rejected the non-canonical panel');
+      throw new Error('get_unfold should have rejected the non-canonical panel');
     } catch (e) {
       unfoldError = e as { code?: string; message?: string };
     }
@@ -110,7 +110,7 @@ describe('Bug: merge_unfold panel selection (MCP team)', () => {
     console.log(`[BUG FIX] ✓ Correctly rejected: ${unfoldError.message}`);
 
     // 5. UNFOLD WITH CANONICAL PANEL: Should succeed
-    const unfoldCorrect: any = await dispatchTool('apply_unfold', {
+    const unfoldCorrect: any = await dispatchTool('get_unfold', {
       part_id: merged.merged_part_id,
       panel_id: merged.merged_part_id,  // ← Canonical merged node
       material_id: config.materials[0]!.id,
@@ -124,7 +124,7 @@ describe('Bug: merge_unfold panel selection (MCP team)', () => {
     await dispatchTool('rollback_transaction', { transaction_id: txn.transaction_id }, config);
   }, 30_000);
 
-  it('CORRECT BEHAVIOR: apply_unfold with canonical merged_part_id produces combined geometry', async () => {
+  it('CORRECT BEHAVIOR: get_unfold with canonical merged_part_id produces combined geometry', async () => {
     const fixturePath = getFixturePath('testcube.step');
     const clean: any = await dispatchTool('clean_geometry', { file_path: fixturePath }, config);
 
@@ -148,7 +148,7 @@ describe('Bug: merge_unfold panel selection (MCP team)', () => {
     }, config);
 
     // CORRECT: use merged_part_id for both part_id and panel_id
-    const unfoldCorrect: any = await dispatchTool('apply_unfold', {
+    const unfoldCorrect: any = await dispatchTool('get_unfold', {
       part_id: merged.merged_part_id,
       panel_id: merged.merged_part_id,  // ← CORRECT: canonical merged node
       material_id: config.materials[0]!.id,
@@ -206,7 +206,7 @@ describe('Bug: merge_unfold panel selection (MCP team)', () => {
     // ACCEPTANCE: After fix, either:
     // 1. Canonical node has a canonical: true flag, OR
     // 2. Non-canonical nodes are removed from the graph, OR
-    // 3. Error message from apply_unfold is clear about which ID to use
+    // 3. Error message from get_unfold is clear about which ID to use
 
     // For now, we verify the correct behavior: using merged_part_id works
     const canonicalPanelId = merged.merged_part_id;

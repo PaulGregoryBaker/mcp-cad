@@ -178,7 +178,7 @@ export function map3dTo2d(
     return {
       code: 'GE_PANEL_NO_FRAME',
       message: 'No panel in the manufacturing graph has a panelFrame. ' +
-               'Run split_body_by_bends or apply_unfold first to populate panel frames.',
+               'Run split_body_by_bends or get_unfold first to populate panel frames.',
     };
   }
 
@@ -186,7 +186,7 @@ export function map3dTo2d(
     return {
       code: 'GE_PANEL_NO_FRAME',
       message: 'No panel in the manufacturing graph has a panelFrame. ' +
-               'Run split_body_by_bends or apply_unfold first to populate panel frames.',
+               'Run split_body_by_bends or get_unfold first to populate panel frames.',
     };
   }
 
@@ -253,7 +253,7 @@ export function map2dTo3d(
       return {
         code: 'GE_PANEL_NO_FRAME',
         message: `Panel "${panelId}" has no panelFrame. ` +
-                 'Run split_body_by_bends or apply_unfold first.',
+                 'Run split_body_by_bends or get_unfold first.',
       };
     }
     // Panel found but point not in region — still reconstruct (legacy behaviour)

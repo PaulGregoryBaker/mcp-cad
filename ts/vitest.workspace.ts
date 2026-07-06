@@ -26,6 +26,8 @@ export default defineWorkspace([
         'tests/session.test.ts',
         'tests/config-schema.test.ts',
         'tests/unit/fuse_preflight.unit.test.ts',
+        'tests/unit/flat-pattern-projection.test.ts',
+        'tests/unit/merge_4point_mapping.test.ts',
       ],
     },
   },

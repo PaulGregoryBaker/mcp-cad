@@ -225,6 +225,13 @@ struct PanelFrameResult {
   double vX = 0, vY = 1, vZ = 0;                  // in-plane axis (shorter extent)
   double normalX = 0, normalY = 0, normalZ = 1;   // out-of-plane (thickness) axis
   double uExtentMm = 0, vExtentMm = 0, thicknessMm = 0;
+  // Outer-wire boundary, projected onto (U, V) and shifted so it's already
+  // local to origin — i.e. each point lies in [0,uExtentMm] x [0,vExtentMm].
+  // Self-consistent BY CONSTRUCTION with origin/U/V/extents above (same
+  // projection, same loop) — callers building a flat-pattern DXF for this
+  // panel should use this instead of an independently-derived unfold, which
+  // has no guarantee of agreeing with this frame's convention.
+  std::vector<std::pair<double, double>> ringLocal;
   std::string errorCode;
   std::string message;
 };

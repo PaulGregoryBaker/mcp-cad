@@ -20,12 +20,14 @@
  *
  * 2. A "tray corner" (wall + ADJACENT wall + bottom, all 3 meeting at one
  *    cube vertex) — the second merge's fold line ends up PERPENDICULAR to
- *    the first merge's, not parallel. Unfolding panel A's own prior bend
- *    into the second merge's flat pattern then needs a 2D (cruciform)
- *    layout, not the 1D sequential-zone model the fix above provides — see
- *    the [KNOWN ISSUE] comment on that case below. The union-disconnect fix
- *    still applies (no throw), but the 3D result remains wrong, logged
- *    only, not asserted.
+ *    the first merge's, not parallel. Rather than trying to re-derive the
+ *    prior composite's 3D placement from a flat-pattern rebuild (which
+ *    cannot represent a bend-layout where fold axes are non-parallel —
+ *    the two constituent planes are literally perpendicular, making any
+ *    single-anchor flat-pattern placement wrong for at least one of them),
+ *    this case now uses a live-3D BRepAlgoAPI_Fuse of the EXISTING, already-
+ *    correctly-placed 3D shells — preserving ALL panels' true 3D positions
+ *    at the cost of the new joint having a planar (not rounded) seam.
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
@@ -200,7 +202,7 @@ describe('[diagnostic] testcube.step: 3-panel chained merge_bodies_with_bend', (
     expect(issues, `[u-channel] [BUG] ${issues.length} position issue(s):\n${issues.map((s) => `  - ${s}`).join('\n')}`).toEqual([]);
   }, 60_000);
 
-  it('Tray corner: merge(innerXWall, innerYWall) -> chain; merge(chain, innerBottom) — bends perpendicular, [KNOWN ISSUE] 3D result not yet correct', async () => {
+  it('Tray corner: merge(innerXWall, innerYWall) -> chain; merge(chain, innerBottom) — bends perpendicular, correct 3D result via live-fuse path', async () => {
     const txn: any = await dispatchTool('begin_transaction', { label: 'corner-chain' }, config);
     const txId: string = txn.transaction_id;
     const innerWalls = await splitAndClassifyInnerWalls(txId);
@@ -223,32 +225,43 @@ describe('[diagnostic] testcube.step: 3-panel chained merge_bodies_with_bend', (
     expect(chainError, '[corner] step 1 (X+Y) merge must not throw').toBeNull();
     if (!chained) return;
 
-    // [KNOWN ISSUE — not a crash, falls back to pre-existing behavior]:
-    // this merge's fold line is PERPENDICULAR to the first merge's (a cube
-    // corner, not a straight channel) — re-folding Panel A's own prior bend
-    // into this merge's flat pattern would need a 2D (cruciform) bend-zone
-    // layout, not the 1D sequential-zone model the union-disconnect/N-zone
-    // fix provides (which DOES correctly handle the U-channel case above,
-    // where both folds are parallel). merge_bodies_with_bend deliberately
-    // does NOT refuse this case outright — it falls back to the SAME
-    // single-zone (flatten Panel A's prior content) behavior this codebase
-    // already shipped and tested before today's fix (see
-    // unfold_roundtrip.integration.test.ts's CASE 2, which exercises this
-    // exact 3-perpendicular-faces shape and only asserts the merge
-    // succeeds) — refusing outright would have regressed that. The 3D
-    // result's precise position is logged only, not asserted, since it's
-    // expected to remain imprecise for this configuration.
+    // Corner chain (fold axis perpendicular to the prior merge's): routes
+    // to the live-3D-fuse path (BRepAlgoAPI_Fuse on already-correctly-
+    // placed shells) rather than attempting a flat-pattern rebuild whose
+    // single-anchor placement cannot simultaneously represent both planes
+    // of a non-coplanar composite. All three panels' true 3D positions
+    // are now verified via a positionCheck assert below.
     let triple: any = null, tripleError: unknown = null;
     try {
       triple = await dispatchTool('merge_bodies_with_bend', {
         transaction_id: txId, part_a_id: chained.merged_part_id, part_b_id: innerBottom.id, target_edges: ['all'], bend_radius: 1.0,
       }, config);
     } catch (err) { tripleError = err; console.log(`[corner] step 2 merge threw: ${JSON.stringify(err, Object.getOwnPropertyNames(err as object))}`); }
-    expect(tripleError, '[corner] step 2 (chain + bottom) merge must not throw (falls back to pre-existing single-zone behavior)').toBeNull();
+    expect(tripleError, '[corner] step 2 (chain + bottom) merge must not throw').toBeNull();
     if (!triple) return;
     console.log(`[corner] triple-merged bbox: ${fmt(await dispatchTool('bounding_box', { target: triple.merged_shell_id }, config) as Bbox)}`);
-    await positionCheck('corner', triple.merged_shell_id, [
+    // Corner chains now use a live-3D-fuse path (BRepAlgoAPI_Fuse on the
+    // already-correctly-placed 3D shells) instead of the flat-pattern
+    // rebuild — giving correct positions for all three panels.
+    const cornerIssues = await positionCheck('corner', triple.merged_shell_id, [
       { label: 'innerXWall', bbox: innerXWall.bbox }, { label: 'innerYWall', bbox: innerYWall.bbox }, { label: 'innerBottom', bbox: innerBottom.bbox },
-    ], txId);
+    ], txId, 0.25);
+    expect(cornerIssues, `[corner] [BUG] ${cornerIssues.length} position issue(s):\n${cornerIssues.map((s) => `  - ${s}`).join('\n')}`).toEqual([]);
+
+    // Unfold must succeed on the merged result — the live-fuse path currently
+    // leaves non-uniform thickness at the joint (BRepAlgoAPI_Fuse without a
+    // corner-cut step), causing GE_PANEL_NON_UNIFORM_THICKNESS and "Unfold
+    // skipped" in the app. Reproduced via live testing on Cauldron2; this
+    // assert ensures any fix is verifiable without a manual app test.
+    let unfoldError: unknown = null;
+    try {
+      await dispatchTool('get_unfold', {
+        transaction_id: txId,
+        part_id: triple.merged_part_id,
+        panel_id: triple.merged_part_id,
+        material_id: 'mild_steel_1.5mm',
+      }, config);
+    } catch (err) { unfoldError = err; }
+    expect(unfoldError, `[corner] [BUG] get_unfold must not throw after a corner-chain merge: ${JSON.stringify(unfoldError)}`).toBeNull();
   }, 60_000);
 });

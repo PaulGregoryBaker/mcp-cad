@@ -1,7 +1,7 @@
 // Round-trip harness for the unfold pipeline.
 //
 // Each test composes a known-good folded shape from cube panels via
-// merge_bodies_with_bend, then runs apply_unfold and asserts the flat
+// merge_bodies_with_bend, then runs get_unfold and asserts the flat
 // dimensions match what we put in.  Cases progress from the existing
 // passing baseline (one merge) to the screenshot failure shape
 // (chained merges, translated panels, multi-bend bodies).
@@ -206,7 +206,7 @@ describe('Unfold round-trip harness', () => {
     }
     expect(mergedId).toBeDefined();
 
-    const unfold: any = await dispatchTool('apply_unfold', {
+    const unfold: any = await dispatchTool('get_unfold', {
       part_id: mergedId,
       panel_id: mergedId,
       material_id: config.materials[0]!.id,
@@ -226,7 +226,8 @@ describe('Unfold round-trip harness', () => {
 
     const txn: any = await dispatchTool('begin_transaction', { label: 'roundtrip_case1' }, config);
 
-    let mergedId: string | undefined;
+    let mergedId: string | undefined;   // stable part ID (for graph ops like get_unfold)
+    let mergedShellId: string | undefined; // live C++ shell ID (for geometry ops like bounding_box)
     let pickedPair: [PanelInfo, PanelInfo] | undefined;
     let pickedUnionBbox: Bbox | undefined;
     const attemptErrors: Array<{ pair: string; code?: string; message?: string }> = [];
@@ -243,7 +244,8 @@ describe('Unfold round-trip harness', () => {
           transaction_id: txn.transaction_id,
         }, config);
         if (m?.merged_shell_id) {
-          mergedId = m.merged_part_id; // stable: equals part_a_id input
+          mergedId = m.merged_part_id;     // stable: for graph ops (get_unfold)
+          mergedShellId = m.merged_shell_id; // live shell: for geometry ops (bounding_box)
           pickedPair = [outer[0]!, outer[i]!];
           pickedUnionBbox = unionBbox(bboxA, bboxB);
           break;
@@ -257,16 +259,15 @@ describe('Unfold round-trip harness', () => {
       console.log('[CASE 1] all merge attempts failed:', JSON.stringify(attemptErrors, null, 2));
     }
     expect(mergedId).toBeDefined();
+    expect(mergedShellId).toBeDefined();
     expect(pickedPair).toBeDefined();
     expect(pickedUnionBbox).toBeDefined();
 
-    // Direct 3D placement check (not inferred from unfold dimensions):
-    // merged shell must remain near source panels' world-space location.
-    // If merge placement regresses, merged shell often lands near canonical origin.
-    // NOTE: an L-shaped merged shell naturally centers 50-150mm from the union bbox
-    // center of two perpendicular flat panels — use a generous 200mm threshold to
-    // catch placement at the far canonical origin while accepting natural geometry offsets.
-    const mergedBbox = await dispatchTool('bounding_box', { target: mergedId }, config) as Bbox;
+    // Direct 3D placement check: merged shell must remain near source panels.
+    // Use merged_shell_id (live geometry) not merged_part_id (stable graph ID) —
+    // the live-fuse path consumes the original shells, so the original shell IDs
+    // no longer exist in the C++ kernel after the merge.
+    const mergedBbox = await dispatchTool('bounding_box', { target: mergedShellId }, config) as Bbox;
     const cMerged = bboxCenter(mergedBbox);
     const cUnion = bboxCenter(pickedUnionBbox!);
     const centerDelta = Math.hypot(
@@ -276,7 +277,7 @@ describe('Unfold round-trip harness', () => {
     );
     expect(centerDelta).toBeLessThan(200);
 
-    const unfold: any = await dispatchTool('apply_unfold', {
+    const unfold: any = await dispatchTool('get_unfold', {
       part_id: mergedId,
       panel_id: mergedId,
       material_id: config.materials[0]!.id,
@@ -290,7 +291,7 @@ describe('Unfold round-trip harness', () => {
     expect(unfold.bend_count).toBe(1);
     expect(Math.abs(maxDim - 400.0)).toBeLessThan(10.0);
     expect(Math.abs(minDim - 200.0)).toBeLessThan(10.0);
-    // Regression for the "Thickness N/A" UI symptom — handleApplyUnfold must
+    // Regression for the "Thickness N/A" UI symptom — handleGetUnfold must
     // expose detectedThickness from the C++ engine.
     expect(unfold.nominal_thickness_mm).toBeGreaterThan(0.5);
     expect(unfold.nominal_thickness_mm).toBeLessThan(3.0);
@@ -391,7 +392,7 @@ describe('Unfold round-trip harness', () => {
 
     let unfold: any;
     try {
-      unfold = await dispatchTool('apply_unfold', {
+      unfold = await dispatchTool('get_unfold', {
         part_id: mergedId,
         panel_id: mergedId,
         material_id: config.materials[0]!.id,
@@ -467,7 +468,7 @@ describe('Unfold round-trip harness', () => {
 
         let unfold: any;
         try {
-          unfold = await dispatchTool('apply_unfold', {
+          unfold = await dispatchTool('get_unfold', {
             part_id: mergedId,
             panel_id: mergedId,
             material_id: config.materials[0]!.id,
@@ -637,7 +638,7 @@ describe('Unfold round-trip harness', () => {
       throw mergeError ?? new Error('merge produced no shell');
     }
 
-    const unfold: any = await dispatchTool('apply_unfold', {
+    const unfold: any = await dispatchTool('get_unfold', {
       part_id: mergedId,   // stable merged_part_id = pA!.id
       panel_id: mergedId,
       material_id: config.materials[0]!.id,

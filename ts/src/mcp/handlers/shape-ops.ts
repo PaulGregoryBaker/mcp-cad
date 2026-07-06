@@ -510,13 +510,7 @@ interface MergePanelLookup {
   shapeDxfA: string;
   /** panelNodeB.shapeDxf, narrowed non-null (lookupMergePanels already validated this). */
   shapeDxfB: string;
-  /** True when panel A's graph already has a BendNode from a prior merge_bodies_with_bend call. */
-  isChainedMerge: boolean;
-  /**
-   * The prior merge's own BendNode (not just isChainedMerge's boolean) —
-   * needed later to re-fold panel A's OWN prior bend alongside the new one,
-   * and to reuse its persisted placement basis for an aligned chain.
-   */
+  /** The prior BendNode in panel A's manufacturing graph, if one exists. */
   priorBendNodeA: BendNode | undefined;
 }
 
@@ -551,14 +545,11 @@ function lookupMergePanels(partAId: string, partBId: string): MergePanelLookup {
   const graphA = getManufacturingGraph(partAId);
   const graphB = getManufacturingGraph(partBId);
 
-  // Detect chained merge: graphA already has a BendNode from a prior merge.
-  // When true, panelNodeA is the canonical merged node whose shapeDxf is the
-  // previously-merged flat DXF and whose bodyId is the previously-folded 3D shell.
+  // Find any prior BendNode in panel A's graph (exists when A was itself merged previously).
   let priorBendNodeA: BendNode | undefined;
   for (const node of graphA.nodes.values()) {
     if (node.type === 'BendNode') { priorBendNodeA = node as BendNode; break; }
   }
-  const isChainedMerge = priorBendNodeA !== undefined;
 
   const panelNodeA = findRepresentativePanelNode(graphA, partAId, 'part_a');
   const panelNodeB = findRepresentativePanelNode(graphB, partBId, 'part_b');
@@ -600,7 +591,7 @@ function lookupMergePanels(partAId: string, partBId: string): MergePanelLookup {
     shellBId: panelNodeB.bodyId as BodyId,
     shapeDxfA: panelNodeA.shapeDxf,
     shapeDxfB: panelNodeB.shapeDxf,
-    isChainedMerge, priorBendNodeA,
+    priorBendNodeA,
   };
 }
 
@@ -748,18 +739,20 @@ interface BendGeometry {
   bboxB3d: import('../../geometry/types').BoundingBoxResult;
   foldAxisVec: [number, number, number];
   foldAxisNorm: number;
-  /** Exact bend-aligned frame/content for panel A — null for coplanar or chained merges (see skipBendAlignedFrame). */
+  /** Exact bend-aligned frame/content for panel A — null for coplanar merges only. */
   frameAAligned: ReturnType<typeof computeBendAlignedFrame> | null;
-  /** Exact bend-aligned frame/content for panel B — null for coplanar or chained merges (see skipBendAlignedFrame). */
+  /** Exact bend-aligned frame/content for panel B — null for coplanar merges only. */
   frameBAligned: ReturnType<typeof computeBendAlignedFrame> | null;
-  /** Always the OLD computeDxfAlignedFrame convention — what gets persisted onto the resulting graph nodes' panelFrame. */
+  /** Persisted onto the resulting graph nodes' panelFrame — computeDxfAlignedFrame convention. */
   frameADxfForGraph: PanelFrame;
   frameBDxfForGraph: PanelFrame;
-  bendDirSimple: [number, number, number];
-  foldNormalSimple: [number, number, number];
-  anchorPointSimple: [number, number, number];
+  /** Current merge's in-plane direction from Panel A toward the fold (= gA). Used for bHingeOffsetMm. */
+  bendDir: [number, number, number];
+  /** +X direction of the merged flat in 3D. For composites: from flatFrame.u. For simple: gA (= normalize(bendDir)). */
   bendDirPayload: [number, number, number];
+  /** Outward normal of the merged flat in 3D. */
   foldNormalPayload: [number, number, number];
+  /** World position of the merged flat's DXF(0,0). For composites: flatFrame.origin. For simple: frameAAligned.alignedFrame.origin. */
   anchorPoint: [number, number, number];
   actualYDir: [number, number, number];
   kFactorDefault: number;
@@ -767,7 +760,8 @@ interface BendGeometry {
   thickness: number;
   /** Bend allowance (mm). */
   ba: number;
-  priorBendDirAligned: boolean;
+  /** True when panel A's prior fold axis is parallel to the new fold — used to include the prior zone in buildShellFromFlatPattern. */
+  priorFoldsParallel: boolean;
   /** Panel B's normalized outward normal (sign arbitrary from the cross product — every use is sign-independent by construction). */
   nBu: [number, number, number];
 }
@@ -790,7 +784,6 @@ function computeBendGeometry(
   shellBId: BodyId,
   panelNodeA: PanelNode,
   panelNodeB: PanelNode,
-  isChainedMerge: boolean,
   priorBendNodeA: BendNode | undefined,
   bendRadiusMm: number,
 ): BendGeometry {
@@ -900,9 +893,36 @@ function computeBendGeometry(
   };
 
   // In-plane direction from the bend edge toward each panel's body.
-  const gA = projectOntoPlane(dAB, nAu);            // points A → bend (toward B in A's plane)
+  // Fallback for both gA and gBtoBody: when dAB (after fold-axis subtraction) is nearly
+  // parallel to the panel normal, the projection is degenerate. Use cross(foldAxis, normal)
+  // to recover the in-plane perpendicular-to-fold direction. Sign is chosen to agree with
+  // the original (pre-subtraction) dAB direction.
+  const crossFoldNormal = (n: [number,number,number]): [number,number,number] | null => {
+    if (foldAxisNorm < 1e-6) return null;
+    const fu: [number,number,number] = [foldAxisVec[0]/foldAxisNorm, foldAxisVec[1]/foldAxisNorm, foldAxisVec[2]/foldAxisNorm];
+    const r: [number,number,number] = [fu[1]*n[2]-fu[2]*n[1], fu[2]*n[0]-fu[0]*n[2], fu[0]*n[1]-fu[1]*n[0]];
+    const rn = Math.hypot(r[0],r[1],r[2]);
+    return rn > 1e-9 ? [r[0]/rn, r[1]/rn, r[2]/rn] : null;
+  };
+
+  let gA = projectOntoPlane(dAB, nAu);              // points A → bend (toward B in A's plane)
+  if (Math.hypot(gA[0], gA[1], gA[2]) < 1e-9) {
+    const fb = crossFoldNormal(nAu);
+    if (fb) {
+      // Pick sign so gA points toward Panel B (dot with pre-subtraction centroid diff > 0)
+      const d = fb[0]*(cB[0]-cA[0]) + fb[1]*(cB[1]-cA[1]) + fb[2]*(cB[2]-cA[2]);
+      gA = d >= 0 ? fb : [-fb[0], -fb[1], -fb[2]];
+    }
+  }
   const gAtoBody: [number, number, number] = [-gA[0], -gA[1], -gA[2]]; // bend → A body
-  const gBtoBody = projectOntoPlane(dAB, nBu);      // bend → B body (toward B in B's plane)
+  let gBtoBody = projectOntoPlane(dAB, nBu);        // bend → B body (toward B in B's plane)
+  if (Math.hypot(gBtoBody[0], gBtoBody[1], gBtoBody[2]) < 1e-9) {
+    const fb = crossFoldNormal(nBu);
+    if (fb) {
+      const d = fb[0]*(cB[0]-cA[0]) + fb[1]*(cB[1]-cA[1]) + fb[2]*(cB[2]-cA[2]);
+      gBtoBody = d >= 0 ? fb : [-fb[0], -fb[1], -fb[2]];
+    }
+  }
 
   // Dihedral interior angle between the two surfaces; fold deviation = 180° − interior.
   // Flat (coplanar continuation) → interior 180° → fold 0°. 90° L → interior 90° → fold 90°.
@@ -952,60 +972,33 @@ function computeBendGeometry(
       ]
     : null;
   const priorFoldAxisNorm = priorFoldAxis ? Math.hypot(priorFoldAxis[0], priorFoldAxis[1], priorFoldAxis[2]) : 0;
-  const priorBendDirAligned = (priorFoldAxis && priorFoldAxisNorm > 1e-6 && foldAxisNorm > 1e-6)
+  // priorFoldsParallel: true when panel A's prior fold axis is parallel to the new fold.
+  // Used to include the prior bend zone in buildShellFromFlatPattern so the C++
+  // correctly reconstructs multi-bend shells. Not a special code path — just geometry.
+  const priorFoldsParallel = (priorFoldAxis && priorFoldAxisNorm > 1e-6 && foldAxisNorm > 1e-6)
     ? Math.abs(dot3(foldAxisVec, priorFoldAxis)) / (foldAxisNorm * priorFoldAxisNorm) > 0.99
     : false;
-  // Only the ALIGNED (parallel-fold-line) case gets the more accurate
-  // multi-zone treatment below — reusing the prior merge's basis as-is
-  // requires Panel A's content to stay unrotated for THIS merge.
-  // Deliberately NOT a hard refusal when unaligned (a cube-corner-style
-  // chain, not a straight channel): merge_bodies_with_bend already
-  // supported chaining onto a perpendicular-fold composite before today's
-  // fix (treating Panel A's prior content as one flat, unbent rectangle —
-  // see the existing single-zone path below, taken whenever priorZone ends
-  // up empty) — confirmed still relied on by
-  // unfold_roundtrip.integration.test.ts's CASE 2 (3 mutually-perpendicular
-  // cube faces), which only asserts the merge succeeds, not that the
-  // result's 3D position is exact. Refusing outright would regress an
-  // already-shipped, already-tested capability; this fix only ADDS
-  // correctness for the case it can actually solve (parallel chains),
-  // leaving the perpendicular case exactly as it was.
-  if (isChainedMerge && priorBendDirAligned) {
-    foldAlongU_A = false;
-  }
 
-  // DXF-aligned frames for both panels, computed early (everything they need
-  // is already available) so the seam-offset calculation below can use the
-  // ACTUAL placement basis instead of guessing at it from raw 3D bboxes.
-  //
-  // For the true bend case, align +X EXACTLY to bendDir/gBtoBody (see
-  // computeBendAlignedFrame's own doc comment) instead of
-  // computeDxfAlignedFrame's 0°-or-90° approximation — the two are
-  // numerically identical for a rectangular panel (bendDir is then exactly
-  // ±u or ±v already), but only the exact version is correct for a
-  // non-rectangular panel (e.g. a skewed quad facet), where neither stored
-  // axis is generally perpendicular to the true shared edge.
-  //
-  // The coplanar branch below (normalsNearlyParallel && flatWidth === null)
-  // never reads frameADxf/frameBDxf for its own placement decision (it uses
-  // `placement` from computeDxfMergePlacement instead) — kept on the old,
-  // unconditional computeDxfAlignedFrame path regardless, since bendDir's
-  // "toward the bend" meaning doesn't cleanly apply without an actual fold
-  // axis, and this avoids changing behavior for an already-validated case
-  // this fix isn't targeting.
-  // Also skip for a chained merge: dAB (bendDir/gBtoBody's basis) is derived
-  // from panel A's FULL shell bbox — for a chained merge that bbox covers
-  // the whole existing composite (e.g. an L-shaped bracket from a prior
-  // bend), not just the immediate-neighbour sub-panel frameA actually
-  // describes. That mismatch can make the "toward the bend" signal
-  // genuinely degenerate (confirmed: both a parallel-chain and a
-  // perpendicular-chain case hit this, so it's not corner-specific). Chained
-  // merges already have their own separate, validated placement mechanism
-  // (priorBendNodeA reuse when aligned; graceful single-zone fallback
-  // otherwise — see isChainedMerge's other uses below) that this fix isn't
-  // targeting — defer to the existing computeDxfAlignedFrame path unchanged.
-  const skipBendAlignedFrame = isChainedMerge || (normalsNearlyParallel && panelNodeA.flatWidth === null);
-  const frameAAligned = skipBendAlignedFrame ? null : computeBendAlignedFrame(
+  // Compute bend-aligned frames for both panels. Skipped only for coplanar merges
+  // (normalsNearlyParallel && flatWidth === null) since bendDir has no meaning there.
+  // Every bend merge — whether panel A is a simple panel or a prior composite — uses
+  // the same 4-point mapping; no special case for "chained" merges.
+  const skipBendAlignedFrame = (normalsNearlyParallel && panelNodeA.flatWidth === null);
+  // For composite Panel A (priorBendNodeA exists), skip computeBendAlignedFrame for BOTH panels:
+  //   - frameAAligned: composite's flat coordinate system comes from the manufacturing graph,
+  //     not from a fresh computation. bendDir from the composite's full-shell bbox doesn't
+  //     reliably lie in the plane of the canonical panel frame → dNorm < 0.5 failures.
+  //   - frameBAligned: gBtoBody is derived from dAB (composite centroid → Panel B centroid),
+  //     which for a composite pointing toward Panel B in its normal direction makes gBtoBody ≈ 0.
+  // In both cases, use the fallback (frameBDxfForGraph / stored flat values / anchorPoint).
+  // For composite Panel A (one that was itself the result of a prior merge), skip
+  // computeBendAlignedFrame. The composite's DXF is already in the flat coordinate frame
+  // (not in panelFrame's local coordinates), so rotating it by gA's projection into panelFrame
+  // would give the WRONG rotation. Instead, the flat's coordinate frame is read directly from
+  // panelNodeA.flatFrame in buildMergedFlatPattern. For simple panels, flatFrame is undefined
+  // and computeBendAlignedFrame is used normally.
+  const isCompositeA = panelNodeA.flatFrame !== undefined && panelNodeA.flatFrame !== null;
+  const frameAAligned = (skipBendAlignedFrame || isCompositeA) ? null : computeBendAlignedFrame(
     effectiveShapeDxfA, frameA, bendDir,
     { flatWidth: panelNodeA.flatWidth, flatHeight: panelNodeA.flatHeight },
   );
@@ -1013,161 +1006,35 @@ function computeBendGeometry(
     effectiveShapeDxfB, frameB, gBtoBody,
     { flatWidth: panelNodeB.flatWidth, flatHeight: panelNodeB.flatHeight },
   );
-  const frameADxf = frameAAligned ? frameAAligned.alignedFrame : computeDxfAlignedFrame(frameA, panelNodeA.flatWidth ?? 0, foldAlongU_A);
-  // What gets PERSISTED onto the resulting graph nodes' own panelFrame is
-  // intentionally always the OLD computeDxfAlignedFrame convention, even
-  // when frameADxf above used the new bend-aligned one for THIS merge's
-  // own placement (panel B's own placement/content never reads a "frameBDxf"
-  // at all — only frameADxf feeds anchorPointSimple/xAgreesDxf below). A
-  // future chained merge reads the canonical
-  // node's panelFrame back as ITS OWN frameA — computeBendAlignedFrame's
-  // convention (B's axis always pointing away from the bend) isn't
-  // guaranteed to match what computeDxfAlignedFrame would have produced
-  // (confirmed: a real cube-corner chain's panel B came out with the exact
-  // opposite axis direction and a different origin between the two), and
-  // the chain-reuse logic (priorBendDirAligned, priorZone, etc.) was built
-  // and validated entirely against the old convention. Keeping the
-  // persisted frame on the old convention regardless of which one placed
-  // THIS merge avoids redesigning that separate, already-validated
-  // mechanism — chained merges already skip computeBendAlignedFrame
-  // entirely (skipBendAlignedFrame above), so this only matters for
-  // whatever a LATER merge might chain onto, not this one's own placement.
   const frameADxfForGraph = computeDxfAlignedFrame(frameA, panelNodeA.flatWidth ?? 0, foldAlongU_A);
   const frameBDxfForGraph = computeDxfAlignedFrame(frameB, panelNodeB.flatWidth ?? 0, foldAlongU_B);
 
-  // Placement basis (see the long derivation at the buildShellFromFlatPattern
-  // call site, where bendDirPayload/foldNormalPayload/anchorPoint feed the
-  // C++ payload). bendDirPayload is ALWAYS the true physical bendDir (never
-  // flipped to match frameADxf.u — getPanelFrame's U/V tie-break has no
-  // relationship to bendDir, especially for a symmetric panel A where the
-  // tie-break is arbitrary either way). The merge always attaches the bend
-  // zone — and Panel B — AFTER Panel A's own content in DXF-local terms (at
-  // local x=effectiveAFlatWidth), which only lands on A's TRUE hinge edge in
-  // world space if local x=0 (frameADxf.origin) is A's FAR (non-hinge)
-  // corner. When bendDir disagrees with frameADxf.u, frameADxf.origin is
-  // actually the NEAR (hinge) corner instead — shift the anchor to the
-  // diagonally-opposite (far) corner of A's content (origin + W*u + H*v) so
-  // local x=effectiveAFlatWidth still lands back exactly on frameADxf.origin,
-  // the real hinge. Both W (fold-perpendicular) and H (fold-parallel) extents
-  // are needed: flipping the X axis (bendDirPayload vs frameADxf.u) FORCES
-  // local-Y's effective world direction to flip too (Y is mechanically Z×X;
-  // Z=foldNormalPayload never flips, so flipping X flips Y as an unavoidable
-  // side effect of keeping a valid right-handed basis) — shifting the anchor
-  // by W alone fixes only the X axis, leaving Panel A's content shifted a
-  // full H off to the wrong side along the seam axis instead of correctly
-  // reflected within its own footprint. (An earlier attempt fixed the X-only
-  // case by 180°-rotating Panel A's own DXF content/frame instead of
-  // adjusting the placement anchor — mathematically valid for the merge's
-  // own placement, but it altered the merged 3D shell's geometry in a way
-  // that broke an unrelated, independent unfoldShell re-derivation
-  // downstream; this anchor-only fix changes nothing about Panel A's actual
-  // shape or content, only the placement transform.)
-  // W must match whatever effectiveAFlatWidth (computed later, in the
-  // bend-case branch below) will actually use — since the bridge/translation
-  // placement that the anchor has to stay consistent with is keyed off THAT
-  // value, not an independently re-derived one. (An earlier version of this
-  // fix used effectiveShapeDxfA's raw DXF bbox unconditionally, reasoning
-  // that "a plain panel's DXF bbox already agrees with its stored
-  // flatWidth/flatHeight" — false in practice: even a plain split panel's
-  // raw DXF bbox can differ from its graph-stored flatWidth by a couple mm,
-  // e.g. from neutral-axis/thickness accounting.) H is the analogous
-  // fold-PARALLEL extent, which effectiveAFlatWidth never needed before this
-  // fix — derived the same way: panelNodeA's OTHER stored dimension.
+  // Placement basis: the three values that define the merged flat's coordinate system in 3D.
+  // Written into BendNode.anchor/bendDir/foldNormal and (for composites) flatFrame, so the
+  // manufacturing graph fully captures everything needed to regenerate the 3D shell.
   //
-  // For a CHAINED merge whose new fold ISN'T parallel to Panel A's own prior
-  // one (priorBendDirAligned false, below — the cube-corner case, which
-  // falls back to treating Panel A's content as one flat rectangle).
-  // panelNodeA.flatWidth/flatHeight store only the LAST individual panel's
-  // own extent, not the cumulative combined flat pattern's — the actual DXF
-  // content is the only reliable ground truth (same reasoning as
-  // effectiveAFlatWidth's own isChainedMerge override, just needed here too
-  // since this anchor-shift computation runs before that point). When the
-  // ALIGNED case applies instead, this is moot — see the isChainedMerge
-  // branch below, which replaces the whole placement basis with values
-  // reused directly from the prior merge and never reads these.
-  const aDxfBboxForAnchor = isChainedMerge ? (() => {
-    try {
-      const ring = parseFirstClosedPolyline(effectiveShapeDxfA);
-      let xMin = Number.POSITIVE_INFINITY, xMax = Number.NEGATIVE_INFINITY;
-      let yMin = Number.POSITIVE_INFINITY, yMax = Number.NEGATIVE_INFINITY;
-      for (const [x, y] of ring) { if (x < xMin) xMin = x; if (x > xMax) xMax = x; if (y < yMin) yMin = y; if (y > yMax) yMax = y; }
-      const w = xMax - xMin, h = yMax - yMin;
-      return w > 0 && h > 0 ? { w, h } : null;
-    } catch { return null; }
-  })() : null;
-  const aFlatWidthForAnchor = aDxfBboxForAnchor
-    ? (foldAlongU_A ? aDxfBboxForAnchor.h : aDxfBboxForAnchor.w)
-    : ((foldAlongU_A && panelNodeA.flatHeight !== null) ? panelNodeA.flatHeight : (panelNodeA.flatWidth ?? 0));
-  const aFlatHeightForAnchor = aDxfBboxForAnchor
-    ? (foldAlongU_A ? aDxfBboxForAnchor.w : aDxfBboxForAnchor.h)
-    : ((foldAlongU_A && panelNodeA.flatHeight !== null) ? (panelNodeA.flatWidth ?? 0) : (panelNodeA.flatHeight ?? 0));
-  const xAgreesDxf = dot3(bendDir, frameADxf.u) >= 0;
-
-  // A CHAINED merge (Panel A is itself an earlier merge_bodies_with_bend
-  // result) needs an entirely different placement basis. The "is
-  // frameADxf.u the content's own fold-perpendicular axis" question that
-  // xAgreesDxf/the anchor-shift above answer for a SIMPLE panel doesn't even
-  // apply: frameADxf is derived from frameA = panelNodeA's own panelFrame,
-  // which — because the prior merge's canonical-node id is partAId itself
-  // (nodeBId = toNodeId(partAId), see the prior call) — is actually that
-  // prior call's PANEL B's frame, describing where PANEL B's own local
-  // (0,0) sits, which is OFFSET from the combined flat pattern's TRUE local
-  // (0,0) by exactly that prior merge's own (effectiveAFlatWidth+ba,
-  // seamYOffset) placement shift. Re-deriving a correct content frame from
-  // graph data (tried: substituting the prior merge's non-canonical
-  // "panel-a-..." node's frame for frameA) doesn't work either — bendDir is
-  // computed relative to panel A's IMMEDIATE neighbour in the chain (the
-  // prior merge's Panel B — physically the side actually touching the NEW
-  // Panel B), not its root, so frameADxf (content-rooted) and bendDir
-  // (immediate-neighbour-rooted) end up describing DIFFERENT planes —
-  // comparing them via xAgreesDxf no longer has the clean
-  // parallel/antiparallel meaning that check assumes for a simple panel.
-  //
-  // The robust fix: skip re-deriving the content's coordinate system from
-  // frames entirely. The prior merge ALREADY computed and persisted
-  // (BendNode.bendDir/foldNormal/anchor) the exact world directions/origin
-  // its own local+X/+Z/(0,0,0) mapped to — and because this merge's new
-  // bend zone is placed AFTER all of Panel A's existing content along that
-  // SAME established local-X (Panel A's content is never moved or
-  // re-rotated by adding a new bend zone past its far end), those same
-  // values are STILL exactly correct for this merge's placement. Reuse them
-  // directly instead of recomputing anything frame-based. priorBendDirAligned
-  // was already computed above (and used there to refuse the unsupported
-  // perpendicular-fold case) — reused here verbatim.
-  // "As if this were a simple (non-chained) merge" placement basis — i.e.
-  // exactly what bendDirPayload/foldNormalPayload/anchorPoint computed
-  // before this whole chained-merge investigation. Still needed even when
-  // chained: the hinge-offset calculation below (bHingeOffsetMm) finds
-  // where THIS NEW bend's true hinge sits inside Panel B's own flat
-  // pattern, by walking from an anchor KNOWN to sit exactly at THIS bend's
-  // own attachment point, along THIS bend's own true direction, until it
-  // hits B's plane. anchorPoint/bendDirPayload (below, chain-aware) describe
-  // the COMBINED assembly's local origin/X-axis, which for a chained merge
-  // is rooted at panel A's distant root (ghost), not at this specific new
-  // bend at all — walking from there along the chain's established
-  // direction does not reach Panel B's plane in any geometrically
-  // meaningful way (confirmed: it degenerates to "parallel to B's plane",
-  // the formula's own degenerate fallback, producing a wildly wrong offset
-  // for a real 3-panel chain repro). These "simple" values are always
-  // correctly rooted at THIS merge's own bend, chained or not.
-  const bendDirSimple: [number, number, number] = bendDir;
-  const foldNormalSimple: [number, number, number] = foldNormal;
-  const anchorPointSimple: [number, number, number] = xAgreesDxf
-    ? [...frameADxf.origin]
-    : [
-        frameADxf.origin[0] + aFlatWidthForAnchor * frameADxf.u[0] + aFlatHeightForAnchor * frameADxf.v[0],
-        frameADxf.origin[1] + aFlatWidthForAnchor * frameADxf.u[1] + aFlatHeightForAnchor * frameADxf.v[1],
-        frameADxf.origin[2] + aFlatWidthForAnchor * frameADxf.u[2] + aFlatHeightForAnchor * frameADxf.v[2],
-      ];
-  const bendDirPayload: [number, number, number] = (isChainedMerge && priorBendDirAligned && priorBendNodeA?.bendDir)
-    ? priorBendNodeA.bendDir
-    : bendDirSimple;
-  const foldNormalPayload: [number, number, number] = (isChainedMerge && priorBendDirAligned && priorBendNodeA?.foldNormal)
-    ? priorBendNodeA.foldNormal
-    : foldNormalSimple;
-  const anchorPoint: [number, number, number] = (isChainedMerge && priorBendDirAligned && priorBendNodeA?.anchor)
-    ? priorBendNodeA.anchor
-    : anchorPointSimple;
+  // anchorPoint = world position of the merged flat's DXF(0,0).
+  // For ALL panels this is frameAAligned.alignedFrame.origin — the exact 3D position of
+  // the DXF origin after computeBendAlignedFrame's rotation+normalization. For composites
+  // this value was computed by the prior merge and stored in flatFrame.origin; reading it
+  // from the graph avoids recomputing it (which would fail because the composite's merged DXF
+  // is in the flat's coordinate system, not in pB's local frame). The value is identical in
+  // both cases — the two branches are the same approach reading from different storage.
+  const storedFlatFrame = panelNodeA.flatFrame ?? null;
+  const bendDirPayload: [number, number, number] = storedFlatFrame
+    ? storedFlatFrame.u as [number, number, number]
+    : bendDir;
+  const foldNormalPayload: [number, number, number] = storedFlatFrame
+    ? storedFlatFrame.normal as [number, number, number]
+    : foldNormal;
+  const anchorPoint: [number, number, number] = storedFlatFrame
+    ? storedFlatFrame.origin as [number, number, number]
+    : frameAAligned!.alignedFrame.origin as [number, number, number];
+  // actualYDir = seam direction stored in the graph (BendNode, flatFrame.v).
+  // Must use cross(foldNormal, bendDir) — not foldAxisUnit — because foldAxisUnit has
+  // arbitrary sign (cross(nAu,nBu) or cross(nBu,nAu)), while foldSign guarantees a
+  // consistent orientation. A sign flip here propagates into flatFrame.v and corrupts
+  // subsequent merges that read ydirA from the graph.
   const actualYDir: [number, number, number] = [
     foldNormalPayload[1] * bendDirPayload[2] - foldNormalPayload[2] * bendDirPayload[1],
     foldNormalPayload[2] * bendDirPayload[0] - foldNormalPayload[0] * bendDirPayload[2],
@@ -1187,9 +1054,8 @@ function computeBendGeometry(
     normalsNearlyParallel, foldAlongU_A, foldAlongU_B, bboxA3d, bboxB3d,
     foldAxisVec, foldAxisNorm, frameAAligned, frameBAligned,
     frameADxfForGraph, frameBDxfForGraph,
-    bendDirSimple, foldNormalSimple, anchorPointSimple,
-    bendDirPayload, foldNormalPayload, anchorPoint, actualYDir,
-    kFactorDefault, bendAngle, thickness, ba, priorBendDirAligned, nBu,
+    bendDir, bendDirPayload, foldNormalPayload, anchorPoint, actualYDir,
+    kFactorDefault, bendAngle, thickness, ba, priorFoldsParallel, nBu,
   };
 }
 
@@ -1197,12 +1063,13 @@ interface MergedFlatPattern {
   mergedDxf: string | null;
   mergedFlatWidth: number | null;
   mergedFlatHeight: number | null;
-  /** Panel A's extent along its own exact bend-aligned (or fallback) X axis. */
+  /**
+   * Fold position in the normalized merged DXF (x=0 at DXF left edge).
+   * = paX1 - xMin_merged. Used as bendZoneDxfX. Correct for both far-end
+   * (xMin=0 → paX1) and near-end (xMin<0 → effectiveBFlatWidth) without any flag.
+   */
   effectiveAFlatWidth: number;
-  /** Panel B's extent along its own exact bend-aligned (or fallback) X axis. */
   effectiveBFlatWidth: number;
-  /** Seam-axis (Y) offset panel B is placed at within the merged flat pattern. */
-  seamYOffset: number;
 }
 
 /**
@@ -1220,29 +1087,34 @@ function buildMergedFlatPattern(
   effectiveShapeDxfB: string,
   placement: MergePlacement2D,
   contactToleranceMm: number,
-  isChainedMerge: boolean,
   bend: BendGeometry,
 ): MergedFlatPattern {
   const {
     normalsNearlyParallel, bboxA3d, bboxB3d, frameAAligned, frameBAligned,
-    foldAlongU_A, foldAlongU_B, foldAxisVec, foldAxisNorm, actualYDir,
-    anchorPoint, ba, kFactorDefault, thickness,
+    foldAlongU_B, frameBDxfForGraph,
+    ba, kFactorDefault, thickness,
   } = bend;
 
-  let effectiveAFlatWidth = 0;
   let effectiveBFlatWidth = 0;
   let rotationMatrix: [[number, number], [number, number]];
   let translation: [number, number];
-  let seamYOffset = 0;
-  // Overlap used to guarantee robust polygon-union connectivity at each seam
-  // (touching-but-not-overlapping edges can register as disconnected under
-  // floating-point noise). Derived from the neutral-axis offset (kFactor *
-  // thickness) rather than a fixed constant, so it scales with the panel's
-  // actual material properties instead of an arbitrary magic number.
+  let _paX1 = 0;  // set in else block; used for bridge and effectiveAFlatWidth
+  let _baDir = 1; // +1 far-end, -1 near-end
   const MERGE_OVERLAP_MM = kFactorDefault * thickness;
 
+  // Normalize a DXF polygon to start at (0,0).
+  const normalizeDxfOrigin = (dxf: string): string => {
+    try {
+      const ring = parseFirstClosedPolyline(dxf);
+      let minX = Number.POSITIVE_INFINITY, minY = Number.POSITIVE_INFINITY;
+      for (const [x, y] of ring) { if (x < minX) minX = x; if (y < minY) minY = y; }
+      if (!isFinite(minX)) return dxf;
+      return ringToLwpolylineDxf(ring.map(([x, y]) => [x - minX, y - minY] as [number, number]));
+    } catch { return dxf; }
+  };
+
   if (normalsNearlyParallel && panelNodeA.flatWidth === null) {
-    // Coplanar merges (no graph-recorded flatWidth, so not from a split) must satisfy contact tolerance strictly.
+    // Coplanar merge: use the 2D placement directly.
     if (!placement.inContact) {
       throwError(
         ErrorCodes.GE_MERGE_FAILED,
@@ -1254,25 +1126,13 @@ function buildMergedFlatPattern(
     rotationMatrix = placement.rotationMatrix;
     translation = placement.translation;
   } else {
-    // Perpendicular/non-coplanar bend case: flatten panel B adjacent to panel A with zero gap.
-    // This avoids spurious 100mm "gap" from projecting 3D origins directly into 2D.
-    // Adjacency check: use the projected 2D placement to verify the panels share/overlap in flat space.
-    // inContact (centroid normal offset) is too strict for bend panels; DXF union connectivity is correct.
+    // Bend case: adjacency check, then 4-point 3D→2D mapping.
     if (panelNodeA.shapeDxf && panelNodeB.shapeDxf) {
-      // Adjacency gate: centroid-to-centroid displacement check.
-      // OCCT frame origins are at arbitrary face corners, so using placement.translation
-      // directly gives ~1× panel-width for adjacent panels (vs the expected ~0.5× from
-      // the old centroid approach). Use bbox centroids instead — they give a stable
-      // ~0.5× displacement for panels that share a fold edge.
       const bboxCentroid = (bb: typeof bboxA3d): [number, number, number] => [
-        (bb.x_min + bb.x_max) / 2,
-        (bb.y_min + bb.y_max) / 2,
-        (bb.z_min + bb.z_max) / 2,
+        (bb.x_min + bb.x_max) / 2, (bb.y_min + bb.y_max) / 2, (bb.z_min + bb.z_max) / 2,
       ];
-      const centA = bboxCentroid(bboxA3d);
-      const centB = bboxCentroid(bboxB3d);
+      const centA = bboxCentroid(bboxA3d), centB = bboxCentroid(bboxB3d);
       const dCent: [number, number, number] = [centB[0]-centA[0], centB[1]-centA[1], centB[2]-centA[2]];
-      // Project centroid displacement onto Panel A's two longest bbox axes (its flat plane).
       const bboxAAxes = [
         { size: bboxA3d.x_max-bboxA3d.x_min, ax: [1,0,0] as [number,number,number] },
         { size: bboxA3d.y_max-bboxA3d.y_min, ax: [0,1,0] as [number,number,number] },
@@ -1281,258 +1141,214 @@ function buildMergedFlatPattern(
       const aU = bboxAAxes[0]!.ax, aV = bboxAAxes[1]!.ax;
       const gTx = dCent[0]*aU[0]+dCent[1]*aU[1]+dCent[2]*aU[2];
       const gTy = dCent[0]*aV[0]+dCent[1]*aV[1]+dCent[2]*aV[2];
-      const aabbLongest = (bb: typeof bboxA3d): number =>
-        [bb.x_max - bb.x_min, bb.y_max - bb.y_min, bb.z_max - bb.z_min].sort((a, b) => a - b)[2] ?? 0;
-      const panelMaxFlatWidth = Math.max(aabbLongest(bboxA3d), aabbLongest(bboxB3d));
-      const centroidTxMag = Math.hypot(gTx, gTy);
-      const adjacentByDisplacement = panelMaxFlatWidth <= 0 || centroidTxMag / panelMaxFlatWidth <= 0.75;
-      if (!adjacentByDisplacement) {
-        throwError(
-          ErrorCodes.GE_MERGE_DISCONNECTED,
-          `GE_MERGE_DISCONNECTED: merge_bodies_with_bend: Panels are not adjacent ` +
-          `and cannot be merged. Panels must share a common bend edge.`,
-          false,
-        );
+      const aabbLongest = (bb: typeof bboxA3d) =>
+        [bb.x_max-bb.x_min, bb.y_max-bb.y_min, bb.z_max-bb.z_min].sort((a, b) => a - b)[2] ?? 0;
+      if ((Math.max(aabbLongest(bboxA3d), aabbLongest(bboxB3d)) > 0) &&
+          Math.hypot(gTx, gTy) / Math.max(aabbLongest(bboxA3d), aabbLongest(bboxB3d)) > 0.75) {
+        throwError(ErrorCodes.GE_MERGE_DISCONNECTED,
+          'GE_MERGE_DISCONNECTED: merge_bodies_with_bend: Panels are not adjacent and cannot be merged.', false);
       }
     }
     if (panelNodeA.flatWidth === null) {
-      throwError(
-        ErrorCodes.GE_MERGE_FAILED,
+      throwError(ErrorCodes.GE_MERGE_FAILED,
         'merge_bodies_with_bend requires panel A flatWidth for bend flattening. Run apply_unfold first.',
-        true,
-        'apply_unfold',
-      );
+        true, 'apply_unfold');
     }
-    // The 3D rotationMatrix from computeDxfMergePlacement is degenerate for perpendicular panels.
-    // In 2D flat-pattern space, panel B is unfolded and placed flat with identity rotation.
-    // effectiveAFlatWidth/effectiveBFlatWidth: each panel's extent along its
-    // OWN exact bend-aligned X axis (frameAAligned/frameBAligned — see
-    // computeBendAlignedFrame). This is the panel's actual flat-pattern
-    // content extent up to its true shared edge with the other panel,
-    // correct for ANY panel shape — a strict improvement over the old
-    // foldAlongU_A-gated flatWidth/flatHeight lookup, which is only valid
-    // for a rectangle (where the fold is necessarily parallel to one stored
-    // axis).
+
+    // ── 4-point 3D→2D mapping ───────────────────────────────────────────────
     //
-    // For a chained merge, frameAAligned/frameBAligned are null (see
-    // skipBendAlignedFrame above) — fall back to the pre-existing
-    // foldAlongU_A-gated lookup plus its own chained-merge DXF-bbox override
-    // (panelNodeA.flatWidth only stores the LAST panel's own extent for a
-    // chained merge, not the cumulative combined width), unchanged from
-    // before this fix.
-    if (frameAAligned && frameBAligned) {
-      effectiveAFlatWidth = frameAAligned.flatExtentMm;
-      effectiveBFlatWidth = frameBAligned.flatExtentMm;
-    } else {
-      effectiveAFlatWidth = (foldAlongU_A && panelNodeA.flatHeight !== null)
-        ? panelNodeA.flatHeight
-        : (panelNodeA.flatWidth ?? 0);
-      effectiveBFlatWidth = (foldAlongU_B && panelNodeB.flatHeight !== null)
-        ? panelNodeB.flatHeight
-        : (panelNodeB.flatWidth ?? 0);
-      if (isChainedMerge && effectiveShapeDxfA) {
-        try {
-          const tmpRing = parseFirstClosedPolyline(effectiveShapeDxfA);
-          let xMin = Number.POSITIVE_INFINITY, xMax = Number.NEGATIVE_INFINITY;
-          let yMin = Number.POSITIVE_INFINITY, yMax = Number.NEGATIVE_INFINITY;
-          for (const [x, y] of tmpRing) {
-            if (x < xMin) xMin = x; if (x > xMax) xMax = x;
-            if (y < yMin) yMin = y; if (y > yMax) yMax = y;
-          }
-          const dxfW = xMax - xMin;
-          const dxfH = yMax - yMin;
-          if (dxfW > 0 && dxfH > 0) effectiveAFlatWidth = foldAlongU_A ? dxfH : dxfW;
-        } catch { /* keep computed value on parse failure */ }
+    // INVARIANTS (never bypassed by DXF-bbox fallbacks or flags):
+    //   fb   = Panel B's 3D frame (gBtoBody→+X for frameBAligned; raw frame otherwise)
+    //   P1   = Panel B's hinge center in 3D = fb.origin + vCenterB * fb.v
+    //   pbU1 = where P1 is in Panel B's own DXF X axis = dot(P1 − fb.origin, fb.u)
+    //   (anchorA, bdirA, ydirA) = Panel A's flat coordinate system from manufacturing graph
+    //   paX1 = dot(P1 − anchorA, bdirA)  — where the fold edge lands in Panel A's flat
+    //   paV1 = dot(P1 − anchorA, ydirA)  — Panel B's seam alignment
+    //   paX2 = dot(centroidB − anchorA, bdirA) — which side Panel B's body is on
+    //   ba_dir = sign(paX2 − paX1): +1 Panel B extends right (far-end), −1 left (near-end)
+    //
+    // When a test fails, diagnose which of these is wrong — never add a fallback.
+
+    // Step 1: Panel B's frame and hinge center in 3D
+    const fb = frameBAligned ? frameBAligned.alignedFrame : frameBDxfForGraph;
+    const fbDxf = frameBAligned
+      ? frameBAligned.alignedDxf
+      : normalizeDxfOrigin(effectiveShapeDxfB ?? '');
+
+    const fbRing = (() => { try { return parseFirstClosedPolyline(fbDxf); } catch { return []; } })();
+    let vCenterB = 0;
+    if (fbRing.length >= 3) {
+      let yMin = Infinity, yMax = -Infinity;
+      for (let i = 0; i < fbRing.length; i++) {
+        const [x1, y1] = fbRing[i]!;
+        const [x2, y2] = fbRing[(i + 1) % fbRing.length]!;
+        // Edges crossing DXF X=0 (the hinge edge in both frameBAligned and frameBDxfForGraph conventions)
+        if ((x1 <= 1e-6 && x2 >= -1e-6) || (x2 <= 1e-6 && x1 >= -1e-6)) {
+          const t = Math.abs(x2 - x1) < 1e-9 ? 0.5 : -x1 / (x2 - x1);
+          const y = y1 + t * (y2 - y1);
+          if (y < yMin) yMin = y;
+          if (y > yMax) yMax = y;
+        }
       }
+      if (isFinite(yMin)) vCenterB = (yMin + yMax) / 2;
     }
-    rotationMatrix = [[1, 0], [0, 1]];
-    // Place panel B after the bend zone in flat pattern space.
-    // X translation: panel B starts after panel A's fold-perpendicular extent + bend allowance.
-    // Y translation: seam-axis offset, chosen so panel B's OWN true 3D
-    // seam-axis range (rangeB, from its live bbox — never panel B's DXF
-    // frame, which only describes B in isolation and isn't validated against
-    // A's actual position) lands correctly once mapped through anchorPoint +
-    // actualYDir, the SAME basis the whole merged pattern's placement uses.
+
+    // P1 = Panel B's hinge center in 3D (at DXF (0, vCenterB))
+    const P1: [number, number, number] = [
+      fb.origin[0] + vCenterB * fb.v[0],
+      fb.origin[1] + vCenterB * fb.v[1],
+      fb.origin[2] + vCenterB * fb.v[2],
+    ];
+    // pbU1: where P1 sits in Panel B's own DXF X axis
+    const pbU1 = dot3([P1[0]-fb.origin[0], P1[1]-fb.origin[1], P1[2]-fb.origin[2]], fb.u as [number,number,number]);
+
+    // Step 2: Panel A's flat coordinate system.
     //
-    // The previous formula compared raw bbox-min projections for BOTH panels
-    // (rangeB.min - rangeA.min, with a containment shortcut for composite
-    // panels). That broke whenever computeDxfAlignedFrame's rotation
-    // (foldAlongU_A) was in effect: the rotation moves panel A's own local
-    // (0,0) — anchorPoint — to a DIFFERENT corner of its range than
-    // rangeA.min assumed (confirmed: off by exactly panel A's full seam-axis
-    // extent whenever the composite/fused side's appendage is what triggers
-    // the rotation). Using anchorPoint directly (the ACTUAL reference point,
-    // already correct for panel A's own placement) instead of re-deriving it
-    // from rangeA sidesteps that blind spot entirely, and folds the
-    // containment shortcut in naturally: aligning B's bbox-min-or-max
-    // (whichever actualYDir's sign says corresponds to local Y=0) with
-    // anchorPoint reduces to the old "offset=0" case exactly when
-    // anchorPoint already sits at that point, with no separate check needed.
-    const seamOffset = foldAxisNorm > 1e-6
-      ? (() => {
-          const seamUnit: [number, number, number] = [
-            foldAxisVec[0] / foldAxisNorm, foldAxisVec[1] / foldAxisNorm, foldAxisVec[2] / foldAxisNorm,
-          ];
-          const actualYDirSeamProj = dot3(actualYDir, seamUnit);
-          if (Math.abs(actualYDirSeamProj) < 1e-6) return 0; // degenerate: actualYDir ⟂ seam axis
-          const projectBboxRange = (b: typeof bboxA3d): { min: number; max: number } => {
-            const axes: Array<[number, number, number]> = [
-              [b.x_min, b.x_max, seamUnit[0]],
-              [b.y_min, b.y_max, seamUnit[1]],
-              [b.z_min, b.z_max, seamUnit[2]],
-            ];
-            let min = 0, max = 0;
-            for (const [lo, hi, a] of axes) {
-              if (a >= 0) { min += lo * a; max += hi * a; }
-              else { min += hi * a; max += lo * a; }
-            }
-            return { min, max };
-          };
-          const rangeB = projectBboxRange(bboxB3d);
-          const target = actualYDirSeamProj > 0 ? rangeB.min : rangeB.max;
-          const anchorSeamProj = dot3(anchorPoint, seamUnit);
-          return (target - anchorSeamProj) / actualYDirSeamProj;
-        })()
-      : 0;
-    seamYOffset = seamOffset;
-    translation = [effectiveAFlatWidth + ba - MERGE_OVERLAP_MM, seamOffset];
+    // Simple Panel A: use frameAAligned.alignedFrame (from computeBendAlignedFrame). This
+    //   gives origin = flat DXF(0,0) in world, u = fold-perp (gA), v = seam direction.
+    //
+    // Composite Panel A (panelNodeA.flatFrame is set): use the stored flatFrame directly.
+    //   flatFrame.origin = world position of the composite's flat DXF(0,0).
+    //   flatFrame.u = the composite flat's X direction (= gA_first from the prior merge).
+    //   flatFrame.v = seam direction (= actualYDir_first from the prior merge).
+    //   flatFrame.vExtentMm = total composite flat width (paX1 for the far-end fold).
+    //   The composite's DXF (shapeDxf) is already in this frame — no rotation needed.
+    //   computeBendAlignedFrame is NOT called for composite Panel A because its DXF is
+    //   in the flat frame, not in panelFrame's (pB's) local frame.
+    //
+    // For composites: pC (Panel B) always attaches to the FAR end of the composite flat
+    //   (the free end of pB). This is the common case — near-end detection is not yet
+    //   implemented for composites (documented as a future improvement).
+    // anchorA, bdirA, ydirA: Panel A's flat coordinate system in 3D.
+    // Source of truth is the manufacturing graph in both cases:
+    //   Composite: read from panelNodeA.flatFrame (stored by the prior merge).
+    //   Simple:    read from frameAAligned.alignedFrame (computed from shapeDxf + panelFrame + bendDir,
+    //              all graph data; the result is stored in BendNode.anchor/bendDir after this call).
+    const flatFrameA = panelNodeA.flatFrame ?? null;
+    const anchorA: [number,number,number] = flatFrameA
+      ? flatFrameA.origin as [number,number,number]
+      : frameAAligned!.alignedFrame.origin as [number,number,number];
+    const bdirA: [number,number,number] = flatFrameA
+      ? flatFrameA.u as [number,number,number]
+      : frameAAligned!.alignedFrame.u as [number,number,number];
+    const ydirA: [number,number,number] = flatFrameA
+      ? flatFrameA.v as [number,number,number]
+      : frameAAligned!.alignedFrame.v as [number,number,number];
+
+    // Step 3: Bridge position and direction.
+    const dP1: [number,number,number] = [P1[0]-anchorA[0], P1[1]-anchorA[1], P1[2]-anchorA[2]];
+    const paX1_geom = dot3(dP1, bdirA);
+    const paY1 = dot3(dP1, ydirA);
+
+    // paX1 = where the fold edge sits in Panel A's flat X.
+    // Simple: frameAAligned.flatExtentMm (includes k-factor correction).
+    // Composite: flatFrame.vExtentMm = total composite flat width (far end).
+    const paX1 = flatFrameA
+      ? flatFrameA.vExtentMm!
+      : frameAAligned!.flatExtentMm;
+    const paX1_dxf = paX1;
+
+    // ba_dir: +1 = far end, -1 = near end.
+    // Composites always attach at the far end (pC → pB's free end).
+    // Simple panels: detect from paX1_geom position relative to midpoint.
+    const ba_dir = flatFrameA ? 1 : (paX1_geom >= paX1_dxf / 2 ? 1 : -1);
+    _paX1 = paX1;
+    _baDir = ba_dir;
+
+    // Step 4: effectiveBFlatWidth
+    effectiveBFlatWidth = frameBAligned
+      ? frameBAligned.flatExtentMm
+      : ((foldAlongU_B && panelNodeB.flatHeight !== null) ? panelNodeB.flatHeight : (panelNodeB.flatWidth ?? 0));
+
+    // Step 5: Unified placement — no branches for near/far.
+    // Rotation: identity if Panel B extends right (ba_dir=+1), x-reflection if left (-1).
+    // 4-point mapping placement:
+    // X: Panel B's hinge (at pbU1 in its DXF) maps to paX1 + ba.
+    // Y: Panel B's hinge (at vCenterB in its DXF) maps to paY1 in Panel A's flat.
+    //    Translation Y = paY1 - vCenterB.
+    rotationMatrix = ba_dir > 0 ? [[1, 0], [0, 1]] : [[-1, 0], [0, 1]];
+    translation = [
+      ba_dir > 0
+        ? paX1 + ba - pbU1 - MERGE_OVERLAP_MM
+        : paX1 - ba + pbU1 + MERGE_OVERLAP_MM,
+      paY1 - vCenterB,
+    ];
   }
 
-  // Normalize DXF to start at (0,0) for both panels to ensure proper placement.
-  // Each panel's DXF from split_body_by_bends might have different origins,
-  // so we shift both to (0,0) before computing placement and union.
-  const normalizeDxfOrigin = (dxf: string): string => {
-    try {
-      const ring = parseFirstClosedPolyline(dxf);
-      let minX = Number.POSITIVE_INFINITY;
-      let minY = Number.POSITIVE_INFINITY;
-      for (const [x, y] of ring) {
-        if (x < minX) minX = x;
-        if (y < minY) minY = y;
-      }
-      if (minX === Number.POSITIVE_INFINITY || minY === Number.POSITIVE_INFINITY) {
-        return dxf;
-      }
-      const shifted = ring.map(([x, y]) => [x - minX, y - minY] as [number, number]);
-      return ringToLwpolylineDxf(shifted);
-    } catch {
-      return dxf;
-    }
-  };
-
-  // Rotate a DXF 90° CCW so its long axis (fold-parallel) moves from X to Y.
-  // normalizePanelDxfOrientation always places the longer (U) dimension along DXF X.
-  // When foldAlongU=true, U is fold-parallel, so the DXF has fold-parallel along X and
-  // fold-perpendicular along Y.  But the merge layout expects fold-perpendicular along X
-  // (it uses effectiveAFlatWidth = flatHeight as the Panel A X-extent).  Rotating 90°
-  // fixes the mismatch: fold-perp → X, fold-parallel → Y.
-  const rotateDxf90 = (dxf: string): string => {
-    try {
-      const ring = parseFirstClosedPolyline(dxf);
-      const rotated = applyPlacement(ring, {
-        rotationMatrix: [[0, 1], [-1, 0]],
-        translation: [0, 0],
-      });
-      let minX = Number.POSITIVE_INFINITY;
-      let minY = Number.POSITIVE_INFINITY;
-      for (const [x, y] of rotated) {
-        if (x < minX) minX = x;
-        if (y < minY) minY = y;
-      }
-      const shifted = rotated.map(([x, y]) => [x - minX, y - minY] as [number, number]);
-      return ringToLwpolylineDxf(shifted);
-    } catch {
-      return dxf;
-    }
-  };
-
-  // For the bend case, use the already-computed exact bend-aligned DXF
-  // directly (frameAAligned/frameBAligned — DXF X is already exactly
-  // bendDir/gBtoBody, and the polygon is already normalized to start at
-  // (0,0)). The coplanar branch never set frameAAligned/frameBAligned (see
-  // their computation above) — fall back to the old foldAlongU_A-gated
-  // 90°-or-not rotation for that case, unchanged.
+  // Panel A DXF: for simple panels (no prior bend), use frameAAligned.alignedDxf
+  // which correctly orients the DXF with fold-perp in X (gA→+X convention).
+  // For composite panels (priorBendNodeA exists), use the raw normalized DXF —
+  // the coordinate system comes from priorBendNodeA.anchor/bendDir, not from
+  // DXF orientation, so no rotation is needed.
+  // frameAAligned is always computed now (no skipAlignedForComposite).
+  // Use alignedDxf when available; normalized raw DXF as fallback (coplanar case).
   const panelADxfForMerge: string = frameAAligned
     ? frameAAligned.alignedDxf
-    : (effectiveShapeDxfA
-        ? (foldAlongU_A ? rotateDxf90(normalizeDxfOrigin(effectiveShapeDxfA)) : normalizeDxfOrigin(effectiveShapeDxfA))
-        : '');
+    : normalizeDxfOrigin(effectiveShapeDxfA ?? '');
   const panelBDxfForMerge: string = frameBAligned
     ? frameBAligned.alignedDxf
-    : (effectiveShapeDxfB
-        ? (foldAlongU_B ? rotateDxf90(normalizeDxfOrigin(effectiveShapeDxfB)) : normalizeDxfOrigin(effectiveShapeDxfB))
-        : '');
-  // The flat-pattern gap between Panel A's rectangle and Panel B's placed
-  // rectangle is the bend-allowance zone (width = ba): real, continuous sheet
-  // material in the unfolded flat pattern, not empty space. mergeDxfOutlines's
-  // gap-nudge (meant to auto-correct small UNINTENTIONAL misalignments, per the
-  // "misalignment less than panel thickness gets adjusted" rule) cannot tell
-  // this deliberate ba-wide gap apart from one of those — and silently
-  // collapses it, shrinking Panel B's reconstructed length by ~ba. Bridging the
-  // gap with an explicit bend-allowance rectangle keeps A/bridge/B contiguous
-  // (overlapping by MERGE_OVERLAP_MM at each seam) so the union always connects
-  // on its own, without ever invoking the nudge.
-  // The bend zone only physically exists where A and B actually share the
-  // fold edge — the INTERSECTION of their own seam-axis (Y) extents, not the
-  // union. A composite/fused panel A (e.g. a wall with an attached
-  // protrusion extending past the seam) can be WIDER than B along this
-  // axis — the protrusion sticks out past B's own edge and has no
-  // continuation on B's side at all. Using the union here let that extra
-  // width leak into the bridge rectangle; once unioned with B's own
-  // (correctly-sized) rectangle next, B's reconstructed region appeared to
-  // inherit A's full extra width (e.g. showing 174mm instead of its own
-  // 150mm) — exactly the user-reported "top panel extends to 174x150
-  // instead of 150x150" bug. Falls back to the union only if A and B don't
-  // overlap along the seam at all (a degenerate case that shouldn't
-  // normally arise for a real bend, but avoids ever building a
-  // zero/negative-height bridge).
+    : normalizeDxfOrigin(effectiveShapeDxfB ?? '');
+
+  // Bridge Y-range: intersection of Panel A's and Panel B's seam extents.
+  // Falls back to union only when they don't overlap (degenerate case).
   const bridgeYRange = (() => {
-    const ringAForBridge = parseFirstClosedPolyline(panelADxfForMerge);
-    const ringBForBridge = parseFirstClosedPolyline(panelBDxfForMerge);
+    const ringA = parseFirstClosedPolyline(panelADxfForMerge);
+    const ringB = parseFirstClosedPolyline(panelBDxfForMerge);
     let yMinA = Infinity, yMaxA = -Infinity, yMinB = Infinity, yMaxB = -Infinity;
-    for (const [, y] of ringAForBridge) { yMinA = Math.min(yMinA, y); yMaxA = Math.max(yMaxA, y); }
-    for (const [, y] of ringBForBridge) { yMinB = Math.min(yMinB, y); yMaxB = Math.max(yMaxB, y); }
-    const yMinBShifted = yMinB + seamYOffset;
-    const yMaxBShifted = yMaxB + seamYOffset;
-    const intersectMin = Math.max(yMinA, yMinBShifted);
-    const intersectMax = Math.min(yMaxA, yMaxBShifted);
-    if (intersectMax > intersectMin) {
-      return { min: intersectMin, max: intersectMax };
-    }
-    return {
-      min: Math.min(yMinA, yMinBShifted),
-      max: Math.max(yMaxA, yMaxBShifted),
-    };
+    for (const [, y] of ringA) { yMinA = Math.min(yMinA, y); yMaxA = Math.max(yMaxA, y); }
+    for (const [, y] of ringB) { yMinB = Math.min(yMinB, y); yMaxB = Math.max(yMaxB, y); }
+    const tY = translation ? translation[1] : 0;
+    const yMinBShifted = yMinB + tY, yMaxBShifted = yMaxB + tY;
+    const iMin = Math.max(yMinA, yMinBShifted), iMax = Math.min(yMaxA, yMaxBShifted);
+    return iMax > iMin
+      ? { min: iMin, max: iMax }
+      : { min: Math.min(yMinA, yMinBShifted), max: Math.max(yMaxA, yMaxBShifted) };
   })();
+
+  // Bridge X-range: derived from paX1 and ba_dir — no flag needed.
+  // far-end (+1): [paX1−OVERLAP, paX1+ba+OVERLAP]
+  // near-end (−1): [paX1−ba−OVERLAP, paX1+OVERLAP]
+  // Use the paX1 and ba_dir already computed inside the else block.
+  const paX1_val = _paX1;
+  const ba_dir_val = _baDir;
+  const bridgeX0 = ba_dir_val > 0 ? paX1_val - MERGE_OVERLAP_MM : paX1_val - ba - MERGE_OVERLAP_MM;
+  const bridgeX1 = ba_dir_val > 0 ? paX1_val + ba + MERGE_OVERLAP_MM : paX1_val + MERGE_OVERLAP_MM;
   const bendZoneBridgeDxf = ringToLwpolylineDxf([
-    [effectiveAFlatWidth - MERGE_OVERLAP_MM, bridgeYRange.min],
-    [effectiveAFlatWidth + ba + MERGE_OVERLAP_MM, bridgeYRange.min],
-    [effectiveAFlatWidth + ba + MERGE_OVERLAP_MM, bridgeYRange.max],
-    [effectiveAFlatWidth - MERGE_OVERLAP_MM, bridgeYRange.max],
+    [bridgeX0, bridgeYRange.min], [bridgeX1, bridgeYRange.min],
+    [bridgeX1, bridgeYRange.max], [bridgeX0, bridgeYRange.max],
   ]);
 
   let preflightMerge: ReturnType<typeof mergeDxfOutlines>;
   try {
-    const identityPlacement = { rotationMatrix: [[1, 0], [0, 1]] as [[number, number], [number, number]], translation: [0, 0] as [number, number] };
-    const aPlusBridge = mergeDxfOutlines(panelADxfForMerge, bendZoneBridgeDxf, identityPlacement);
-    preflightMerge = mergeDxfOutlines(aPlusBridge.mergedDxf, panelBDxfForMerge, {
-      rotationMatrix,
-      translation,
-    });
+    const identity = { rotationMatrix: [[1, 0], [0, 1]] as [[number,number],[number,number]], translation: [0, 0] as [number,number] };
+    const aPlusBridge = mergeDxfOutlines(panelADxfForMerge, bendZoneBridgeDxf, identity);
+    preflightMerge = mergeDxfOutlines(aPlusBridge.mergedDxf, panelBDxfForMerge, { rotationMatrix, translation });
   } catch (err) {
-    throwError(
-      ErrorCodes.GE_MERGE_FAILED,
+    throwError(ErrorCodes.GE_MERGE_FAILED,
       `merge_bodies_with_bend DXF merge failed: ${err instanceof Error ? err.message : String(err)}. ` +
-      `No geometry merge performed because DXF is the source of truth.`,
-      false,
-    );
+      `No geometry merge performed because DXF is the source of truth.`, false);
   }
 
+  // Normalize the merged DXF so it starts at x=0. effectiveAFlatWidth = paX1 − xMin_merged:
+  // correct for both far-end (xMin=0 → paX1) and near-end (xMin<0 → effectiveBFlatWidth).
+  let mergedDxf = preflightMerge.mergedDxf;
+  let xMinMerged = 0;
+  try {
+    const ring = parseFirstClosedPolyline(mergedDxf);
+    xMinMerged = Math.min(...ring.map(([x]) => x));
+    if (xMinMerged < -0.01) {
+      mergedDxf = ringToLwpolylineDxf(ring.map(([x, y]) => [x - xMinMerged, y] as [number, number]));
+    } else {
+      xMinMerged = 0;
+    }
+  } catch { xMinMerged = 0; }
+  const effectiveAFlatWidth = paX1_val - xMinMerged;
+
   return {
-    mergedDxf: preflightMerge.mergedDxf,
+    mergedDxf,
     mergedFlatWidth: preflightMerge.metrics.bbox.width,
     mergedFlatHeight: preflightMerge.metrics.bbox.height,
-    effectiveAFlatWidth, effectiveBFlatWidth, seamYOffset,
+    effectiveAFlatWidth, effectiveBFlatWidth,
   };
 }
 
@@ -1629,8 +1445,14 @@ function computeBendAlignedFrame(
   const AXIS_ALIGN_TOL = 0.02; // ~1.1°
   if (Math.abs(b) < AXIS_ALIGN_TOL) { a = Math.sign(a) || 1; b = 0; }
   else if (Math.abs(a) < AXIS_ALIGN_TOL) { a = 0; b = Math.sign(b) || 1; }
-  // Rotation mapping unit vector (a, b) -> (1, 0): [[a, b], [-b, a]].
-  const rotated = applyPlacement(ring, { rotationMatrix: [[a, b], [-b, a]], translation: [0, 0] });
+
+  // Y-axis of the DXF rotation: always the implicit perpendicular (-b, a).
+  // For rectangular panels this is exact. For curved-surface panels the seam direction
+  // is handled by a Y-flip in buildMergedFlatPattern based on dot(fb.v, ydirA).
+  const c = -b, d = a;
+
+  // Rotation matrix: maps (a,b) → +X (fold-perpendicular) and (c,d) → +Y (fold axis).
+  const rotated = applyPlacement(ring, { rotationMatrix: [[a, b], [c, d]], translation: [0, 0] });
   let xMin = Number.POSITIVE_INFINITY, xMax = Number.NEGATIVE_INFINITY;
   let yMin = Number.POSITIVE_INFINITY, yMax = Number.NEGATIVE_INFINITY;
   for (const [x, y] of rotated) {
@@ -1663,17 +1485,17 @@ function computeBendAlignedFrame(
     : rawFlatExtentMm;
   const shifted = rotated.map(([x, y]) => [x - xMin, y - yMin] as [number, number]);
   const alignedDxf = ringToLwpolylineDxf(shifted);
-  // newU = a*u + b*v, newV = -b*u + a*v — a pure in-plane rotation, so it
-  // preserves u×v exactly (the panel's normal is unaffected).
+  // newU = a*u + b*v (fold-perp direction, aligned with +X).
+  // newV = c*u + d*v (seam direction, aligned with +Y = fold axis when foldAxisUnit provided).
   const newU: [number, number, number] = [
     a * frame.u[0] + b * frame.v[0],
     a * frame.u[1] + b * frame.v[1],
     a * frame.u[2] + b * frame.v[2],
   ];
   const newV: [number, number, number] = [
-    -b * frame.u[0] + a * frame.v[0],
-    -b * frame.u[1] + a * frame.v[1],
-    -b * frame.u[2] + a * frame.v[2],
+    c * frame.u[0] + d * frame.v[0],
+    c * frame.u[1] + d * frame.v[1],
+    c * frame.u[2] + d * frame.v[2],
   ];
   const newOrigin: [number, number, number] = [
     frame.origin[0] + xMin * newU[0] + yMin * newV[0],
@@ -1847,19 +1669,13 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
 
   const toBodyId = (s: string) => s as BodyId;
 
-  // Resolves both parts' manufacturing-graph PanelNodes + current C++ shell
-  // IDs, with all the strict graph/bodyId/shapeDxf validation this tool
-  // requires. effectiveAFlatWidth for a chained merge must come from the DXF
-  // bbox (see below), not from panelNodeA.flatWidth, which stores only the
-  // last panel's individual width — priorBendNodeA (the actual node, not
-  // just isChainedMerge's boolean) is needed later to re-fold panel A's OWN
-  // prior bend alongside the new one, and to reuse its persisted placement
-  // basis for an aligned chain — see the buildShellFromFlatPattern call
-  // site's multi-zone bendZones construction.
   const lookup = lookupMergePanels(partAId, partBId);
-  const { panelNodeA, panelNodeB, isChainedMerge, priorBendNodeA } = lookup;
+  const { panelNodeA, panelNodeB, priorBendNodeA } = lookup;
   let shellAId = lookup.shellAId;
   let shellBId = lookup.shellBId;
+  // Manufacturing graph for composite Panel A — used by buildMergedFlatPattern to project
+  // Panel B's hinge into the composite's flat using each individual panel's stored frame.
+  // graphAForChainWalk no longer needed — flat coordinate frame is stored in panelFrame
   // Derives both panels' frames, fixes chirality, normalizes DXF origins,
   // computes the 2D merge placement, and runs the pre-merge edge-alignment
   // check (rejecting or auto-correcting with close_gap as needed) — see
@@ -1877,21 +1693,15 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
   const edgeAlignmentCorrectionMm = prepared.edgeAlignmentCorrectionMm;
   shellBId = prepared.shellBId;
 
-  // Computes everything about the bend itself — fold axis/angle/direction,
-  // each panel's exact bend-aligned flat-pattern frame (or the graceful
-  // fallback for coplanar/chained merges), and the world-space placement
-  // basis the C++ rebuild call and the persisted BendNode both need — see
-  // computeBendGeometry's own doc comment.
   const bend = computeBendGeometry(
     frameA, frameB, effectiveShapeDxfA, effectiveShapeDxfB,
     shellAId, shellBId, panelNodeA, panelNodeB,
-    isChainedMerge, priorBendNodeA, bendRadius as number,
+    priorBendNodeA, bendRadius as number,
   );
   const foldAlongU_B = bend.foldAlongU_B;
   const frameADxfForGraph = bend.frameADxfForGraph;
   const frameBDxfForGraph = bend.frameBDxfForGraph;
-  const bendDirSimple = bend.bendDirSimple;
-  const anchorPointSimple = bend.anchorPointSimple;
+  const bendDir = bend.bendDir;
   const bendDirPayload = bend.bendDirPayload;
   const foldNormalPayload = bend.foldNormalPayload;
   const anchorPoint = bend.anchorPoint;
@@ -1899,21 +1709,16 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
   const bendAngle = bend.bendAngle;
   const thickness = bend.thickness;
   const ba = bend.ba;
-  const priorBendDirAligned = bend.priorBendDirAligned;
+  const actualYDir = bend.actualYDir;
+  const priorFoldsParallel = bend.priorFoldsParallel;
   const nBu = bend.nBu;
 
-  // Classifies coplanar-vs-bend placement, derives each panel's
-  // fold-perpendicular extent and seam offset, and unions panel A + an
-  // explicit bend-allowance bridge + panel B into the merged flat
-  // pattern (the merge's actual source of truth) — see
-  // buildMergedFlatPattern's own doc comment.
   const flatPattern = buildMergedFlatPattern(
     panelNodeA, panelNodeB, effectiveShapeDxfA, effectiveShapeDxfB,
-    placement, contactToleranceMm, isChainedMerge, bend,
+    placement, contactToleranceMm, bend,
   );
   const effectiveAFlatWidth = flatPattern.effectiveAFlatWidth;
   const effectiveBFlatWidth = flatPattern.effectiveBFlatWidth;
-  const seamYOffset = flatPattern.seamYOffset;
   let mergedDxf = flatPattern.mergedDxf;
   const mergedFlatWidth = flatPattern.mergedFlatWidth;
   const mergedFlatHeight = flatPattern.mergedFlatHeight;
@@ -1951,10 +1756,10 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
   // frameADxfForGraph/frameBDxfForGraph were already computed earlier
   // (right after bendDir) for the graph-persisted panelFrame fields below.
 
-  // Panel A: dxfPlacement = identity (origin of the merged flat)
+  // Panel A: identity placement at the merged flat origin
   const dxfPlacementA: Placement2D = { rotationMatrix: [[1, 0], [0, 1]], translation: [0, 0] };
-  // Panel B: translated by (effectiveAFlatWidth + ba) along flat X, plus seam Y offset
-  const dxfPlacementB: Placement2D = { rotationMatrix: [[1, 0], [0, 1]], translation: [effectiveAFlatWidth + ba, seamYOffset] };
+  // Panel B: not stored separately — the merged flat DXF (shapeDxf on the canonical node)
+  // already encodes Panel B's exact position via the 4-point mapping merge. No dxfPlacementB needed.
 
   // Upstream panel A node (non-canonical; stale after merge).
   // flatWidth stores Panel A's own fold-perpendicular extent so that
@@ -1974,10 +1779,27 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
     dxfPlacement: dxfPlacementA,
   });
 
-  // Canonical merged panel node — bodyId is null until C++ call succeeds.
-  // shapeDxf is the merged 2D outline (source of truth, FR-008).
-  // flatWidth stores Panel B's own fold-perpendicular extent. getFlatPatternDimensions
-  // traverses nodeAId → BendNode → nodeBId and sums them to get the total width.
+  // The flat coordinate frame records the merged flat's world coordinate system so that
+  // subsequent merges can use the 4-point 3D→2D mapping without re-deriving it from 3D.
+  // Stored as flatFrame (separate from panelFrame) so that panelFrame remains pB's local
+  // 3D frame — which is what computeBendGeometry needs to compute the next fold's axis and
+  // direction correctly. Using pA's flat normal for panelFrame would make the next fold's
+  // cross(nAu, nBu) degenerate whenever pC has the same normal as pA (common in U-channels).
+  //
+  // flat coordinate frame:
+  //   origin = anchorPoint     — world position of the merged flat's DXF(0,0)
+  //   u = bendDirPayload       — flat X direction (fold-perpendicular, toward Panel B)
+  //   v = actualYDir           — flat Y direction (seam/fold-axis direction)
+  //   vExtentMm = mergedFlatWidth — total composite flat width (used as paX1 in next merge)
+  //   normal = foldNormalPayload — flat's outward normal
+  const mergedFlatFrame: import('../../manufacturing/graph/types').PanelFrame = {
+    origin: anchorPoint,
+    u: bendDirPayload,
+    v: actualYDir,
+    vExtentMm: mergedFlatWidth ?? undefined,
+    normal: foldNormalPayload,
+  };
+
   mergedGraph.addNode({
     type: 'PanelNode',
     id: nodeBId,
@@ -1990,12 +1812,10 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
     canonical: true,
     shapeDxf: mergedDxf,
     panelFrame: frameBDxfForGraph,
-    dxfPlacement: dxfPlacementB,
+    flatFrame: mergedFlatFrame,
+    dxfPlacement: dxfPlacementA,
   });
 
-  // Alias node so apply_unfold(panel_id: partBId) also resolves.
-  // No BendNode points to this alias, so flatWidth must be the pre-computed total
-  // merged width for getFlatPatternDimensions to return the correct value.
   mergedGraph.addNode({
     type: 'PanelNode',
     id: nodeBIdAlias,
@@ -2008,7 +1828,8 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
     canonical: true,
     shapeDxf: mergedDxf,
     panelFrame: frameBDxfForGraph,
-    dxfPlacement: dxfPlacementB,
+    flatFrame: mergedFlatFrame,
+    dxfPlacement: dxfPlacementA,
   });
 
   const bendNode: import('../../manufacturing/graph/types').BendNode = {
@@ -2024,6 +1845,8 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
     anchor: anchorPoint,
     kFactor: kFactorDefault,
     bendAllowance: ba,
+    // Near-end: Panel B is the FIRST segment; the fold zone starts after Panel B's width.
+    // Far-end: fold zone is at the end of Panel A's content.
     bendZoneDxfX: effectiveAFlatWidth,
   };
   mergedGraph.addNode(bendNode);
@@ -2038,7 +1861,21 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
   let rollbackToken: string = snapshotId;
 
   try {
-    if (mergedDxf && getGeometryBinding().hasBuildShellFromFlatPattern()) {
+    // Perpendicular-fold composites (prior and new fold axes at 90°) cannot be
+    // reconstructed from a single flat-pattern — two non-coplanar panels can't be
+    // represented in one flat. Use fuseBodies (live BRepAlgoAPI_Fuse on the
+    // already-correctly-placed 3D shells) instead. This is a geometric fact, not
+    // a special case: the OBB thickness check in mergeBodiesWithBend fails for
+    // composite shells where the OBB min-dim is the flat-width, not 2mm material.
+    if (priorBendNodeA && !priorFoldsParallel && bend.foldAxisNorm > 1e-6 && shellAId && shellBId) {
+      const fuseRes = getGeometryBinding().fuseBodies([shellAId as string, shellBId as string], 0.15);
+      if (fuseRes.disjoint) {
+        throwError(ErrorCodes.GE_MERGE_DISCONNECTED,
+          'merge_bodies_with_bend: perpendicular-fold composite — panels do not share a touching edge.',
+          false);
+      }
+      mergedShellId = fuseRes.solid_id;
+    } else if (mergedDxf && getGeometryBinding().hasBuildShellFromFlatPattern()) {
       // Anchor: world position of the merged flat-pattern's own local (0,0,0).
       // Panel A occupies local x∈[0..effectiveAFlatWidth] by the merge's own
       // DXF convention, with local-X/-Y always panelADxfForMerge's actual
@@ -2110,24 +1947,21 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
       // relative to frameB.origin, a known point on that plane): sign
       // ambiguity in nBu cancels in the ratio, so this is robust regardless
       // of which way either panel's face-normal convention happens to point.
-      // Uses bendDirSimple/anchorPointSimple (NEVER the chain-aware
-      // bendDirPayload/anchorPoint) — this is a ray/plane intersection that
-      // must start from an anchor truly rooted at THIS bend, walking along
-      // THIS bend's own true direction; for a chained merge, anchorPoint/
-      // bendDirPayload describe the WHOLE assembly's distant root instead
-      // (see their own derivation above), which doesn't reach Panel B's
-      // plane in any geometrically meaningful way.
-      const planeDenom = dot3(bendDirSimple, nBu);
+      // Ray-plane intersection: start at anchorPoint (flat DXF(0,0) in 3D), walk along
+      // bendDir (current merge's in-plane direction toward the fold) until hitting Panel B's
+      // plane. bendDir is always the current merge's gA — not bendDirPayload, which for
+      // composites is the prior merge's flat X direction (not the current fold direction).
+      const planeDenom = dot3(bendDir, nBu);
       const hingeShiftAlongBendDir = Math.abs(planeDenom) > 1e-9
         ? -dot3(
-            [anchorPointSimple[0] - frameB.origin[0], anchorPointSimple[1] - frameB.origin[1], anchorPointSimple[2] - frameB.origin[2]],
+            [anchorPoint[0] - frameB.origin[0], anchorPoint[1] - frameB.origin[1], anchorPoint[2] - frameB.origin[2]],
             nBu,
           ) / planeDenom
-        : effectiveAFlatWidth; // degenerate (B's plane ~parallel to bendDir): fall back to the old assumption
+        : effectiveAFlatWidth;
       const hingeWorldPoint: [number, number, number] = [
-        anchorPointSimple[0] + hingeShiftAlongBendDir * bendDirSimple[0],
-        anchorPointSimple[1] + hingeShiftAlongBendDir * bendDirSimple[1],
-        anchorPointSimple[2] + hingeShiftAlongBendDir * bendDirSimple[2],
+        anchorPoint[0] + hingeShiftAlongBendDir * bendDir[0],
+        anchorPoint[1] + hingeShiftAlongBendDir * bendDir[1],
+        anchorPoint[2] + hingeShiftAlongBendDir * bendDir[2],
       ];
       const bAxisVec = foldAlongU_B ? frameB.v : frameB.u;
       const bHingeOffsetRaw = dot3(
@@ -2159,24 +1993,22 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
       const HINGE_SNAP_TOL_MM = Math.max(2.0, thickness * 2);
       if (Math.abs(bHingeOffsetMm) < HINGE_SNAP_TOL_MM) bHingeOffsetMm = 0;
       bendNode.bHingeOffsetMm = bHingeOffsetMm;
-      // When Panel A is itself the result of an earlier merge_bodies_with_bend
-      // AND this new bend's fold line is parallel to Panel A's own prior one
-      // (priorBendDirAligned — a straight channel, not a cube corner), A's
-      // OWN prior bend has to be re-folded HERE too, as an EARLIER entry in
-      // this bendZones array — otherwise buildShellFromFlatPattern treats
-      // all of A's content as one flat, unbent rectangle, silently
-      // flattening A's existing dihedral (see Bug 11 follow-up). When NOT
-      // aligned (cube-corner case), priorZone is deliberately left empty —
-      // see priorBendDirAligned's own derivation above for why falling back
-      // to the pre-existing single-zone (flatten Panel A) behavior, instead
-      // of attempting a 1-D re-fold this case can't represent, is the right
-      // call here. foldAlongU_A is only forced false (so
-      // priorBendNodeA.bendZoneDxfX, an offset along A's OWN un-rotated
-      // local-X, stays valid as-is) when priorBendDirAligned, matching this
-      // same gate.
-      const priorZone = (isChainedMerge && priorBendDirAligned && priorBendNodeA && priorBendNodeA.bendZoneDxfX !== undefined && priorBendNodeA.bendAllowance !== null)
+      // When Panel A has a prior bend in its manufacturing graph AND the prior
+      // fold is parallel to the new fold, include the prior bend zone so C++
+      // correctly reconstructs the multi-bend shell. When folds are NOT parallel
+      // (perpendicular composite), omit the prior zone — single-zone path handles it.
+      // For near-end merges (Panel B placed to the left, effectiveAFlatWidth < priorBendZone),
+      // the composite Panel A starts at effectiveAFlatWidth + ba - OVERLAP in the merged DXF.
+      // The prior fold (at priorBendNodeA.bendZoneDxfX in the composite's own DXF) must be
+      // shifted to the correct position in the merged DXF.
+      const kMOL = kFactorDefault * thickness; // MERGE_OVERLAP_MM
+      const priorZoneOffset = (priorBendNodeA?.bendZoneDxfX !== undefined && effectiveAFlatWidth < priorBendNodeA.bendZoneDxfX)
+        ? (effectiveAFlatWidth + ba - kMOL) + priorBendNodeA.bendZoneDxfX  // near-end: shift prior fold
+        : priorBendNodeA?.bendZoneDxfX ?? 0;  // far-end: use as-is
+
+      const priorZone = (priorFoldsParallel && priorBendNodeA && priorBendNodeA.bendZoneDxfX !== undefined && priorBendNodeA.bendAllowance !== null)
         ? [{
-            offsetMm: priorBendNodeA.bendZoneDxfX,
+            offsetMm: priorZoneOffset,
             widthMm: priorBendNodeA.bendAllowance,
             angleDeg: priorBendNodeA.angle,
             innerRadiusMm: priorBendNodeA.innerRadius,

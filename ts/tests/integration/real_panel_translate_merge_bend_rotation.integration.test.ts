@@ -295,7 +295,7 @@ describe('[diagnostic] merge_bodies_with_bend on REAL split panels, one translat
     // merge_bodies_with_bend persists the EXACT fold placement basis it
     // computed (foldNormal/bendDir/anchor, plus bHingeOffsetMm) onto the
     // BendNode — see shape-ops.ts's bendNode object — specifically so the
-    // bend can be regenerated from graph data alone (apply_unfold +
+    // bend can be regenerated from graph data alone (get_unfold +
     // buildShellFromFlatPattern), without re-deriving it from live shells
     // that are gone by the time anything downstream runs.
     const graphResult: any = await dispatchTool('query_graph', { part_id: merged.merged_part_id }, config);

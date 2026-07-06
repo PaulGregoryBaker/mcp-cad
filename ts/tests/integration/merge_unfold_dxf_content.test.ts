@@ -1,7 +1,7 @@
 /**
- * Test to verify that apply_unfold returns dxf_content for canonical merged panels.
+ * Test to verify that get_unfold returns dxf_content for canonical merged panels.
  *
- * User reported: apply_unfold for canonical merged panel returns unfold_id, bend_count,
+ * User reported: get_unfold for canonical merged panel returns unfold_id, bend_count,
  * graph_flat_width_mm, graph_flat_height_mm — but omits dxf_content from response.
  *
  * This test validates that dxf_content IS present in the response and contains valid DXF.
@@ -29,8 +29,8 @@ afterEach(async () => {
   }
 });
 
-describe('apply_unfold dxf_content for merged panels', () => {
-  it('apply_unfold includes dxf_content in response for canonical merged panel', async () => {
+describe('get_unfold dxf_content for merged panels', () => {
+  it('get_unfold includes dxf_content in response for canonical merged panel', async () => {
     const fixturePath = getFixturePath('testcube.step');
     const clean: any = await dispatchTool('clean_geometry', { file_path: fixturePath }, config);
 
@@ -59,15 +59,16 @@ describe('apply_unfold dxf_content for merged panels', () => {
     expect(merged.merged_shell_id).toBeDefined();
 
     // Unfold the canonical merged panel
-    const unfoldResult: any = await dispatchTool('apply_unfold', {
+    const unfoldResult: any = await dispatchTool('get_unfold', {
       part_id: merged.merged_part_id,
       panel_id: merged.merged_part_id,  // canonical panel
       material_id: config.materials[0]!.id,
       transaction_id: txn.transaction_id,
     }, config);
 
-    // Verify required fields
-    expect(unfoldResult.unfold_id).toBeDefined();
+    // Verify required fields. get_unfold returns panel_id as unfold_id (non-empty
+    // synthetic ID) so the app's emptiness check passes without needing a C++ unfold.
+    expect(unfoldResult.unfold_id).toBeTruthy();
     expect(unfoldResult.bend_count).toBe(1);
     expect(unfoldResult.graph_flat_width_mm).toBeGreaterThan(350);
     expect(unfoldResult.graph_flat_height_mm).toBeGreaterThan(150);
@@ -81,7 +82,7 @@ describe('apply_unfold dxf_content for merged panels', () => {
     expect(unfoldResult.dxf_content).toContain('SECTION');
     expect(unfoldResult.dxf_content).toContain('ENDSEC');
 
-    console.log(`✓ apply_unfold response includes dxf_content (${unfoldResult.dxf_content.length} bytes)`);
+    console.log(`✓ get_unfold response includes dxf_content (${unfoldResult.dxf_content.length} bytes)`);
     console.log(`  Flat dimensions: ${unfoldResult.graph_flat_width_mm.toFixed(1)}×${unfoldResult.graph_flat_height_mm.toFixed(1)}mm`);
     console.log(`  Bends: ${unfoldResult.bend_count} with ${unfoldResult.bend_lines.length} bend lines`);
 

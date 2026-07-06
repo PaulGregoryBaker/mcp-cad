@@ -126,7 +126,7 @@ describe('[repro] testcube.step: -75mm protrusion alignment (inner -Y wall), fus
     const fusedMass: any = await dispatchTool('mass_properties', { target: fused.solid_id, properties: ['volume'] }, config);
     console.log(`[minus75-bottom-repro] fused panel bbox: ${fmt(fusedBbox)} volume=${fusedMass.volume?.toFixed(1)}`);
 
-    const unfoldFused: any = await dispatchTool('apply_unfold', {
+    const unfoldFused: any = await dispatchTool('get_unfold', {
       transaction_id: txId, part_id: fused.part_id, panel_id: fused.part_id, material_id: config.materials[0]!.id,
     }, config);
     console.log(`[minus75-bottom-repro] fused flat: ${unfoldFused.flat_width_mm?.toFixed(1)} x ${unfoldFused.flat_height_mm?.toFixed(1)}mm`);
@@ -148,7 +148,7 @@ describe('[repro] testcube.step: -75mm protrusion alignment (inner -Y wall), fus
     const mergedBbox: Bbox = await dispatchTool('bounding_box', { target: merged.merged_shell_id }, config) as Bbox;
     console.log(`[minus75-bottom-repro] merged result bbox: ${fmt(mergedBbox)}`);
 
-    const unfold: any = await dispatchTool('apply_unfold', {
+    const unfold: any = await dispatchTool('get_unfold', {
       transaction_id: txId, part_id: merged.merged_part_id, panel_id: merged.merged_part_id, material_id: config.materials[0]!.id,
     }, config);
     console.log(`[minus75-bottom-repro] merged flat: ${unfold.flat_width_mm?.toFixed(1)} x ${unfold.flat_height_mm?.toFixed(1)}mm`);

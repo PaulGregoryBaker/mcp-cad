@@ -229,18 +229,61 @@ public:
       return allVerts;
     };
 
-    // Generate a minimal closed-rectangle LWPOLYLINE DXF string
-    auto makeDxfRect = [](double x0, double y0, double x1, double y1) -> std::string {
+    // Generate a closed LWPOLYLINE DXF string from an arbitrary point list
+    // (the segment's true clipped shape, not just a bounding rectangle).
+    auto makeDxfPolygon = [](const std::vector<std::pair<double, double>>& pts) -> std::string {
       std::ostringstream oss;
       oss << std::fixed << std::setprecision(6);
       oss << "  0\nSECTION\n  2\nENTITIES\n";
-      oss << "  0\nLWPOLYLINE\n  8\n0\n 70\n     1\n 90\n     4\n";
-      oss << " 10\n" << x0 << "\n 20\n" << y0 << "\n";
-      oss << " 10\n" << x1 << "\n 20\n" << y0 << "\n";
-      oss << " 10\n" << x1 << "\n 20\n" << y1 << "\n";
-      oss << " 10\n" << x0 << "\n 20\n" << y1 << "\n";
+      oss << "  0\nLWPOLYLINE\n  8\n0\n 70\n     1\n 90\n     " << pts.size() << "\n";
+      for (const auto& p : pts) {
+        oss << " 10\n" << p.first << "\n 20\n" << p.second << "\n";
+      }
       oss << "  0\nENDSEC\n  0\nEOF\n";
       return oss.str();
+    };
+
+    // Sutherland-Hodgman clip of a (possibly non-convex, but simple) polygon
+    // against the vertical strip xLo <= x <= xHi — i.e. two successive
+    // half-plane clips. Used to give each bend-zone segment its TRUE shape
+    // (the portion of the full flat-pattern outline actually within that
+    // segment's X-range) instead of approximating it with the segment's
+    // bounding rectangle, which over-includes area for any non-rectangular
+    // panel (confirmed: ~51% too much area for a real skewed-quad facet).
+    // For a rectangular segment, clipping to its own X-range is the
+    // identity — this is a verified no-op for every rectangular panel.
+    auto clipToXRange = [](
+        const std::vector<std::pair<double, double>>& poly,
+        double xLo, double xHi) -> std::vector<std::pair<double, double>> {
+      auto clipHalfPlane = [](
+          const std::vector<std::pair<double, double>>& in,
+          double boundary, bool keepGreaterEqual) -> std::vector<std::pair<double, double>> {
+        std::vector<std::pair<double, double>> out;
+        if (in.empty()) return out;
+        const double eps = 1e-9;
+        auto inside = [&](const std::pair<double, double>& p) {
+          return keepGreaterEqual ? (p.first >= boundary - eps) : (p.first <= boundary + eps);
+        };
+        for (size_t i = 0; i < in.size(); i++) {
+          const auto& cur = in[i];
+          const auto& prev = in[(i == 0) ? in.size() - 1 : i - 1];
+          bool curIn = inside(cur), prevIn = inside(prev);
+          if (curIn != prevIn) {
+            const double dx = cur.first - prev.first;
+            const double dy = cur.second - prev.second;
+            // dx ~ 0 means both points sit on (or essentially on) the
+            // boundary line already; skip the degenerate intersection.
+            if (std::abs(dx) > eps) {
+              const double t = (boundary - prev.first) / dx;
+              out.emplace_back(boundary, prev.second + t * dy);
+            }
+          }
+          if (curIn) out.push_back(cur);
+        }
+        return out;
+      };
+      auto step1 = clipHalfPlane(poly, xLo, true);
+      return clipHalfPlane(step1, xHi, false);
     };
 
     try {
@@ -331,49 +374,25 @@ public:
                   "Bend zone(s) must leave non-zero panels on every side (zones may not overlap)."};
       }
 
-      // Each segment's OWN Y-range — restricted to its own X-span — rather
-      // than the whole merged DXF's [yMin,yMax]. Any segment can be a fused/
-      // composite panel whose attached tab extends its own Y-range past a
-      // neighbour's; using the global range for every rectangle would
-      // stretch a narrower (simple) segment out to match a wider
-      // (composite) one's extent, even though that segment's real flat
-      // pattern never reaches that far.
-      //
-      // Checks EDGES (consecutive vertex pairs, including the closing edge),
-      // not individual vertices: for a MIDDLE segment (N>1, both its
-      // boundaries interior to the overall outline — e.g. re-folding a
-      // chained merge's own prior bend alongside a new one), polygon
-      // union/clipping is free to omit vertices exactly at that segment's
-      // boundary entirely if the polygon is straight through there (no
-      // direction change needed) — confirmed via a real 3-panel chain
-      // repro: a segment's boundary vertices were completely absent from
-      // the final outline, so vertex-containment alone found only an
-      // unrelated few-mm sliver from nearby bend-zone corner points instead
-      // of the segment's true ~150mm extent. An edge whose X-SPAN overlaps
-      // the segment's range must pass THROUGH it (the polygon boundary is
-      // piecewise-linear), so its endpoints' Y values are valid samples of
-      // the segment's true extent even when no vertex sits inside the range.
-      std::vector<double> segYMin(N + 1, std::numeric_limits<double>::max());
-      std::vector<double> segYMax(N + 1, -std::numeric_limits<double>::max());
-      for (size_t vi = 0; vi < verts.size(); vi++) {
-        const auto& v0 = verts[vi];
-        const auto& v1 = verts[(vi + 1) % verts.size()];
-        const double edgeXMin = std::min(v0.first, v1.first);
-        const double edgeXMax = std::max(v0.first, v1.first);
-        for (size_t k = 0; k <= N; k++) {
-          if (edgeXMax >= segStart[k] - 1e-6 && edgeXMin <= segEnd[k] + 1e-6) {
-            segYMin[k] = std::min({segYMin[k], v0.second, v1.second});
-            segYMax[k] = std::max({segYMax[k], v0.second, v1.second});
-          }
-        }
-      }
-      for (size_t k = 0; k <= N; k++) {
-        if (segYMin[k] > segYMax[k]) { segYMin[k] = yMin; segYMax[k] = yMax; }  // no edges found: fall back
-      }
-
+      // Each segment's TRUE shape — the full outline clipped to its own
+      // X-range — not its bounding rectangle. A rectangle over-includes
+      // area for any non-rectangular segment (confirmed: ~51% too much
+      // area for a real skewed-quad sheet-metal facet, the dominant cause
+      // of a since-fixed merge-position bug). Falls back to a structured
+      // error (never silently) if the clip degenerates to fewer than 3
+      // points — shouldn't arise for any real sheet-metal panel, since
+      // segment boundaries come from the caller's own placement math, not
+      // a coincidental exact vertex match.
       std::vector<TopoDS_Shape> segShapes(N + 1);
+      std::vector<std::vector<std::pair<double, double>>> segClipped(N + 1);
       for (size_t k = 0; k <= N; k++) {
-        std::string dxfSeg = makeDxfRect(segStart[k], segYMin[k], segEnd[k], segYMax[k]);
+        std::vector<std::pair<double, double>> clipped = clipToXRange(verts, segStart[k], segEnd[k]);
+        if (clipped.size() < 3)
+          return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
+                  "Bend zone segment " + std::to_string(k) +
+                  " clipped to fewer than 3 vertices; cannot rebuild its true shape."};
+        segClipped[k] = clipped;
+        std::string dxfSeg = makeDxfPolygon(clipped);
         DxfSheetResult     sheet = buildSheetFromDxf(dxfSeg);
         ThickenSheetResult sol   = thickenSheet(sheet.sheetId, thicknessMm);
         auto itSolid = s_.shells.find(sol.solidId);
@@ -383,9 +402,58 @@ public:
         segShapes[k] = itSolid->second.shape;
       }
 
+      // The TRUE Y-extent of a segment's own boundary edge — i.e. its
+      // clipped polygon's points lying ON the clip line x=lineX. Reading
+      // this from the segment's OWN already-correctly-clipped polygon
+      // (rather than re-querying the full merged outline at that exact X)
+      // matters because the merged outline includes a deliberately
+      // oversized BRIDGE rectangle spanning the bend-zone gap — inserted
+      // purely for 2D-union robustness — whose own width can straddle
+      // bendStart[i]/bendEnd[i] (the boundary IS the bridge's own edge).
+      // Sampling the full merged outline exactly there can land inside
+      // that bridge rectangle and report its FULL combined Y-range instead
+      // of this one segment's true (often much narrower, for a skewed
+      // quad) edge profile — confirmed: this was the cauldron merge's last
+      // remaining bbox divergence after the segment-shape and seam-offset
+      // fixes, traced to exactly this.
+      // The segment's TRUE Y-extent at a sample line x=lineX, found by
+      // intersecting the segment's OWN already-clipped polygon's edges
+      // (interpolated precisely, not approximated by nearby vertices) —
+      // NOT by checking for vertices sitting exactly at the boundary
+      // itself. The boundary x (bendStart[i]/bendEnd[i]) sits exactly on
+      // the deliberately-oversized bridge rectangle's own edge (it's
+      // inserted to span the bend-zone gap, overlapping a little past
+      // both bendStart[i] and bendEnd[i] for 2D-union robustness) — a
+      // vertex check exactly there still picks up the bridge's full
+      // height. Sampling a line INSET slightly past that overlap (by
+      // sampleInsetMm, comfortably larger than the union's own overlap
+      // margin) and reading the edge crossings there instead reads the
+      // segment's true edge profile, unaffected by the bridge.
+      auto yRangeAtSegmentBoundary = [](
+          const std::vector<std::pair<double, double>>& clippedPoly, double lineX) -> std::pair<double, double> {
+        double lo = std::numeric_limits<double>::max();
+        double hi = -std::numeric_limits<double>::max();
+        const double eps = 1e-9;
+        const size_t n = clippedPoly.size();
+        for (size_t i = 0; i < n; i++) {
+          const auto& v0 = clippedPoly[i];
+          const auto& v1 = clippedPoly[(i + 1) % n];
+          if (std::abs(v0.first - lineX) <= eps) { lo = std::min(lo, v0.second); hi = std::max(hi, v0.second); }
+          const double dx = v1.first - v0.first;
+          if (std::abs(dx) > eps) {
+            const double t = (lineX - v0.first) / dx;
+            if (t > eps && t < 1.0 - eps) {
+              const double y = v0.second + t * (v1.second - v0.second);
+              lo = std::min(lo, y); hi = std::max(hi, y);
+            }
+          }
+        }
+        return {lo, hi};
+      };
+
       auto fuseTwo = [](const TopoDS_Shape& s1, const TopoDS_Shape& s2) -> TopoDS_Shape {
         BRepAlgoAPI_Fuse f(s1, s2);
-        f.SetFuzzyValue(0.15);
+        f.SetFuzzyValue(1e-5);
         f.Build();
         if (!f.IsDone() || f.Shape().IsNull()) return TopoDS_Shape();
         return f.Shape();
@@ -436,16 +504,45 @@ public:
         // directly in the ORIGINAL/flat frame — its own geometry already IS
         // the rotation, swept through angleDeg — then carried by
         // cumulative[i] (the same transform segment i itself already has)
-        // since it's rigidly attached to segment i's side. Only needs to
-        // span where segments i and i+1 actually OVERLAP in Y (the real
-        // shared fold line, using their ORIGINAL, pre-fold Y-ranges);
-        // falling back to the full [yMin,yMax] when they don't overlap at
-        // all keeps this from degenerating to zero-width.
+        // since it's rigidly attached to segment i's side. Sized to each
+        // segment's OWN already-correctly-clipped polygon's Y-extent AT its
+        // boundary line (yRangeAtSegmentBoundary) — not the FULL merged
+        // outline sampled at that same X. The merged outline includes a
+        // deliberately oversized bridge rectangle spanning the bend-zone
+        // gap (for 2D-union robustness), whose own edges sit AT
+        // bendStart[i]/bendEnd[i] by construction — sampling the full
+        // outline there can land inside that bridge and report its whole
+        // combined Y-range instead of this one segment's true (often much
+        // narrower, for a skewed quad) edge profile. Falls back to the full
+        // [yMin,yMax] when the two boundary lines don't overlap at all
+        // (degenerate), keeping this from collapsing to zero-width.
         const BendZoneSpec& bz = zones[i];
         const double thetaRad = bz.angleDeg * M_PI / 180.0;
-        double sectorYMin = std::max(segYMin[i], segYMin[i + 1]);
-        double sectorYMax = std::min(segYMax[i], segYMax[i + 1]);
+        // Sample strictly inside each segment's own clipped polygon — past
+        // the bridge rectangle's own overlap margin (~0.3x thickness on
+        // each side in practice; thicknessMm itself is a safe, simple
+        // upper bound) — rather than exactly at bendStart[i]/bendEnd[i],
+        // which sit ON the bridge's own (deliberately wider) edge.
+        const double boundaryInsetMm = thicknessMm;
+        const auto yAtNear = yRangeAtSegmentBoundary(segClipped[i], bendStart[i] - boundaryInsetMm);
+        const auto yAtFar = yRangeAtSegmentBoundary(segClipped[i + 1], bendEnd[i] + boundaryInsetMm);
+        double sectorYMin = std::max(yAtNear.first, yAtFar.first);
+        double sectorYMax = std::min(yAtNear.second, yAtFar.second);
         if (sectorYMax <= sectorYMin) { sectorYMin = yMin; sectorYMax = yMax; }
+        // Small robustness margin: the two boundary samples above give the
+        // EXACT (zero-slack) Y-extent each adjacent segment's own true edge
+        // occupies right at the fold line. Fusing two shapes whose touching
+        // faces line up with literally zero overlap is exactly the
+        // configuration OCCT's fuzzy boolean (see fuseTwo's SetFuzzyValue)
+        // can fail to connect on floating-point noise alone — confirmed:
+        // without this margin, a real skewed-quad merge failed with
+        // "Refold produced 0 solids" where the old, looser (segment-overall-
+        // range) heuristic had enough incidental slack to mask the same
+        // razor's-edge connectivity. Matches MERGE_OVERLAP_MM's role on the
+        // 2D DXF-union side of this same merge.
+        const double SECTOR_OVERLAP_MM = std::max(0.05, thicknessMm * 0.1);
+        sectorYMin -= SECTOR_OVERLAP_MM;
+        sectorYMax += SECTOR_OVERLAP_MM;
         const double extentY = sectorYMax - sectorYMin;
 
         TopoDS_Shape bendSector;
@@ -619,10 +716,13 @@ public:
     // independent of OCCT's plane parameterization or world-space tilt.
     double uMin = 0, uMax = 0, vMin = 0, vMax = 0;
     bool firstP = true;
+    std::vector<std::pair<double, double>> rawProjected;
+    rawProjected.reserve(ring.size());
     for (const gp_Pnt& p : ring) {
       gp_Vec rel(loc, p);
       double pu = rel.Dot(gp_Vec(U.XYZ()));
       double pv = rel.Dot(gp_Vec(V.XYZ()));
+      rawProjected.emplace_back(pu, pv);
       if (firstP) { uMin = uMax = pu; vMin = vMax = pv; firstP = false; }
       else {
         uMin = std::min(uMin, pu); uMax = std::max(uMax, pu);
@@ -631,6 +731,36 @@ public:
     }
     double uExt = uMax - uMin;
     double vExt = vMax - vMin;
+
+    // Local ring: shift the same projected points so they're already
+    // relative to origin (the (uMin, vMin) corner) — self-consistent with
+    // origin/U/V by construction, since it's the exact same projection used
+    // to compute them. See PanelFrameResult::ringLocal's own comment.
+    std::vector<std::pair<double, double>> ringLocal;
+    ringLocal.reserve(rawProjected.size());
+    for (const auto& [pu, pv] : rawProjected) {
+      ringLocal.emplace_back(pu - uMin, pv - vMin);
+    }
+
+    // Canonicalize winding to CCW (positive shoelace signed area) in (U, V).
+    // BRepTools_WireExplorer's traversal direction depends on the source
+    // face's own TopoDS orientation flag, which varies face-to-face (no
+    // contract to be consistent) — left uncorrected, two panels built from
+    // this ring via buildSheetFromDxf's BRepBuilderAPI_MakeFace can end up
+    // with OPPOSITE face-normal conventions for what's geometrically the
+    // same kind of panel, flipping the orientation of anything rebuilt from
+    // it (confirmed: this exact flip broke fuse_bodies's normal-consistency
+    // check for some, but not all, cube faces). A single fixed winding for
+    // every panel's ring removes that inconsistency at the source.
+    double signedArea = 0.0;
+    for (size_t i = 0; i < ringLocal.size(); ++i) {
+      const auto& a = ringLocal[i];
+      const auto& b = ringLocal[(i + 1) % ringLocal.size()];
+      signedArea += a.first * b.second - b.first * a.second;
+    }
+    if (signedArea < 0.0) {
+      std::reverse(ringLocal.begin(), ringLocal.end());
+    }
 
     // Corner at (uMin, vMin) in world = the panel-local origin.
     gp_Pnt corner(loc.XYZ() + U.XYZ() * uMin + V.XYZ() * vMin);
@@ -652,6 +782,7 @@ public:
     out.uExtentMm = uExt;
     out.vExtentMm = vExt;
     out.thicknessMm = nMax - nMin;
+    out.ringLocal = std::move(ringLocal);
     return out;
   }
 

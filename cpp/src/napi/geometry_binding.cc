@@ -523,6 +523,14 @@ Napi::Value GetPanelFrame(const Napi::CallbackInfo& info) {
     result.Set("uExtentMm", Napi::Number::New(env, res.uExtentMm));
     result.Set("vExtentMm", Napi::Number::New(env, res.vExtentMm));
     result.Set("thicknessMm", Napi::Number::New(env, res.thicknessMm));
+    Napi::Array ring = Napi::Array::New(env, res.ringLocal.size());
+    for (size_t i = 0; i < res.ringLocal.size(); ++i) {
+      Napi::Object pt = Napi::Object::New(env);
+      pt.Set("x", Napi::Number::New(env, res.ringLocal[i].first));
+      pt.Set("y", Napi::Number::New(env, res.ringLocal[i].second));
+      ring.Set(i, pt);
+    }
+    result.Set("ring", ring);
     return result;
   })
   return env.Undefined();

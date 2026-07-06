@@ -191,7 +191,7 @@ export function resolveTargetToShell(target: string): { shellId: string; partGra
 // ─── Post-transform graph bookkeeping ────────────────────────────────────────
 
 // Updates a panel node's bodyId after a transform and registers the new shell ID
-// as an alias in parts so apply_unfold can find it by either the original part_id
+// as an alias in parts so get_unfold can find it by either the original part_id
 // or the new solid_id returned by the transform.
 export function updatePanelBodyIdAfterTransform(
   oldShellId: string,
