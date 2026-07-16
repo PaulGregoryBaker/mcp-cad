@@ -62,7 +62,7 @@ export interface GeometryBinding {
    * original world-space orientation, keeping panelFrame normals and
    * fold-direction vectors valid for subsequent merges.
    */
-  buildShellFromFlatPattern?(dxfContent: string, bendZones: unknown[], thicknessMm: number, explicitPlacement?: FlatPanelPlacement): { shellId: string };
+  buildShellFromFlatPattern?(dxfContent: string, bendZones: import('../../geometry/types').NapiBendZoneSpec[], thicknessMm: number, explicitPlacement?: FlatPanelPlacement): { shellId: string };
   /** Apply a bend between two panel solids/shells and return merged body. */
   applyBend?(panelAId: string, panelBId: string, innerRadiusMm: number, angleDeg: number, kFactor: number): { mergedShellId: string };
 }
@@ -99,8 +99,8 @@ export function addonToBinding(addon: GeometryAddon): GeometryBinding {
       ? (sheetId, thicknessMm) => addon.thickenSheet!(sheetId, thicknessMm)
       : undefined,
     buildShellFromFlatPattern: addon.buildShellFromFlatPattern
-      ? (dxf, _bendZones, thickness, explicitPlacement) =>
-          addon.buildShellFromFlatPattern!(dxf, [], thickness, explicitPlacement)
+      ? (dxf, bendZones, thickness, explicitPlacement) =>
+          addon.buildShellFromFlatPattern!(dxf, bendZones, thickness, explicitPlacement)
       : undefined,
     applyBend: addon.applyBend
       ? (panelAId, panelBId, innerRadiusMm, angleDeg, kFactor) =>

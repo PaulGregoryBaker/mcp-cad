@@ -7,7 +7,7 @@
 import { throwError, ErrorCodes } from '../errors.js';
 import { getManufacturingGraph } from '../state.js';
 import { jobQueue } from '../../geometry/jobs.js';
-import { requireString } from '../helpers.js';
+import { requireString, resolveTransactionContext, resolveRollbackToken } from '../helpers.js';
 import { getGeometryBinding } from '../state.js';
 import { filterInvalidCutLines, generateDxfFromManufacturingGraph } from '../dxf-helpers.js';
 import { MaterialStore } from '../../manufacturing/material.js';
@@ -57,7 +57,7 @@ export const unfoldExportDefinitions: object[] = [
         auto_heal_tolerance: { type: 'number', default: 0.1, maximum: 0.1, description: 'Maximum gap tolerance (mm) for automatic sewing repair.' },
         transaction_id: { type: 'string', description: 'Active transaction ID' }
       },
-      required: ['panel_id', 'material_id', 'transaction_id'],
+      required: ['part_id', 'panel_id', 'material_id', 'transaction_id'],
     },
   },
   {
@@ -97,22 +97,14 @@ export const unfoldExportDefinitions: object[] = [
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
 export function handleGetUnfold(args: Record<string, unknown>, config: ManufacturingConfig): unknown {
-  // The manufacturing graph IS the source of truth.
-  // 3D shells are DERIVED from 2D (buildShellFromFlatPattern), never the reverse.
-  // This function reads the existing graph data — it does NOT call unfoldShell
-  // or isPanelValid (both of which analyze the 3D shell to derive 2D, which
-  // is architecturally wrong). All flat-pattern data is populated by the
-  // creating operation: split_body_by_bends sets shapeDxf/flatWidth/flatHeight
-  // directly from the face ring; merge_bodies_with_bend sets mergedDxf.
-  // panel_id is required; part_id is optional and defaults to panel_id.
-  // For panels created by split_body_by_bends, the shell UUID is used as BOTH
-  // the part_id (graph container key) and the panel_id (stable node ID) — so
-  // callers may omit part_id when they only have the panel's own UUID.
-  const panelId = requireString(args, 'panel_id');
-  const partId = typeof args['part_id'] === 'string' && args['part_id'].length > 0
-    ? args['part_id']
-    : panelId;
+  // Validate required arguments explicitly.
+  const partId = requireString(args, 'part_id');
+  const panelId = typeof args['panel_id'] === 'string' && args['panel_id'].length > 0
+    ? args['panel_id']
+    : partId;
   const materialId = requireString(args, 'material_id');
+  const ctx = resolveTransactionContext(args);
+  requireString(args, 'transaction_id');
 
   const graph = getManufacturingGraph(partId);
 
@@ -236,6 +228,7 @@ export function handleGetUnfold(args: Record<string, unknown>, config: Manufactu
       node_id: z.nodeId,
     })),
     shape_history: [],
+    rollback_token: resolveRollbackToken(ctx, ""),
   };
 
   if (cutProfiles.length > 0) response['cut_profiles'] = cutProfiles;

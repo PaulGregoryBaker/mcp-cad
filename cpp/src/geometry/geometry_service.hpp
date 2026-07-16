@@ -151,7 +151,11 @@ struct CurvedRebuildResult {
 };
 
 struct BendZoneSpec {
-  double offsetMm;
+  // DXF-local hinge line: two points defining the fold axis in the flat
+  // pattern.  The polygon is split by this line into seg0 (non-fold side)
+  // and seg1 (fold side).  Replaces the old foldX/foldY X-based clipping.
+  double hingeX1 = 0.0, hingeY1 = 0.0;
+  double hingeX2 = 0.0, hingeY2 = 0.0;
   double widthMm;
   double angleDeg;
   double innerRadiusMm;
@@ -183,6 +187,19 @@ struct BendZoneSpec {
   // this offset instead of at B's origin — both the near and far sides of
   // the true hinge then land correctly on either side of it.
   double bHingeOffsetMm = 0.0;
+  // World-space fold axis (hinge line direction).
+  // Canonical +Y maps to this direction in the placement transform.
+  // Required for consistent placement regardless of foldDirection.
+  double foldAxisX = 0.0, foldAxisY = 0.0, foldAxisZ = 0.0;
+  // World-space hinge anchor: a point on the fold axis at the hinge centre.
+  // The fold rotation pivots around the line through this point parallel to
+  // foldAxis. Separated from anchor (the DXF origin) so the fold axis stays
+  // on the hinge even when bendDir tilts relative to the hinge line.
+  bool   hasHingeAnchor = false;
+  double hingeAnchorX = 0.0, hingeAnchorY = 0.0, hingeAnchorZ = 0.0;
+  // +1 = fold the RIGHT segment (seg1, X > bendEnd) — far-end.
+  // −1 = fold the LEFT  segment (seg0, X < bendStart) — near-end.
+  double foldDirection = 1.0;
 };
 
 struct BuildShellFromFlatPatternResult {

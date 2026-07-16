@@ -146,8 +146,24 @@ describe('[repro] testcube.step: +75mm protrusion alignment (inner +Y wall), fus
     expect(mergeError, '[plus75-bottom-repro] merge_bodies_with_bend must not throw').toBeNull();
     if (!merged) return;
 
-    const mergedBbox: Bbox = await dispatchTool('bounding_box', { target: merged.merged_shell_id }, config) as Bbox;
-    console.log(`[plus75-bottom-repro] merged result bbox: ${fmt(mergedBbox)}`);
+    // RUN SOLVE GEOMETRY to reconstruct the real 3D assembly from the manufacturing graph.
+    // The user has brilliantly noted that testing only the direct, pre-solve, C++ merge result
+    // hid the bugs in the graph-first reconstruction solver!
+    await dispatchTool('solve_geometry', {
+      part_id: merged.merged_part_id,
+      transaction_id: txId,
+    }, config);
+
+    const graphAfterSolve: any = await dispatchTool('query_graph', {
+      part_id: merged.merged_part_id,
+    }, config);
+    const canonicalPanelNode = graphAfterSolve.nodes.find((n: any) => n.type === 'PanelNode' && n.canonical === true);
+    expect(canonicalPanelNode).toBeDefined();
+    const solvedShellId = canonicalPanelNode.bodyId;
+    expect(solvedShellId).toBeDefined();
+
+    const mergedBbox: Bbox = await dispatchTool('bounding_box', { target: solvedShellId }, config) as Bbox;
+    console.log(`[plus75-bottom-repro] merged result bbox (solved): ${fmt(mergedBbox)}`);
 
     const unfold: any = await dispatchTool('get_unfold', {
       transaction_id: txId, part_id: merged.merged_part_id, panel_id: merged.merged_part_id, material_id: config.materials[0]!.id,
@@ -177,11 +193,11 @@ describe('[repro] testcube.step: +75mm protrusion alignment (inner +Y wall), fus
     // ── Check 1 (mesh export): must succeed on the real geometry (not
     // silently fall back to mesh/server.ts's crude topology-estimated box).
     // Run BEFORE the intersect_bodies probe below, which consumes/invalidates
-    // merged.merged_shell_id as one of its boolean inputs.
+    // solvedShellId as one of its boolean inputs.
     const gbEarly = getGeometryBinding();
     let glbError: unknown = null;
     try {
-      const glb = gbEarly.exportGlb(merged.merged_shell_id as string);
+      const glb = gbEarly.exportGlb(solvedShellId as string);
       console.log(`[plus75-bottom-repro] exportGlb succeeded, ${glb.length} bytes`);
     } catch (err) {
       glbError = err;
@@ -190,7 +206,7 @@ describe('[repro] testcube.step: +75mm protrusion alignment (inner +Y wall), fus
     expect(glbError, '[plus75-bottom-repro] [BUG] exportGlb threw').toBeNull();
 
     // ── Check 2: whole-result volume conservation (ground truth, not estimated). ──
-    const mergedMass: any = await dispatchTool('mass_properties', { target: merged.merged_shell_id, properties: ['volume'] }, config);
+    const mergedMass: any = await dispatchTool('mass_properties', { target: solvedShellId, properties: ['volume'] }, config);
     const expectedTotalVolume = fusedMass.volume + bottomMass.volume;
     const totalRatio = mergedMass.volume / expectedTotalVolume;
     console.log(`[plus75-bottom-repro] merged volume: actual=${mergedMass.volume?.toFixed(1)} expected≈${expectedTotalVolume.toFixed(1)} ratio=${totalRatio.toFixed(3)}`);
@@ -230,14 +246,14 @@ describe('[repro] testcube.step: +75mm protrusion alignment (inner +Y wall), fus
     // calls — exportGlb on target_a failed, and reusing target_b in a later
     // cut_bodies call failed with GE_SHELL_NOT_FOUND).
     const mergedCopy: any = await dispatchTool('translate_body', {
-      transaction_id: txId, targets: [merged.merged_shell_id], vector: [0, 0, 0], keep_original: true,
+      transaction_id: txId, targets: [solvedShellId], vector: [0, 0, 0], keep_original: true,
     }, config);
     const probeCopy: any = await dispatchTool('translate_body', {
       transaction_id: txId, targets: [probe.shellId], vector: [0, 0, 0], keep_original: true,
     }, config);
 
     const intersected: any = await dispatchTool('intersect_bodies', {
-      transaction_id: txId, target_a: merged.merged_shell_id, target_b: probe.shellId,
+      transaction_id: txId, target_a: solvedShellId, target_b: probe.shellId,
     }, config);
     expect(intersected.solid_id, '[plus75-bottom-repro] [BUG] intersection with panel A\'s own probe region must not be empty').toBeDefined();
     if (!intersected.solid_id) return;

@@ -428,7 +428,14 @@ Napi::Value BuildShellFromFlatPattern(const Napi::CallbackInfo& info) {
   for (uint32_t i = 0; i < zonesArr.Length(); ++i) {
     Napi::Object obj = zonesArr.Get(i).As<Napi::Object>();
     BendZoneSpec bz;
-    bz.offsetMm     = obj.Get("offsetMm").As<Napi::Number>().DoubleValue();
+    auto readOpt = [&](const char* key) -> double {
+      Napi::Value v = obj.Get(key);
+      return v.IsNumber() ? v.As<Napi::Number>().DoubleValue() : 0.0;
+    };
+    bz.hingeX1     = readOpt("hingeX1");
+    bz.hingeY1     = readOpt("hingeY1");
+    bz.hingeX2     = readOpt("hingeX2");
+    bz.hingeY2     = readOpt("hingeY2");
     bz.widthMm      = obj.Get("widthMm").As<Napi::Number>().DoubleValue();
     bz.angleDeg     = obj.Get("angleDeg").As<Napi::Number>().DoubleValue();
     bz.innerRadiusMm = obj.Get("innerRadiusMm").As<Napi::Number>().DoubleValue();
@@ -437,10 +444,6 @@ Napi::Value BuildShellFromFlatPattern(const Napi::CallbackInfo& info) {
     // the caller. No live-shell fallback: if these are absent, the rebuilt
     // shell is simply left unplaced (same as before when referenceShellId
     // was omitted).
-    auto readOpt = [&](const char* key) -> double {
-      Napi::Value v = obj.Get(key);
-      return v.IsNumber() ? v.As<Napi::Number>().DoubleValue() : 0.0;
-    };
     bz.foldNormalX = readOpt("foldNormalX");
     bz.foldNormalY = readOpt("foldNormalY");
     bz.foldNormalZ = readOpt("foldNormalZ");
@@ -453,6 +456,16 @@ Napi::Value BuildShellFromFlatPattern(const Napi::CallbackInfo& info) {
     bz.anchorY = readOpt("anchorY");
     bz.anchorZ = readOpt("anchorZ");
     bz.bHingeOffsetMm = readOpt("bHingeOffsetMm");
+    bz.foldDirection = readOpt("foldDirection");
+    if (bz.foldDirection == 0.0) bz.foldDirection = 1.0; // default to far-end
+    bz.foldAxisX   = readOpt("foldAxisX");
+    bz.foldAxisY   = readOpt("foldAxisY");
+    bz.foldAxisZ   = readOpt("foldAxisZ");
+    Napi::Value hasHA = obj.Get("hasHingeAnchor");
+    bz.hasHingeAnchor = hasHA.IsBoolean() && hasHA.As<Napi::Boolean>().Value();
+    bz.hingeAnchorX = readOpt("hingeAnchorX");
+    bz.hingeAnchorY = readOpt("hingeAnchorY");
+    bz.hingeAnchorZ = readOpt("hingeAnchorZ");
     bendZones.push_back(bz);
   }
 

@@ -13,6 +13,7 @@ import { GeometrySolver } from '../manufacturing/graph/solver.js';
 import type { GeometryBinding as SolverGeometryBinding } from '../manufacturing/graph/solver.js';
 import { FoldabilityChecker } from '../manufacturing/graph/foldability.js';
 import { toNodeId } from '../manufacturing/graph/types.js';
+import { parseFirstClosedPolyline } from '../manufacturing/dxf/merge.js';
 
 // ─── Geometry binding override (test seam) ────────────────────────────────────
 
@@ -278,6 +279,25 @@ export function registerTestPart(partId: string, panelBodyIds: string[] = [], sh
   initializeSolvers();
   _parts.delete(partId);
   const graph = createPart(partId);
+
+  let flatWidth = 100;
+  let flatHeight = 100;
+  if (shapeDxf) {
+    try {
+      const ring = parseFirstClosedPolyline(shapeDxf);
+      let xMin = Number.POSITIVE_INFINITY, xMax = Number.NEGATIVE_INFINITY;
+      let yMin = Number.POSITIVE_INFINITY, yMax = Number.NEGATIVE_INFINITY;
+      for (const [x, y] of ring) {
+        if (x < xMin) xMin = x; if (x > xMax) xMax = x;
+        if (y < yMin) yMin = y; if (y > yMax) yMax = y;
+      }
+      if (isFinite(xMin)) {
+        flatWidth = xMax - xMin;
+        flatHeight = yMax - yMin;
+      }
+    } catch {}
+  }
+
   for (const bodyId of panelBodyIds) {
     graph.addNode({
       type: 'PanelNode',
@@ -286,8 +306,8 @@ export function registerTestPart(partId: string, panelBodyIds: string[] = [], sh
       dirty: false,
       materialType: 'default',
       nominalThickness: 1.0,
-      flatWidth: 100,
-      flatHeight: 100,
+      flatWidth,
+      flatHeight,
       canonical: true,
       shapeDxf: shapeDxf ?? null,
     } as any);

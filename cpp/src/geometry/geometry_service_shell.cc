@@ -252,38 +252,48 @@ public:
     // panel (confirmed: ~51% too much area for a real skewed-quad facet).
     // For a rectangular segment, clipping to its own X-range is the
     // identity — this is a verified no-op for every rectangular panel.
-    auto clipToXRange = [](
+    // Split a polygon by a directed line segment (hinge).  Returns two
+    // polygons: seg0 (non-fold side, where cross(p−p1, dir) ≤ 0) and
+    // seg1 (fold side, where cross(p−p1, dir) > 0).
+    auto splitByHingeLine = [](
         const std::vector<std::pair<double, double>>& poly,
-        double xLo, double xHi) -> std::vector<std::pair<double, double>> {
-      auto clipHalfPlane = [](
-          const std::vector<std::pair<double, double>>& in,
-          double boundary, bool keepGreaterEqual) -> std::vector<std::pair<double, double>> {
-        std::vector<std::pair<double, double>> out;
-        if (in.empty()) return out;
-        const double eps = 1e-9;
-        auto inside = [&](const std::pair<double, double>& p) {
-          return keepGreaterEqual ? (p.first >= boundary - eps) : (p.first <= boundary + eps);
-        };
-        for (size_t i = 0; i < in.size(); i++) {
-          const auto& cur = in[i];
-          const auto& prev = in[(i == 0) ? in.size() - 1 : i - 1];
-          bool curIn = inside(cur), prevIn = inside(prev);
-          if (curIn != prevIn) {
-            const double dx = cur.first - prev.first;
-            const double dy = cur.second - prev.second;
-            // dx ~ 0 means both points sit on (or essentially on) the
-            // boundary line already; skip the degenerate intersection.
-            if (std::abs(dx) > eps) {
-              const double t = (boundary - prev.first) / dx;
-              out.emplace_back(boundary, prev.second + t * dy);
-            }
-          }
-          if (curIn) out.push_back(cur);
-        }
-        return out;
+        double x1, double y1, double x2, double y2) ->
+        std::pair<std::vector<std::pair<double, double>>,
+                  std::vector<std::pair<double, double>>> {
+      std::vector<std::pair<double, double>> seg0, seg1;
+      if (poly.empty()) return {seg0, seg1};
+      const double eps = 1e-9;
+      const double dx = x2 - x1, dy = y2 - y1;
+      const double len = std::hypot(dx, dy);
+      if (len < eps) return {poly, {}};  // degenerate hinge → all in seg0
+
+      // Signed distance from the hinge line (positive = fold side).
+      auto side = [&](double px, double py) -> double {
+        return (px - x1) * dy - (py - y1) * dx;
       };
-      auto step1 = clipHalfPlane(poly, xLo, true);
-      return clipHalfPlane(step1, xHi, false);
+
+      const size_t n = poly.size();
+      for (size_t i = 0; i < n; i++) {
+        const auto& cur  = poly[i];
+        const auto& prev = poly[(i == 0) ? n - 1 : i - 1];
+        double scur  = side(cur.first, cur.second);
+        double sprev = side(prev.first, prev.second);
+
+        bool curInSeg0  = scur <= eps;
+        bool prevInSeg0 = sprev <= eps;
+
+        if (curInSeg0 != prevInSeg0) {
+          // Edge crosses the hinge line — compute intersection.
+          double t = sprev / (sprev - scur);
+          double ix = prev.first + t * (cur.first - prev.first);
+          double iy = prev.second + t * (cur.second - prev.second);
+          seg0.emplace_back(ix, iy);
+          seg1.emplace_back(ix, iy);
+        }
+        if (curInSeg0) seg0.push_back(cur);
+        else           seg1.push_back(cur);
+      }
+      return {seg0, seg1};
     };
 
     try {
@@ -330,13 +340,10 @@ public:
       // too, alongside the new one, or it gets silently flattened — A's
       // entire DXF content would otherwise be built as ONE flat rectangle,
       // discarding whatever dihedral A's own sub-panels already had).
-      // Zones are processed in DXF-local-X order (sorted defensively — the
-      // caller is expected to already sort them, since offsetMm is measured
-      // absolutely from the whole DXF's xMin, not cumulatively from the
-      // previous zone).
+      // Zones are sorted by foldX (absolute DXF-local X position of the fold).
       std::vector<BendZoneSpec> zones = bendZones;
       std::sort(zones.begin(), zones.end(),
-                [](const BendZoneSpec& a, const BendZoneSpec& b) { return a.offsetMm < b.offsetMm; });
+                [](const BendZoneSpec& a, const BendZoneSpec& b) { return a.hingeX1 < b.hingeX1; });
       const size_t N = zones.size();
 
       auto verts = parseDxfVerts(dxfContent);
@@ -351,48 +358,34 @@ public:
         yMin = std::min(yMin, v.second); yMax = std::max(yMax, v.second);
       }
 
-      // Per-zone bend boundaries and per-segment (N+1 flat panels between/
-      // around the zones) X-ranges, all absolute (measured from xMin).
-      std::vector<double> bendStart(N), bendEnd(N);
-      for (size_t i = 0; i < N; i++) {
-        bendStart[i] = xMin + zones[i].offsetMm;
-        bendEnd[i]   = bendStart[i] + zones[i].widthMm;
-      }
-      std::vector<double> segStart(N + 1), segEnd(N + 1);
-      segStart[0] = xMin;
-      for (size_t i = 0; i < N; i++) { segEnd[i] = bendStart[i]; segStart[i + 1] = bendEnd[i]; }
-      segEnd[N] = xMax;
-
-      for (size_t i = 0; i < N; i++) {
-        if (zones[i].offsetMm < 0.0 || bendEnd[i] > xMax + 1e-6)
-          return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
-                  "Bend zone extends beyond DXF flat-pattern bounds."};
-      }
-      for (size_t k = 0; k <= N; k++) {
-        if (segEnd[k] - segStart[k] < 1e-6)
-          return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
-                  "Bend zone(s) must leave non-zero panels on every side (zones may not overlap)."};
-      }
-
-      // Each segment's TRUE shape — the full outline clipped to its own
-      // X-range — not its bounding rectangle. A rectangle over-includes
-      // area for any non-rectangular segment (confirmed: ~51% too much
-      // area for a real skewed-quad sheet-metal facet, the dominant cause
-      // of a since-fixed merge-position bug). Falls back to a structured
-      // error (never silently) if the clip degenerates to fewer than 3
-      // points — shouldn't arise for any real sheet-metal panel, since
-      // segment boundaries come from the caller's own placement math, not
-      // a coincidental exact vertex match.
+      // Segment splitting: for each zone, split the DXF outline by the
+      // hinge line.  seg0 = non-fold side, seg1 = fold side.
+      // The fold axis is the Y-axis through the hinge line's X position.
       std::vector<TopoDS_Shape> segShapes(N + 1);
       std::vector<std::vector<std::pair<double, double>>> segClipped(N + 1);
-      for (size_t k = 0; k <= N; k++) {
-        std::vector<std::pair<double, double>> clipped = clipToXRange(verts, segStart[k], segEnd[k]);
-        if (clipped.size() < 3)
+      std::vector<double> bendStart(N), bendEnd(N);
+      for (size_t i = 0; i < N; i++) {
+        double hx = (zones[i].hingeX1 + zones[i].hingeX2) * 0.5;
+        bendStart[i] = hx;
+        bendEnd[i]   = hx + zones[i].widthMm;
+      }
+      // For single-zone (N=1): split once → seg0, seg1.
+      // For multi-zone: split recursively (not yet implemented).
+      if (N == 1) {
+        auto [s0, s1] = splitByHingeLine(verts,
+            zones[0].hingeX1, zones[0].hingeY1,
+            zones[0].hingeX2, zones[0].hingeY2);
+        if (s0.size() < 3 || s1.size() < 3)
           return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
-                  "Bend zone segment " + std::to_string(k) +
-                  " clipped to fewer than 3 vertices; cannot rebuild its true shape."};
-        segClipped[k] = clipped;
-        std::string dxfSeg = makeDxfPolygon(clipped);
+                  "Hinge-line split produced a degenerate segment."};
+        segClipped[0] = s0;
+        segClipped[1] = s1;
+      } else {
+        return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
+                "Multi-zone hinge-line splitting not yet implemented."};
+      }
+      for (size_t k = 0; k <= N; k++) {
+        std::string dxfSeg = makeDxfPolygon(segClipped[k]);
         DxfSheetResult     sheet = buildSheetFromDxf(dxfSeg);
         ThickenSheetResult sol   = thickenSheet(sheet.sheetId, thicknessMm);
         auto itSolid = s_.shells.find(sol.solidId);
@@ -459,65 +452,30 @@ public:
         return f.Shape();
       };
 
-      // Cumulative per-segment transforms: CT[0] is identity (segment 0,
-      // like Panel A in the original single-zone version, never moves).
-      // CT[k+1] = CT[k] applied AFTER zone k's own fold (translate so the
-      // true hinge — bz.bHingeOffsetMm inside the near segment's own flat
-      // pattern, past its near/glue edge at bendEnd — lands at the bend
-      // line, then rotate -angleDeg about the Y hinge at (bendStart,*,0),
-      // both still expressed in the ORIGINAL/flat frame) — i.e. each new
-      // fold is computed relative to its own (already-correctly-folded)
-      // near segment, then carried along by everything that segment
-      // already accumulated. This is exactly like folding a paper strip:
-      // each crease is folded in the strip's OWN current local frame, and
-      // the whole already-folded flap moves together with it.
+      // Cumulative per-segment transforms — single unified path: seg0 stays
+      // at cumulative[i] (identity for the first zone), seg1 is translated
+      // left to close the bend-zone gap then rotated around the fold axis.
       std::vector<gp_Trsf> cumulative(N + 1);
       cumulative[0] = gp_Trsf();
       for (size_t i = 0; i < N; i++) {
         const BendZoneSpec& bz = zones[i];
         const double thetaRad = bz.angleDeg * M_PI / 180.0;
 
-        gp_Trsf transTrsf;
-        transTrsf.SetTranslation(gp_Vec(-(bz.widthMm + bz.bHingeOffsetMm), 0.0, 0.0));
+        // Cumulative transform: rotate seg[i+1] around the hinge line by −θ.
+        // No translation — the hinge is the shared edge between panels; both
+        // touch at the fold axis.  The bend-zone material (widthMm) curves
+        // naturally and the fuse connector bridges the gap.
         gp_Ax1 bendAxis(gp_Pnt(bendStart[i], 0.0, 0.0), gp_Dir(0.0, 1.0, 0.0));
-        gp_Trsf rotTrsf;
-        rotTrsf.SetRotation(bendAxis, -thetaRad);
-        gp_Trsf zoneFold = rotTrsf.Multiplied(transTrsf); // translate, then rotate, in original/flat coords
-
-        cumulative[i + 1] = cumulative[i].Multiplied(zoneFold); // apply this zone's fold first, then everything segment i already carries
+        gp_Trsf zoneFold;
+        zoneFold.SetRotation(bendAxis, -thetaRad);
+        cumulative[i + 1] = cumulative[i].Multiplied(zoneFold);
       }
 
-      // Build the final assembly strictly LEFT TO RIGHT (segment 0, zone 0's
-      // connector, segment 1, zone 1's connector, segment 2, ...) — the same
-      // pairwise fuse order the original single-zone code used (Panel A,
-      // then the bend connector, then Panel B), generalized. Boolean union
-      // is associative in principle, but OCCT's fuzzy Boolean is a
-      // numerical operation whose exact result CAN depend on grouping —
-      // matching the original order exactly for N=1 keeps that case
-      // byte-for-byte equivalent instead of just "topologically the same."
-      TopoDS_Shape merged = segShapes[0];
+      // Build the final assembly: seg0 stationary, connector at fold axis,
+      // seg1 translated+rotated.  Single unified path.
+      TopoDS_Shape merged = BRepBuilderAPI_Transform(segShapes[0], cumulative[0], true).Shape();
       for (size_t i = 0; i < N; i++) {
-        // Bend connector for zone i: a solid cylindrical sector (apex on the
-        // z=0 hinge, radius = thickness) that fills the wedge between
-        // segment i's bend face (x=bendStart[i], z∈[0,t], pointing +Z) and
-        // segment i+1's (about-to-be-folded) rotated bend face. Built
-        // directly in the ORIGINAL/flat frame — its own geometry already IS
-        // the rotation, swept through angleDeg — then carried by
-        // cumulative[i] (the same transform segment i itself already has)
-        // since it's rigidly attached to segment i's side. Sized to each
-        // segment's OWN already-correctly-clipped polygon's Y-extent AT its
-        // boundary line (yRangeAtSegmentBoundary) — not the FULL merged
-        // outline sampled at that same X. The merged outline includes a
-        // deliberately oversized bridge rectangle spanning the bend-zone
-        // gap (for 2D-union robustness), whose own edges sit AT
-        // bendStart[i]/bendEnd[i] by construction — sampling the full
-        // outline there can land inside that bridge and report its whole
-        // combined Y-range instead of this one segment's true (often much
-        // narrower, for a skewed quad) edge profile. Falls back to the full
-        // [yMin,yMax] when the two boundary lines don't overlap at all
-        // (degenerate), keeping this from collapsing to zero-width.
         const BendZoneSpec& bz = zones[i];
-        const double thetaRad = bz.angleDeg * M_PI / 180.0;
         // Sample strictly inside each segment's own clipped polygon — past
         // the bridge rectangle's own overlap margin (~0.3x thickness on
         // each side in practice; thicknessMm itself is a safe, simple
@@ -528,7 +486,9 @@ public:
         const auto yAtFar = yRangeAtSegmentBoundary(segClipped[i + 1], bendEnd[i] + boundaryInsetMm);
         double sectorYMin = std::max(yAtNear.first, yAtFar.first);
         double sectorYMax = std::min(yAtNear.second, yAtFar.second);
-        if (sectorYMax <= sectorYMin) { sectorYMin = yMin; sectorYMax = yMax; }
+        if (sectorYMax <= sectorYMin)
+          return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
+                  "Connector Y-range is empty — segment boundary Y-ranges do not intersect."};
         // Small robustness margin: the two boundary samples above give the
         // EXACT (zero-slack) Y-extent each adjacent segment's own true edge
         // occupies right at the fold line. Fusing two shapes whose touching
@@ -547,13 +507,20 @@ public:
 
         TopoDS_Shape bendSector;
         try {
-          gp_Ax2 sectorAxes(gp_Pnt(bendStart[i], sectorYMax, 0.0), gp_Dir(0.0, -1.0, 0.0), gp_Dir(0.0, 0.0, 1.0));
-          bendSector = BRepPrimAPI_MakeCylinder(sectorAxes, thicknessMm, extentY, thetaRad).Solid();
+          // Cylinder axis = Y (the fold/hinge).  Cross-section in XZ fills
+          // the gap between seg0 (z=0, x≤foldX) and seg1 (rotated by −θ).
+          // A full 360° cylinder covers both sides and the fuse trims excess.
+          gp_Ax2 sectorAxes(gp_Pnt(bendStart[i], sectorYMin, 0.0),
+                            gp_Dir(0.0, 1.0, 0.0),    // main = Y (fold axis)
+                            gp_Dir(-1.0, 0.0, 0.0));  // Vx = −X
+          bendSector = BRepPrimAPI_MakeCylinder(sectorAxes, thicknessMm, extentY).Solid();
         } catch (const Standard_Failure& e) {
           return {"", false, "GE_BUILD_FROM_PATTERN_FAILED",
                   std::string("Failed to build bend connector: ") + e.GetMessageString()};
         }
-        TopoDS_Shape placedConnector = BRepBuilderAPI_Transform(bendSector, cumulative[i], true).Shape();
+        // Connector stays at the fold axis (cumulative[i]).
+        gp_Trsf connectorXfm = cumulative[i];
+        TopoDS_Shape placedConnector = BRepBuilderAPI_Transform(bendSector, connectorXfm, true).Shape();
         TopoDS_Shape placedNextSeg = BRepBuilderAPI_Transform(segShapes[i + 1], cumulative[i + 1], true).Shape();
 
         merged = fuseTwo(merged, placedConnector);
@@ -596,13 +563,16 @@ public:
 
       if (fnLen > 1e-6 && bdLen > 1e-6 && bz.hasAnchor) {
         // Explicit fold frame supplied by the caller (manufacturing graph):
-        //   canonical +X → bendDir, canonical +Z → foldNormal, +Y = Z × X.
-        // This pins down every axis sign, so the fold is reconstructed on the
-        // same side as the original geometry (no rotation / inversion).
+        //   canonical +X → bendDir, canonical +Z → foldNormal, +Y → foldAxis.
+        // foldAxis is the hinge-line direction in world coords.
         gp_Dir actualXDir(bz.bendDirX, bz.bendDirY, bz.bendDirZ);
         gp_Dir faceNormal(bz.foldNormalX, bz.foldNormalY, bz.foldNormalZ);
-        gp_Vec yv = gp_Vec(faceNormal).Crossed(gp_Vec(actualXDir)); // Z × X
-        gp_Dir actualYDir(yv);
+        double faLen = std::sqrt(bz.foldAxisX * bz.foldAxisX +
+                                 bz.foldAxisY * bz.foldAxisY +
+                                 bz.foldAxisZ * bz.foldAxisZ);
+        gp_Dir actualYDir = faLen > 1e-6
+            ? gp_Dir(bz.foldAxisX, bz.foldAxisY, bz.foldAxisZ)
+            : gp_Dir(gp_Vec(faceNormal).Crossed(gp_Vec(actualXDir)));
 
         // Anchor: the WORLD position of the merged flat-pattern's own LOCAL
         // (0,0,0) — i.e. panel A's DXF(0,0) corner (panel A occupies

@@ -78,6 +78,10 @@ export interface BendNode {
   bendDir?: [number, number, number];
   anchor?: [number, number, number];
   bHingeOffsetMm?: number;
+  /** World position of the fold axis at the hinge centre (anchorA + paX1_geom_fb*bdirA). */
+  hingeAnchor?: [number, number, number];
+  /** True hinge-line direction in world = cross(nA,nB) — the physical fold axis. */
+  foldAxis?: [number, number, number];
 }
 
 // ─── JoinNode params ──────────────────────────────────────────────────────────

@@ -117,7 +117,22 @@ describe('[diagnostic] merge_bodies_with_bend: does panel A\'s own (composite/no
       transaction_id: txId, part_a_id: fused.part_id, part_b_id: innerTop, target_edges: ['all'], bend_radius: 1.0,
     }, config);
     expect(merged.merged_shell_id, 'merge must succeed').toBeDefined();
-    const mergedBbox: Bbox = await dispatchTool('bounding_box', { target: merged.merged_shell_id }, config) as Bbox;
+
+    // Run solve_geometry to verify that graph-driven geometry reconstruction preserves Panel A shape.
+    await dispatchTool('solve_geometry', {
+      part_id: merged.merged_part_id,
+      transaction_id: txId,
+    }, config);
+
+    const graphAfterSolve: any = await dispatchTool('query_graph', {
+      part_id: merged.merged_part_id,
+    }, config);
+    const canonicalPanelNode = graphAfterSolve.nodes.find((n: any) => n.type === 'PanelNode' && n.canonical === true);
+    expect(canonicalPanelNode).toBeDefined();
+    const solvedShellId = canonicalPanelNode.bodyId;
+    expect(solvedShellId).toBeDefined();
+
+    const mergedBbox: Bbox = await dispatchTool('bounding_box', { target: solvedShellId }, config) as Bbox;
     console.log(`[panelA-shape] merged result bbox: ${fmt(mergedBbox)}`);
 
     // Build a probe box covering panel A's PRE-merge bbox. Pad generously in
@@ -153,7 +168,7 @@ describe('[diagnostic] merge_bodies_with_bend: does panel A\'s own (composite/no
     console.log(`[panelA-shape] probe box bbox: ${fmt(probeBbox)}`);
 
     const intersected: any = await dispatchTool('intersect_bodies', {
-      transaction_id: txId, target_a: merged.merged_shell_id, target_b: probe.shellId,
+      transaction_id: txId, target_a: solvedShellId as string, target_b: probe.shellId,
     }, config);
     expect(intersected.solid_id, '[panelA-shape] intersection with panel A\'s own probe region must not be empty').toBeDefined();
     const intersectedBbox: Bbox = await dispatchTool('bounding_box', { target: intersected.solid_id }, config) as Bbox;

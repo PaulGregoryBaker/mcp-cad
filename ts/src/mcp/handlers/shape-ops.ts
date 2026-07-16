@@ -1032,14 +1032,19 @@ function computeBendGeometry(
     : frameAAligned!.alignedFrame.origin as [number, number, number];
   // actualYDir = seam direction stored in the graph (BendNode, flatFrame.v).
   // Must use cross(foldNormal, bendDir) — not foldAxisUnit — because foldAxisUnit has
-  // arbitrary sign (cross(nAu,nBu) or cross(nBu,nAu)), while foldSign guarantees a
-  // consistent orientation. A sign flip here propagates into flatFrame.v and corrupts
-  // subsequent merges that read ydirA from the graph.
-  const actualYDir: [number, number, number] = [
+  // actualYDir = the true hinge line cross(nA,nB), with sign aligned to
+  // cross(foldNormal,bendDir) for chained-merge consistency.
+  const _ydirFromFN: [number, number, number] = [
     foldNormalPayload[1] * bendDirPayload[2] - foldNormalPayload[2] * bendDirPayload[1],
     foldNormalPayload[2] * bendDirPayload[0] - foldNormalPayload[0] * bendDirPayload[2],
     foldNormalPayload[0] * bendDirPayload[1] - foldNormalPayload[1] * bendDirPayload[0],
   ];
+  const uFoldAxis: [number, number, number] = foldAxisNorm > 1e-6
+    ? [foldAxisVec[0] / foldAxisNorm, foldAxisVec[1] / foldAxisNorm, foldAxisVec[2] / foldAxisNorm]
+    : _ydirFromFN;
+  const actualYDir: [number, number, number] = dot3(uFoldAxis, _ydirFromFN) >= 0
+    ? uFoldAxis
+    : [-uFoldAxis[0], -uFoldAxis[1], -uFoldAxis[2]];
 
   const kFactorDefault = 0.33;
   // Use the real dihedral; guard against degenerate (near-0/near-180) folds, falling
@@ -1063,13 +1068,20 @@ interface MergedFlatPattern {
   mergedDxf: string | null;
   mergedFlatWidth: number | null;
   mergedFlatHeight: number | null;
-  /**
-   * Fold position in the normalized merged DXF (x=0 at DXF left edge).
-   * = paX1 - xMin_merged. Used as bendZoneDxfX. Correct for both far-end
-   * (xMin=0 → paX1) and near-end (xMin<0 → effectiveBFlatWidth) without any flag.
-   */
   effectiveAFlatWidth: number;
   effectiveBFlatWidth: number;
+  /** X-coordinate of B's hinge edge in B's own DXF (from edge-length detection). */
+  hingeX_B: number;
+  /** Fold axis X in normalized DXF. */
+  foldDxfX: number;
+  /** World position of the hinge centre. */
+  hingeAnchor: [number, number, number];
+  /** DXF normalization shift. */
+  xMinMerged: number;
+  /** +1 = far-end, -1 = near-end (from 4-point hinge geometry). */
+  baDir: number;
+  /** A's flat extent along fold-perp (paX1). */
+  paX1: number;
 }
 
 /**
@@ -1090,7 +1102,7 @@ function buildMergedFlatPattern(
   bend: BendGeometry,
 ): MergedFlatPattern {
   const {
-    normalsNearlyParallel, bboxA3d, bboxB3d, frameAAligned, frameBAligned,
+    normalsNearlyParallel, frameAAligned, frameBAligned,
     foldAlongU_B, frameBDxfForGraph,
     ba, kFactorDefault, thickness,
   } = bend;
@@ -1099,6 +1111,10 @@ function buildMergedFlatPattern(
   let rotationMatrix: [[number, number], [number, number]];
   let translation: [number, number];
   let _paX1 = 0;  // set in else block; used for bridge and effectiveAFlatWidth
+  let _foldX = 0;
+  let _hingeX_B = 0;
+  let _hingeX_rot = 0; // B's hinge X after rotation (for bridge positioning)
+  let _hingeAnchor: [number, number, number] = [0, 0, 0];
   let _baDir = 1; // +1 far-end, -1 near-end
   const MERGE_OVERLAP_MM = kFactorDefault * thickness;
 
@@ -1126,29 +1142,6 @@ function buildMergedFlatPattern(
     rotationMatrix = placement.rotationMatrix;
     translation = placement.translation;
   } else {
-    // Bend case: adjacency check, then 4-point 3D→2D mapping.
-    if (panelNodeA.shapeDxf && panelNodeB.shapeDxf) {
-      const bboxCentroid = (bb: typeof bboxA3d): [number, number, number] => [
-        (bb.x_min + bb.x_max) / 2, (bb.y_min + bb.y_max) / 2, (bb.z_min + bb.z_max) / 2,
-      ];
-      const centA = bboxCentroid(bboxA3d), centB = bboxCentroid(bboxB3d);
-      const dCent: [number, number, number] = [centB[0]-centA[0], centB[1]-centA[1], centB[2]-centA[2]];
-      const bboxAAxes = [
-        { size: bboxA3d.x_max-bboxA3d.x_min, ax: [1,0,0] as [number,number,number] },
-        { size: bboxA3d.y_max-bboxA3d.y_min, ax: [0,1,0] as [number,number,number] },
-        { size: bboxA3d.z_max-bboxA3d.z_min, ax: [0,0,1] as [number,number,number] },
-      ].sort((a, b) => b.size - a.size);
-      const aU = bboxAAxes[0]!.ax, aV = bboxAAxes[1]!.ax;
-      const gTx = dCent[0]*aU[0]+dCent[1]*aU[1]+dCent[2]*aU[2];
-      const gTy = dCent[0]*aV[0]+dCent[1]*aV[1]+dCent[2]*aV[2];
-      const aabbLongest = (bb: typeof bboxA3d) =>
-        [bb.x_max-bb.x_min, bb.y_max-bb.y_min, bb.z_max-bb.z_min].sort((a, b) => a - b)[2] ?? 0;
-      if ((Math.max(aabbLongest(bboxA3d), aabbLongest(bboxB3d)) > 0) &&
-          Math.hypot(gTx, gTy) / Math.max(aabbLongest(bboxA3d), aabbLongest(bboxB3d)) > 0.75) {
-        throwError(ErrorCodes.GE_MERGE_DISCONNECTED,
-          'GE_MERGE_DISCONNECTED: merge_bodies_with_bend: Panels are not adjacent and cannot be merged.', false);
-      }
-    }
     if (panelNodeA.flatWidth === null) {
       throwError(ErrorCodes.GE_MERGE_FAILED,
         'merge_bodies_with_bend requires panel A flatWidth for bend flattening. Run apply_unfold first.',
@@ -1192,6 +1185,7 @@ function buildMergedFlatPattern(
       }
       if (isFinite(yMin)) vCenterB = (yMin + yMax) / 2;
     }
+    _hingeX_B = 0;  // hinge is at x=0 in B's aligned DXF
 
     // P1 = Panel B's hinge center in 3D (at DXF (0, vCenterB))
     const P1: [number, number, number] = [
@@ -1199,8 +1193,6 @@ function buildMergedFlatPattern(
       fb.origin[1] + vCenterB * fb.v[1],
       fb.origin[2] + vCenterB * fb.v[2],
     ];
-    // pbU1: where P1 sits in Panel B's own DXF X axis
-    const pbU1 = dot3([P1[0]-fb.origin[0], P1[1]-fb.origin[1], P1[2]-fb.origin[2]], fb.u as [number,number,number]);
 
     // Step 2: Panel A's flat coordinate system.
     //
@@ -1254,24 +1246,56 @@ function buildMergedFlatPattern(
     const ba_dir = flatFrameA ? 1 : (paX1_geom >= paX1_dxf / 2 ? 1 : -1);
     _paX1 = paX1;
     _baDir = ba_dir;
+    // _foldX = hinge position in the pre-normalisation DXF.  For far-end
+    // the hinge sits at A's right edge (≈paX1).  For near-end the A DXF
+    // shift moves the hinge to x=0, so paX1_geom ≈ 0 gives the correct
+    // value automatically — no branch needed.
+    _foldX = paX1_geom;
+    _hingeAnchor = [
+      anchorA[0] + paX1_geom * bdirA[0],
+      anchorA[1] + paX1_geom * bdirA[1],
+      anchorA[2] + paX1_geom * bdirA[2],
+    ];
 
     // Step 4: effectiveBFlatWidth
     effectiveBFlatWidth = frameBAligned
       ? frameBAligned.flatExtentMm
       : ((foldAlongU_B && panelNodeB.flatHeight !== null) ? panelNodeB.flatHeight : (panelNodeB.flatWidth ?? 0));
 
-    // Step 5: Unified placement — no branches for near/far.
-    // Rotation: identity if Panel B extends right (ba_dir=+1), x-reflection if left (-1).
-    // 4-point mapping placement:
-    // X: Panel B's hinge (at pbU1 in its DXF) maps to paX1 + ba.
-    // Y: Panel B's hinge (at vCenterB in its DXF) maps to paY1 in Panel A's flat.
-    //    Translation Y = paY1 - vCenterB.
-    rotationMatrix = ba_dir > 0 ? [[1, 0], [0, 1]] : [[-1, 0], [0, 1]];
+    // Step 5: Single unified placement — B always goes to the RIGHT of
+    // the fold (seg1), A always to the LEFT (seg0).
+    //
+    // Far-end (+1): align Y, B on right.  Near-end (−1): mirror B 180°
+    // around the hinge perpendicular-bisector (so it extends the right
+    // way), then Y-align; A's DXF will be shifted left in Step 6 so its
+    // hinge sits at the fold line.
+    const cosY = dot3(fb.v as [number,number,number], ydirA);
+    const sinY = dot3(fb.u as [number,number,number], ydirA);
+    const hingeX_B = _hingeX_B;
+    let mirrorTx = 0, mirrorTy = 0;
+    if (ba_dir > 0) {
+      // Far-end: pure Y-alignment.
+      rotationMatrix = [[cosY, -sinY], [sinY, cosY]] as [[number,number],[number,number]];
+      _hingeX_rot = hingeX_B * cosY - vCenterB * sinY;
+    } else {
+      // Near-end: mirror B so it extends the right way AND Y-aligns.
+      if (cosY >= 0) {
+        rotationMatrix = [[-cosY, sinY], [-sinY, -cosY]] as [[number,number],[number,number]];
+        _hingeX_rot = sinY * vCenterB;
+        mirrorTx = -2 * sinY * vCenterB;
+        mirrorTy =  2 * cosY * vCenterB;
+      } else {
+        rotationMatrix = [[1, 0], [0, -1]] as [[number,number],[number,number]];
+        _hingeX_rot = 0;
+      }
+    }
+    const hingeY_rot = hingeX_B * sinY + vCenterB * cosY;
+    // Unified translation: B's hinge lands at _foldX + ba (right edge of
+    // the bend zone).  After the C++ translation by −ba the hinge sits on
+    // the fold axis, matching far-end behaviour.
     translation = [
-      ba_dir > 0
-        ? paX1 + ba - pbU1 - MERGE_OVERLAP_MM
-        : paX1 - ba + pbU1 + MERGE_OVERLAP_MM,
-      paY1 - vCenterB,
+      _foldX + ba - _hingeX_rot + mirrorTx,
+      paY1 - hingeY_rot + mirrorTy,
     ];
   }
 
@@ -1282,37 +1306,50 @@ function buildMergedFlatPattern(
   // DXF orientation, so no rotation is needed.
   // frameAAligned is always computed now (no skipAlignedForComposite).
   // Use alignedDxf when available; normalized raw DXF as fallback (coplanar case).
-  const panelADxfForMerge: string = frameAAligned
+  // Build Panel A's DXF for the merge.  For near-end, reflect A across
+  // the hinge (x → −x) so A extends left from the hinge at x=0, putting
+  // A in seg0 with the fold at the hinge.  DXF(0,0) stays at the hinge.
+  let panelADxfForMerge: string = frameAAligned
     ? frameAAligned.alignedDxf
     : normalizeDxfOrigin(effectiveShapeDxfA ?? '');
+  if (_baDir < 0) {
+    try {
+      const ring = parseFirstClosedPolyline(panelADxfForMerge);
+      panelADxfForMerge = ringToLwpolylineDxf(ring.map(([x, y]) => [-x, y] as [number, number]));
+    } catch { /* keep original on parse failure */ }
+  }
   const panelBDxfForMerge: string = frameBAligned
     ? frameBAligned.alignedDxf
     : normalizeDxfOrigin(effectiveShapeDxfB ?? '');
 
-  // Bridge Y-range: intersection of Panel A's and Panel B's seam extents.
-  // Falls back to union only when they don't overlap (degenerate case).
+  // Bridge X/Y range: Y from placed B ring, X between hinge positions.
+  const placedBRing = (() => {
+    const ringLocal = parseFirstClosedPolyline(panelBDxfForMerge);
+    return applyPlacement(ringLocal, { rotationMatrix, translation });
+  })();
+  const ringA = parseFirstClosedPolyline(panelADxfForMerge);
+
   const bridgeYRange = (() => {
-    const ringA = parseFirstClosedPolyline(panelADxfForMerge);
-    const ringB = parseFirstClosedPolyline(panelBDxfForMerge);
     let yMinA = Infinity, yMaxA = -Infinity, yMinB = Infinity, yMaxB = -Infinity;
     for (const [, y] of ringA) { yMinA = Math.min(yMinA, y); yMaxA = Math.max(yMaxA, y); }
-    for (const [, y] of ringB) { yMinB = Math.min(yMinB, y); yMaxB = Math.max(yMaxB, y); }
-    const tY = translation ? translation[1] : 0;
-    const yMinBShifted = yMinB + tY, yMaxBShifted = yMaxB + tY;
-    const iMin = Math.max(yMinA, yMinBShifted), iMax = Math.min(yMaxA, yMaxBShifted);
+    for (const [, y] of placedBRing) { yMinB = Math.min(yMinB, y); yMaxB = Math.max(yMaxB, y); }
+    const iMin = Math.max(yMinA, yMinB), iMax = Math.min(yMaxA, yMaxB);
     return iMax > iMin
       ? { min: iMin, max: iMax }
-      : { min: Math.min(yMinA, yMinBShifted), max: Math.max(yMaxA, yMaxBShifted) };
+      : { min: Math.min(yMinA, yMinB), max: Math.max(yMaxA, yMaxB) };
   })();
 
-  // Bridge X-range: derived from paX1 and ba_dir — no flag needed.
-  // far-end (+1): [paX1−OVERLAP, paX1+ba+OVERLAP]
-  // near-end (−1): [paX1−ba−OVERLAP, paX1+OVERLAP]
-  // Use the paX1 and ba_dir already computed inside the else block.
-  const paX1_val = _paX1;
-  const ba_dir_val = _baDir;
-  const bridgeX0 = ba_dir_val > 0 ? paX1_val - MERGE_OVERLAP_MM : paX1_val - ba - MERGE_OVERLAP_MM;
-  const bridgeX1 = ba_dir_val > 0 ? paX1_val + ba + MERGE_OVERLAP_MM : paX1_val + MERGE_OVERLAP_MM;
+  // Bridge X-range: gap between A's hinge and B's hinge after placement.
+  // A is stationary at identity; B is placed via {rotationMatrix, translation}.
+  // The hinge in B's DXF moves to hingeX_B_in_dxf = ba_dir>0
+  //   ? hingeX_rot + translation[0]  (far end — B to the right)
+  //   : -hingeX_rot + translation[0] (near end — reflect then translate).
+  const hingeX_B_in_dxf = _baDir > 0
+    ? _hingeX_rot + translation[0]
+    : -_hingeX_rot + translation[0];
+  // _foldX is already paX1_geom = A's hinge in its (stationary) DXF.
+  const bridgeX0 = Math.min(_foldX, hingeX_B_in_dxf) - MERGE_OVERLAP_MM;
+  const bridgeX1 = Math.max(_foldX, hingeX_B_in_dxf) + ba + MERGE_OVERLAP_MM;
   const bendZoneBridgeDxf = ringToLwpolylineDxf([
     [bridgeX0, bridgeYRange.min], [bridgeX1, bridgeYRange.min],
     [bridgeX1, bridgeYRange.max], [bridgeX0, bridgeYRange.max],
@@ -1329,26 +1366,30 @@ function buildMergedFlatPattern(
       `No geometry merge performed because DXF is the source of truth.`, false);
   }
 
-  // Normalize the merged DXF so it starts at x=0. effectiveAFlatWidth = paX1 − xMin_merged:
-  // correct for both far-end (xMin=0 → paX1) and near-end (xMin<0 → effectiveBFlatWidth).
+  // Do NOT normalise the merged DXF.  The C++ handles negative xMin via
+  // segStart[0]=xMin.  Normalisation would move the fold axis away from
+  // the hinge for near-end merges (fold at x=0 → hinge; normalised fold
+  // at x=paX1 ≠ hinge at x=0).
   let mergedDxf = preflightMerge.mergedDxf;
   let xMinMerged = 0;
   try {
     const ring = parseFirstClosedPolyline(mergedDxf);
     xMinMerged = Math.min(...ring.map(([x]) => x));
-    if (xMinMerged < -0.01) {
-      mergedDxf = ringToLwpolylineDxf(ring.map(([x, y]) => [x - xMinMerged, y] as [number, number]));
-    } else {
-      xMinMerged = 0;
-    }
   } catch { xMinMerged = 0; }
-  const effectiveAFlatWidth = paX1_val - xMinMerged;
+  const effectiveAFlatWidth = _paX1 - xMinMerged;
+  const foldDxfX = _foldX;  // raw DXF fold position = hinge
 
   return {
     mergedDxf,
     mergedFlatWidth: preflightMerge.metrics.bbox.width,
     mergedFlatHeight: preflightMerge.metrics.bbox.height,
     effectiveAFlatWidth, effectiveBFlatWidth,
+    hingeX_B: _hingeX_B,
+    foldDxfX,
+    hingeAnchor: _hingeAnchor,
+    xMinMerged,
+    baDir: _baDir,
+    paX1: _paX1,
   };
 }
 
@@ -1842,12 +1883,18 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
     angle: bendAngle,
     foldNormal: foldNormalPayload,
     bendDir: bendDirPayload,
+    // For near-end A is reflected (x→−x), so DXF +X = world −bendDir
+    // and xMinMerged < 0.  The anchor formula maps DXF(0,0) to world.
+    // With A-flip for near-end, DXF(0,0) stays at the hinge (= anchorPoint)
+    // for both cases.  The bendDir reversal handles the direction change.
     anchor: anchorPoint,
     kFactor: kFactorDefault,
     bendAllowance: ba,
     // Near-end: Panel B is the FIRST segment; the fold zone starts after Panel B's width.
     // Far-end: fold zone is at the end of Panel A's content.
-    bendZoneDxfX: effectiveAFlatWidth,
+    bendZoneDxfX: flatPattern.foldDxfX,
+    hingeAnchor: flatPattern.hingeAnchor,
+    foldAxis: actualYDir,
   };
   mergedGraph.addNode(bendNode);
 
@@ -1875,7 +1922,8 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
           false);
       }
       mergedShellId = fuseRes.solid_id;
-    } else if (mergedDxf && getGeometryBinding().hasBuildShellFromFlatPattern()) {
+    }
+    if (mergedDxf && getGeometryBinding().hasBuildShellFromFlatPattern()) {
       // Anchor: world position of the merged flat-pattern's own local (0,0,0).
       // Panel A occupies local x∈[0..effectiveAFlatWidth] by the merge's own
       // DXF convention, with local-X/-Y always panelADxfForMerge's actual
@@ -1920,8 +1968,14 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
       // re-derivation downstream. This anchor-only approach changes nothing
       // about Panel A's actual shape or content, only the placement
       // transform.)
-      const anchor = {
-        anchorX: anchorPoint[0], anchorY: anchorPoint[1], anchorZ: anchorPoint[2],
+      // For near-end merges, DXF(0,0) is at the hinge (A was reflected x→−x).
+      // The world anchor for DXF(0,0) must therefore be the hinge position,
+      // not A's original DXF origin (which is now at negative x, displaced
+      // by paX1_geom from the hinge along bendDir).
+      const normAnchor = {
+        anchorX: anchorPoint[0],
+        anchorY: anchorPoint[1],
+        anchorZ: anchorPoint[2],
         hasAnchor: true,
       };
       // Where Panel B's TRUE hinge edge sits inside its OWN flat pattern,
@@ -2008,7 +2062,8 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
 
       const priorZone = (priorFoldsParallel && priorBendNodeA && priorBendNodeA.bendZoneDxfX !== undefined && priorBendNodeA.bendAllowance !== null)
         ? [{
-            offsetMm: priorZoneOffset,
+            hingeX1: priorZoneOffset, hingeY1: 0,
+            hingeX2: priorZoneOffset, hingeY2: 1,
             widthMm: priorBendNodeA.bendAllowance,
             angleDeg: priorBendNodeA.angle,
             innerRadiusMm: priorBendNodeA.innerRadius,
@@ -2021,28 +2076,26 @@ export function handleMergeBodiesWithBend(args: Record<string, unknown>): unknow
             hasAnchor: false, anchorX: 0, anchorY: 0, anchorZ: 0,
           }]
         : [];
-      const bendZones = effectiveAFlatWidth
-        ? [...priorZone, {
-            offsetMm: effectiveAFlatWidth,
+      const bendZones = [...priorZone, {
+            hingeX1: flatPattern.foldDxfX, hingeY1: 0,
+            hingeX2: flatPattern.foldDxfX, hingeY2: 1,
             widthMm: ba,
             angleDeg: bendAngle,
             innerRadiusMm: bendRadius as number,
             kFactor: kFactorDefault,
-            // Fold frame (world): canonical +X → bendDir, canonical +Z → foldNormal.
-            // Lets C++ place the rebuilt shell on the correct side without guessing
-            // a face-normal sign (which previously inverted the fold). bendDirPayload
-            // is always the true physical bendDir; anchorPoint (not these directions)
-            // is what's adjusted to keep the C++ placement's local↔world
-            // correspondence matching frameADxf exactly — see anchorPoint's
-            // derivation, above, for why. This is also the LAST entry in
-            // bendZones (X-sorted), so it's the one buildShellFromFlatPattern
-            // actually reads for world placement.
             foldNormalX: foldNormalPayload[0], foldNormalY: foldNormalPayload[1], foldNormalZ: foldNormalPayload[2],
             bendDirX: bendDirPayload[0], bendDirY: bendDirPayload[1], bendDirZ: bendDirPayload[2],
+            foldAxisX: actualYDir[0],
+            foldAxisY: actualYDir[1],
+            foldAxisZ: actualYDir[2],
+            hasHingeAnchor: true,
+            hingeAnchorX: flatPattern.hingeAnchor[0],
+            hingeAnchorY: flatPattern.hingeAnchor[1],
+            hingeAnchorZ: flatPattern.hingeAnchor[2],
             bHingeOffsetMm,
-            ...anchor,
-          }]
-        : [];
+            foldDirection: 1, // always far-end — unified fold always rotates seg1
+            ...normAnchor,
+          }];
       const res = getGeometryBinding().buildShellFromFlatPattern(mergedDxf, bendZones, thickness);
       mergedShellId = res.shellId;
     } else {

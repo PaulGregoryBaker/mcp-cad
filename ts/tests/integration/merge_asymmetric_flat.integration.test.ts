@@ -350,8 +350,14 @@ describe('merge_bodies_with_bend: l_bracket_corner_90deg L-shaped flat pattern (
     const r = await setupAndMerge();
     if (!r) return;
 
-    const { bboxOriginal, mergedPartId } = r;
+    const { bboxOriginal, mergedPartId, txId } = r;
     const config = loadConfig(configPath);
+
+    // Solve the geometry to verify perfect reconstruction under graph solver.
+    await dispatchTool('solve_geometry', {
+      part_id: mergedPartId,
+      transaction_id: txId,
+    }, config);
 
     // Pull the merged shell's body straight from the Manufacturing Graph (not the
     // raw return value of merge_bodies_with_bend) to confirm the canonical PanelNode
@@ -719,7 +725,21 @@ describe('[bug repro] fuse side-wall+flange then merge_bodies_with_bend: rectang
     }
 
     // 8. Check 3D orientation — BUG: merged shell should be axis-aligned but is tilted
-    const pf = getGeometryBinding().getPanelFrame(merged.merged_shell_id as string);
+    // Also solve are verify solved geometry matches cleanly
+    await dispatchTool('solve_geometry', {
+      part_id: merged.merged_part_id,
+      transaction_id: txId,
+    }, config);
+
+    const graphAfterSolve: any = await dispatchTool('query_graph', {
+      part_id: merged.merged_part_id,
+    }, config);
+    const canonicalPanelNode = graphAfterSolve.nodes.find((n: any) => n.type === 'PanelNode' && n.canonical === true);
+    expect(canonicalPanelNode).toBeDefined();
+    const solvedShellId = canonicalPanelNode.bodyId;
+    expect(solvedShellId).toBeDefined();
+
+    const pf = getGeometryBinding().getPanelFrame(solvedShellId as string);
     console.log(`[repro] merged shell frame: normal=(${pf.normalX.toFixed(4)}, ${pf.normalY.toFixed(4)}, ${pf.normalZ.toFixed(4)})`);
     console.log(`[repro] merged shell frame: u=(${pf.uX.toFixed(4)}, ${pf.uY.toFixed(4)}, ${pf.uZ.toFixed(4)})`);
     console.log(`[repro] merged shell frame: v=(${pf.vX.toFixed(4)}, ${pf.vY.toFixed(4)}, ${pf.vZ.toFixed(4)})`);
@@ -852,12 +872,26 @@ describe('[bug repro] fuse side-wall+flange then merge_bodies_with_bend: rectang
       `(a spurious seam offset from the overhanging flange tab would inflate this)`,
     ).toBeLessThanOrEqual(HEIGHT_TOL_MM);
 
+    // Solve the geometry to verify perfect reconstruction under graph solver.
+    await dispatchTool('solve_geometry', {
+      part_id: merged.merged_part_id,
+      transaction_id: txId,
+    }, config);
+
+    const graphAfterSolve: any = await dispatchTool('query_graph', {
+      part_id: merged.merged_part_id,
+    }, config);
+    const canonicalPanelNode = graphAfterSolve.nodes.find((n: any) => n.type === 'PanelNode' && n.canonical === true);
+    expect(canonicalPanelNode).toBeDefined();
+    const solvedShellId = canonicalPanelNode.bodyId;
+    expect(solvedShellId).toBeDefined();
+
     // The merged 3D shell's bbox must be close to the union of the (pre-merge)
     // fused panel and top wall bboxes. A skewed full-bbox centroid feeding into
     // the fold-direction/dihedral-angle computation (a second, deeper bug found
     // alongside the seam-offset one) would tilt the merged shell away from this
     // expected union, even when the flat-pattern placement above is correct.
-    const mergedBbox: Bbox = await dispatchTool('bounding_box', { target: merged.merged_shell_id }, config) as Bbox;
+    const mergedBbox: Bbox = await dispatchTool('bounding_box', { target: solvedShellId as string }, config) as Bbox;
     const expectedUnion = unionBbox(fusedBbox, topWallBbox);
     console.log(`[repro2] merged 3D bbox:    ${fmt(mergedBbox)}`);
     console.log(`[repro2] expected (union):  ${fmt(expectedUnion)}`);
@@ -870,7 +904,7 @@ describe('[bug repro] fuse side-wall+flange then merge_bodies_with_bend: rectang
         .toBeLessThanOrEqual(TOL_MM);
     }
 
-    const pf = getGeometryBinding().getPanelFrame(merged.merged_shell_id as string);
+    const pf = getGeometryBinding().getPanelFrame(solvedShellId as string);
     const axisAligned = (n: number) => Math.abs(Math.abs(n) - 1) < 1e-2 || Math.abs(n) < 1e-2;
     const isTilted = ![pf.normalX, pf.normalY, pf.normalZ].every(axisAligned);
     console.log(`[repro2] merged shell normal=(${pf.normalX.toFixed(4)}, ${pf.normalY.toFixed(4)}, ${pf.normalZ.toFixed(4)}) tilted=${isTilted}`);
@@ -1097,7 +1131,21 @@ describe('[multi-axis] fuse side-wall+flange then merge_bodies_with_bend: fold a
       `[multi-axis ${tag}] [BUG] flat pattern is fully rectangular (fill=${(fillRatio * 100).toFixed(1)}%) — lost the flange notch`)
       .toBeLessThan(0.999);
 
-    const mergedBbox: Bbox = await dispatchTool('bounding_box', { target: merged.merged_shell_id }, config) as Bbox;
+    // Solve the geometry to verify perfect reconstruction under graph solver.
+    await dispatchTool('solve_geometry', {
+      part_id: merged.merged_part_id,
+      transaction_id: txId,
+    }, config);
+
+    const graphAfterSolve: any = await dispatchTool('query_graph', {
+      part_id: merged.merged_part_id,
+    }, config);
+    const canonicalPanelNode = graphAfterSolve.nodes.find((n: any) => n.type === 'PanelNode' && n.canonical === true);
+    expect(canonicalPanelNode).toBeDefined();
+    const solvedShellId = canonicalPanelNode.bodyId;
+    expect(solvedShellId).toBeDefined();
+
+    const mergedBbox: Bbox = await dispatchTool('bounding_box', { target: solvedShellId as string }, config) as Bbox;
     const expectedUnion = unionBbox(fusedBbox, simpleBbox);
     console.log(`[multi-axis ${tag}] merged 3D bbox:   ${fmt(mergedBbox)}`);
     console.log(`[multi-axis ${tag}] expected (union): ${fmt(expectedUnion)}`);
@@ -1110,7 +1158,7 @@ describe('[multi-axis] fuse side-wall+flange then merge_bodies_with_bend: fold a
         .toBeLessThanOrEqual(TOL_MM);
     }
 
-    const pf = getGeometryBinding().getPanelFrame(merged.merged_shell_id as string);
+    const pf = getGeometryBinding().getPanelFrame(solvedShellId as string);
     const axisAligned = (n: number) => Math.abs(Math.abs(n) - 1) < 1e-2 || Math.abs(n) < 1e-2;
     const isTilted = ![pf.normalX, pf.normalY, pf.normalZ].every(axisAligned);
     console.log(`[multi-axis ${tag}] merged shell normal=(${pf.normalX.toFixed(4)}, ${pf.normalY.toFixed(4)}, ${pf.normalZ.toFixed(4)}) tilted=${isTilted}`);

@@ -136,7 +136,14 @@ export interface ApplyBendResult {
 }
 
 export interface NapiBendZoneSpec {
-  offsetMm: number;
+  /** Hinge-line start X in DXF-local coordinates. */
+  hingeX1: number;
+  /** Hinge-line start Y in DXF-local coordinates. */
+  hingeY1?: number;
+  /** Hinge-line end X in DXF-local coordinates. */
+  hingeX2: number;
+  /** Hinge-line end Y in DXF-local coordinates. */
+  hingeY2?: number;
   widthMm: number;
   angleDeg: number;
   innerRadiusMm: number;

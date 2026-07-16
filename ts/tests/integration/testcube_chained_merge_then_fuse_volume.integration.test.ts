@@ -127,7 +127,21 @@ describe('[diagnostic] testcube.step: merge_bodies_with_bend FIRST (chain), then
     const fusedBbox: Bbox = await dispatchTool('bounding_box', { target: fused.solid_id }, config) as Bbox;
     console.log(`[chain-then-fuse] fused (chain+protrusion) bbox: ${fmt(fusedBbox)}`);
 
-    const fusedMass: any = await dispatchTool('mass_properties', { target: fused.solid_id, properties: ['volume'] }, config);
+    // Solve the geometry to verify perfect reconstruction under graph solver.
+    await dispatchTool('solve_geometry', {
+      part_id: fused.part_id,
+      transaction_id: txId,
+    }, config);
+
+    const graphAfterSolve: any = await dispatchTool('query_graph', {
+      part_id: fused.part_id,
+    }, config);
+    const canonicalPanelNode = graphAfterSolve.nodes.find((n: any) => n.type === 'PanelNode' && n.canonical === true);
+    expect(canonicalPanelNode).toBeDefined();
+    const solvedShellId = canonicalPanelNode.bodyId;
+    expect(solvedShellId).toBeDefined();
+
+    const fusedMass: any = await dispatchTool('mass_properties', { target: solvedShellId as string, properties: ['volume'] }, config);
     const expectedVolume = chainedMass.volume + protMass.volume;
     console.log(`[chain-then-fuse] fused volume: actual=${fusedMass.volume?.toFixed(1)} expected≈${expectedVolume.toFixed(1)}`);
     const volumeRatio = fusedMass.volume / expectedVolume;
@@ -138,7 +152,7 @@ describe('[diagnostic] testcube.step: merge_bodies_with_bend FIRST (chain), then
 
     let glbError: unknown = null;
     try {
-      const glb = getGeometryBinding().exportGlb(fused.solid_id as string);
+      const glb = getGeometryBinding().exportGlb(solvedShellId as string);
       console.log(`[chain-then-fuse] exportGlb succeeded, ${glb.length} bytes`);
     } catch (err) {
       glbError = err;

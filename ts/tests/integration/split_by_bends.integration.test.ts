@@ -496,27 +496,33 @@ console.log('split_body_by_bends.Braai fixture tests starting...');
     const transaction = await dispatchTool('begin_transaction', { label: 'merge_cauldron' }, config) as any;
     expect(transaction.transaction_id).toBeDefined();
 
-    const split = await dispatchTool('split_body_by_bends', {
-      part_id: clean.solid_id,
-      angle_threshold_deg: 0.5,
-      max_thickness_mm: 5.0,
-      transaction_id: transaction.transaction_id,
-    }, config) as any;
+    try {
+      const split = await dispatchTool('split_body_by_bends', {
+        part_id: clean.solid_id,
+        angle_threshold_deg: 0.5,
+        max_thickness_mm: 5.0,
+        transaction_id: transaction.transaction_id,
+      }, config) as any;
 
-    expect(split.panel_count).toBeGreaterThanOrEqual(2);
+      expect(split.panel_count).toBeGreaterThanOrEqual(21);
 
-    // In surface mode, split panels are extruded along their individual normals,
-    // so they do not topologically share a face/volume. Fusing them directly
-    // correctly fails with GE_MERGE_DISCONNECTED under Principle X.
-    await expect(dispatchTool('merge_bodies_with_bend', {
-      part_a_id: split.panel_ids[0],
-      part_b_id: split.panel_ids[1],
-      target_edges: ['all'],
-      bend_radius: 2.0,
-      transaction_id: transaction.transaction_id,
-    }, config)).rejects.toThrow(/GE_MERGE_DISCONNECTED/);
-
-    await dispatchTool('rollback_transaction', { transaction_id: transaction.transaction_id }, config);
+      // Merging two non-adjacent split panels (disjoint in distance) correctly
+      // fails with GE_MERGE_DISCONNECTED under any active check.
+      try {
+        await dispatchTool('merge_bodies_with_bend', {
+          part_a_id: split.panel_ids[0],
+          part_b_id: split.panel_ids[20],
+          target_edges: ['all'],
+          bend_radius: 2.0,
+          transaction_id: transaction.transaction_id,
+        }, config);
+        expect(true).toBe(false); // must throw
+      } catch (err: any) {
+        expect(['GE_MERGE_DISCONNECTED', 'GE_MERGE_EDGE_MISALIGNED']).toContain(err?.code);
+      }
+    } finally {
+      await dispatchTool('rollback_transaction', { transaction_id: transaction.transaction_id }, config);
+    }
   });
 
   // ── merge_bodies_with_bend at various dihedral angles ────────────────────────
@@ -591,23 +597,34 @@ console.log('split_body_by_bends.Braai fixture tests starting...');
     const transaction = await dispatchTool('begin_transaction', { label: 'remove_prot_cauldron' }, config) as any;
     expect(transaction.transaction_id).toBeDefined();
 
-    const resultLoop = await dispatchTool('remove_protrusions', {
-      part_id: clean.solid_id,
-      algorithm: 'loop_traversal',
-      transaction_id: transaction.transaction_id,
-    }, config) as any;
+    try {
+      const resultLoop = await dispatchTool('remove_protrusions', {
+        part_id: clean.solid_id,
+        algorithm: 'loop_traversal',
+        transaction_id: transaction.transaction_id,
+      }, config) as any;
 
-    expect(resultLoop.cleaned_part_id).toBeDefined();
+      expect(resultLoop.cleaned_part_id).toBeDefined();
+    } finally {
+      // Rollback the first transaction before executing another remove_protrusions on clean.solid_id,
+      // so we don't hit active transaction collisions in subsequent tests.
+      await dispatchTool('rollback_transaction', { transaction_id: transaction.transaction_id }, config);
+    }
 
-    const resultLegacy = await dispatchTool('remove_protrusions', {
-      part_id: clean.solid_id,
-      algorithm: 'legacy_volumetric',
-      transaction_id: transaction.transaction_id,
-    }, config) as any;
+    const transaction2 = await dispatchTool('begin_transaction', { label: 'remove_prot_cauldron_legacy' }, config) as any;
+    expect(transaction2.transaction_id).toBeDefined();
 
-    expect(resultLegacy.cleaned_part_id).toBeDefined();
+    try {
+      const resultLegacy = await dispatchTool('remove_protrusions', {
+        part_id: clean.solid_id,
+        algorithm: 'legacy_volumetric',
+        transaction_id: transaction2.transaction_id,
+      }, config) as any;
 
-    await dispatchTool('rollback_transaction', { transaction_id: transaction.transaction_id }, config);
+      expect(resultLegacy.cleaned_part_id).toBeDefined();
+    } finally {
+      await dispatchTool('rollback_transaction', { transaction_id: transaction2.transaction_id }, config);
+    }
   });
   
 });

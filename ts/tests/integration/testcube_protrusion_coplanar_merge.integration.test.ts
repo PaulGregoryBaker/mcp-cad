@@ -223,6 +223,20 @@ describe('[repro] testcube.step: protrusion shifted to coplanar wall edge, fused
     expect(mergeError, `[testcube ${order}] merge_bodies_with_bend must not throw`).toBeNull();
     if (!merged) return;
 
+    // Solve the geometry to verify perfect reconstruction under graph solver.
+    await dispatchTool('solve_geometry', {
+      part_id: merged.merged_part_id,
+      transaction_id: txId,
+    }, config);
+
+    const graphAfterSolve: any = await dispatchTool('query_graph', {
+      part_id: merged.merged_part_id,
+    }, config);
+    const canonicalPanelNode = graphAfterSolve.nodes.find((n: any) => n.type === 'PanelNode' && n.canonical === true);
+    expect(canonicalPanelNode).toBeDefined();
+    const solvedShellId = canonicalPanelNode.bodyId;
+    expect(solvedShellId).toBeDefined();
+
     // Volume check: bbox + axis-aligned-normal can both pass for a DEGENERATE
     // (e.g. sheared) shape that happens to share the same bbox as a proper
     // two-face bent bracket — neither check verifies actual shape topology.
@@ -230,7 +244,7 @@ describe('[repro] testcube.step: protrusion shifted to coplanar wall edge, fused
     // merged shell's volume should match the SUM of the two inputs' own
     // (already-measured, not estimated) volumes.
     const massProps: any = await dispatchTool('mass_properties', {
-      target: merged.merged_shell_id, properties: ['volume'],
+      target: solvedShellId as string, properties: ['volume'],
     }, config);
     const expectedVolume = fusedMassProps.volume + innerTopMassProps.volume;
     console.log(`[testcube ${order}] merged volume: actual=${massProps.volume?.toFixed(1)}mm3 expected≈${expectedVolume.toFixed(1)}mm3`);
@@ -246,7 +260,7 @@ describe('[repro] testcube.step: protrusion shifted to coplanar wall edge, fused
     let glbError: unknown = null;
     let glb: Buffer | null = null;
     try {
-      glb = getGeometryBinding().exportGlb(merged.merged_shell_id as string);
+      glb = getGeometryBinding().exportGlb(solvedShellId as string);
     } catch (err) {
       glbError = err;
       console.log(`[testcube ${order}] exportGlb threw: ${JSON.stringify(err, Object.getOwnPropertyNames(err as object))}`);
@@ -281,7 +295,7 @@ describe('[repro] testcube.step: protrusion shifted to coplanar wall edge, fused
 
     // ASSERTION 2 (user): merged 3D part occupies the same footprint as the
     // pre-merge (fused panel ∪ inner top wall) — i.e. nothing shifted/tilted.
-    const mergedBbox: Bbox = await dispatchTool('bounding_box', { target: merged.merged_shell_id }, config) as Bbox;
+    const mergedBbox: Bbox = await dispatchTool('bounding_box', { target: solvedShellId as string }, config) as Bbox;
     const expectedUnion = unionBbox(fusedBbox, innerTopBbox);
     console.log(`[testcube ${order}] merged 3D bbox:   ${fmt(mergedBbox)}`);
     console.log(`[testcube ${order}] expected (union): ${fmt(expectedUnion)}`);
@@ -294,7 +308,7 @@ describe('[repro] testcube.step: protrusion shifted to coplanar wall edge, fused
         .toBeLessThanOrEqual(TOL_MM);
     }
 
-    const pf = getGeometryBinding().getPanelFrame(merged.merged_shell_id as string);
+    const pf = getGeometryBinding().getPanelFrame(solvedShellId as string);
     const axisAligned = (n: number) => Math.abs(Math.abs(n) - 1) < 1e-2 || Math.abs(n) < 1e-2;
     const isTilted = ![pf.normalX, pf.normalY, pf.normalZ].every(axisAligned);
     console.log(`[testcube ${order}] normal=(${pf.normalX.toFixed(4)},${pf.normalY.toFixed(4)},${pf.normalZ.toFixed(4)}) tilted=${isTilted}`);

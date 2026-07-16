@@ -518,7 +518,28 @@ export function handleFuseBodies(args: Record<string, unknown>): unknown {
             ],
           };
         }
-
+        // Mark the fused panel as a composite so that later merge_bodies_with_bend
+        // calls compute bHingeOffsetMm to correctly split the fold across Panel B's
+        // multi-panel content (e.g. wall below fold line + flange above it).
+        // The flatFrame values themselves (origin/u/v) are not used during the
+        // bHingeOffsetMm computation — only panelFrame is. flatFrame merely signals
+        // "this panel contains material from multiple inputs, the hinge may not be
+        // at the panel's edge."
+        if (canonicalNode.panelFrame) {
+          const pf = canonicalNode.panelFrame;
+          const fn = pf.normal ?? [
+            pf.u[1] * pf.v[2] - pf.u[2] * pf.v[1],
+            pf.u[2] * pf.v[0] - pf.u[0] * pf.v[2],
+            pf.u[0] * pf.v[1] - pf.u[1] * pf.v[0],
+          ];
+          canonicalNode.flatFrame = {
+            origin: pf.origin,
+            u: pf.u,
+            v: pf.v,
+            vExtentMm: flatWidth ?? undefined,
+            normal: fn,
+          };
+        }
         // Footprint-stacked panels (e.g. a doubler/reinforcement patch fully
         // inside the base panel's outline) are invisible to the 2D outline
         // union above — rebuild each one from ITS OWN graph data and 3D-fuse
