@@ -1,6 +1,9 @@
 # 17 — Numerical Policy Module Spec (Phase 2.4, cont'd)
 
-**Status:** `[PROPOSAL]` for Paul's review.
+**Status:** Reviewed & approved by Paul 2026-07-20. §7's two open points are **not**
+resolved by this approval — they remain open, deferred (17.1 to a future usage
+decision, 17.2 to archaeology/first-principles derivation once a stack exists to
+profile against); neither blocks the module's structure or enforcement discipline.
 **Inputs it must satisfy:** 04 P4 (central numerical policy, its own enforcement
 mechanism), 02 N3 (the requirement) and N11 (project tolerance profiles — the thing
 this module is explicitly *not*), 12-domain-notes §2 (the raw v1 facts this

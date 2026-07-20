@@ -127,7 +127,21 @@ surface) to only the narrow slice that genuinely needs it.
 
 Every criterion below cites the requirement it comes from — this evaluation is
 against *our* case inventory and *our* constraints, not a generic CAD-kernel
-scorecard:
+scorecard.
+
+**Priority ordering across this table** `[SET 2026-07-20]`, Paul: "getting the soak
+test passing is secondary to getting the functionality working correctly... Design
+for long-term performance and functionality; next build functionality; after which
+build long-term performance." Concretely, for reading the table below and scoring a
+spike: the top two rows (kernel-port coverage, the historically-hardest case-inventory
+rows) are the **primary** gate — a candidate that doesn't get the geometry right fails
+regardless of anything else. Boundary-crossing performance and N13 (further down) are
+evaluated and taken seriously at *design* time — a candidate whose architecture gives
+no credible story for bounded resource lifecycle is a real problem *now* — but a
+prototype that gets functionality correct and has *not yet* proven its soak leg is not
+automatically rejected; that is exactly the kind of hardening work the priority
+ordering above defers to *after* functionality, not a disqualifier at spike time. This
+directly resolves how a soak-leg result should be weighed in §4 and OPEN-18.3.
 
 | Criterion | Source | What "pass" looks like |
 |---|---|---|
@@ -137,7 +151,7 @@ scorecard:
 | Boundary-crossing performance, both A and B | §1 (new) | Measured, not asserted — a concrete number beats a design argument |
 | Build/iteration velocity | Paul, explicit | Time from a representative code change to a passing test run, measured, not estimated |
 | AI-assisted development throughput | Paul, explicit | A real criterion, not a soft one — Paul has first-hand evidence for Rust specifically; worth weighing alongside the harder technical criteria, not dismissed as unmeasurable |
-| N13 native memory/handle discipline — **the sharpest criterion in this table** | 02 N13; §1's elaboration | Passes the §4 soak leg: bounded RSS and native-handle count over thousands of repeated operations. Does the language make "acquire/release, scope-bound" the *idiomatic* path (Rust's ownership/`Drop` model is a structural point in its favor, independent of Paul's personal preference), or something the team must enforce by discipline/lint alone, the way the current stack apparently did — and evidently didn't sustain? |
+| N13 native memory/handle discipline — **secondary to functional correctness, but a real design-time question** (priority note above) | 02 N13; §1's elaboration | Passes the §4 soak leg: bounded RSS and native-handle count over thousands of repeated operations. Does the language make "acquire/release, scope-bound" the *idiomatic* path (Rust's ownership/`Drop` model is a structural point in its favor, independent of Paul's personal preference), or something the team must enforce by discipline/lint alone, the way the current stack apparently did — and evidently didn't sustain? A candidate whose *architecture* offers no credible path here is a real concern now; a candidate that simply hasn't proven it yet is hardening work, deferred per the priority ordering. |
 | P1 boundary/lint enforcement tooling | 04 P1 | Can dependency-boundary lint, complexity budgets, and the tolerance-literal ban (17 §6) actually be mechanically enforced in the chosen language(s)? A stack that can't support this *fails selection* per P1's own text. |
 | MCP SDK maturity per language | 06-plan (existing criterion) | Official/well-supported SDK with resource, tool, and job-API primitives matching 15's contract shape — genuinely uncertain for Rust today; a named research item (§4), not an assumption either way |
 | Deployment fit | N10 | Container size, cold-start time, matches the "native now, cloud later" trajectory |
@@ -172,11 +186,15 @@ released over time" — not raw latency — is the actual, evidenced bar (§1):
 1. **Spike 1 — Candidate 1 (Rust+OCCT) minimal path.** A `napi-rs`/`cadrum` (or
    custom `cxx`) prototype performing one representative HEAVY operation
    (import + heal a real fixture, e.g. `cauldron.step`) end-to-end from an MCP-style
-   caller. Measure: latency, iteration time (edit → build → running test — Paul's
-   explicit ask), **and a soak run — the same operation repeated thousands of times,
-   asserting bounded RSS and native-handle count (N13's soak-gate shape, run here at
-   evaluation time rather than deferred to Phase 4 CI)**. A candidate that's fast
-   once but still leaks under sustained use has not cleared the actual bar.
+   caller. Measure, **in this order of priority (§3's priority note): first, does the
+   operation produce correct output on the real fixture — that gate is primary and
+   non-negotiable; then** latency, iteration time (edit → build → running test —
+   Paul's explicit ask), **and a soak run — the same operation repeated thousands of
+   times, asserting bounded RSS and native-handle count (N13's soak-gate shape, run
+   here at evaluation time rather than deferred to Phase 4 CI)**. A candidate that's
+   functionally correct but hasn't yet proven the soak leg is not rejected on that
+   basis alone — record it as a known hardening item and note whether anything about
+   the architecture (vs. just this prototype's current state) explains the gap.
 2. **Spike 2 — Candidate 2/3 (pure/partial Rust kernel) against the hard cases.** A
    minimal `truck`/`monstertruck` prototype attempting the specific
    developable-surfaces-scoped operations 08's red cases need — corner-chain
@@ -198,6 +216,80 @@ released over time" — not raw latency — is the actual, evidenced bar (§1):
 Each spike produces a short scored write-up against §3's table — inputs to the ADRs
 below, not the ADRs themselves.
 
+### 4.1 Timeboxing spikes under AI-assisted development `[PROPOSAL 2026-07-20]`
+
+Paul: "I agree these need to be timeboxed; I'm uncertain how to do this when using AI
+assistance." The difficulty is specific: AI-assisted coding throughput is **not**
+linear with calendar time the way solo hand-coding roughly is — it front-loads
+unpredictably (a full working prototype in an afternoon is plausible per Paul's own
+signal, §3) *and* it can produce something that runs and looks plausible while hiding
+the exact class of defect this whole rebuild exists to eliminate (dual derivation,
+compensating hacks — L1). A calendar estimate ("this should take 3 days") is guessing
+at the wrong variable. Proposed structure instead:
+
+1. **A fixed calendar ceiling per spike, sized as a backstop, not a target.**
+   `[ADOPTED 2026-07-20 as a starting point — Paul: "let's start with your
+   suggestions; if the guidance is incorrect, we can adjust"]` scaled to each spike's
+   actual scope rather than one uniform number, in **active working days** (see the
+   soak-run carve-out below) — kept revisable once a spike is actually underway and
+   real evidence exists about whether a given ceiling was too tight or too generous:
+   - **Spike 1 (Rust+OCCT minimal path): 3 working days.** New toolchain + FFI bridge
+     + one real HEAVY operation end-to-end + soak run — bounded scope, one fixture,
+     one operation.
+   - **Spike 2 (pure/partial Rust vs. hard cases): 4 working days.** One day more than
+     Spike 1 on purpose: this spike targets exactly the cases v1 never fully solved
+     (C05/C08/C13-class), so per point (3) it's the spike most likely to need more
+     than one structurally different attempt before a verdict is honest.
+   - **Spike 3 (MCP-layer language): 1–2 working days.** Research-first by design (§4)
+     — most of the question is answerable without writing much code; only escalates
+     toward the top of that range if a gap surfaces and a small prototype gets built.
+   - **Spike 4 (lint/boundary tooling): 1–2 working days.** A narrow, well-defined
+     feasibility question once a language combination is fixed.
+   - Total ≈ 9–13 working days if run strictly in sequence — but Spikes 1, 2, and 3
+     don't depend on each other's outcome and can run **concurrently** if resourcing
+     allows, which shortens wall-clock time without changing any individual ceiling.
+     Spike 4 is genuinely sequential — it needs 1–3's survivor(s) decided first.
+   - **Soak runs don't count against the active-time ceiling.** "Thousands of repeated
+     operations" is unattended wall-clock time (plausibly hours), not developer/AI
+     iteration effort — launch it and let it run in the background while other work
+     continues, the same way a long CI job isn't counted as a day of someone's time.
+   - If AI-assisted iteration is as fast as Paul's own experience suggests, a real
+     result lands well inside the ceiling; if it doesn't, hitting the ceiling with an
+     inconclusive result *is itself the finding* ("this candidate didn't converge even
+     with AI assistance in the time given") — write it up as exactly that, not as a
+     failure to hide.
+2. **Exit condition is §3/§4's criteria, not the clock — identical regardless of how
+   the time was spent.** A spike stops the moment it clears its bar (don't keep
+   polishing past done) or hits the ceiling (write up what's actually known). AI speed
+   changes *when* you can check the criteria, never *what* the criteria are — the
+   soak leg's bounded-RSS bar, the specific hard-case rows (§3.1), and the SDK-gap
+   question (Spike 3) don't get relaxed because the code arrived quickly.
+3. **Budget attempts, not hours, inside the ceiling.** If a first implementation
+   tactic stalls, treat "try a structurally different approach" as the default move,
+   not "debug the same approach for the rest of the ceiling" — cheap-to-try
+   alternatives are specifically where AI assistance earns its keep, and a timebox
+   that only tracks elapsed time doesn't reward that. Two or three independent
+   attempts that all fail to clear the bar inside the ceiling is a stronger signal
+   than one long grind.
+4. **Extra scrutiny on fast passes of correctness-critical criteria, not less.** A
+   spike that clears its soak leg or the §3.1 hard-case check quickly, with heavy AI
+   involvement, should get the *same* verification rigor as a slow manual pass would
+   — re-run the soak leg, re-check the specific case-inventory rows by hand, don't
+   accept "it ran once and looked right" as equivalent to "it passed." This is the
+   direct lesson of why this rebuild exists (L1): fast-and-plausible is not the same
+   claim as correct, and a timeboxing scheme that implicitly rewards speed over
+   verification would reintroduce the exact risk class this whole plan is trying to
+   retire.
+5. **Record the AI-assistance datapoint itself, concretely.** Since "AI-assisted
+   development throughput" is already a named criterion (§3), each spike's write-up
+   should note *where* AI assistance helped vs. where it produced something that
+   needed to be caught and redone — real evidence for that criterion, not a
+   retrospective impression.
+
+This is a proposal, not a decision — Paul still sets the actual ceiling length (a
+resourcing call this doc can't make) and confirms whether the attempt-budget framing
+in (3) matches how he'd actually want to work a spike.
+
 ## 5. ADRs (the decision artifacts, per 06-plan's exit criterion)
 
 - **ADR-1: Kernel/geometry-engine.** Which candidate (§2) implements the HEAVY
@@ -215,8 +307,17 @@ Given 16 §0's own finding (most operations are LIGHT, kernel-free) and §1's ne
 direction I'd validate first** — it doesn't treat "which kernel" as all-or-nothing,
 and it directly exploits work already done rather than a fresh assumption. Within
 that, Rust's ownership model is a genuine structural fit for N13 independent of
-Paul's own productivity signal, which makes Rust-for-orchestration attractive
-*if* Spike 3 doesn't reveal an MCP-SDK gap serious enough to keep that layer in TS.
+Paul's own productivity signal — and §1's elaboration sharpens *why* that fit
+matters here specifically: the current stack's actual failure mode wasn't a missing
+optimization, it was resources that depended on manual/GC-adjacent discipline being
+released, and evidently weren't, over a session's lifetime. `Drop`-based release
+tied to scope exit is a different *kind* of guarantee than "remember to call
+release" — that's the concrete mechanism behind the lean, not just a general
+preference for Rust. That makes Rust-for-orchestration attractive *if* Spike 3
+doesn't reveal an MCP-SDK gap serious enough to keep that layer in TS, but the
+lean is only as good as Spike 1/2's soak legs (§4) — a design argument about
+ownership is exactly the kind of claim §1.1 says shouldn't be trusted without
+running it.
 None of this is a recommendation to skip §4 — it's a starting hypothesis for the
 spikes to confirm or kill, offered because a plan with no point of view is harder to
 react to than one with a stated, falsifiable lean.
@@ -225,10 +326,27 @@ react to than one with a stated, falsifiable lean.
 
 - ~~`[OPEN-18.1]`~~ **ANSWERED 2026-07-20:** no diagnostic spike on the current
   stack — its evidence is the project itself (§1.1).
-- `[OPEN-18.2]` Timebox per spike — how much time is reasonable before this needs to
-  convert to a decision? (Not answered here; a resourcing call.)
-- `[OPEN-18.3]` Since Boundary A vs. B isn't being disambiguated in the *old* system
-  (§1.1), each replacement candidate's soak spike (§4) will show bounded-or-not as a
-  single combined result. If a candidate's soak leg fails, is a follow-up spike to
-  isolate *which* boundary is responsible worth the time, or is "still leaking,
-  reject the candidate" a sufficient outcome without further isolation?
+- ~~`[OPEN-18.2]`~~ **ANSWERED 2026-07-20:** timeboxing approach ratified — attempt-
+  budget framing (§4.1 point 3) agreed, and the scope-scaled ceilings adopted
+  as a starting point: Spike 1 = 3 working days, Spike 2 = 4, Spike 3 = 1–2,
+  Spike 4 = 1–2 (soak-run wall-clock time excluded, per the carve-out in §4.1).
+  Paul: "let's start with your suggestions; if the guidance is incorrect, we can
+  adjust" — explicitly a starting point, not a permanent commitment; §4.1's
+  `[ADOPTED]` tag is kept in place (not deleted down to a bare number) since it still
+  records the reasoning behind each figure, in case the numbers need revisiting once a
+  spike is actually underway.
+- ~~`[OPEN-18.3]`~~ **ANSWERED 2026-07-20**, by §3's priority ordering: neither
+  "reject on first leak" nor "always isolate immediately" — **"still leaking, reject"
+  is too strict** given the new priority (functionality first, long-term performance
+  second) and **is only the right call for a *design-level* gap, not an
+  *implementation* one.** Concretely: if a spike's soak leg fails, first ask whether
+  anything about the candidate's *architecture* explains it (e.g. the language forces
+  manual release the same way NAPI did, with no ownership/`Drop`-style structural
+  alternative) — if so, that's a real reject reason and worth naming even without a
+  full A-vs-B isolation spike. If nothing architectural explains it, treat it as an
+  unfinished **implementation** detail: record it as a known hardening item and move
+  on without a dedicated follow-up spike — per Paul, "I don't see any options at the
+  moment that would break the soak test," so this is not expected to bite in practice,
+  but the policy is set for if it does. A vs. B isolation, if ever needed, becomes
+  Phase 4/5 "build long-term performance" work against real functionality, not a
+  Phase 3 spike-extension.
