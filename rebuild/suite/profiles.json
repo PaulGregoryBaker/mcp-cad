@@ -1,0 +1,24 @@
+{
+  "$comment": "Named tolerance profiles (N11). Cases reference budgets by key; no case file carries a number. Values in mm / degrees.",
+  "default": {
+    "closureMm": 0.1,
+    "probeMm": 0.1,
+    "outlineMm": 0.05,
+    "lenMm": 0.05,
+    "angleDeg": 0.1
+  },
+  "loose": {
+    "closureMm": 1.0,
+    "probeMm": 1.0,
+    "outlineMm": 0.5,
+    "lenMm": 0.5,
+    "angleDeg": 1.0
+  },
+  "tight": {
+    "closureMm": 0.01,
+    "probeMm": 0.01,
+    "outlineMm": 0.005,
+    "lenMm": 0.005,
+    "angleDeg": 0.01
+  }
+}

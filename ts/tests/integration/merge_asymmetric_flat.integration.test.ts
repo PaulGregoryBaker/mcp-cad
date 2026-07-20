@@ -998,31 +998,10 @@ describe('[multi-axis] fuse side-wall+flange then merge_bodies_with_bend: fold a
     };
   }
 
-  const cases: AxisCase[] = [
-    {
-      foldAxis: 'Y',
-      pick: (f) => ({
-        wallId: f.plusXWall, wallBbox: f.plusXWallBbox,
-        flangeId: f.plusXFlange, flangeBbox: f.plusXFlangeBbox,
-        simpleId: f.topWall, simpleBbox: f.topWallBbox,
-      }),
-    },
-    {
-      foldAxis: 'X',
-      pick: (f) => ({
-        wallId: f.plusYWall, wallBbox: f.plusYWallBbox,
-        flangeId: f.plusYFlange, flangeBbox: f.plusYFlangeBbox,
-        simpleId: f.topWall, simpleBbox: f.topWallBbox,
-      }),
-    },
-    {
-      foldAxis: 'Z',
-      pick: (f) => ({
-        wallId: f.plusXWall, wallBbox: f.plusXWallBbox,
-        flangeId: f.plusXFlange, flangeBbox: f.plusXFlangeBbox,
-        simpleId: f.plusYWall, simpleBbox: f.plusYWallBbox,
-      }),
-    },
+  const cases: Array<{ foldAxis: 'X' | 'Y' | 'Z' }> = [
+    { foldAxis: 'Y' },
+    { foldAxis: 'X' },
+    { foldAxis: 'Z' },
   ];
 
   // Cross every axis case with BOTH argument orders. merge_bodies_with_bend treats
@@ -1031,9 +1010,39 @@ describe('[multi-axis] fuse side-wall+flange then merge_bodies_with_bend: fold a
   // panelNodeA's effective flat width, not B's. A fix validated only with the
   // composite (fused) panel as A could still be broken when it's passed as B.
   const orders: Array<'compositeFirst' | 'simpleFirst'> = ['compositeFirst', 'simpleFirst'];
-  const allCases = cases.flatMap((c) => orders.map((order) => ({ ...c, order })));
+  const allCases = cases.flatMap((c) => orders.map((order) => ({ foldAxis: c.foldAxis, order })));
 
-  it.each(allCases)('fold axis $foldAxis ($order): fuse wall+flange, then merge_bodies_with_bend', async ({ foldAxis, pick, order }) => {
+  /** Resolves which panels to use for a given fold axis (no functions in it.each params). */
+  function pickPanels(
+    axis: 'X' | 'Y' | 'Z',
+    faces: AllFaces,
+  ): { wallId: string; wallBbox: Bbox; flangeId: string; flangeBbox: Bbox; simpleId: string; simpleBbox: Bbox } {
+    switch (axis) {
+      case 'Y':
+        return {
+          wallId: faces.plusXWall, wallBbox: faces.plusXWallBbox,
+          flangeId: faces.plusXFlange, flangeBbox: faces.plusXFlangeBbox,
+          simpleId: faces.topWall, simpleBbox: faces.topWallBbox,
+        };
+      case 'X':
+        return {
+          wallId: faces.plusYWall, wallBbox: faces.plusYWallBbox,
+          flangeId: faces.plusYFlange, flangeBbox: faces.plusYFlangeBbox,
+          simpleId: faces.topWall, simpleBbox: faces.topWallBbox,
+        };
+      case 'Z':
+        return {
+          wallId: faces.plusXWall, wallBbox: faces.plusXWallBbox,
+          flangeId: faces.plusXFlange, flangeBbox: faces.plusXFlangeBbox,
+          simpleId: faces.plusYWall, simpleBbox: faces.plusYWallBbox,
+        };
+    }
+  }
+
+  // Run each axis×order combination as a separate test (explicit loop avoids
+  // it.each serialization issues with vitest's fork pool).
+  for (const { foldAxis, order } of allCases) {
+    it(`fold axis ${foldAxis} (${order}): fuse wall+flange, then merge_bodies_with_bend`, async () => {
     const fixturePath = findFixture(fixtureName);
     if (!fixturePath) { console.warn(`${fixtureName} missing — skipping`); return; }
     const config = loadConfig(configPath);
@@ -1047,9 +1056,9 @@ describe('[multi-axis] fuse side-wall+flange then merge_bodies_with_bend: fold a
     expect(split.panel_count, 'cube_with_flanges must split into 10 panels').toBe(10);
 
     const faces = await classifyAllFaces(split.panel_ids as string[], config);
-    if (!faces) { console.warn(`[multi-axis ${tag}] classification failed — skipping`); return; }
-    const { wallId, wallBbox, flangeId, flangeBbox, simpleId, simpleBbox } = pick(faces);
     const tag = `${foldAxis}/${order}`;
+    if (!faces) { console.warn(`[multi-axis ${tag}] classification failed — skipping`); return; }
+    const { wallId, wallBbox, flangeId, flangeBbox, simpleId, simpleBbox } = pickPanels(foldAxis, faces);
 
     const txn: any = await dispatchTool('begin_transaction', { label: `multi-axis-${tag}` }, config);
     const txId: string = txn.transaction_id;
@@ -1163,5 +1172,6 @@ describe('[multi-axis] fuse side-wall+flange then merge_bodies_with_bend: fold a
     const isTilted = ![pf.normalX, pf.normalY, pf.normalZ].every(axisAligned);
     console.log(`[multi-axis ${tag}] merged shell normal=(${pf.normalX.toFixed(4)}, ${pf.normalY.toFixed(4)}, ${pf.normalZ.toFixed(4)}) tilted=${isTilted}`);
     expect(isTilted, `[multi-axis ${tag}] [BUG] merged 3D shell is tilted — normal=(${pf.normalX.toFixed(4)}, ${pf.normalY.toFixed(4)}, ${pf.normalZ.toFixed(4)})`).toBe(false);
-  }, 120_000);
+    }, 120_000);
+  }
 });

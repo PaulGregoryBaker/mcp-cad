@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "0.1",
+  "id": "t1-bracket45-merge-position-preserved",
+  "title": "T1: angle_bracket 45° two-panel merge — non-right angle, positions preserved",
+  "level": "C",
+  "tier": "T1",
+  "inventory": ["C04"],
+  "toleranceProfile": "default",
+  "expectation": "pass",
+  "fixture": { "kind": "step", "path": "cpp/tests/fixtures/angle_bracket_45deg.stp" },
+  "params": { "$harvests": "merge at arbitrary angle (branch 010: exact orientation at any bend angle)" },
+  "ops": [
+    { "op": "import", "path": "cpp/tests/fixtures/angle_bracket_45deg.stp" },
+    { "op": "decompose" },
+    { "op": "merge_pair" }
+  ],
+  "oracles": [
+    { "type": "position_preserved", "budgetKey": "probeMm", "$semantics": "As t1-bracket90." }
+  ]
+}

@@ -28,6 +28,13 @@ export default defineWorkspace([
         'tests/unit/fuse_preflight.unit.test.ts',
         'tests/unit/flat-pattern-projection.test.ts',
         'tests/unit/merge_4point_mapping.test.ts',
+        'tests/unit/coordinate-map.unit.test.ts',
+        'tests/unit/dxf_validation.test.ts',
+        'tests/manufacturing/graph/bootstrap.test.ts',
+        'tests/manufacturing/graph/graph.test.ts',
+        'tests/manufacturing/graph/solver.test.ts',
+        'tests/manufacturing/graph/foldability.test.ts',
+        'tests/manufacturing/graph/drc.test.ts',
       ],
     },
   },
@@ -61,13 +68,13 @@ export default defineWorkspace([
       name: 'integration',
       include: ['tests/integration/**/*.test.ts'],
       setupFiles: ['tests/setup/integration-reset.ts'],
-      pool: 'forks',
-      poolOptions: {
-        forks: {
-          singleFork: true,
-          execArgv: ['--max-old-space-size=4096'],
-        },
-      },
+      // Switched from pool:'forks' (singleFork) to pool:'threads' because
+      // merge_asymmetric_flat causes a hard worker crash in forked processes.
+      // The C++ addon's g_service singleton is process-scoped; threads share
+      // the same main process, avoiding the fork crash. Some tests may fail
+      // with GE_SHELL_NOT_FOUND due to shared state — the integration-reset
+      // setup file calls clearState() between files to mitigate this.
+      pool: 'threads',
     },
   },
   {

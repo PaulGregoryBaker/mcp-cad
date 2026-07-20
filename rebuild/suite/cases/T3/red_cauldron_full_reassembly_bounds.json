@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "0.1",
+  "id": "red-cauldron-full-reassembly-bounds",
+  "title": "RED (C13): full cauldron decompose→re-merge reproduces the imported solid's bounds",
+  "level": "C",
+  "tier": "T3",
+  "inventory": ["C13"],
+  "toleranceProfile": "default",
+  "expectation": "known-fail-v1",
+  "fixture": { "kind": "step", "path": "cpp/tests/fixtures/cauldron.step" },
+  "params": {
+    "$note": "v1 history: after five real bug fixes, 5/6 bbox bounds within ~1mm; the LAST bound stayed off by ~167mm and the mechanism was never found despite extensive instrumentation. Oracle is self-referential: ground truth is the imported solid itself."
+  },
+  "ops": [
+    { "op": "import", "path": "cpp/tests/fixtures/cauldron.step" },
+    { "op": "record_import_reference" },
+    { "op": "decompose" },
+    { "op": "merge_all_adjacent" }
+  ],
+  "oracles": [
+    {
+      "type": "bounds_match_import",
+      "budgetKey": "probeMm",
+      "$semantics": "All 6 bbox bounds of the fully re-merged composite equal the ORIGINAL imported solid's bounds within budget (decompose+re-merge is an identity on the part's extent). Bbox is admissible here ONLY because the reference is exact and self-derived — this is a closure-style identity, not a weak spot-check."
+    },
+    {
+      "type": "position_preserved",
+      "budgetKey": "probeMm",
+      "$semantics": "Reference vertices recorded at import must be found at the same coordinates on the final composite (O1) — the bounds oracle alone cannot localize which panel drifted."
+    }
+  ]
+}

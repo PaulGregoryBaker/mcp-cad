@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "0.1",
+  "id": "t0-lbracket-mapping-roundtrip",
+  "title": "T0: l_bracket panels — 2D→3D→2D grid roundtrip within budget, panel identity preserved",
+  "level": "C",
+  "tier": "T0",
+  "inventory": ["C01", "C21"],
+  "toleranceProfile": "default",
+  "expectation": "pass",
+  "fixture": { "kind": "step", "path": "cpp/tests/fixtures/l_bracket_corner_90deg.stp" },
+  "params": { "$harvests": "unfold_roundtrip + split_panel_frame_dxf_consistency intent (rect panels)" },
+  "ops": [
+    { "op": "import", "path": "cpp/tests/fixtures/l_bracket_corner_90deg.stp" },
+    { "op": "decompose" },
+    { "op": "map_roundtrip_grid", "gridN": 3, "insetMm": 2.0 }
+  ],
+  "oracles": [
+    {
+      "type": "closure",
+      "budgetKey": "probeMm",
+      "$semantics": "For every panel, every grid point: |map3d→2d(map2d→3d(p)) − p| ≤ budget AND the returning panel_id equals the originating panel (identity mismatch = association-swap defect, scored as a huge residual)."
+    }
+  ]
+}

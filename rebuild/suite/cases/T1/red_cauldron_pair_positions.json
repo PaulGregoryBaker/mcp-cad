@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "0.1",
+  "id": "red-cauldron-pair-positions",
+  "title": "RED (C05): every adjacent cauldron pair merges with both panels' 3D positions preserved",
+  "level": "C",
+  "tier": "T1",
+  "inventory": ["C05"],
+  "toleranceProfile": "default",
+  "expectation": "known-fail-v1",
+  "fixture": { "kind": "step", "path": "cpp/tests/fixtures/cauldron.step" },
+  "params": {
+    "$note": "v1 history: a specific pair ('pair (1,0)') fails even a SIMPLE 2-panel merge position check; pair-dependent, root cause never found. Sweep formulation avoids index instability across split-order changes. Related minimal repro (no cauldron needed): the authored-panel association-swap defect, 12-domain-notes.md §6."
+  },
+  "ops": [
+    { "op": "import", "path": "cpp/tests/fixtures/cauldron.step" },
+    { "op": "decompose" },
+    {
+      "op": "sweep_adjacent_pairs",
+      "inner": [{ "op": "merge_pair" }],
+      "isolation": "rollback-between-iterations"
+    }
+  ],
+  "oracles": [
+    {
+      "type": "position_preserved",
+      "budgetKey": "probeMm",
+      "$semantics": "Before each merge, record >=3 non-collinear reference vertices on each panel; after the merge, the same features must be at the same world coordinates within budget. Zero-reference: no stored constants."
+    }
+  ]
+}

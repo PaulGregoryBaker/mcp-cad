@@ -1,0 +1,137 @@
+{
+  "schemaVersion": "0.1",
+  "id": "c22-n6-down-rot137-sharp",
+  "title": "Polygon closure: N=6 (60° bends down), pose rot137, sharp folds",
+  "level": "A",
+  "tier": "T2",
+  "inventory": [
+    "C22"
+  ],
+  "toleranceProfile": "default",
+  "expectation": "pass",
+  "fixture": {
+    "kind": "authored",
+    "path": null
+  },
+  "params": {
+    "N": 6,
+    "bendDeg": 60,
+    "segmentLenMm": 60,
+    "widthMm": 40,
+    "thicknessMm": 1,
+    "bendDir": "down",
+    "variant": "sharp"
+  },
+  "ops": [
+    {
+      "op": "author_strip",
+      "N": 6,
+      "segmentLenMm": 60,
+      "widthMm": 40,
+      "thicknessMm": 1,
+      "bendDir": "down",
+      "pose": {
+        "rotDeg": 137,
+        "offsetMm": [
+          250,
+          -80
+        ]
+      }
+    },
+    {
+      "op": "construct"
+    },
+    {
+      "op": "map_strip_ends"
+    }
+  ],
+  "oracles": [
+    {
+      "type": "closure",
+      "budgetKey": "closureMm",
+      "checkpoints": [
+        {
+          "afterBend": 1,
+          "endCorners": [
+            [
+              210,
+              0,
+              -259.807621135
+            ],
+            [
+              210,
+              40,
+              -259.807621135
+            ]
+          ]
+        },
+        {
+          "afterBend": 2,
+          "endCorners": [
+            [
+              -30,
+              0,
+              -259.807621135
+            ],
+            [
+              -30,
+              40,
+              -259.807621135
+            ]
+          ]
+        },
+        {
+          "afterBend": 3,
+          "endCorners": [
+            [
+              -120,
+              0,
+              -103.923048454
+            ],
+            [
+              -120,
+              40,
+              -103.923048454
+            ]
+          ]
+        },
+        {
+          "afterBend": 4,
+          "endCorners": [
+            [
+              -60,
+              0,
+              0
+            ],
+            [
+              -60,
+              40,
+              0
+            ]
+          ]
+        },
+        {
+          "afterBend": 5,
+          "endCorners": [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              40,
+              0
+            ]
+          ]
+        }
+      ],
+      "finalCoincidentWithStart": true
+    },
+    {
+      "type": "structure",
+      "solidCount": 1,
+      "typedError": null
+    }
+  ]
+}

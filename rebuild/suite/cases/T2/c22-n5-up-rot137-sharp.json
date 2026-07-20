@@ -1,0 +1,122 @@
+{
+  "schemaVersion": "0.1",
+  "id": "c22-n5-up-rot137-sharp",
+  "title": "Polygon closure: N=5 (72° bends up), pose rot137, sharp folds",
+  "level": "A",
+  "tier": "T2",
+  "inventory": [
+    "C22"
+  ],
+  "toleranceProfile": "default",
+  "expectation": "pass",
+  "fixture": {
+    "kind": "authored",
+    "path": null
+  },
+  "params": {
+    "N": 5,
+    "bendDeg": 72,
+    "segmentLenMm": 60,
+    "widthMm": 40,
+    "thicknessMm": 1,
+    "bendDir": "up",
+    "variant": "sharp"
+  },
+  "ops": [
+    {
+      "op": "author_strip",
+      "N": 5,
+      "segmentLenMm": 60,
+      "widthMm": 40,
+      "thicknessMm": 1,
+      "bendDir": "up",
+      "pose": {
+        "rotDeg": 137,
+        "offsetMm": [
+          250,
+          -80
+        ]
+      }
+    },
+    {
+      "op": "construct"
+    },
+    {
+      "op": "map_strip_ends"
+    }
+  ],
+  "oracles": [
+    {
+      "type": "closure",
+      "budgetKey": "closureMm",
+      "checkpoints": [
+        {
+          "afterBend": 1,
+          "endCorners": [
+            [
+              134.16407865,
+              0,
+              228.253563911
+            ],
+            [
+              134.16407865,
+              40,
+              228.253563911
+            ]
+          ]
+        },
+        {
+          "afterBend": 2,
+          "endCorners": [
+            [
+              -67.082039325,
+              0,
+              162.86473639
+            ],
+            [
+              -67.082039325,
+              40,
+              162.86473639
+            ]
+          ]
+        },
+        {
+          "afterBend": 3,
+          "endCorners": [
+            [
+              -67.082039325,
+              0,
+              21.79627584
+            ],
+            [
+              -67.082039325,
+              40,
+              21.79627584
+            ]
+          ]
+        },
+        {
+          "afterBend": 4,
+          "endCorners": [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              40,
+              0
+            ]
+          ]
+        }
+      ],
+      "finalCoincidentWithStart": true
+    },
+    {
+      "type": "structure",
+      "solidCount": 1,
+      "typedError": null
+    }
+  ]
+}

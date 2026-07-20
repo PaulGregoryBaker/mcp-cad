@@ -264,7 +264,20 @@ export const kerfOffsetMm = {
 function resolveAddonPath(): string {
   const envPath = process.env['GEOMETRY_ADDON_PATH'];
   if (envPath !== undefined && envPath.length > 0) {
-    return envPath;
+    // resolve() handles absolute paths (preserved) and relative paths
+    // (resolved against CWD).  Env vars set by CI / VS Code tasks are
+    // often workspace-relative, and require() resolves relative paths
+    // from the calling module, not CWD — so we must absolutify first.
+    const resolved = path.resolve(envPath);
+    if (fs.existsSync(resolved)) {
+      return resolved;
+    }
+    // If CWD differs from the project root (e.g. forked vitest workers),
+    // also try resolving relative to __dirname as a fallback.
+    const fromDirname = path.resolve(__dirname, envPath);
+    if (fs.existsSync(fromDirname)) {
+      return fromDirname;
+    }
   }
 
   // Default locations (relative to dist/ or project root)

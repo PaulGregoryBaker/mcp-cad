@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "0.1",
+  "id": "red-cauldron-triple-single-solid",
+  "title": "RED (C08): every adjacent cauldron triple chain-merges into exactly one solid",
+  "level": "C",
+  "tier": "T3",
+  "inventory": ["C08"],
+  "toleranceProfile": "default",
+  "expectation": "known-fail-v1",
+  "fixture": { "kind": "step", "path": "cpp/tests/fixtures/cauldron.step" },
+  "params": {
+    "$note": "v1 history: 'Refold produced 2 solids' on chained (3+) merges — 8/~250 triples originally, reduced by fixes to 1 documented remaining edge case; a 1440-triple sweep with weak oracles also reported false negatives. This sweep re-runs with strong oracles."
+  },
+  "ops": [
+    { "op": "import", "path": "cpp/tests/fixtures/cauldron.step" },
+    { "op": "decompose" },
+    {
+      "op": "sweep_adjacent_triples",
+      "inner": [{ "op": "merge_pair" }, { "op": "merge_next" }],
+      "isolation": "rollback-between-iterations"
+    }
+  ],
+  "oracles": [
+    { "type": "structure", "solidCount": 1, "typedError": null },
+    {
+      "type": "position_preserved",
+      "budgetKey": "probeMm",
+      "$semantics": "All three panels' reference features at unchanged world coordinates after both merges — the weak-oracle sweep of v1 passed cases a position probe later disproved; never again (L4)."
+    }
+  ]
+}
