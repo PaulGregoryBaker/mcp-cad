@@ -38,6 +38,9 @@ jobs:
       - name: Lint TypeScript
         run: cd ts && npm run lint
 
+      - name: Lint TypeScript import boundaries (constitution principle I)
+        run: cd ts && npm run lint:boundaries
+
       - name: Type check
         run: cd ts && npm run typecheck
 
@@ -50,13 +53,33 @@ jobs:
           $VCPKG_ROOT/bootstrap-vcpkg.sh -disableMetrics
           cd cpp && $VCPKG_ROOT/vcpkg install --triplet x64-linux
 
+      - name: Lint C++ include boundaries (constitution principle I)
+        run: node cpp/tools/check-include-boundaries.mjs
+
       - name: Build C++ (geometry_engine)
         run: |
           cd cpp
           cmake -B build \
             -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake \
-            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
           cmake --build build -j$(nproc)
+
+      - name: clang-tidy (constitution principles VIII, X static complement)
+        # Config verified 2026-07-21 against one real file (geometry_service_shell.cc,
+        # manual include flags, no compile_commands.json — this project's local
+        # Windows build uses the Visual Studio generator, which doesn't emit one;
+        # Linux CI's Makefiles/Ninja-based build does, via -p build below): 11 real,
+        # legitimate findings, zero noise from OCCT's own headers. Still non-blocking
+        # — that was one file, not a full-codebase baseline, and the TS-side
+        # equivalent found 75+ pre-existing violations once run broadly. Flip to
+        # blocking once a full run + baseline decision (same pattern as
+        # .dependency-cruiser-known-violations.json) is done.
+        continue-on-error: true
+        run: |
+          sudo apt-get update && sudo apt-get install -y clang-tidy
+          cd cpp
+          find src/geometry -name '*.cc' | xargs clang-tidy -p build
 
       - name: Run TypeScript unit tests
         run: cd ts && npm run test:unit

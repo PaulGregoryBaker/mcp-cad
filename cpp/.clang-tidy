@@ -1,0 +1,40 @@
+# Static complement to constitution v2.0.0 principles VIII (SOLID / complexity
+# budgets) and X (native resource lifecycle). Not a replacement for either —
+# principle X's real gate is the runtime soak test (rebuild/19 §3); this catches
+# the subset of ownership mistakes visible from source alone.
+#
+# NOTE: not verified against this codebase yet — clang-tidy is not installed on the
+# machine this was authored on. Needs a real run (locally or in CI) before trusting
+# it; the check list below is deliberately conservative to avoid drowning real
+# findings in noise from OCCT's own idioms (Handle<> reference counting, TopoDS_Shape
+# value semantics), which don't match vanilla "modern C++ RAII" assumptions that some
+# of the stricter cppcoreguidelines checks assume.
+
+Checks: >
+  -*,
+  cppcoreguidelines-owning-memory,
+  cppcoreguidelines-no-malloc,
+  cppcoreguidelines-macro-usage,
+  readability-function-cognitive-complexity,
+  readability-function-size,
+  bugprone-use-after-move,
+  bugprone-dangling-handle,
+  bugprone-unused-return-value,
+  performance-unnecessary-copy-initialization,
+  modernize-use-override
+
+WarningsAsErrors: ''
+
+CheckOptions:
+  # Mirrors the TS-side complexity budget (eslint "complexity": 15) — see
+  # eslint-local-rules.cjs / .eslintrc.json for the TS half of this same rule.
+  - key: readability-function-cognitive-complexity.Threshold
+    value: '15'
+  - key: readability-function-size.LineThreshold
+    value: '120'
+  - key: readability-function-size.ParameterThreshold
+    value: '8'
+
+# HeaderFilterRegex intentionally scoped to this project's own headers — never lint
+# OCCT's or any vendored/vcpkg headers pulled in transitively.
+HeaderFilterRegex: '^.*/cpp/src/.*\.(h|hpp)$'

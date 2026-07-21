@@ -6,7 +6,7 @@
     "ecmaVersion": 2022,
     "sourceType": "module"
   },
-  "plugins": ["@typescript-eslint", "prettier"],
+  "plugins": ["@typescript-eslint", "prettier", "local-rules"],
   "extends": [
     "eslint:recommended",
     "plugin:@typescript-eslint/recommended",
@@ -20,7 +20,27 @@
     "@typescript-eslint/no-explicit-any": "error",
     "@typescript-eslint/no-non-null-assertion": "error",
     "@typescript-eslint/strict-boolean-expressions": "error",
-    "no-console": ["warn", { "allow": ["error", "warn"] }]
+    "@typescript-eslint/switch-exhaustiveness-check": "error",
+    "no-console": ["warn", { "allow": ["error", "warn"] }],
+    "complexity": ["error", 15],
+    "max-lines-per-function": ["error", { "max": 120, "skipBlankLines": true, "skipComments": true }],
+    "local-rules/no-tolerance-literal": "error",
+    "local-rules/fallback-requires-adr": "error",
+    "no-restricted-syntax": [
+      "error",
+      {
+        "selector": "Literal[value=/geometry_addon\\.node/]",
+        "message": "Only src/geometry/binding.ts may reference the native addon file directly — constitution v2 principle I/IV (GeometryKernel adapter is the sole kernel-binding entry point)."
+      }
+    ]
   },
+  "overrides": [
+    {
+      "files": ["src/geometry/binding.ts"],
+      "rules": {
+        "no-restricted-syntax": "off"
+      }
+    }
+  ],
   "ignorePatterns": ["dist/", "node_modules/", "*.js", "*.d.ts"]
 }
