@@ -7,6 +7,11 @@ formulation (root transform + per-bend transforms), all of D1–D5, and the case
 coverage survive; what changes is that `T_pc` (child-local → parent-local placement) is
 **deleted**, because there is no longer a separate child frame to place — every region panel
 is already a subset of the part's one flat frame.
+**Execution note added 2026-07-21** ([19](19-cpp-ts-interface-boundary.md) §1): this
+module is written kernel-agnostic and `evaluate()` is provably pure — true either way —
+but per the Phase 3 stack decision, it **executes in C++, not TS**: no geometric
+computation, pure or otherwise, happens on the TS side of the boundary. Nothing in this
+document's content changes; only where it runs.
 This is the highest-stakes artifact of the rebuild: the one geometric model from which
 every frame, flat pattern, DXF, drawing dimension, and 2D↔3D mapping derives (P3).
 Prohibited by construction: parallel solvers, per-case gates, fallbacks, compensating

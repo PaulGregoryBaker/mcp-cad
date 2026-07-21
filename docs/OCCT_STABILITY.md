@@ -105,4 +105,4 @@ Pin in `cpp/vcpkg.json`. Do not upgrade without re-running this fixture suite.
 
 - OCCT 7.8.1 Release Notes: https://dev.opencascade.org/doc/overview/html/occt_dev_guides__documentation.html
 - OCCT Forum: BRepAlgoAPI stability discussion (7.7 → 7.8)
-- Engineering-Design.md §1 (OCCT stability mitigations)
+- rebuild/19-cpp-ts-interface-boundary.md §2 (Port A/C/D — OCCT usage in the v2 interface)

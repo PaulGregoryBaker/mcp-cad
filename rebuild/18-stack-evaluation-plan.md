@@ -1,11 +1,11 @@
 # 18 — Stack Evaluation Plan (Phase 3)
 
-**Status:** `[PROPOSAL]` for Paul's review — a plan for *how* to decide, not the
-decision itself. Phase 3 is explicitly where Paul's stack opinions get their hearing
-(06-plan.md), now against a complete requirement set: 13 (geometric model), 14
-(schema), 15 (contract), 16 (kernel capability list, HEAVY/LIGHT split), 17
-(numerical policy). This doc structures the evaluation; it does not pre-select a
-winner.
+**Status:** **DECIDED 2026-07-21 — see [19-cpp-ts-interface-boundary.md](19-cpp-ts-interface-boundary.md) §0.**
+Stack stays C++/TS; no move to Rust for this rebuild. This doc's plan-and-spike
+process ran to completion (Spikes 1-3, `spikes/SUMMARY.md`) and produced real,
+concrete findings, but the decision itself turned on tracing this rebuild's own git
+history rather than the spikes directly — 19 §0 has the full reasoning. Kept below as
+the historical record of how the evaluation was actually run; not re-opened.
 
 ---
 
@@ -153,7 +153,7 @@ directly resolves how a soak-leg result should be weighed in §4 and OPEN-18.3.
 | AI-assisted development throughput | Paul, explicit | A real criterion, not a soft one — Paul has first-hand evidence for Rust specifically; worth weighing alongside the harder technical criteria, not dismissed as unmeasurable |
 | N13 native memory/handle discipline — **secondary to functional correctness, but a real design-time question** (priority note above) | 02 N13; §1's elaboration | Passes the §4 soak leg: bounded RSS and native-handle count over thousands of repeated operations. Does the language make "acquire/release, scope-bound" the *idiomatic* path (Rust's ownership/`Drop` model is a structural point in its favor, independent of Paul's personal preference), or something the team must enforce by discipline/lint alone, the way the current stack apparently did — and evidently didn't sustain? A candidate whose *architecture* offers no credible path here is a real concern now; a candidate that simply hasn't proven it yet is hardening work, deferred per the priority ordering. |
 | P1 boundary/lint enforcement tooling | 04 P1 | Can dependency-boundary lint, complexity budgets, and the tolerance-literal ban (17 §6) actually be mechanically enforced in the chosen language(s)? A stack that can't support this *fails selection* per P1's own text. |
-| MCP SDK maturity per language | 06-plan (existing criterion) | Official/well-supported SDK with resource, tool, and job-API primitives matching 15's contract shape — genuinely uncertain for Rust today; a named research item (§4), not an assumption either way |
+| MCP SDK maturity per language | 06-plan (existing criterion) | Official/well-supported SDK with resource, tool, and job-API primitives matching 15's contract shape — **RESOLVED by Spike 3 (2026-07-20, research-only, see `spikes/spike-3-mcp-language/RESEARCH.md`): `rmcp` v2.2.0, the official SDK under the `modelcontextprotocol` GitHub org, has `Resource`/tool-router/task-progress primitives that line up with 15's shape directly** — the "maybe no viable SDK exists" risk is closed; ADR-3 still weighs team fluency and boundary-count (§1), just not this risk |
 | Deployment fit | N10 | Container size, cold-start time, matches the "native now, cloud later" trajectory |
 | Team fluency / maintenance risk | 06-plan (existing criterion) | Honest accounting of ramp-up cost, not just greenfield productivity |
 
@@ -170,7 +170,52 @@ sufficient for exactly what 08's case inventory needs even if it isn't for gener
 CAD — but it is the single biggest thing §4's spikes must settle with evidence,
 specifically against **our** hardest cases (C05/C07/C08/C13), not general confidence.
 
+**Settled by Spike 2 (2026-07-20), and more precisely than expected.** The risk
+didn't show up as "the boolean algorithm gives wrong answers" (§2c: it's precise,
+0.0003% residual, on non-trivial curved geometry) — it showed up as **the import and
+boolean crates not composing at all** (a missing trait impl) plus **measured per-call
+latency in the seconds, not milliseconds, range** on geometry far simpler than
+cauldron. Both are concrete, checkable findings against real evidence, not general
+"young kernel" confidence — exactly what this section asked the spikes to produce. See
+`spikes/spike-2-pure-rust-kernel/RESULTS.md` for the full detail.
+
 ## 4. Evaluation process — spikes before ADRs
+
+**Progress log** (workspaces + write-ups live under `rebuild/spikes/`, not in this
+doc — this doc stays the plan, not the results):
+- **Spike 1 (Rust+OCCT via `cadrum`): substantially done.** Environment/build
+  feasibility ✅, functional correctness on `cauldron.step` ✅ (cross-checked against
+  v1's known 82-panel ground truth), build/iteration velocity measured (6.4s debug /
+  9.3s release incremental), soak leg run to completion (3000 iterations — a real,
+  small, quantified leak found and analyzed, not assumed clean or catastrophic; see
+  `spikes/spike-1-rust-occt/RESULTS.md` §5). Remaining: MCP-caller-shape wiring
+  (Boundary A itself, not yet exercised), hard-case coverage beyond import (more
+  Spike 2's territory).
+- **Spike 3 (MCP-layer language): done, research-only, no gap found.** Official
+  `rmcp` SDK confirmed with matching primitives — see
+  `spikes/spike-3-mcp-language/RESEARCH.md`. §3's table row updated to match.
+- **Spike 2 (pure/partial Rust via `truck`): done — a decisive, concrete finding.**
+  Import (Port A) as strong as Spike 1's, independently cross-validated to 3 decimal
+  places against a completely different codebase (OCCT vs. pure-Rust `ruststep`).
+  **But `truck_shapeops` booleans cannot run on `truck_stepio`-imported geometry at
+  all** — a missing trait impl (`Curve3D` lacks `From<IntersectionCurve<..>>`), not an
+  ergonomics gap. Pivoted to the officially-supported path (booleans on
+  `truck_modeling`-authored solids): correctness is strong (0.0003% residual,
+  inclusion-exclusion self-check, curved surfaces included) but **each boolean call
+  measured ~2.5-3.1 seconds** on simple synthetic geometry — a real latency concern,
+  separate from the composability gap. N13/soak result is the cleanest of both spikes:
+  bounded, no leak, structurally explained (pure Rust, no C++ destructor-workaround
+  class of bug possible). Net: two independent points against Candidate 2 for the
+  actual import→operate pipeline; both reinforce Candidate 3's port-split design
+  (HEAVY ports stay on OCCT per Spike 1; pure Rust never asked to bridge either gap).
+  Full write-up: `spikes/spike-2-pure-rust-kernel/RESULTS.md`.
+- Spike 4 not yet started (correctly gated on 1-3's survivor per §4).
+- **Cross-spike summary against this whole §3 table**: `spikes/SUMMARY.md` — scores
+  every row for Spikes 1-3, names a new architectural finding not previously stated
+  here (Boundary A may not exist at all if Rust hosts orchestration+kernel together),
+  and is explicit about what's still untested (the actual C05/C07/C08/C13 hard cases
+  on real geometry remain unreproduced by either candidate — the single largest
+  remaining evidence gap). Not an ADR — still short of that bar.
 
 This decision is expensive to reverse (04 P1's whole "requirements before stack"
 discipline exists because of exactly this class of choice). It is evaluated by

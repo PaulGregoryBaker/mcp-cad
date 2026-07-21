@@ -35,8 +35,8 @@ entities (panels within a part).
 
 **Job statement `[DECIDED 2026-07-18]`: Folding core first.** The v2 product core is the
 manufacturing graph + decompose/merge/unfold + exact 2D↔3D mapping. Nesting, export,
-and other Architecture.md pipeline stages are satellites, added only once the core is
-proven. This targets v1's actual pain rather than the full orchestrator vision.
+and other full-orchestrator pipeline stages are satellites, added only once the core
+is proven. This targets v1's actual pain rather than the full orchestrator vision.
 
 **Consumers `[DECIDED 2026-07-18]`: both paths are real.** Some flows are agent-driven
 (AI agent calls MCP tools), others are direct front-end → MCP calls. The v2 contract must
@@ -362,8 +362,7 @@ model (N2):
 - NG2. `[DECIDED 2026-07-18]` Real-time co-editing (locking, CRDTs, live cursors) is a
   non-goal; concurrent users are served by branching + merge + review (B5). Session
   runtime remains single-writer per branch.
-- NG3. Cloud geometry backends (Onshape/Fusion adapters from Architecture.md §2) unless a
-  consumer exists.
+- NG3. Cloud geometry backends (Onshape/Fusion adapters) unless a consumer exists.
 - NG4. `[DECIDED 2026-07-19]` Bending scope = **all standard approaches to bending
   custom parts** (notched/relieved bends, rolled bends); features specific to
   high-tonnage press dies (coining, stamping-class forming) are out of scope —

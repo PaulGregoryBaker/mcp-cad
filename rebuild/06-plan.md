@@ -72,7 +72,11 @@ remaining cube nets, allowance variant) belongs to Phases 2/5.)*
   demand. This phase validates it against interactive write-latency budgets and settles
   the schema-migration-across-branches policy rather than reopening the choice.
 - Decisions recorded as ADRs (kernel, orchestration language, graph store, lint stack).
-- **Exit:** ADRs merged.
+- **Exit:** ✅ ADRs merged (2026-07-21) — see
+  [19-cpp-ts-interface-boundary.md](19-cpp-ts-interface-boundary.md): stack stays
+  C++/TS (ADR-1/2/3), interface binding shape + ownership decided (ADR-4 groundwork,
+  pending Phase 4 lint tooling to enforce it). Graph store (B7, Dolt) stands as
+  previously decided. **Phase 3 complete.**
 
 ## Phase 4 — SDLC & enforcement machinery (in the chosen stack)
 1. Constitution v2 via `speckit-constitution` (principles + enforcement column from

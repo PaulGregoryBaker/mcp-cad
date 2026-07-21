@@ -245,5 +245,5 @@ node --inspect -r ts-node/register src/index.ts
 
 - [OCCT_STABILITY.md](OCCT_STABILITY.md)
 - [MVP_SCOPE.md](MVP_SCOPE.md)
-- [specs/001-align-specification/research.md](../specs/001-align-specification/research.md)
-- [Engineering-Design.md](../Engineering-Design.md)
+- [rebuild/README.md](../rebuild/README.md) — authoritative architecture/interface reference for the v2 rebuild
+- [.specify/memory/constitution.md](../.specify/memory/constitution.md) — governing principles (v2.0.0)

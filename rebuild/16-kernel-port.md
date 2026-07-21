@@ -1,6 +1,9 @@
 # 16 — Kernel Port: Capability List (Phase 2.4)
 
-**Status:** `[PROPOSAL]` for Paul's review.
+**Status:** `[PROPOSAL]` for Paul's review. **§4's deferred interface design is now
+done — see [19-cpp-ts-interface-boundary.md](19-cpp-ts-interface-boundary.md)** (Phase
+3 decided 2026-07-21: stack stays C++/TS; 19 adds the binding shape and ownership on
+top of this doc's port list, which stands unchanged).
 **Inputs it must satisfy:** 13 §6 (what the translation module itself needs at
 graph-construction time — the seed this doc generalizes to the whole system), 15
 (every tool/resource that could conceivably touch a kernel), C5 (the developable-
@@ -200,7 +203,7 @@ countable, not just asserted.
   scope-bound to one request, never cached (14 §3.1, Layer 1) — this list is what
   makes that scope concrete rather than a general principle with nothing to point at.
 
-## 4. What is explicitly NOT decided here
+## 4. What is explicitly NOT decided here `[RESOLVED 2026-07-21 — see 19]`
 
 Per Paul (2026-07-18): no concrete kernel/library selection, no binding mechanism
 (NAPI, FFI, subprocess, WASM, etc.), and no decision about whether all HEAVY ports
@@ -209,6 +212,11 @@ deliberately — it may be a real Phase 3 finding that HEAVY and LIGHT capabilit
 are best served by different tools entirely (e.g., a mature open-source B-Rep kernel
 for A/B/C/D/G-STEP, and a small first-party or lightweight-library implementation for
 E/F/G-DXF) rather than assuming a single kernel dependency.
+
+**Now decided**: kernel/library stays OCCT via the existing C++ wrapper; binding
+mechanism stays NAPI; whether E/F split from the HEAVY ports onto a different
+implementation is still explicitly open (19 §5) — the "one kernel or several" question
+was about implementation choice, not language, and stays unresolved on its own terms.
 
 ## 5. Decisions
 

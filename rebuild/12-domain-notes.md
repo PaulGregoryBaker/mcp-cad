@@ -50,8 +50,8 @@ branches. Companion to the placement case inventory ([08](08-case-inventory.md) 
 - Cut lines vs bend lines live on separate layers (bend-up/bend-down distinction is
   the drawing spec's D1 concern, 07 §2); v1's cut-line-at-bend filter bug is the
   cautionary tale (a bend line emitted as a cut line gets cut).
-- Kerf compensation: 0.1–0.2 mm offset class for laser/waterjet (Architecture.md);
-  v2: kerf class lives in the tolerance profile (N11).
+- Kerf compensation: 0.1–0.2 mm offset class for laser/waterjet (constitution v2
+  principle XII); v2: kerf class lives in the tolerance profile (N11).
 
 ## 4. Fixture inventory (cpp/tests/fixtures/)
 
