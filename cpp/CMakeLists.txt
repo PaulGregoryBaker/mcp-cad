@@ -84,6 +84,7 @@ add_library(geometry_engine STATIC
   src/geometry/topology_graph.cc
   src/geometry/translation/manufacturing_graph_evaluator.cc
   src/geometry/translation/part_solid_construction.cc
+  src/geometry/translation/point_mapping.cc
   src/acl/feature_extractor.cc
 )
 
@@ -117,6 +118,7 @@ add_executable(geometry_tests
   tests/production_workflow_test.cc
   tests/manufacturing_graph_evaluator_test.cc
   tests/part_solid_construction_test.cc
+  tests/point_mapping_test.cc
 )
 
 target_include_directories(geometry_tests PRIVATE

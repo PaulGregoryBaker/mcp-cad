@@ -169,6 +169,11 @@ export const ErrorCodes = {
   GRAPH_REGION_PANEL_NOT_FOUND: 'GRAPH_REGION_PANEL_NOT_FOUND',
   GRAPH_REGION_PANEL_ALIASED: 'GRAPH_REGION_PANEL_ALIASED',
 
+  // Phase 5 Slice 3 — point mapping (rebuild/13-translation-module-design.md §4/§5).
+  // Verbatim string matches for translation::MapErrorCode, same convention as
+  // the Slice 1 GE_* codes above.
+  GE_POINT_NOT_ON_PART: 'GE_POINT_NOT_ON_PART',
+
   // Internal errors
   INTERNAL_ERROR: 'INTERNAL_ERROR',
 } as const;
@@ -245,7 +250,7 @@ export function toStructuredError(err: unknown): StructuredError {
       if (typeof parsed.code === 'string' && typeof parsed.message === 'string') {
         return {
           code: (parsed.code as ErrorCode) ?? ErrorCodes.INTERNAL_ERROR,
-          message: parsed.message as string,
+          message: parsed.message,
           recoverable: typeof parsed.recoverable === 'boolean' ? parsed.recoverable : false,
           suggestedTool:
             typeof parsed.suggestedTool === 'string' ? parsed.suggestedTool : undefined,

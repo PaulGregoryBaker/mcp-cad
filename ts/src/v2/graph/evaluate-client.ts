@@ -15,8 +15,12 @@ import type {
   NapiPartGraphSpec,
   EvaluatePartGraphResult,
   ConstructPartSolidResult,
+  NapiPoint3,
+  MapToWorldResult,
+  MapToFlatResult,
 } from '../../geometry/types';
 import type { GraphStore, PartGraphSnapshot } from './store';
+import type { Point2 } from './types';
 
 /** PartGraphSnapshot (this store's row shape) -> NapiPartGraphSpec (the addon's
  * input shape) — a direct field mapping, not a re-derivation of any fact. */
@@ -75,4 +79,49 @@ export function constructPart(store: GraphStore, partId: string): ConstructPartS
     );
   }
   return result;
+}
+
+/**
+ * Forward mapping (2D->3D, rebuild/13-translation-module-design.md §4) — a
+ * genuine "not on any region panel or bridge" (GE_POINT_NOT_ON_PART) is a
+ * normal read outcome, not thrown; only evaluate() itself failing (a bad
+ * graph) throws, matching constructPart's own convention above.
+ */
+export function mapPointToWorld(
+  store: GraphStore,
+  partId: string,
+  point2d: Point2,
+  zMm?: number,
+): MapToWorldResult {
+  const snapshot = store.snapshotPart(partId);
+  const graph = toNapiPartGraphSpec(snapshot);
+  const layout = geometryBinding.evaluatePartGraph(graph);
+  if (!layout.ok) {
+    throwError(
+      (layout.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
+      layout.message || `evaluatePartGraph failed for part ${partId}`,
+      false,
+    );
+  }
+  return geometryBinding.mapPointToWorld(graph, layout, point2d, zMm);
+}
+
+/** Reverse mapping (3D->2D, §5) — same "GE_POINT_NOT_ON_PART is a normal
+ * outcome, not thrown" convention as mapPointToWorld above. */
+export function mapPointToFlat(
+  store: GraphStore,
+  partId: string,
+  point3d: NapiPoint3,
+): MapToFlatResult {
+  const snapshot = store.snapshotPart(partId);
+  const graph = toNapiPartGraphSpec(snapshot);
+  const layout = geometryBinding.evaluatePartGraph(graph);
+  if (!layout.ok) {
+    throwError(
+      (layout.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
+      layout.message || `evaluatePartGraph failed for part ${partId}`,
+      false,
+    );
+  }
+  return geometryBinding.mapPointToFlat(graph, layout, point3d);
 }

@@ -16,6 +16,7 @@
 #include <napi.h>
 #include "../geometry/geometry_service.hpp"
 #include "../geometry/translation/manufacturing_graph_evaluator.hpp"
+#include "../geometry/translation/point_mapping.hpp"
 
 #include <string>
 #include <vector>
@@ -26,6 +27,9 @@ using translation::BendSpec;
 using translation::BridgeLayout;
 using translation::EvaluateErrorCode;
 using translation::EvaluateResult;
+using translation::MapErrorCode;
+using translation::MapToFlatResult;
+using translation::MapToWorldResult;
 using translation::PartGraphSpec;
 using translation::Point2;
 using translation::Point3;
@@ -53,6 +57,15 @@ const char* ErrorCodeToString(EvaluateErrorCode code) {
     case EvaluateErrorCode::kDanglingBendReference: return "GE_DANGLING_BEND_REFERENCE";
     case EvaluateErrorCode::kRegionClipFailed: return "GE_REGION_CLIP_FAILED";
     case EvaluateErrorCode::kDegenerateOutline: return "GE_DEGENERATE_OUTLINE";
+  }
+  return "GE_UNKNOWN_ERROR";
+}
+
+const char* MapErrorCodeToString(MapErrorCode code) {
+  switch (code) {
+    case MapErrorCode::kNone: return "";
+    case MapErrorCode::kPointNotOnPart: return "GE_POINT_NOT_ON_PART";
+    case MapErrorCode::kInvalidLayout: return "GE_INVALID_LAYOUT";
   }
   return "GE_UNKNOWN_ERROR";
 }
@@ -274,6 +287,29 @@ EvaluateResult ReadEvaluateResult(const Napi::Object& obj) {
   return result;
 }
 
+Napi::Object WriteMapToWorldResult(Napi::Env env, const MapToWorldResult& result) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("ok", Napi::Boolean::New(env, result.ok));
+  obj.Set("errorCode", Napi::String::New(env, MapErrorCodeToString(result.errorCode)));
+  obj.Set("message", Napi::String::New(env, result.message));
+  obj.Set("point3d", WritePoint3(env, result.point3d));
+  obj.Set("regionPanelId", Napi::String::New(env, result.regionPanelId));
+  obj.Set("bendId", Napi::String::New(env, result.bendId));
+  return obj;
+}
+
+Napi::Object WriteMapToFlatResult(Napi::Env env, const MapToFlatResult& result) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("ok", Napi::Boolean::New(env, result.ok));
+  obj.Set("errorCode", Napi::String::New(env, MapErrorCodeToString(result.errorCode)));
+  obj.Set("message", Napi::String::New(env, result.message));
+  obj.Set("point2d", WritePoint2(env, result.point2d));
+  obj.Set("regionPanelId", Napi::String::New(env, result.regionPanelId));
+  obj.Set("bendId", Napi::String::New(env, result.bendId));
+  obj.Set("residualMm", Napi::Number::New(env, result.residualMm));
+  return obj;
+}
+
 }  // namespace
 
 // ─── NAPI method implementations ─────────────────────────────────────────────
@@ -320,9 +356,55 @@ Napi::Value ConstructPartSolidBinding(const Napi::CallbackInfo& info) {
   }
 }
 
+Napi::Value MapPointToWorldBinding(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 3 || !info[0].IsObject() || !info[1].IsObject() || !info[2].IsObject()) {
+    Napi::TypeError::New(
+        env, "mapPointToWorld(graph: PartGraphSpec, layout: EvaluateResult, "
+             "point2d: {x,y}, zMm?: number)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    PartGraphSpec graph = ReadPartGraphSpec(info[0].As<Napi::Object>());
+    EvaluateResult layout = ReadEvaluateResult(info[1].As<Napi::Object>());
+    Point2 point2d = ReadPoint2(info[2].As<Napi::Object>());
+    double zMm = (info.Length() >= 4 && info[3].IsNumber()) ? info[3].As<Napi::Number>().DoubleValue() : 0.0;
+
+    MapToWorldResult result = translation::MapPointToWorld(graph, layout, point2d, zMm);
+    return WriteMapToWorldResult(env, result);
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
+Napi::Value MapPointToFlatBinding(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 3 || !info[0].IsObject() || !info[1].IsObject() || !info[2].IsObject()) {
+    Napi::TypeError::New(
+        env, "mapPointToFlat(graph: PartGraphSpec, layout: EvaluateResult, point3d: {x,y,z})")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    PartGraphSpec graph = ReadPartGraphSpec(info[0].As<Napi::Object>());
+    EvaluateResult layout = ReadEvaluateResult(info[1].As<Napi::Object>());
+    Point3 point3d = ReadPoint3(info[2].As<Napi::Object>());
+
+    MapToFlatResult result = translation::MapPointToFlat(graph, layout, point3d);
+    return WriteMapToFlatResult(env, result);
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
 void RegisterTranslationMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("evaluatePartGraph", Napi::Function::New(env, EvaluatePartGraph));
   exports.Set("constructPartSolid", Napi::Function::New(env, ConstructPartSolidBinding));
+  exports.Set("mapPointToWorld", Napi::Function::New(env, MapPointToWorldBinding));
+  exports.Set("mapPointToFlat", Napi::Function::New(env, MapPointToFlatBinding));
 }
 
 }  // namespace mcp_cad

@@ -151,13 +151,19 @@ export interface NapiBendZoneSpec {
   // World-space fold frame used to place the rebuilt shell on the correct side
   // (canonical +X → bendDir, canonical +Z → foldNormal) — manufacturing-graph
   // data only; there is no live-shell fallback.
-  foldNormalX?: number; foldNormalY?: number; foldNormalZ?: number;
-  bendDirX?: number; bendDirY?: number; bendDirZ?: number;
+  foldNormalX?: number;
+  foldNormalY?: number;
+  foldNormalZ?: number;
+  bendDirX?: number;
+  bendDirY?: number;
+  bendDirZ?: number;
   // World-space anchor: panel A's own oriented-bbox centre, computed from its
   // stored panelFrame + flat extents + midplaneOffsetMm. The flat centroid of
   // panel A's region in the merged DXF maps to this point.
   hasAnchor?: boolean;
-  anchorX?: number; anchorY?: number; anchorZ?: number;
+  anchorX?: number;
+  anchorY?: number;
+  anchorZ?: number;
   // How far Panel B's TRUE hinge edge sits inside its own flat pattern, past
   // its near/glue edge — zero (default) when B's hinge IS its own DXF
   // origin. Nonzero when B is a composite panel with material continuing
@@ -173,10 +179,18 @@ export interface NapiBendZoneSpec {
 // midplaneOffsetMm) — there is no live-shell fallback when hasFrame is false.
 export interface FlatPanelPlacement {
   hasFrame: boolean;
-  originX: number; originY: number; originZ: number;
-  uX: number; uY: number; uZ: number;
-  vX: number; vY: number; vZ: number;
-  normalX: number; normalY: number; normalZ: number;
+  originX: number;
+  originY: number;
+  originZ: number;
+  uX: number;
+  uY: number;
+  uZ: number;
+  vX: number;
+  vY: number;
+  vZ: number;
+  normalX: number;
+  normalY: number;
+  normalZ: number;
   nCentreMm: number;
 }
 
@@ -187,11 +201,21 @@ export interface BuildShellFromFlatPatternResult {
 // Oriented panel frame P(x): local (u, v, n) → world via origin + u*U + v*V + n*N.
 // uExtent/vExtent are the true in-plane flat dimensions (tilt-independent).
 export interface PanelFrameResult {
-  originX: number; originY: number; originZ: number;
-  uX: number; uY: number; uZ: number;
-  vX: number; vY: number; vZ: number;
-  normalX: number; normalY: number; normalZ: number;
-  uExtentMm: number; vExtentMm: number; thicknessMm: number;
+  originX: number;
+  originY: number;
+  originZ: number;
+  uX: number;
+  uY: number;
+  uZ: number;
+  vX: number;
+  vY: number;
+  vZ: number;
+  normalX: number;
+  normalY: number;
+  normalZ: number;
+  uExtentMm: number;
+  vExtentMm: number;
+  thicknessMm: number;
   // Outer-wire boundary, already projected onto (u, v) and shifted local to
   // origin — each point lies in [0,uExtentMm] x [0,vExtentMm]. Self-consistent
   // by construction with origin/u/v/extents above.
@@ -303,8 +327,8 @@ export interface CloseGapResult {
 }
 
 export interface PanelValidationError {
-  code: string;     // e.g. "GE_PANEL_DISCONNECTED"
-  message: string;  // human-readable explanation
+  code: string; // e.g. "GE_PANEL_DISCONNECTED"
+  message: string; // human-readable explanation
 }
 
 export interface PanelValidationResult {
@@ -315,7 +339,7 @@ export interface PanelValidationResult {
 }
 
 // ── Assembly IDs ──────────────────────────────────────────────────────────────
-export type AssemblyId  = string;
+export type AssemblyId = string;
 export type ComponentId = string;
 
 // ── Boolean results ───────────────────────────────────────────────────────────
@@ -340,8 +364,12 @@ export interface IntersectResult {
 
 // ── Interrogation results ─────────────────────────────────────────────────────
 export interface BoundingBoxResult {
-  x_min: number; y_min: number; z_min: number;
-  x_max: number; y_max: number; z_max: number;
+  x_min: number;
+  y_min: number;
+  z_min: number;
+  x_max: number;
+  y_max: number;
+  z_max: number;
 }
 
 export interface MassPropertiesResult {
@@ -373,7 +401,7 @@ export interface FilletResult {
   rollback_token: string;
   shape_history?: ShapeHistoryRecord[];
 }
-export interface ChamferResult  extends FilletResult {}   // same shape
+export interface ChamferResult extends FilletResult {} // same shape
 export interface SimplifyResult extends FilletResult {}
 export interface OffsetShapeResult extends FilletResult {}
 
@@ -411,10 +439,22 @@ export interface AddInstanceResult {
 }
 
 export type LocationMatrix16 = [
-  number, number, number, number,
-  number, number, number, number,
-  number, number, number, number,
-  number, number, number, number
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
 ];
 
 export interface MateRigidResult {
@@ -489,10 +529,24 @@ export interface AlignmentResult {
 export interface SplitBodyByBendsResult {
   panel_ids: string[];
   panel_count: number;
-  panel_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>;
+  panel_bboxes: Array<{
+    x_min: number;
+    y_min: number;
+    z_min: number;
+    x_max: number;
+    y_max: number;
+    z_max: number;
+  }>;
   protrusion_ids: string[];
   protrusion_count: number;
-  protrusion_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>;
+  protrusion_bboxes: Array<{
+    x_min: number;
+    y_min: number;
+    z_min: number;
+    x_max: number;
+    y_max: number;
+    z_max: number;
+  }>;
   protrusion_parents: Array<{ protrusion_id: string; parent_panel_id: string | null }>;
   detected_mode: string;
   rollback_token: string;
@@ -502,7 +556,14 @@ export interface SplitBodyByBendsResult {
 export interface RemoveProtrusionsResult {
   cleaned_part_id: string;
   protrusion_ids: string[];
-  protrusion_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>;
+  protrusion_bboxes: Array<{
+    x_min: number;
+    y_min: number;
+    z_min: number;
+    x_max: number;
+    y_max: number;
+    z_max: number;
+  }>;
   protrusion_count: number;
   rollback_token: string;
   shape_history?: ShapeHistoryRecord[];
@@ -616,4 +677,25 @@ export interface ConstructPartSolidResult {
   // "GE_BRIDGE_EDGE_NOT_FOUND" | "GE_BRIDGE_UNSUPPORTED_TOPOLOGY" |
   // "GE_BRIDGE_BUILD_FAILED" | "GE_CONSTRUCTION_FAILED"
   message: string;
+}
+
+// rebuild/13-translation-module-design.md §4/§5 — Phase 5 Slice 3.
+export interface MapToWorldResult {
+  ok: boolean;
+  errorCode: string; // "" | "GE_POINT_NOT_ON_PART" | "GE_INVALID_LAYOUT"
+  message: string;
+  point3d: NapiPoint3;
+  // Exactly one of these is non-empty on success.
+  regionPanelId: string;
+  bendId: string;
+}
+
+export interface MapToFlatResult {
+  ok: boolean;
+  errorCode: string; // "" | "GE_POINT_NOT_ON_PART" | "GE_INVALID_LAYOUT"
+  message: string;
+  point2d: NapiPoint2;
+  regionPanelId: string;
+  bendId: string;
+  residualMm: number;
 }
