@@ -699,3 +699,18 @@ export interface MapToFlatResult {
   bendId: string;
   residualMm: number;
 }
+
+// rebuild/14-graph-schema.md §2.1.2 / part_merge.hpp — Phase 5 Slice 4. Pure
+// 2D outline reconciliation for merge_bodies_with_bend: given a free edge on
+// each of two parts' outlines, returns the spliced combined outline plus the
+// shared hinge segment (in A's frame). No graph bookkeeping (region panels,
+// bends, re-parenting) happens here — that's GraphStore.mergePartsWithBend's
+// job, reusing this purely-geometric result.
+export interface ReconcileOutlinesResult {
+  ok: boolean;
+  errorCode: string; // "" | "GE_INVALID_EDGE_REF" | "GE_MERGE_EDGE_MISMATCH" | "GE_MERGE_SELF_INTERSECTION"
+  message: string;
+  combinedOutline: NapiPoint2[];
+  hingeA: NapiPoint2;
+  hingeB: NapiPoint2;
+}

@@ -10,6 +10,7 @@
  */
 
 import { GraphStore, GraphStoreError } from '../graph/store';
+import { mergePartsWithBend } from '../graph/evaluate-client';
 import { throwError, ErrorCodes } from '../../mcp/errors';
 import {
   requireString,
@@ -19,6 +20,7 @@ import {
   optTransform,
   requirePoint2,
   requirePoint2Array,
+  requireEdgeRef,
 } from './helpers';
 
 export const graphToolDefinitions = [
@@ -88,6 +90,44 @@ export const graphToolDefinitions = [
       required: ['kind', 'part_id', 'parent_region_panel_id', 'hinge_a', 'hinge_b', 'angle_deg'],
     },
   },
+  {
+    name: 'merge_bodies_with_bend',
+    description:
+      "Join two independently-authored parts into one, connected by a new bend at a caller-specified seam (rebuild/14 §2.1.2). Not a distinct primitive: reconciles B's outline into A's frame, re-parents B's rows onto A, then an ordinary create_node(bend, ...) at the seam. B is aliased via merged_into_part_id, never deleted.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        part_a_id: { type: 'string' },
+        part_b_id: { type: 'string' },
+        edge_a: {
+          type: 'object',
+          description:
+            "The free (non-bend) boundary edge on A's live region panel to use as the seam.",
+          properties: {
+            region_panel_id: { type: 'string' },
+            edge_index: { type: 'number' },
+          },
+          required: ['region_panel_id', 'edge_index'],
+        },
+        edge_b: {
+          type: 'object',
+          description: "The matching free boundary edge on B's live region panel.",
+          properties: {
+            region_panel_id: { type: 'string' },
+            edge_index: { type: 'number' },
+          },
+          required: ['region_panel_id', 'edge_index'],
+        },
+        angle_deg: {
+          type: 'number',
+          description: 'Signed; positive = mountain, negative = valley.',
+        },
+        radius_mm: { type: 'number', minimum: 0 },
+        k_factor: { type: 'number', minimum: 0, maximum: 1 },
+      },
+      required: ['part_a_id', 'part_b_id', 'edge_a', 'edge_b', 'angle_deg'],
+    },
+  },
 ];
 
 export function dispatchGraphTool(
@@ -100,6 +140,8 @@ export function dispatchGraphTool(
       return handleCreatePart(store, args);
     case 'create_node':
       return handleCreateNode(store, args);
+    case 'merge_bodies_with_bend':
+      return handleMergeBodiesWithBend(store, args);
     default:
       throwError(ErrorCodes.INTERNAL_ERROR, `Unknown v2 tool: ${name}`, false);
   }
@@ -160,6 +202,41 @@ function handleCreateNode(
       label,
     });
     return { bend_id: bend.bendId, child_region_panel_id: childRegionPanel.regionPanelId };
+  } catch (err) {
+    if (err instanceof GraphStoreError) {
+      throwError(err.code, err.message, false);
+    }
+    throw err;
+  }
+}
+
+function handleMergeBodiesWithBend(
+  store: GraphStore,
+  args: Record<string, unknown>,
+): { part_id: string; bend_id: string; child_region_panel_id: string } {
+  const partAId = requireString(args, 'part_a_id');
+  const partBId = requireString(args, 'part_b_id');
+  const edgeA = requireEdgeRef(args, 'edge_a');
+  const edgeB = requireEdgeRef(args, 'edge_b');
+  const angleDeg = requireNumber(args, 'angle_deg');
+  const radiusMm = optNumber(args, 'radius_mm');
+  const kFactor = optNumber(args, 'k_factor');
+
+  try {
+    const { bend, childRegionPanel } = mergePartsWithBend(store, {
+      partAId,
+      partBId,
+      edgeA,
+      edgeB,
+      angleDeg,
+      radiusMm,
+      kFactor,
+    });
+    return {
+      part_id: partAId,
+      bend_id: bend.bendId,
+      child_region_panel_id: childRegionPanel.regionPanelId,
+    };
   } catch (err) {
     if (err instanceof GraphStoreError) {
       throwError(err.code, err.message, false);

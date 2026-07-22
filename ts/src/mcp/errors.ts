@@ -168,11 +168,26 @@ export const ErrorCodes = {
   GRAPH_PART_NOT_FOUND: 'GRAPH_PART_NOT_FOUND',
   GRAPH_REGION_PANEL_NOT_FOUND: 'GRAPH_REGION_PANEL_NOT_FOUND',
   GRAPH_REGION_PANEL_ALIASED: 'GRAPH_REGION_PANEL_ALIASED',
+  // Phase 5 Slice 4: a part already absorbed by a prior merge_bodies_with_bend
+  // (mergedIntoPartId != null) can't be a merge participant again — mirrors
+  // GRAPH_REGION_PANEL_ALIASED one level up.
+  GRAPH_PART_ALIASED: 'GRAPH_PART_ALIASED',
 
   // Phase 5 Slice 3 — point mapping (rebuild/13-translation-module-design.md §4/§5).
   // Verbatim string matches for translation::MapErrorCode, same convention as
   // the Slice 1 GE_* codes above.
   GE_POINT_NOT_ON_PART: 'GE_POINT_NOT_ON_PART',
+
+  // Phase 5 Slice 4 — merge_bodies_with_bend (rebuild/14-graph-schema.md §2.1.2).
+  // Verbatim string matches for translation::MergeErrorCode
+  // (part_merge.hpp). Deliberately distinct from v1's similarly-named
+  // GE_MERGE_EDGE_MISALIGNED/GE_POINT_NOT_ON_PANEL above — same precedent as
+  // Slice 3's GE_POINT_NOT_ON_PART: a new module gets its own code rather
+  // than reusing a v1 code whose exact semantics/threshold belong to a
+  // different implementation.
+  GE_INVALID_EDGE_REF: 'GE_INVALID_EDGE_REF',
+  GE_MERGE_EDGE_MISMATCH: 'GE_MERGE_EDGE_MISMATCH',
+  GE_MERGE_SELF_INTERSECTION: 'GE_MERGE_SELF_INTERSECTION',
 
   // Internal errors
   INTERNAL_ERROR: 'INTERNAL_ERROR',

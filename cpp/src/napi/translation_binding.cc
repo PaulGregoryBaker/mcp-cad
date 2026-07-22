@@ -17,6 +17,7 @@
 #include "../geometry/geometry_service.hpp"
 #include "../geometry/translation/manufacturing_graph_evaluator.hpp"
 #include "../geometry/translation/point_mapping.hpp"
+#include "../geometry/translation/part_merge.hpp"
 
 #include <string>
 #include <vector>
@@ -30,7 +31,9 @@ using translation::EvaluateResult;
 using translation::MapErrorCode;
 using translation::MapToFlatResult;
 using translation::MapToWorldResult;
+using translation::MergeErrorCode;
 using translation::PartGraphSpec;
+using translation::ReconcileOutlinesResult;
 using translation::Point2;
 using translation::Point3;
 using translation::RegionPanelLayout;
@@ -70,6 +73,16 @@ const char* MapErrorCodeToString(MapErrorCode code) {
   return "GE_UNKNOWN_ERROR";
 }
 
+const char* MergeErrorCodeToString(MergeErrorCode code) {
+  switch (code) {
+    case MergeErrorCode::kNone: return "";
+    case MergeErrorCode::kInvalidEdgeRef: return "GE_INVALID_EDGE_REF";
+    case MergeErrorCode::kMergeEdgeMismatch: return "GE_MERGE_EDGE_MISMATCH";
+    case MergeErrorCode::kMergeSelfIntersecting: return "GE_MERGE_SELF_INTERSECTION";
+  }
+  return "GE_UNKNOWN_ERROR";
+}
+
 // ─── JS -> C++ ────────────────────────────────────────────────────────────────
 
 Point2 ReadPoint2(const Napi::Object& obj) {
@@ -101,6 +114,15 @@ Transform3 ReadTransform3(const Napi::Object& obj) {
     t.t[i] = tArr.Get(i).As<Napi::Number>().DoubleValue();
   }
   return t;
+}
+
+std::vector<Point2> ReadPoint2Array(const Napi::Array& arr) {
+  std::vector<Point2> pts;
+  pts.reserve(arr.Length());
+  for (uint32_t i = 0; i < arr.Length(); ++i) {
+    pts.push_back(ReadPoint2(arr.Get(i).As<Napi::Object>()));
+  }
+  return pts;
 }
 
 PartGraphSpec ReadPartGraphSpec(const Napi::Object& obj) {
@@ -310,6 +332,17 @@ Napi::Object WriteMapToFlatResult(Napi::Env env, const MapToFlatResult& result) 
   return obj;
 }
 
+Napi::Object WriteReconcileOutlinesResult(Napi::Env env, const ReconcileOutlinesResult& result) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("ok", Napi::Boolean::New(env, result.ok));
+  obj.Set("errorCode", Napi::String::New(env, MergeErrorCodeToString(result.errorCode)));
+  obj.Set("message", Napi::String::New(env, result.message));
+  obj.Set("combinedOutline", WritePoint2Array(env, result.combinedOutline));
+  obj.Set("hingeA", WritePoint2(env, result.hingeA));
+  obj.Set("hingeB", WritePoint2(env, result.hingeB));
+  return obj;
+}
+
 }  // namespace
 
 // ─── NAPI method implementations ─────────────────────────────────────────────
@@ -400,11 +433,39 @@ Napi::Value MapPointToFlatBinding(const Napi::CallbackInfo& info) {
   }
 }
 
+Napi::Value ReconcileOutlinesBinding(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 6 || !info[0].IsArray() || !info[1].IsObject() || !info[2].IsObject() ||
+      !info[3].IsArray() || !info[4].IsObject() || !info[5].IsObject()) {
+    Napi::TypeError::New(
+        env, "reconcileOutlines(outlineA: {x,y}[], edgeA0: {x,y}, edgeA1: {x,y}, "
+             "outlineB: {x,y}[], edgeB0: {x,y}, edgeB1: {x,y})")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    std::vector<Point2> outlineA = ReadPoint2Array(info[0].As<Napi::Array>());
+    Point2 edgeA0 = ReadPoint2(info[1].As<Napi::Object>());
+    Point2 edgeA1 = ReadPoint2(info[2].As<Napi::Object>());
+    std::vector<Point2> outlineB = ReadPoint2Array(info[3].As<Napi::Array>());
+    Point2 edgeB0 = ReadPoint2(info[4].As<Napi::Object>());
+    Point2 edgeB1 = ReadPoint2(info[5].As<Napi::Object>());
+
+    ReconcileOutlinesResult result =
+        translation::ReconcileOutlines(outlineA, edgeA0, edgeA1, outlineB, edgeB0, edgeB1);
+    return WriteReconcileOutlinesResult(env, result);
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
 void RegisterTranslationMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("evaluatePartGraph", Napi::Function::New(env, EvaluatePartGraph));
   exports.Set("constructPartSolid", Napi::Function::New(env, ConstructPartSolidBinding));
   exports.Set("mapPointToWorld", Napi::Function::New(env, MapPointToWorldBinding));
   exports.Set("mapPointToFlat", Napi::Function::New(env, MapPointToFlatBinding));
+  exports.Set("reconcileOutlines", Napi::Function::New(env, ReconcileOutlinesBinding));
 }
 
 }  // namespace mcp_cad

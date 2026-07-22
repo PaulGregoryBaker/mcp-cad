@@ -20,7 +20,7 @@ import type {
   MapToFlatResult,
 } from '../../geometry/types';
 import type { GraphStore, PartGraphSnapshot } from './store';
-import type { Point2 } from './types';
+import type { BendRow, Point2, RegionPanelRow } from './types';
 
 /** PartGraphSnapshot (this store's row shape) -> NapiPartGraphSpec (the addon's
  * input shape) — a direct field mapping, not a re-derivation of any fact. */
@@ -124,4 +124,128 @@ export function mapPointToFlat(
     );
   }
   return geometryBinding.mapPointToFlat(graph, layout, point3d);
+}
+
+/** A free (non-hinge) boundary edge reference (Phase 5 Slice 4): edge
+ * `edgeIndex` of `regionPanelId`'s own already-computed boundary — the exact
+ * same (regionOuter, edgeBendId) pair every other v2 reader already uses
+ * (e.g. the map-2d-3d resource, Slice 3's own test code), never a re-derived
+ * raw-outline index. */
+export interface EdgeRef {
+  regionPanelId: string;
+  edgeIndex: number;
+}
+
+function resolveFreeEdge(
+  partId: string,
+  layout: EvaluatePartGraphResult,
+  ref: EdgeRef,
+): { p0: Point2; p1: Point2 } {
+  const panel = layout.panels.find((p) => p.regionPanelId === ref.regionPanelId);
+  if (!panel) {
+    throwError(
+      ErrorCodes.GE_INVALID_EDGE_REF,
+      `no live region panel ${ref.regionPanelId} on part ${partId}`,
+      false,
+    );
+  }
+  const n = panel.regionOuter.length;
+  if (!Number.isInteger(ref.edgeIndex) || ref.edgeIndex < 0 || ref.edgeIndex >= n) {
+    throwError(
+      ErrorCodes.GE_INVALID_EDGE_REF,
+      `edgeIndex ${ref.edgeIndex} out of range for region panel ${ref.regionPanelId} (${n} edges)`,
+      false,
+    );
+  }
+  if (panel.edgeBendId[ref.edgeIndex] !== '') {
+    throwError(
+      ErrorCodes.GE_INVALID_EDGE_REF,
+      `edge ${ref.edgeIndex} of region panel ${ref.regionPanelId} is a bend zone boundary, not a free edge`,
+      false,
+    );
+  }
+  return { p0: panel.regionOuter[ref.edgeIndex], p1: panel.regionOuter[(ref.edgeIndex + 1) % n] };
+}
+
+export interface MergePartsWithBendInput {
+  partAId: string;
+  partBId: string;
+  edgeA: EdgeRef;
+  edgeB: EdgeRef;
+  angleDeg: number;
+  radiusMm?: number;
+  kFactor?: number;
+}
+
+/**
+ * merge_bodies_with_bend (14 §2.1.2): resolves each caller-given edge_ref to
+ * its live 2D endpoints (via evaluatePartGraph — never re-derived), calls the
+ * ONE place this reconciliation is computed (part_merge.hpp's
+ * reconcileOutlines, pure C++), and — only on success — applies the result as
+ * an ordinary GraphStore mutation (re-parent B's rows, alias B, create the
+ * connecting bend via the existing createBendNode path). A reconciliation
+ * failure (mismatched edge lengths, a self-intersecting splice) is a normal,
+ * typed outcome, not a bad-graph exception — thrown with the addon's own
+ * errorCode, same convention as constructPart's addon-failure path above.
+ */
+export function mergePartsWithBend(
+  store: GraphStore,
+  input: MergePartsWithBendInput,
+): { bend: BendRow; childRegionPanel: RegionPanelRow } {
+  const partA = store.getPart(input.partAId);
+  if (!partA) {
+    throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${input.partAId}`, false);
+  }
+  const partB = store.getPart(input.partBId);
+  if (!partB) {
+    throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${input.partBId}`, false);
+  }
+
+  const layoutA = evaluatePart(store, input.partAId);
+  if (!layoutA.ok) {
+    throwError(
+      (layoutA.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
+      layoutA.message || `evaluatePartGraph failed for part ${input.partAId}`,
+      false,
+    );
+  }
+  const layoutB = evaluatePart(store, input.partBId);
+  if (!layoutB.ok) {
+    throwError(
+      (layoutB.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
+      layoutB.message || `evaluatePartGraph failed for part ${input.partBId}`,
+      false,
+    );
+  }
+
+  const edgeA = resolveFreeEdge(input.partAId, layoutA, input.edgeA);
+  const edgeB = resolveFreeEdge(input.partBId, layoutB, input.edgeB);
+
+  const reconciled = geometryBinding.reconcileOutlines(
+    partA.outline,
+    edgeA.p0,
+    edgeA.p1,
+    partB.outline,
+    edgeB.p0,
+    edgeB.p1,
+  );
+  if (!reconciled.ok) {
+    throwError(
+      (reconciled.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
+      reconciled.message || 'reconcileOutlines failed',
+      true,
+    );
+  }
+
+  return store.mergePartsWithBend({
+    partAId: input.partAId,
+    partBId: input.partBId,
+    combinedOutlineA: reconciled.combinedOutline,
+    hingeA: reconciled.hingeA,
+    hingeB: reconciled.hingeB,
+    parentRegionPanelIdOnA: input.edgeA.regionPanelId,
+    angleDeg: input.angleDeg,
+    radiusMm: input.radiusMm,
+    kFactor: input.kFactor,
+  });
 }

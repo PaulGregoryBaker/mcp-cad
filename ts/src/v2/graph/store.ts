@@ -36,6 +36,28 @@ export interface CreateBendNodeInput {
   label?: string;
 }
 
+/**
+ * merge_bodies_with_bend's graph bookkeeping (14 §2.1.2), given an ALREADY-
+ * COMPUTED combined outline + hinge segment — the pure 2D reconciliation
+ * itself (aligning B's edge to A's edge, splicing the outlines) is real
+ * geometry and lives in C++ (part_merge.hpp); this store never derives it,
+ * only applies the result. `combinedOutlineA` replaces A's one stored
+ * outline; `parentRegionPanelIdOnA` is the live region panel of A that owned
+ * the matched seam edge (the new bend's parent, exactly like an ordinary
+ * within-part split).
+ */
+export interface MergePartsWithBendInput {
+  partAId: string;
+  partBId: string;
+  combinedOutlineA: Point2[];
+  hingeA: Point2;
+  hingeB: Point2;
+  parentRegionPanelIdOnA: string;
+  angleDeg: number;
+  radiusMm?: number;
+  kFactor?: number;
+}
+
 export class GraphStoreError extends Error {
   constructor(
     message: string,
@@ -142,6 +164,68 @@ export class GraphStore {
     this.bends.set(bendId, bend);
     this.regionPanels.set(childRegionPanelId, child);
     return { bend, childRegionPanel: child };
+  }
+
+  /**
+   * merge_bodies_with_bend (14 §2.1.2): (1) replace A's outline with the
+   * already-spliced combined outline, (2) re-parent every B region-panel/bend
+   * row onto A's partId — mutated in place, since this store's row maps are
+   * flat/store-wide rather than per-part, so re-parenting is a field
+   * assignment, not a data move — (3) alias B via mergedIntoPartId, (4)
+   * create the connecting bend via the ordinary createBendNode path (the
+   * exact same operation a within-part split uses — not a distinct join
+   * primitive). B is never deleted.
+   */
+  mergePartsWithBend(input: MergePartsWithBendInput): {
+    bend: BendRow;
+    childRegionPanel: RegionPanelRow;
+  } {
+    const partA = this.parts.get(input.partAId);
+    if (!partA) {
+      throw new GraphStoreError(
+        `no part with id ${input.partAId}`,
+        ErrorCodes.GRAPH_PART_NOT_FOUND,
+      );
+    }
+    const partB = this.parts.get(input.partBId);
+    if (!partB) {
+      throw new GraphStoreError(
+        `no part with id ${input.partBId}`,
+        ErrorCodes.GRAPH_PART_NOT_FOUND,
+      );
+    }
+    if (partA.mergedIntoPartId !== null) {
+      throw new GraphStoreError(
+        `part ${input.partAId} is an alias (already merged), not a live part`,
+        ErrorCodes.GRAPH_PART_ALIASED,
+      );
+    }
+    if (partB.mergedIntoPartId !== null) {
+      throw new GraphStoreError(
+        `part ${input.partBId} is an alias (already merged), not a live part`,
+        ErrorCodes.GRAPH_PART_ALIASED,
+      );
+    }
+
+    partA.outline = input.combinedOutlineA;
+
+    for (const panel of this.regionPanels.values()) {
+      if (panel.partId === input.partBId) panel.partId = input.partAId;
+    }
+    for (const bend of this.bends.values()) {
+      if (bend.partId === input.partBId) bend.partId = input.partAId;
+    }
+    partB.mergedIntoPartId = input.partAId;
+
+    return this.createBendNode({
+      partId: input.partAId,
+      parentRegionPanelId: input.parentRegionPanelIdOnA,
+      hingeA: input.hingeA,
+      hingeB: input.hingeB,
+      angleDeg: input.angleDeg,
+      radiusMm: input.radiusMm,
+      kFactor: input.kFactor,
+    });
   }
 
   getPart(partId: string): PartRow | undefined {

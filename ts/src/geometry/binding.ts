@@ -70,6 +70,7 @@ import type {
   NapiPoint3,
   MapToWorldResult,
   MapToFlatResult,
+  ReconcileOutlinesResult,
 } from './types';
 
 // ─── Addon interface ──────────────────────────────────────────────────────────
@@ -321,6 +322,16 @@ export interface GeometryAddon {
     layout: EvaluatePartGraphResult,
     point3d: NapiPoint3,
   ): MapToFlatResult;
+
+  // ── Phase 5 Slice 4: merge_bodies_with_bend outline reconciliation ────────
+  reconcileOutlines?(
+    outlineA: NapiPoint2[],
+    edgeA0: NapiPoint2,
+    edgeA1: NapiPoint2,
+    outlineB: NapiPoint2[],
+    edgeB0: NapiPoint2,
+    edgeB1: NapiPoint2,
+  ): ReconcileOutlinesResult;
 }
 
 export const kerfOffsetMm = {
@@ -431,6 +442,10 @@ export class GeometryBinding {
 
   hasMapPointToFlat(): boolean {
     return typeof this.addon.mapPointToFlat === 'function';
+  }
+
+  hasReconcileOutlines(): boolean {
+    return typeof this.addon.reconcileOutlines === 'function';
   }
 
   loadStep(filePath: string): string {
@@ -1206,6 +1221,24 @@ export class GeometryBinding {
     }
     try {
       return this.addon.mapPointToFlat(graph, layout, point3d);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  reconcileOutlines(
+    outlineA: NapiPoint2[],
+    edgeA0: NapiPoint2,
+    edgeA1: NapiPoint2,
+    outlineB: NapiPoint2[],
+    edgeB0: NapiPoint2,
+    edgeB1: NapiPoint2,
+  ): ReconcileOutlinesResult {
+    if (!this.addon.reconcileOutlines) {
+      throw new Error('Geometry addon does not expose reconcileOutlines');
+    }
+    try {
+      return this.addon.reconcileOutlines(outlineA, edgeA0, edgeA1, outlineB, edgeB0, edgeB1);
     } catch (err) {
       throw toStructuredError(err);
     }

@@ -5,14 +5,23 @@
 #include "geometry/translation/part_solid_construction.hpp"
 #include "geometry/geometry_service_impl.hpp"
 
+#include <BRepAlgoAPI_Common.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
 #include <GProp_GProps.hxx>
 #include <TopExp_Explorer.hxx>
+#include <gp_Pnt.hxx>
+#include <gp_Trsf.hxx>
+#include <gp_Vec.hxx>
 
 #include <cmath>
 #include <map>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -581,4 +590,84 @@ TEST_CASE("ConstructPartSolid: rejects non-positive thickness",
   ConstructPartSolidResult result = ConstructPartSolid(state, layout, 0.0);
   REQUIRE_FALSE(result.ok);
   CHECK(result.errorCode == "GE_INVALID_SHEET_METAL");
+}
+
+// Phase 5 Slice 4 investigation (merge_bodies_with_bend's own volume check
+// found this and needed to confirm it wasn't a merge-specific defect):
+// directly measures the boolean overlap between the two panel prisms of an
+// asymmetric-length, sharp (r=0) N=2 mountain fold, and asserts it EXACTLY
+// equals the naive-sum-vs-fused-volume shortfall — the strongest possible
+// confirmation that "volume short of the naive flat-area sum" is this
+// file's own documented panel/panel outer-corner overlap phenomenon (see
+// the N=4 square tube test's comment above), not a distinct defect. Kept
+// as a permanent regression: if this ever stops matching, the overlap
+// mechanism itself has changed, which every other test here only bounds,
+// never explains directly.
+TEST_CASE("ConstructPartSolid: N=2 asymmetric sharp mountain fold — measured panel/panel "
+          "overlap exactly accounts for the naive-sum shortfall",
+          "[translation][construction]") {
+  double widthMm = 5.0, thicknessMm = 1.0;
+  double seg0Len = 8.115044407846124, seg1Len = 6.115044407846124;
+  double totalLen = seg0Len + seg1Len; // BA=0 at r=0,k=0
+
+  PartGraphSpec graph;
+  graph.partId = "diag";
+  graph.rootRegionPanelId = "seg0";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = Transform3::Identity();
+  graph.outline.outer = {{0, 0}, {totalLen, 0}, {totalLen, widthMm}, {0, widthMm}};
+
+  BendSpec bend;
+  bend.id = "bend0";
+  bend.parentRegionPanelId = "seg0";
+  bend.childRegionPanelId = "seg1";
+  bend.hingeA = {seg0Len, widthMm};
+  bend.hingeB = {seg0Len, 0};
+  bend.angleDeg = 90.0;
+  bend.radiusMm = 0.0;
+  bend.kFactor = 0.0;
+  graph.bends.push_back(bend);
+
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, thicknessMm);
+  REQUIRE(result.ok);
+  auto it = state.solids.find(result.shellId);
+  REQUIRE(it != state.solids.end());
+  double fusedVolume = SolidVolume(it->second.shape);
+
+  double naiveSum = totalLen * widthMm * thicknessMm;
+  double shortfall = naiveSum - fusedVolume;
+
+  // Independently build the two panel prisms exactly as ConstructPartSolid
+  // does (polygon -> face -> prism -> place by pose), then measure their
+  // pairwise boolean Common() volume directly — no dependency on
+  // ConstructPartSolid's own internal bookkeeping.
+  std::unordered_map<std::string, TopoDS_Shape> panelSolidById;
+  for (const auto& panel : layout.panels) {
+    BRepBuilderAPI_MakePolygon polyMaker;
+    for (const auto& v : panel.regionOuter) polyMaker.Add(gp_Pnt(v.x, v.y, 0.0));
+    polyMaker.Close();
+    BRepBuilderAPI_MakeFace faceMaker(polyMaker.Wire());
+    BRepPrimAPI_MakePrism prism(faceMaker.Face(), gp_Vec(0.0, 0.0, thicknessMm), true);
+    gp_Trsf trsf;
+    trsf.SetValues(panel.pose.r[0], panel.pose.r[1], panel.pose.r[2], panel.pose.t[0],
+                   panel.pose.r[3], panel.pose.r[4], panel.pose.r[5], panel.pose.t[1],
+                   panel.pose.r[6], panel.pose.r[7], panel.pose.r[8], panel.pose.t[2]);
+    BRepBuilderAPI_Transform placed(prism.Shape(), trsf, /*Copy=*/true);
+    panelSolidById[panel.regionPanelId] = placed.Shape();
+  }
+  REQUIRE(panelSolidById.count("seg0") == 1);
+  REQUIRE(panelSolidById.count("seg1") == 1);
+
+  BRepAlgoAPI_Common common(panelSolidById["seg0"], panelSolidById["seg1"]);
+  common.Build();
+  REQUIRE(common.IsDone());
+  double overlapVolume = SolidVolume(common.Shape());
+
+  INFO("naiveSum=" << naiveSum << " fusedVolume=" << fusedVolume << " shortfall=" << shortfall
+                    << " directly-measured panelA/panelB overlap=" << overlapVolume);
+  CHECK(overlapVolume == Approx(shortfall).epsilon(0.01));
 }

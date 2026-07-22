@@ -7,6 +7,7 @@
 
 import { throwError, ErrorCodes } from '../../mcp/errors';
 import type { Point2, Transform3Row } from '../graph/types';
+import type { EdgeRef } from '../graph/evaluate-client';
 
 export function requireString(args: Record<string, unknown>, key: string): string {
   const val = args[key];
@@ -82,6 +83,30 @@ export function optTransform(
   return {
     r: obj.r as Transform3Row['r'],
     t: obj.t as Transform3Row['t'],
+  };
+}
+
+function isEdgeRefLike(val: unknown): val is Record<string, unknown> {
+  return (
+    typeof val === 'object' &&
+    val !== null &&
+    typeof (val as Record<string, unknown>)['region_panel_id'] === 'string' &&
+    typeof (val as Record<string, unknown>)['edge_index'] === 'number'
+  );
+}
+
+export function requireEdgeRef(args: Record<string, unknown>, key: string): EdgeRef {
+  const val = args[key];
+  if (!isEdgeRefLike(val)) {
+    throwError(
+      ErrorCodes.GE_INVALID_EDGE_REF,
+      `${key} must be a {region_panel_id: string, edge_index: number} edge reference`,
+      false,
+    );
+  }
+  return {
+    regionPanelId: val['region_panel_id'] as string,
+    edgeIndex: val['edge_index'] as number,
   };
 }
 
