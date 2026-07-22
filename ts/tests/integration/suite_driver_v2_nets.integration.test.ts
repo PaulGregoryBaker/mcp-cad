@@ -35,22 +35,35 @@
  *
  *   SUITE_V2_DRIVER=1 npx vitest run tests/integration/suite_driver_v2_nets
  *
- * Scope note: 8 cube-net cases exist today — net_cross_cube.json (Paul's anchor
- * case) plus 7 more (rebuild/suite/generator/net_family.mjs's own comment has
- * the full derivation), varying branch position, branch count, and topology
- * (staircases, multi-branch roots, a mirrored staircase). Each case's own
- * "seams" oracle was derived NUMERICALLY (auto-detected coincident open edges
- * from the real evaluator's own output, not independently re-derived from
- * pure combinatorics the way C22's checkpoints are) — a from-scratch symbolic
- * cube-orientation solver was attempted first and hit a real bug (edge
- * tangent vs. face-normal direction aren't simply negatives once faces are
- * non-coplanar) that wasn't worth chasing further given the available,
- * still-meaningful independent check: every one of these 8 different
- * fold-tree topologies must construct to the IDENTICAL 50x50x50 cube
- * (bbox/volume) already independently verified for net_cross_cube — exactly
- * the property 08-case-inventory.md §3.2 states this family exists to catch
- * ("a model that is secretly sequential or orientation-biased will pass some
- * nets and fail others"). Tetrahedron/pyramid/prism nets (non-square faces)
+ * Scope note: 12 cube-net cases exist today — net_cross_cube.json (Paul's
+ * anchor case) plus 11 more (rebuild/suite/generator/net_family.mjs's own
+ * comment has the full derivation), varying branch position, branch count,
+ * and topology (staircases, multi-branch roots, a mirrored staircase, several
+ * side-arm-row-position variants). This meets 08-case-inventory.md §3.2's
+ * literal "cross->cube and the other 10 cube nets" bar in raw count, though
+ * distinctness under the cube's own rotation/reflection symmetry group was
+ * NOT formally verified — some of the 11 may be equivalent to another under
+ * that symmetry (the generator's own header documents one case deliberately
+ * left out for exactly this reason); any such redundancy is a coverage
+ * inefficiency, not a correctness problem, since every case is independently
+ * validated regardless. Each case's own "seams" oracle was derived
+ * NUMERICALLY (auto-detected coincident open edges from the real evaluator's
+ * own output, not independently re-derived from pure combinatorics the way
+ * C22's checkpoints are) — a from-scratch symbolic cube-orientation solver
+ * was attempted first and hit a real bug (edge tangent vs. face-normal
+ * direction aren't simply negatives once faces are non-coplanar) that wasn't
+ * worth chasing further given the available, still-meaningful independent
+ * check: every one of these 12 different fold-tree topologies must construct
+ * to the IDENTICAL 50x50x50 cube (bbox/volume) already independently
+ * verified for net_cross_cube — exactly the property 08-case-inventory.md
+ * §3.2 states this family exists to catch ("a model that is secretly
+ * sequential or orientation-biased will pass some nets and fail others").
+ * This check itself had a real bug found and fixed while generating these
+ * cases: an initial loose volume range (10000-15000mm³) let one genuinely
+ * invalid candidate ("zigzag-3-wide") pass with volume 12104 — tightened to
+ * an exact-match epsilon against net_cross_cube's own verified 14408mm³,
+ * which then correctly rejected it (see net_family.mjs's own comment).
+ * Tetrahedron/pyramid/prism nets (non-square faces)
  * are a separate, larger follow-up — they need a schema/authoring extension
  * beyond the unit-square grid this driver's traceNetOutline assumes, not
  * just more case files.

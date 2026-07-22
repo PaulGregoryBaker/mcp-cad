@@ -44,6 +44,18 @@ const addon = createRequire(import.meta.url)(path.join(ROOT, 'ts', 'geometry_add
 const FACE_SIZE_MM = 50;
 const THICKNESS_MM = 1;
 const IDENTITY = { r: [1, 0, 0, 0, 1, 0, 0, 0, 1], t: [0, 0, 0] };
+// The exact shell volume of net_cross_cube.json's own already-verified
+// construction (cpp/tests/part_solid_construction_test.cc's "Latin-cross cube
+// net... builds one manifold cube") — every valid net targets this SAME
+// solid, so its volume must match to the same near-exact precision, not just
+// fall in some "plausible" range. A looser range (e.g. 10000-15000) is a real
+// bug, not a convenience: a genuinely broken/self-overlapping construction
+// (a bad fuse, an invalid topology) can still land inside a wide range by
+// coincidence — caught empirically generating this file's own candidates,
+// where a candidate ("zigzag-3-wide") passed bbox=[50,50,50] with volume
+// 12104 under a loose 10000-15000 check and was silently wrong.
+const REFERENCE_CUBE_VOLUME_MM3 = 14408.0;
+const VOLUME_EPSILON_MM3 = 0.1;
 
 // ─── Hinge from a parent->child grid step (same rule the v2 suite driver's own
 // computeHinge uses — ts/tests/integration/suite_driver_v2_nets.integration.test.ts —
@@ -229,7 +241,7 @@ function makeCase(id, title, faces, root, foldPairs) {
   const mass = addon.computeMassProperties(constructResult.shellId);
   const dims = [bbox.x_max - bbox.x_min, bbox.y_max - bbox.y_min, bbox.z_max - bbox.z_min];
   const isCube = dims.every((d) => Math.abs(d - FACE_SIZE_MM) < 1e-6);
-  const volumeOk = mass.volume > 10000 && mass.volume < FACE_SIZE_MM * FACE_SIZE_MM * 6;
+  const volumeOk = Math.abs(mass.volume - REFERENCE_CUBE_VOLUME_MM3) < VOLUME_EPSILON_MM3;
   if (!isCube || !volumeOk) {
     console.log(`  REJECT ${id}: not the target cube — dims=${JSON.stringify(dims)} volume=${mass.volume}`);
     return null;
@@ -359,6 +371,68 @@ const CANDIDATES = [
       { parent: 'F1', child: 'L' },
       { parent: 'F1', child: 'R' },
       { parent: 'F0', child: 'S' },
+    ],
+  },
+  // Below: 4 more side-arm-position variants on the F0-F1-F2-F3 column, added
+  // to push closer to the 11 canonical hexomino cube nets. Distinctness under
+  // the cube's own rotation/reflection symmetry group was NOT formally
+  // verified (a from-scratch symbolic solver for that was already abandoned
+  // once above — see this file's header); one obviously-equivalent candidate
+  // (both arms swapped end-for-end vs. shift-lr-split-ends, i.e. a 180-degree
+  // rotation of that net) was deliberately left out during generation. Any
+  // remaining redundancy here is a coverage inefficiency, not a correctness
+  // problem — every case is independently construct/volume-validated below
+  // regardless of whether it turns out equivalent to another under symmetry.
+  {
+    id: 'net-branches-rows-1-2-90-sharp',
+    title: 'Net closure: side-arms split across rows 1 and 2, 5 folds at 90°',
+    faces: { F0: [0, 0], F1: [0, 1], F2: [0, 2], F3: [0, 3], L: [-1, 1], R: [1, 2] },
+    root: 'F0',
+    folds: [
+      { parent: 'F0', child: 'F1' },
+      { parent: 'F1', child: 'F2' },
+      { parent: 'F2', child: 'F3' },
+      { parent: 'F1', child: 'L' },
+      { parent: 'F2', child: 'R' },
+    ],
+  },
+  {
+    id: 'net-branches-rows-1-3-90-sharp',
+    title: 'Net closure: side-arms split across rows 1 and 3, 5 folds at 90°',
+    faces: { F0: [0, 0], F1: [0, 1], F2: [0, 2], F3: [0, 3], L: [-1, 1], R: [1, 3] },
+    root: 'F0',
+    folds: [
+      { parent: 'F0', child: 'F1' },
+      { parent: 'F1', child: 'F2' },
+      { parent: 'F2', child: 'F3' },
+      { parent: 'F1', child: 'L' },
+      { parent: 'F3', child: 'R' },
+    ],
+  },
+  {
+    id: 'net-branches-rows-2-3-90-sharp',
+    title: 'Net closure: side-arms split across rows 2 and 3, 5 folds at 90°',
+    faces: { F0: [0, 0], F1: [0, 1], F2: [0, 2], F3: [0, 3], L: [-1, 2], R: [1, 3] },
+    root: 'F0',
+    folds: [
+      { parent: 'F0', child: 'F1' },
+      { parent: 'F1', child: 'F2' },
+      { parent: 'F2', child: 'F3' },
+      { parent: 'F2', child: 'L' },
+      { parent: 'F3', child: 'R' },
+    ],
+  },
+  {
+    id: 'net-branches-rows-0-2-90-sharp',
+    title: 'Net closure: side-arms split across rows 0 and 2, 5 folds at 90°',
+    faces: { F0: [0, 0], F1: [0, 1], F2: [0, 2], F3: [0, 3], L: [-1, 0], R: [1, 2] },
+    root: 'F0',
+    folds: [
+      { parent: 'F0', child: 'F1' },
+      { parent: 'F1', child: 'F2' },
+      { parent: 'F2', child: 'F3' },
+      { parent: 'F0', child: 'L' },
+      { parent: 'F2', child: 'R' },
     ],
   },
 ];
