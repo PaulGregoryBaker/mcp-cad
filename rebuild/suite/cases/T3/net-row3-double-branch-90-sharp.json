@@ -1,0 +1,128 @@
+{
+  "schemaVersion": "0.1",
+  "id": "net-row3-double-branch-90-sharp",
+  "title": "Net closure: a row-of-3 with two branches off its middle face, 5 folds at 90°",
+  "level": "A",
+  "tier": "T3",
+  "inventory": [
+    "C14",
+    "C15"
+  ],
+  "toleranceProfile": "default",
+  "expectation": "pass",
+  "fixture": {
+    "kind": "authored",
+    "path": null
+  },
+  "params": {
+    "net": "net-row3-double-branch-90-sharp",
+    "faceSizeMm": 50,
+    "thicknessMm": 1,
+    "variant": "sharp"
+  },
+  "ops": [
+    {
+      "op": "author_net",
+      "faceSizeMm": 50,
+      "thicknessMm": 1,
+      "root": "B",
+      "faces": {
+        "A": [
+          0,
+          0
+        ],
+        "B": [
+          1,
+          0
+        ],
+        "C": [
+          2,
+          0
+        ],
+        "D": [
+          1,
+          1
+        ],
+        "E": [
+          1,
+          -1
+        ],
+        "F": [
+          1,
+          -2
+        ]
+      },
+      "folds": [
+        {
+          "parent": "B",
+          "child": "A",
+          "angleDeg": 90
+        },
+        {
+          "parent": "B",
+          "child": "C",
+          "angleDeg": 90
+        },
+        {
+          "parent": "B",
+          "child": "D",
+          "angleDeg": 90
+        },
+        {
+          "parent": "B",
+          "child": "E",
+          "angleDeg": 90
+        },
+        {
+          "parent": "E",
+          "child": "F",
+          "angleDeg": 90
+        }
+      ]
+    },
+    {
+      "op": "construct"
+    }
+  ],
+  "oracles": [
+    {
+      "type": "net_closure",
+      "budgetKey": "closureMm",
+      "seams": [
+        [
+          "A:S",
+          "E:W"
+        ],
+        [
+          "A:N",
+          "D:W"
+        ],
+        [
+          "A:W",
+          "F:W"
+        ],
+        [
+          "C:S",
+          "E:E"
+        ],
+        [
+          "C:E",
+          "F:E"
+        ],
+        [
+          "C:N",
+          "D:E"
+        ],
+        [
+          "D:N",
+          "F:S"
+        ]
+      ]
+    },
+    {
+      "type": "structure",
+      "solidCount": 1,
+      "typedError": null
+    }
+  ]
+}

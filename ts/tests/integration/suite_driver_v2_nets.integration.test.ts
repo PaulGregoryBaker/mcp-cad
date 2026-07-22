@@ -35,11 +35,25 @@
  *
  *   SUITE_V2_DRIVER=1 npx vitest run tests/integration/suite_driver_v2_nets
  *
- * Scope note: only net_cross_cube.json exists as a generated case today (the
- * other 10 cube nets + tetrahedron/pyramid/prism from 08 §3.2 are a documented
- * fast-follow, not yet generated) — this driver already generalizes to any
- * fold-tree net the schema allows (arbitrary branching, all 4 grid directions),
- * it is simply only exercised against the one case file that exists.
+ * Scope note: 8 cube-net cases exist today — net_cross_cube.json (Paul's anchor
+ * case) plus 7 more (rebuild/suite/generator/net_family.mjs's own comment has
+ * the full derivation), varying branch position, branch count, and topology
+ * (staircases, multi-branch roots, a mirrored staircase). Each case's own
+ * "seams" oracle was derived NUMERICALLY (auto-detected coincident open edges
+ * from the real evaluator's own output, not independently re-derived from
+ * pure combinatorics the way C22's checkpoints are) — a from-scratch symbolic
+ * cube-orientation solver was attempted first and hit a real bug (edge
+ * tangent vs. face-normal direction aren't simply negatives once faces are
+ * non-coplanar) that wasn't worth chasing further given the available,
+ * still-meaningful independent check: every one of these 8 different
+ * fold-tree topologies must construct to the IDENTICAL 50x50x50 cube
+ * (bbox/volume) already independently verified for net_cross_cube — exactly
+ * the property 08-case-inventory.md §3.2 states this family exists to catch
+ * ("a model that is secretly sequential or orientation-biased will pass some
+ * nets and fail others"). Tetrahedron/pyramid/prism nets (non-square faces)
+ * are a separate, larger follow-up — they need a schema/authoring extension
+ * beyond the unit-square grid this driver's traceNetOutline assumes, not
+ * just more case files.
  */
 import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
