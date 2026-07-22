@@ -1,0 +1,169 @@
+/**
+ * v2 graph tools (Phase 5 Slice 1) — create_part, create_node(kind=bend).
+ *
+ * Pure bookkeeping via GraphStore: neither tool calls the geometry addon at
+ * creation time (Layout stays lazy, computed only when a resource or
+ * construct call reads it — 14 §2.1's "only region panel geometry is
+ * derived"). Name collision with v1's own `create_part` tool is intentional
+ * and safe: this module is registered on a separate v2 Server instance with
+ * its own tool registry (ts/src/v2/server.ts), never merged with v1's.
+ */
+
+import { GraphStore, GraphStoreError } from '../graph/store';
+import { throwError, ErrorCodes } from '../../mcp/errors';
+import {
+  requireString,
+  requireNumber,
+  optNumber,
+  optString,
+  optTransform,
+  requirePoint2,
+  requirePoint2Array,
+} from './helpers';
+
+export const graphToolDefinitions = [
+  {
+    name: 'create_part',
+    description:
+      'Create a new v2 manufacturing-graph part: one flat outline, one thickness, one material. Pure bookkeeping — no geometry is computed until a resource or construct call reads this part.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Human-readable part name' },
+        outline: {
+          type: 'array',
+          description: "The part's flat cut outline, CCW winding, at least 3 vertices.",
+          items: {
+            type: 'object',
+            properties: { x: { type: 'number' }, y: { type: 'number' } },
+            required: ['x', 'y'],
+          },
+          minItems: 3,
+        },
+        thickness_mm: { type: 'number', exclusiveMinimum: 0 },
+        material_id: { type: 'string' },
+        k_factor: { type: 'number', minimum: 0, maximum: 1 },
+        anchor: {
+          type: 'object',
+          description:
+            'R (embeds the flat frame F into world, row-major 3x3) + t. Defaults to identity.',
+          properties: {
+            r: { type: 'array', items: { type: 'number' }, minItems: 9, maxItems: 9 },
+            t: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 },
+          },
+          required: ['r', 't'],
+        },
+      },
+      required: ['name', 'outline', 'thickness_mm'],
+    },
+  },
+  {
+    name: 'create_node',
+    description:
+      'Add a node to a v2 manufacturing-graph part. Slice 1 supports kind="bend" only: creates the bend row and its new child region panel atomically (rebuild/14 §2.1.1).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['bend'] },
+        part_id: { type: 'string' },
+        parent_region_panel_id: { type: 'string' },
+        hinge_a: {
+          type: 'object',
+          properties: { x: { type: 'number' }, y: { type: 'number' } },
+          required: ['x', 'y'],
+        },
+        hinge_b: {
+          type: 'object',
+          properties: { x: { type: 'number' }, y: { type: 'number' } },
+          required: ['x', 'y'],
+        },
+        angle_deg: {
+          type: 'number',
+          description: 'Signed; positive = mountain, negative = valley.',
+        },
+        radius_mm: { type: 'number', minimum: 0 },
+        k_factor: { type: 'number', minimum: 0, maximum: 1 },
+        label: { type: 'string' },
+      },
+      required: ['kind', 'part_id', 'parent_region_panel_id', 'hinge_a', 'hinge_b', 'angle_deg'],
+    },
+  },
+];
+
+export function dispatchGraphTool(
+  store: GraphStore,
+  name: string,
+  args: Record<string, unknown>,
+): unknown {
+  switch (name) {
+    case 'create_part':
+      return handleCreatePart(store, args);
+    case 'create_node':
+      return handleCreateNode(store, args);
+    default:
+      throwError(ErrorCodes.INTERNAL_ERROR, `Unknown v2 tool: ${name}`, false);
+  }
+}
+
+function handleCreatePart(
+  store: GraphStore,
+  args: Record<string, unknown>,
+): { part_id: string; root_region_panel_id: string } {
+  const name = requireString(args, 'name');
+  const outline = requirePoint2Array(args, 'outline');
+  const thicknessMm = requireNumber(args, 'thickness_mm');
+  const materialId = optString(args, 'material_id');
+  const kFactor = optNumber(args, 'k_factor');
+  const anchor = optTransform(args, 'anchor');
+
+  try {
+    const part = store.createPart({ name, outline, thicknessMm, materialId, kFactor, anchor });
+    return { part_id: part.partId, root_region_panel_id: part.rootRegionPanelId };
+  } catch (err) {
+    if (err instanceof GraphStoreError) {
+      throwError(err.code, err.message, false);
+    }
+    throw err;
+  }
+}
+
+function handleCreateNode(
+  store: GraphStore,
+  args: Record<string, unknown>,
+): { bend_id: string; child_region_panel_id: string } {
+  const kind = requireString(args, 'kind');
+  if (kind !== 'bend') {
+    throwError(
+      ErrorCodes.INTERNAL_ERROR,
+      `Unsupported create_node kind "${kind}" — Slice 1 supports "bend" only`,
+      false,
+    );
+  }
+  const partId = requireString(args, 'part_id');
+  const parentRegionPanelId = requireString(args, 'parent_region_panel_id');
+  const hingeA = requirePoint2(args, 'hinge_a');
+  const hingeB = requirePoint2(args, 'hinge_b');
+  const angleDeg = requireNumber(args, 'angle_deg');
+  const radiusMm = optNumber(args, 'radius_mm');
+  const kFactor = optNumber(args, 'k_factor');
+  const label = optString(args, 'label');
+
+  try {
+    const { bend, childRegionPanel } = store.createBendNode({
+      partId,
+      parentRegionPanelId,
+      hingeA,
+      hingeB,
+      angleDeg,
+      radiusMm,
+      kFactor,
+      label,
+    });
+    return { bend_id: bend.bendId, child_region_panel_id: childRegionPanel.regionPanelId };
+  } catch (err) {
+    if (err instanceof GraphStoreError) {
+      throwError(err.code, err.message, false);
+    }
+    throw err;
+  }
+}

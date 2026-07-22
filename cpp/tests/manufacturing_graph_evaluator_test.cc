@@ -3,6 +3,7 @@
 
 #include "geometry/translation/manufacturing_graph_evaluator.hpp"
 
+#include <array>
 #include <cmath>
 
 using namespace mcp_cad::translation;
@@ -342,6 +343,147 @@ TEST_CASE("GraphEvaluator: N=3..9 triangle-through-nonagon prisms all close",
     Point3 start0 = seg0->pose.Apply({0, 0, z});
     Point3 end0 = segLast->pose.Apply({farX, 0, z});
     CHECK(Dist(start0, end0) < 1e-6);
+  }
+}
+
+// ─── C22 suite (rebuild/suite) cross-check: sharp (r=0) folds, both mountain ──
+// ─── and valley angle sign, self-consistency AND independent zero-reference ──
+//
+// rebuild/suite/generator/closure_family.mjs computes its own "endCorners"
+// oracle from a PURE zero-thickness idealization (E_k = V_k + (N-k)L*d_k, no
+// radius/thickness term at all — its own comment calls this a "zero-reference
+// oracle"). That independent formula can only exactly equal this evaluator's
+// real output when TestPivotZOffset is itself exactly zero — true for a
+// MOUNTAIN fold at r=0 (pivot = -radiusMm = 0) but NOT for a VALLEY fold at
+// r=0 (pivot = +(radiusMm+thicknessMm) = +thicknessMm, nonzero even at r=0 —
+// a real physical consequence of this evaluator's material-thickness model,
+// not a bug: see TestPivotZOffset's own comment). This test proves that
+// split directly at the Evaluate() layer (no NAPI/TS involved) so a v2 suite
+// driver reproducing these JSON cases through the MCP layer knows in advance
+// which construction to use, instead of discovering a false "TS-layer bug"
+// from a mismatch that is actually just this formula-domain gap.
+TEST_CASE("GraphEvaluator: sharp (r=0) N=3 closure — mountain matches the "
+          "suite's independent zero-reference formula exactly; valley does "
+          "NOT (real thickness-scale pivot offset), though both self-close",
+          "[translation][closure][investigation]") {
+  const double L = 60.0, widthMm = 40.0, thicknessMm = 1.0;
+  const double bendDeg = 120.0;  // 360/3
+
+  // closure_family.mjs's own checkpoint formula (independent re-derivation,
+  // dirSign=+1 here — matches this test's "mountain" construction directly;
+  // the JSON suite's "down" cases instead mirror the whole construction via a
+  // world anchor rather than negating angleDeg — see this TEST_CASE's own
+  // banner comment and the companion "up"/"down" anchor-mirror test below).
+  auto zeroReferenceCheckpoint1 = [&](double dirSign) -> Point3 {
+    double theta = 2.0 * kTestPi / 3.0;
+    double vx = L, vz = 0.0;  // V_1 = L * d(0) = L*(1,0,0)
+    double dkx = std::cos(theta), dkz = dirSign * std::sin(theta);
+    return {vx + 2.0 * L * dkx, 0.0, vz + 2.0 * L * dkz};
+  };
+
+  SECTION("mountain (angleDeg=+bendDeg): exact match to the zero-reference formula") {
+    auto graph = MakeStrip(3, L, widthMm, thicknessMm, bendDeg, /*radiusMm=*/0.0,
+                           /*kFactor=*/0.0, 0.0, 0.0, Transform3::Identity(),
+                           /*closesLoop=*/false);
+    EvaluateResult result = Evaluate(graph);
+    REQUIRE(result.ok);
+    const RegionPanelLayout* seg1 = nullptr;
+    for (auto& p : result.panels) if (p.regionPanelId == "seg1") seg1 = &p;
+    REQUIRE(seg1 != nullptr);
+
+    double z = TestPivotZOffset(bendDeg, 0.0, thicknessMm);
+    CHECK(z == Approx(0.0).margin(1e-12));  // mountain at r=0: pivot sits exactly on bottomFace
+    Point3 got = seg1->pose.Apply({3.0 * L, 0.0, z});
+    Point3 expected = zeroReferenceCheckpoint1(+1.0);
+    CHECK(Dist(got, expected) < 1e-6);
+  }
+
+  SECTION("valley (angleDeg=-bendDeg): self-consistent closure, but a real "
+          "thicknessMm-scale gap from the zero-reference formula") {
+    auto graph = MakeStrip(3, L, widthMm, thicknessMm, -bendDeg, /*radiusMm=*/0.0,
+                           /*kFactor=*/0.0, 0.0, 0.0, Transform3::Identity(),
+                           /*closesLoop=*/false);
+    EvaluateResult result = Evaluate(graph);
+    REQUIRE(result.ok);
+    const RegionPanelLayout* seg1 = nullptr;
+    for (auto& p : result.panels) if (p.regionPanelId == "seg1") seg1 = &p;
+    REQUIRE(seg1 != nullptr);
+
+    double z = TestPivotZOffset(-bendDeg, 0.0, thicknessMm);
+    CHECK(z == Approx(thicknessMm).margin(1e-12));  // valley at r=0: pivot is thicknessMm off bottomFace
+    Point3 got = seg1->pose.Apply({3.0 * L, 0.0, z});
+    Point3 expected = zeroReferenceCheckpoint1(-1.0);
+    // Real, expected gap — NOT a bug: documents exactly why a suite driver
+    // must author "sharp" strips as mountain folds (with a mirrored world
+    // anchor for the opposite direction) rather than negating angleDeg.
+    CHECK(Dist(got, expected) > 0.5);
+    CHECK(Dist(got, expected) == Approx(thicknessMm).margin(1e-6));
+  }
+
+  SECTION("mountain + 180deg-about-X anchor reproduces the mirrored ('down') "
+          "zero-reference checkpoint exactly, still as a pure mountain fold "
+          "(NOT 180-about-Y: that negates X and Z together, which N=3's own "
+          "single checkpoint can't distinguish from the correct X-preserving "
+          "mirror since its X component happens to be exactly zero — see the "
+          "N=4 section below, where a nonzero X finally tells them apart)") {
+    Transform3 mirror = Transform3::RotationAboutAxis({0, 0, 0}, {1, 0, 0}, 180.0);
+    auto graph = MakeStrip(3, L, widthMm, thicknessMm, bendDeg, /*radiusMm=*/0.0,
+                           /*kFactor=*/0.0, 0.0, 0.0, mirror, /*closesLoop=*/false);
+    EvaluateResult result = Evaluate(graph);
+    REQUIRE(result.ok);
+    const RegionPanelLayout* seg1 = nullptr;
+    for (auto& p : result.panels) if (p.regionPanelId == "seg1") seg1 = &p;
+    REQUIRE(seg1 != nullptr);
+
+    double z = TestPivotZOffset(bendDeg, 0.0, thicknessMm);
+    Point3 got = seg1->pose.Apply({3.0 * L, 0.0, z});
+    Point3 expected = zeroReferenceCheckpoint1(-1.0);  // the suite's "down" checkpoint
+    CHECK(Dist(got, expected) < 1e-6);
+  }
+
+  SECTION("N=4 confirms 180deg-about-X (not -Y) is the correct mirror once X "
+          "is nonzero at a checkpoint") {
+    const double L4 = 60.0, w4 = 40.0, t4 = 1.0, bend4 = 90.0;  // 360/4
+    Transform3 mirrorX = Transform3::RotationAboutAxis({0, 0, 0}, {1, 0, 0}, 180.0);
+    auto graph = MakeStrip(4, L4, w4, t4, bend4, /*radiusMm=*/0.0, /*kFactor=*/0.0,
+                           0.0, 0.0, mirrorX, /*closesLoop=*/false);
+    EvaluateResult result = Evaluate(graph);
+    REQUIRE(result.ok);
+
+    auto theta4 = 2.0 * kTestPi / 4.0;
+    auto d4 = [&](int j, double dirSign) -> std::array<double, 2> {
+      return {std::cos(j * theta4), dirSign * std::sin(j * theta4)};
+    };
+    double z = TestPivotZOffset(bend4, 0.0, t4);
+    // The width-side query must use LOCAL y=-widthMm: mirrorX negates the
+    // flat pattern's own Y axis too, so +widthMm in local space lands at
+    // world y=-widthMm — querying the negated local Y compensates exactly
+    // (this is the ts/v2 suite driver's widthSign convention, mirrored here).
+    for (int k = 1; k <= 3; ++k) {
+      const RegionPanelLayout* seg = nullptr;
+      for (auto& p : result.panels) if (p.regionPanelId == "seg" + std::to_string(k)) seg = &p;
+      REQUIRE(seg != nullptr);
+
+      double vx = 0.0, vz = 0.0;
+      for (int j = 0; j < k; ++j) {
+        auto dPrev = d4(j, -1.0);
+        vx += L4 * dPrev[0];
+        vz += L4 * dPrev[1];
+      }
+      auto dk = d4(k, -1.0);
+      double ex = vx + (4 - k) * L4 * dk[0];
+      double ez = vz + (4 - k) * L4 * dk[1];
+
+      Point3 got0 = seg->pose.Apply({4.0 * L4, 0.0, z});
+      Point3 got1 = seg->pose.Apply({4.0 * L4, -w4, z});
+      INFO("k=" << k);
+      CHECK(got0.x == Approx(ex).margin(1e-6));
+      CHECK(got0.y == Approx(0.0).margin(1e-6));
+      CHECK(got0.z == Approx(ez).margin(1e-6));
+      CHECK(got1.x == Approx(ex).margin(1e-6));
+      CHECK(got1.y == Approx(w4).margin(1e-6));
+      CHECK(got1.z == Approx(ez).margin(1e-6));
+    }
   }
 }
 

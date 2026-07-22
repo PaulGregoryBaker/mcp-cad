@@ -146,6 +146,29 @@ export const ErrorCodes = {
   // Feature 012-accurate-coord-mapping
   GE_PANEL_FRAME_FAILED: 'GE_PANEL_FRAME_FAILED',
 
+  // Phase 5 Slice 1 — v2 graph-authored construction. The GE_* codes below are
+  // verbatim string matches for translation::EvaluateErrorCode /
+  // ConstructPartSolidResult.errorCode (manufacturing_graph_evaluator.hpp,
+  // part_solid_construction.hpp) — passed through unchanged, never re-derived,
+  // so there is exactly one place each code's meaning is defined (the C++
+  // header comments). The GRAPH_* codes are this store's own (ts/src/v2/graph).
+  GE_TREE_CYCLE_DETECTED: 'GE_TREE_CYCLE_DETECTED',
+  GE_BEND_SELF_REFERENCE: 'GE_BEND_SELF_REFERENCE',
+  GE_DANGLING_BEND_REFERENCE: 'GE_DANGLING_BEND_REFERENCE',
+  GE_REGION_CLIP_FAILED: 'GE_REGION_CLIP_FAILED',
+  GE_DEGENERATE_OUTLINE: 'GE_DEGENERATE_OUTLINE',
+  GE_INVALID_LAYOUT: 'GE_INVALID_LAYOUT',
+  GE_EMPTY_LAYOUT: 'GE_EMPTY_LAYOUT',
+  GE_POLYGON_BUILD_FAILED: 'GE_POLYGON_BUILD_FAILED',
+  GE_EXTRUDE_FAILED: 'GE_EXTRUDE_FAILED',
+  GE_BRIDGE_EDGE_NOT_FOUND: 'GE_BRIDGE_EDGE_NOT_FOUND',
+  GE_BRIDGE_UNSUPPORTED_TOPOLOGY: 'GE_BRIDGE_UNSUPPORTED_TOPOLOGY',
+  GE_BRIDGE_BUILD_FAILED: 'GE_BRIDGE_BUILD_FAILED',
+  GE_CONSTRUCTION_FAILED: 'GE_CONSTRUCTION_FAILED',
+  GRAPH_PART_NOT_FOUND: 'GRAPH_PART_NOT_FOUND',
+  GRAPH_REGION_PANEL_NOT_FOUND: 'GRAPH_REGION_PANEL_NOT_FOUND',
+  GRAPH_REGION_PANEL_ALIASED: 'GRAPH_REGION_PANEL_ALIASED',
+
   // Internal errors
   INTERNAL_ERROR: 'INTERNAL_ERROR',
 } as const;
