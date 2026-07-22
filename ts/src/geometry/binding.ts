@@ -63,6 +63,9 @@ import type {
   CloseGapResult,
   PanelValidationResult,
   PanelThicknessResult,
+  NapiPartGraphSpec,
+  EvaluatePartGraphResult,
+  ConstructPartSolidResult,
 } from './types';
 
 // ─── Addon interface ──────────────────────────────────────────────────────────
@@ -252,6 +255,13 @@ export interface GeometryAddon {
   validateSheetMetal(partId: string): SheetMetalValidationResult;
   reconstructCurvedBends(partId: string): CurvedRebuildResult;
   measurePanelThickness(shellId: string): PanelThicknessResult;
+
+  // ── Phase 5 Slice 1: graph-authored construction ──────────────────────────
+  evaluatePartGraph?(graph: NapiPartGraphSpec): EvaluatePartGraphResult;
+  constructPartSolid?(
+    layout: EvaluatePartGraphResult,
+    thicknessMm: number,
+  ): ConstructPartSolidResult;
 }
 
 export const kerfOffsetMm = {
@@ -346,6 +356,14 @@ export class GeometryBinding {
 
   hasGetPanelFrame(): boolean {
     return typeof this.addon.getPanelFrame === 'function';
+  }
+
+  hasEvaluatePartGraph(): boolean {
+    return typeof this.addon.evaluatePartGraph === 'function';
+  }
+
+  hasConstructPartSolid(): boolean {
+    return typeof this.addon.constructPartSolid === 'function';
   }
 
   loadStep(filePath: string): string {
@@ -1036,6 +1054,31 @@ export class GeometryBinding {
         rollback_token: (res as any).rollbackToken,
         shape_history: (res as any).shape_history,
       };
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  evaluatePartGraph(graph: NapiPartGraphSpec): EvaluatePartGraphResult {
+    if (!this.addon.evaluatePartGraph) {
+      throw new Error('Geometry addon does not expose evaluatePartGraph');
+    }
+    try {
+      return this.addon.evaluatePartGraph(graph);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  constructPartSolid(
+    layout: EvaluatePartGraphResult,
+    thicknessMm: number,
+  ): ConstructPartSolidResult {
+    if (!this.addon.constructPartSolid) {
+      throw new Error('Geometry addon does not expose constructPartSolid');
+    }
+    try {
+      return this.addon.constructPartSolid(layout, thicknessMm);
     } catch (err) {
       throw toStructuredError(err);
     }

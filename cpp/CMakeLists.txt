@@ -79,8 +79,11 @@ add_library(geometry_engine STATIC
   src/geometry/geometry_service_assembly.cc
   src/geometry/geometry_service_validation.cc
   src/geometry/geometry_service_sheet_metal.cc
+  src/geometry/geometry_service_translation.cc
   src/geometry/shape_history.cc
   src/geometry/topology_graph.cc
+  src/geometry/translation/manufacturing_graph_evaluator.cc
+  src/geometry/translation/part_solid_construction.cc
   src/acl/feature_extractor.cc
 )
 
@@ -112,6 +115,8 @@ add_executable(geometry_tests
   tests/determinism_test.cc
   tests/nesting_test.cc
   tests/production_workflow_test.cc
+  tests/manufacturing_graph_evaluator_test.cc
+  tests/part_solid_construction_test.cc
 )
 
 target_include_directories(geometry_tests PRIVATE

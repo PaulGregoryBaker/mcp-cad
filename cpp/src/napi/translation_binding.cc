@@ -1,0 +1,328 @@
+/**
+ * NAPI translation binding — TypeScript <-> C++ marshaling for the pure
+ * translation module (manufacturing_graph_evaluator) and its Port D-lite
+ * solid construction (part_solid_construction).
+ *
+ * Two entry points, matching rebuild's Slice 1 plan:
+ *   - evaluatePartGraph: a free function, NOT routed through GeometryService —
+ *     translation::Evaluate() is pure/stateless (no OCCT, no shared state), so
+ *     there is nothing for the service layer to add here.
+ *   - constructPartSolid: routed through GeometryService (svc().constructPartSolid),
+ *     since the resulting shape is registered in the SAME shared GeometryState
+ *     every other geometry operation uses — the returned shellId must be usable
+ *     by exportDxf/measurement/etc. exactly like any other constructed shell.
+ */
+
+#include <napi.h>
+#include "../geometry/geometry_service.hpp"
+#include "../geometry/translation/manufacturing_graph_evaluator.hpp"
+
+#include <string>
+#include <vector>
+
+namespace mcp_cad {
+
+using translation::BendSpec;
+using translation::BridgeLayout;
+using translation::EvaluateErrorCode;
+using translation::EvaluateResult;
+using translation::PartGraphSpec;
+using translation::Point2;
+using translation::Point3;
+using translation::RegionPanelLayout;
+using translation::Transform3;
+
+// svc() (the single-session-per-process GeometryService instance) is already
+// declared+defined, `static`, in geometry_binding.cc — addon.cc #includes that
+// file BEFORE this one into a single translation unit (the established
+// single-TU NAPI build pattern), so it is already in scope here; no
+// declaration of our own is needed (and re-declaring it — even as a forward
+// declaration — would conflict with its internal `static` linkage). Reusing
+// the SAME instance is what's wanted anyway: a shellId built here must be
+// visible to every other existing geometry operation.
+
+namespace {
+
+// ─── EvaluateErrorCode <-> string ─────────────────────────────────────────────
+
+const char* ErrorCodeToString(EvaluateErrorCode code) {
+  switch (code) {
+    case EvaluateErrorCode::kNone: return "";
+    case EvaluateErrorCode::kTreeCycleDetected: return "GE_TREE_CYCLE_DETECTED";
+    case EvaluateErrorCode::kBendSelfReference: return "GE_BEND_SELF_REFERENCE";
+    case EvaluateErrorCode::kDanglingBendReference: return "GE_DANGLING_BEND_REFERENCE";
+    case EvaluateErrorCode::kRegionClipFailed: return "GE_REGION_CLIP_FAILED";
+    case EvaluateErrorCode::kDegenerateOutline: return "GE_DEGENERATE_OUTLINE";
+  }
+  return "GE_UNKNOWN_ERROR";
+}
+
+// ─── JS -> C++ ────────────────────────────────────────────────────────────────
+
+Point2 ReadPoint2(const Napi::Object& obj) {
+  Point2 p;
+  p.x = obj.Get("x").As<Napi::Number>().DoubleValue();
+  p.y = obj.Get("y").As<Napi::Number>().DoubleValue();
+  return p;
+}
+
+Point3 ReadPoint3(const Napi::Object& obj) {
+  Point3 p;
+  p.x = obj.Get("x").As<Napi::Number>().DoubleValue();
+  p.y = obj.Get("y").As<Napi::Number>().DoubleValue();
+  p.z = obj.Get("z").As<Napi::Number>().DoubleValue();
+  return p;
+}
+
+// Transform3 is JS-facing as { r: number[9], t: number[3] } — the same
+// row-major 3x3 rotation + translation layout Transform3 itself uses, so this
+// is a direct field-for-field copy, not a re-derivation of anything.
+Transform3 ReadTransform3(const Napi::Object& obj) {
+  Transform3 t = Transform3::Identity();
+  Napi::Array rArr = obj.Get("r").As<Napi::Array>();
+  Napi::Array tArr = obj.Get("t").As<Napi::Array>();
+  for (uint32_t i = 0; i < 9 && i < rArr.Length(); ++i) {
+    t.r[i] = rArr.Get(i).As<Napi::Number>().DoubleValue();
+  }
+  for (uint32_t i = 0; i < 3 && i < tArr.Length(); ++i) {
+    t.t[i] = tArr.Get(i).As<Napi::Number>().DoubleValue();
+  }
+  return t;
+}
+
+PartGraphSpec ReadPartGraphSpec(const Napi::Object& obj) {
+  PartGraphSpec graph;
+  graph.partId = obj.Get("partId").As<Napi::String>().Utf8Value();
+  graph.rootRegionPanelId = obj.Get("rootRegionPanelId").As<Napi::String>().Utf8Value();
+  graph.thicknessMm = obj.Get("thicknessMm").As<Napi::Number>().DoubleValue();
+
+  Napi::Object outlineObj = obj.Get("outline").As<Napi::Object>();
+  Napi::Array outerArr = outlineObj.Get("outer").As<Napi::Array>();
+  for (uint32_t i = 0; i < outerArr.Length(); ++i) {
+    graph.outline.outer.push_back(ReadPoint2(outerArr.Get(i).As<Napi::Object>()));
+  }
+
+  Napi::Value anchorV = obj.Get("anchor");
+  if (anchorV.IsObject()) {
+    Napi::Object anchorObj = anchorV.As<Napi::Object>();
+    Napi::Value transformV = anchorObj.Get("transform");
+    if (transformV.IsObject()) {
+      graph.anchor.transform = ReadTransform3(transformV.As<Napi::Object>());
+    }
+  }
+
+  Napi::Array bendsArr = obj.Get("bends").As<Napi::Array>();
+  for (uint32_t i = 0; i < bendsArr.Length(); ++i) {
+    Napi::Object bendObj = bendsArr.Get(i).As<Napi::Object>();
+    BendSpec bend;
+    bend.id = bendObj.Get("id").As<Napi::String>().Utf8Value();
+    bend.parentRegionPanelId = bendObj.Get("parentRegionPanelId").As<Napi::String>().Utf8Value();
+    bend.childRegionPanelId = bendObj.Get("childRegionPanelId").As<Napi::String>().Utf8Value();
+    bend.hingeA = ReadPoint2(bendObj.Get("hingeA").As<Napi::Object>());
+    bend.hingeB = ReadPoint2(bendObj.Get("hingeB").As<Napi::Object>());
+    bend.angleDeg = bendObj.Get("angleDeg").As<Napi::Number>().DoubleValue();
+    Napi::Value radiusV = bendObj.Get("radiusMm");
+    bend.radiusMm = radiusV.IsNumber() ? radiusV.As<Napi::Number>().DoubleValue() : 0.0;
+    Napi::Value kFactorV = bendObj.Get("kFactor");
+    bend.kFactor = kFactorV.IsNumber() ? kFactorV.As<Napi::Number>().DoubleValue() : 0.0;
+    graph.bends.push_back(std::move(bend));
+  }
+
+  return graph;
+}
+
+// ─── C++ -> JS ────────────────────────────────────────────────────────────────
+
+Napi::Object WritePoint2(Napi::Env env, const Point2& p) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("x", Napi::Number::New(env, p.x));
+  obj.Set("y", Napi::Number::New(env, p.y));
+  return obj;
+}
+
+Napi::Object WritePoint3(Napi::Env env, const Point3& p) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("x", Napi::Number::New(env, p.x));
+  obj.Set("y", Napi::Number::New(env, p.y));
+  obj.Set("z", Napi::Number::New(env, p.z));
+  return obj;
+}
+
+Napi::Object WriteTransform3(Napi::Env env, const Transform3& t) {
+  Napi::Object obj = Napi::Object::New(env);
+  Napi::Array rArr = Napi::Array::New(env, 9);
+  for (int i = 0; i < 9; ++i) rArr.Set(i, Napi::Number::New(env, t.r[i]));
+  Napi::Array tArr = Napi::Array::New(env, 3);
+  for (int i = 0; i < 3; ++i) tArr.Set(i, Napi::Number::New(env, t.t[i]));
+  obj.Set("r", rArr);
+  obj.Set("t", tArr);
+  return obj;
+}
+
+Napi::Array WritePoint2Array(Napi::Env env, const std::vector<Point2>& pts) {
+  Napi::Array arr = Napi::Array::New(env, pts.size());
+  for (size_t i = 0; i < pts.size(); ++i) arr.Set(i, WritePoint2(env, pts[i]));
+  return arr;
+}
+
+Napi::Array WritePoint3Array(Napi::Env env, const std::vector<Point3>& pts) {
+  Napi::Array arr = Napi::Array::New(env, pts.size());
+  for (size_t i = 0; i < pts.size(); ++i) arr.Set(i, WritePoint3(env, pts[i]));
+  return arr;
+}
+
+Napi::Array WriteStringArray(Napi::Env env, const std::vector<std::string>& strs) {
+  Napi::Array arr = Napi::Array::New(env, strs.size());
+  for (size_t i = 0; i < strs.size(); ++i) arr.Set(i, Napi::String::New(env, strs[i]));
+  return arr;
+}
+
+Napi::Object WriteRegionPanelLayout(Napi::Env env, const RegionPanelLayout& panel) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("regionPanelId", Napi::String::New(env, panel.regionPanelId));
+  obj.Set("regionOuter", WritePoint2Array(env, panel.regionOuter));
+  obj.Set("bottomFace", WritePoint3Array(env, panel.bottomFace));
+  obj.Set("topFace", WritePoint3Array(env, panel.topFace));
+  obj.Set("pose", WriteTransform3(env, panel.pose));
+  obj.Set("edgeBendId", WriteStringArray(env, panel.edgeBendId));
+  return obj;
+}
+
+Napi::Object WriteBridgeLayout(Napi::Env env, const BridgeLayout& bridge) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("bendId", Napi::String::New(env, bridge.bendId));
+  obj.Set("parentRegionPanelId", Napi::String::New(env, bridge.parentRegionPanelId));
+  obj.Set("childRegionPanelId", Napi::String::New(env, bridge.childRegionPanelId));
+  obj.Set("pivotOriginWorld", WritePoint3(env, bridge.pivotOriginWorld));
+  obj.Set("pivotAxisWorld", WritePoint3(env, bridge.pivotAxisWorld));
+  obj.Set("angleDeg", Napi::Number::New(env, bridge.angleDeg));
+  return obj;
+}
+
+Napi::Object WriteEvaluateResult(Napi::Env env, const EvaluateResult& result) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("ok", Napi::Boolean::New(env, result.ok));
+  obj.Set("errorCode", Napi::String::New(env, ErrorCodeToString(result.errorCode)));
+  obj.Set("message", Napi::String::New(env, result.message));
+
+  Napi::Array panelsArr = Napi::Array::New(env, result.panels.size());
+  for (size_t i = 0; i < result.panels.size(); ++i) {
+    panelsArr.Set(i, WriteRegionPanelLayout(env, result.panels[i]));
+  }
+  obj.Set("panels", panelsArr);
+
+  Napi::Array bridgesArr = Napi::Array::New(env, result.bridges.size());
+  for (size_t i = 0; i < result.bridges.size(); ++i) {
+    bridgesArr.Set(i, WriteBridgeLayout(env, result.bridges[i]));
+  }
+  obj.Set("bridges", bridgesArr);
+
+  return obj;
+}
+
+// evaluatePartGraph's own JS-facing EvaluateResult shape (above) is also what
+// constructPartSolid's caller is expected to pass BACK in — this reader is the
+// exact inverse of WriteEvaluateResult, field for field.
+EvaluateResult ReadEvaluateResult(const Napi::Object& obj) {
+  EvaluateResult result;
+  result.ok = obj.Get("ok").As<Napi::Boolean>().Value();
+  result.message = obj.Get("message").As<Napi::String>().Utf8Value();
+  // errorCode is round-tripped as a plain string on the JS side; not parsed
+  // back into the enum here since ConstructPartSolid never reads it.
+
+  Napi::Array panelsArr = obj.Get("panels").As<Napi::Array>();
+  for (uint32_t i = 0; i < panelsArr.Length(); ++i) {
+    Napi::Object panelObj = panelsArr.Get(i).As<Napi::Object>();
+    RegionPanelLayout panel;
+    panel.regionPanelId = panelObj.Get("regionPanelId").As<Napi::String>().Utf8Value();
+
+    Napi::Array regionOuterArr = panelObj.Get("regionOuter").As<Napi::Array>();
+    for (uint32_t j = 0; j < regionOuterArr.Length(); ++j) {
+      panel.regionOuter.push_back(ReadPoint2(regionOuterArr.Get(j).As<Napi::Object>()));
+    }
+    Napi::Array bottomFaceArr = panelObj.Get("bottomFace").As<Napi::Array>();
+    for (uint32_t j = 0; j < bottomFaceArr.Length(); ++j) {
+      panel.bottomFace.push_back(ReadPoint3(bottomFaceArr.Get(j).As<Napi::Object>()));
+    }
+    Napi::Array topFaceArr = panelObj.Get("topFace").As<Napi::Array>();
+    for (uint32_t j = 0; j < topFaceArr.Length(); ++j) {
+      panel.topFace.push_back(ReadPoint3(topFaceArr.Get(j).As<Napi::Object>()));
+    }
+    panel.pose = ReadTransform3(panelObj.Get("pose").As<Napi::Object>());
+    Napi::Array edgeBendIdArr = panelObj.Get("edgeBendId").As<Napi::Array>();
+    for (uint32_t j = 0; j < edgeBendIdArr.Length(); ++j) {
+      panel.edgeBendId.push_back(edgeBendIdArr.Get(j).As<Napi::String>().Utf8Value());
+    }
+    result.panels.push_back(std::move(panel));
+  }
+
+  Napi::Array bridgesArr = obj.Get("bridges").As<Napi::Array>();
+  for (uint32_t i = 0; i < bridgesArr.Length(); ++i) {
+    Napi::Object bridgeObj = bridgesArr.Get(i).As<Napi::Object>();
+    BridgeLayout bridge;
+    bridge.bendId = bridgeObj.Get("bendId").As<Napi::String>().Utf8Value();
+    bridge.parentRegionPanelId =
+        bridgeObj.Get("parentRegionPanelId").As<Napi::String>().Utf8Value();
+    bridge.childRegionPanelId =
+        bridgeObj.Get("childRegionPanelId").As<Napi::String>().Utf8Value();
+    bridge.pivotOriginWorld = ReadPoint3(bridgeObj.Get("pivotOriginWorld").As<Napi::Object>());
+    bridge.pivotAxisWorld = ReadPoint3(bridgeObj.Get("pivotAxisWorld").As<Napi::Object>());
+    bridge.angleDeg = bridgeObj.Get("angleDeg").As<Napi::Number>().DoubleValue();
+    result.bridges.push_back(std::move(bridge));
+  }
+
+  return result;
+}
+
+}  // namespace
+
+// ─── NAPI method implementations ─────────────────────────────────────────────
+
+Napi::Value EvaluatePartGraph(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsObject()) {
+    Napi::TypeError::New(env, "evaluatePartGraph(graph: PartGraphSpec)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    PartGraphSpec graph = ReadPartGraphSpec(info[0].As<Napi::Object>());
+    EvaluateResult result = translation::Evaluate(graph);
+    return WriteEvaluateResult(env, result);
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
+Napi::Value ConstructPartSolidBinding(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 2 || !info[0].IsObject() || !info[1].IsNumber()) {
+    Napi::TypeError::New(env, "constructPartSolid(layout: EvaluateResult, thicknessMm: number)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    EvaluateResult layout = ReadEvaluateResult(info[0].As<Napi::Object>());
+    double thicknessMm = info[1].As<Napi::Number>().DoubleValue();
+
+    ConstructPartSolidResultDTO result = svc().constructPartSolid(layout, thicknessMm);
+
+    Napi::Object obj = Napi::Object::New(env);
+    obj.Set("ok", Napi::Boolean::New(env, result.ok));
+    obj.Set("shellId", Napi::String::New(env, result.shellId));
+    obj.Set("errorCode", Napi::String::New(env, result.errorCode));
+    obj.Set("message", Napi::String::New(env, result.message));
+    return obj;
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
+void RegisterTranslationMethods(Napi::Env env, Napi::Object exports) {
+  exports.Set("evaluatePartGraph", Napi::Function::New(env, EvaluatePartGraph));
+  exports.Set("constructPartSolid", Napi::Function::New(env, ConstructPartSolidBinding));
+}
+
+}  // namespace mcp_cad

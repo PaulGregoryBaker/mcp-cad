@@ -21,6 +21,7 @@
 #include "topology_graph.hpp"
 #include "snapshot.hpp"
 #include "shape_history.hpp"
+#include "translation/manufacturing_graph_evaluator.hpp"
 
 namespace mcp_cad {
 
@@ -203,6 +204,18 @@ struct BendZoneSpec {
 };
 
 struct BuildShellFromFlatPatternResult {
+  std::string shellId;
+  bool        ok        = false;
+  std::string errorCode;
+  std::string message;
+};
+
+// Result of constructPartSolid — mirrors translation::ConstructPartSolidResult's
+// shape exactly (shellId/ok/errorCode/message), duplicated here rather than
+// reused directly to avoid part_solid_construction.hpp's own dependency back on
+// this header (it needs ShellId) becoming circular. The .cc implementation
+// translates between the two one-to-one.
+struct ConstructPartSolidResultDTO {
   std::string shellId;
   bool        ok        = false;
   std::string errorCode;
@@ -669,6 +682,18 @@ public:
       const std::vector<BendZoneSpec>& bendZones,
       double                        thicknessMm,
       const FlatPanelPlacementSpec& explicitPlacement = FlatPanelPlacementSpec{}) = 0;
+
+  // Port D-lite (rebuild/16 Port D): builds the realized 3D solid directly from
+  // ManufacturingGraphEvaluator's exact point-array output (`layout`, the
+  // translation::Evaluate() result) — see part_solid_construction.hpp's own
+  // header comment for why this is a separate, native construction path rather
+  // than routed through buildShellFromFlatPattern's DXF-text detour. Result's
+  // shellId (when ok) is registered in this same service's shared state, so it
+  // is usable by every other existing operation (exportDxf, measurement, etc.)
+  // exactly like any other constructed shell.
+  virtual ConstructPartSolidResultDTO constructPartSolid(
+      const translation::EvaluateResult& layout,
+      double                              thicknessMm) = 0;
 
   // Derive a panel's oriented local→world frame P(x) from its largest planar
   // face. Used at panel-creation time so flat dimensions come from the true

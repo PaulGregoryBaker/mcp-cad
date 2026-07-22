@@ -532,3 +532,88 @@ export interface ValidationReport {
     execution_time_ms: number;
   };
 }
+
+// ── Phase 5 Slice 1: graph-authored construction (manufacturing_graph_evaluator) ──
+//
+// Mirrors cpp/src/geometry/translation/manufacturing_graph_evaluator.hpp and
+// part_solid_construction.hpp field-for-field (see cpp/src/napi/translation_binding.cc
+// for the exact marshaling). No geometric computation happens on the TS side
+// (constitution v2.0.0 principle IV) — these types only carry data in and out of
+// evaluatePartGraph/constructPartSolid.
+
+export interface NapiPoint2 {
+  x: number;
+  y: number;
+}
+
+export interface NapiPoint3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
+// Row-major 3x3 rotation (r, 9 elements) + translation (t, 3 elements) — the
+// same layout Transform3 itself uses in C++, so this is a direct field copy.
+export interface NapiTransform3 {
+  r: [number, number, number, number, number, number, number, number, number];
+  t: [number, number, number];
+}
+
+export interface NapiBendSpec {
+  id: string;
+  parentRegionPanelId: string;
+  childRegionPanelId: string;
+  hingeA: NapiPoint2;
+  hingeB: NapiPoint2;
+  angleDeg: number;
+  radiusMm?: number;
+  kFactor?: number;
+}
+
+export interface NapiPartGraphSpec {
+  partId: string;
+  rootRegionPanelId: string;
+  outline: { outer: NapiPoint2[] };
+  bends: NapiBendSpec[];
+  thicknessMm: number;
+  anchor?: { transform: NapiTransform3 };
+}
+
+export interface NapiRegionPanelLayout {
+  regionPanelId: string;
+  regionOuter: NapiPoint2[];
+  bottomFace: NapiPoint3[];
+  topFace: NapiPoint3[];
+  pose: NapiTransform3;
+  // edgeBendId[i] names the bend whose zone the edge (regionOuter[i],
+  // regionOuter[i+1]) borders, or "" for a true outer boundary.
+  edgeBendId: string[];
+}
+
+export interface NapiBridgeLayout {
+  bendId: string;
+  parentRegionPanelId: string;
+  childRegionPanelId: string;
+  pivotOriginWorld: NapiPoint3;
+  pivotAxisWorld: NapiPoint3;
+  angleDeg: number;
+}
+
+export interface EvaluatePartGraphResult {
+  ok: boolean;
+  errorCode: string; // "" | "GE_TREE_CYCLE_DETECTED" | "GE_BEND_SELF_REFERENCE" |
+  // "GE_DANGLING_BEND_REFERENCE" | "GE_REGION_CLIP_FAILED" | "GE_DEGENERATE_OUTLINE"
+  message: string;
+  panels: NapiRegionPanelLayout[];
+  bridges: NapiBridgeLayout[];
+}
+
+export interface ConstructPartSolidResult {
+  ok: boolean;
+  shellId: string;
+  errorCode: string; // "" | "GE_INVALID_LAYOUT" | "GE_EMPTY_LAYOUT" |
+  // "GE_INVALID_SHEET_METAL" | "GE_POLYGON_BUILD_FAILED" | "GE_EXTRUDE_FAILED" |
+  // "GE_BRIDGE_EDGE_NOT_FOUND" | "GE_BRIDGE_UNSUPPORTED_TOPOLOGY" |
+  // "GE_BRIDGE_BUILD_FAILED" | "GE_CONSTRUCTION_FAILED"
+  message: string;
+}

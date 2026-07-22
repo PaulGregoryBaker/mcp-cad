@@ -158,6 +158,9 @@ public:
       double thicknessMm,
       const FlatPanelPlacementSpec& explicitPlacement = FlatPanelPlacementSpec{}) override;
 
+  ConstructPartSolidResultDTO constructPartSolid(const translation::EvaluateResult& layout,
+                                                  double thicknessMm) override;
+
   PanelFrameResult getPanelFrame(const std::string& shellId) override;
 
   ShellId addCornerRelief(const ShellId& shellId, ReliefType reliefType,
