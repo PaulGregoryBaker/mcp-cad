@@ -159,9 +159,25 @@ namespace {
 
 // True if `p` is on the "keep" side of the directed line lineA->lineB.
 // keepLeft=true keeps the left/CCW side (Cross(lineB-lineA, p-lineA) >= 0).
+//
+// STRICT at the boundary (excludes an epsilon band around the line itself from
+// BOTH sides), not the inclusive `>= -eps` a textbook Sutherland-Hodgman clip
+// normally uses. This matters for non-convex subject polygons whose "outside"
+// excursion merely GRAZES the clip line (touches it at an isolated point or
+// along a short run, without ever crossing below it) — e.g. a fold-tree net's
+// root face, bounded on one side by a single bend, with sibling branches whose
+// own base edges happen to sit exactly on that same clip line. An inclusive
+// test treats those grazing touch-points as "inside," so the single-pass
+// clip connects them directly into the kept polygon, producing a degenerate
+// bridge edge that isn't part of the region's real boundary (confirmed via
+// the cross-cube-net case: F0's own clip bridged out to its siblings L/R's
+// far corners, entirely along y=50, before this fix). The strict test instead
+// drops grazing points to "outside," and the ENTER/EXIT transitions still
+// correctly reconstruct the region's own real boundary via LineIntersect
+// (proven exact for F0 by hand and empirically before this change landed).
 bool IsInside(const Point2& p, const Point2& lineA, const Point2& lineB, bool keepLeft) {
   double cross = Cross2(Sub2(lineB, lineA), Sub2(p, lineA));
-  return keepLeft ? (cross >= -kGeometricEpsilon) : (cross <= kGeometricEpsilon);
+  return keepLeft ? (cross > kGeometricEpsilon) : (cross < -kGeometricEpsilon);
 }
 
 Point2 LineIntersect(const Point2& a, const Point2& b, const Point2& lineA, const Point2& lineB) {

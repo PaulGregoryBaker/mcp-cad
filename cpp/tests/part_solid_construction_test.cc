@@ -11,6 +11,10 @@
 #include <TopExp_Explorer.hxx>
 
 #include <cmath>
+#include <map>
+#include <string>
+#include <utility>
+#include <vector>
 
 using namespace mcp_cad;
 using namespace mcp_cad::translation;
@@ -402,6 +406,156 @@ TEST_CASE("ConstructPartSolid: result is invariant under an arbitrary non-axis-a
   double volumeIdentity = SolidVolume(itIdentity->second.shape);
   double volumeTumbled = SolidVolume(itTumbled->second.shape);
   CHECK(volumeTumbled == Approx(volumeIdentity).epsilon(1e-6));
+}
+
+// ─── Fold-tree nets: branching + perpendicular fold lines ───────────────────
+//
+// Slice 2 (rebuild/06-plan.md's phased build order): every prior test above is a
+// LINEAR chain of PARALLEL fold lines (MakeStrip). This is the first test of a
+// genuine fold TREE (one region panel — F1 — has three children: F2, L, R) with
+// PERPENDICULAR fold lines (F1's own four bounding edges are two pairs of
+// mutually-perpendicular hinges) — closing into a Latin-cross cube net
+// (rebuild/suite/cases/T3/net_cross_cube.json, Paul's anchor case for 08 §3.2).
+//
+// This test is the direct-C++ reproduction (zero NAPI/TS in the path) that found
+// and confirmed a real bug in ClipHalfPlane: a region bounded by only ONE
+// touching bend (F0, whose only bend is F0-F1) was clipping to a degenerate
+// polygon that bridged out to its SIBLINGS' (L/R's) far corners — because those
+// siblings' own base edges happen to graze F0's clip line (y=50) without ever
+// crossing it, and the inclusive `>= -eps` boundary test in IsInside treated
+// those grazing touch-points as "inside," connecting them directly. Every
+// previous linear-chain test only ever clipped simple rectangles with clean
+// crossings, so this never surfaced before. Fixed by making IsInside strict at
+// the boundary (see its own comment in manufacturing_graph_evaluator.cc) — the
+// ENTER/EXIT transition logic still exactly reconstructs genuine boundary edges
+// regardless of length, so this did not regress any linear-chain case (full
+// suite re-run confirmed 0 regressions before this test was added).
+namespace {
+
+double Dist3(const Point3& a, const Point3& b) {
+  return std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) +
+                    (a.z - b.z) * (a.z - b.z));
+}
+
+// Latin-cross cube net: F0 (root, bottom) -> F1 (front) -> F2 (top) -> F3 (back),
+// with F1 also branching to L (left) and R (right). Grid coords x faceSizeMm,
+// matching rebuild/suite/cases/T3/net_cross_cube.json's own "faces" layout
+// exactly (F0=[0,0], F1=[0,1], F2=[0,2], F3=[0,3], L=[-1,1], R=[1,1]).
+//
+// Hinge point order was calibrated empirically against a throwaway NAPI probe
+// before being trusted here: all 5 folds are "mountain" (angleDeg=+90, the
+// zero-pivot-offset case at r=0 — see the sharp-fold closure investigation
+// test above), but L's and R's own hinge endpoint order must be MIRRORED
+// relative to each other (not just F0-F1/F1-F2/F2-F3's shared convention)
+// since they sit on opposite sides of their shared parent F1 — confirmed by
+// this test's own exact (0mm) seam closure below.
+PartGraphSpec MakeCrossCubeNet(double faceSizeMm, double thicknessMm) {
+  double s = faceSizeMm;
+  PartGraphSpec graph;
+  graph.partId = "cross-cube";
+  graph.rootRegionPanelId = "F0";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = Transform3::Identity();
+  graph.outline.outer = {
+      {0, 0},    {s, 0},      {s, s},     {2 * s, s},  {2 * s, 2 * s}, {s, 2 * s},
+      {s, 3 * s}, {s, 4 * s}, {0, 4 * s}, {0, 3 * s},  {0, 2 * s},
+      {-s, 2 * s}, {-s, s},   {0, s},
+  };
+
+  auto MakeBend = [&](const std::string& id, const std::string& parent,
+                       const std::string& child, Point2 hingeA, Point2 hingeB) {
+    BendSpec bend;
+    bend.id = id;
+    bend.parentRegionPanelId = parent;
+    bend.childRegionPanelId = child;
+    bend.hingeA = hingeA;
+    bend.hingeB = hingeB;
+    bend.angleDeg = 90.0;
+    bend.radiusMm = 0.0;
+    bend.kFactor = 0.0;
+    return bend;
+  };
+
+  graph.bends = {
+      MakeBend("b01", "F0", "F1", {0, s}, {s, s}),
+      MakeBend("b12", "F1", "F2", {0, 2 * s}, {s, 2 * s}),
+      MakeBend("b23", "F2", "F3", {0, 3 * s}, {s, 3 * s}),
+      MakeBend("b1L", "F1", "L", {0, s}, {0, 2 * s}),
+      MakeBend("b1R", "F1", "R", {s, 2 * s}, {s, s}),  // mirrored order vs b1L
+  };
+  return graph;
+}
+
+}  // namespace
+
+TEST_CASE("GraphEvaluator: Latin-cross cube net (branching + perpendicular "
+          "folds) closes at all 7 seams exactly",
+          "[translation][closure][net]") {
+  double faceSizeMm = 50.0, thicknessMm = 1.0;
+  auto graph = MakeCrossCubeNet(faceSizeMm, thicknessMm);
+  EvaluateResult result = Evaluate(graph);
+  REQUIRE(result.ok);
+  REQUIRE(result.panels.size() == 6);
+
+  std::map<std::string, const RegionPanelLayout*> byId;
+  for (auto& p : result.panels) byId[p.regionPanelId] = &p;
+
+  double s = faceSizeMm;
+  // Each named edge, in the shared flat frame (face:cardinal per schema.md's
+  // net encoding), at the mountain-fold zero-offset pivot height (z=0).
+  auto edge = [&](const std::string& face, double x0, double y0, double x1,
+                   double y1) {
+    return std::make_pair(byId.at(face), std::make_pair(Point3{x0, y0, 0},
+                                                          Point3{x1, y1, 0}));
+  };
+  std::vector<std::pair<decltype(edge("", 0, 0, 0, 0)), decltype(edge("", 0, 0, 0, 0))>>
+      seams = {
+          {edge("F3", 0, 4 * s, s, 4 * s), edge("F0", 0, 0, s, 0)},          // F3:N vs F0:S
+          {edge("L", -s, s, 0, s), edge("F0", 0, 0, 0, s)},                  // L:S vs F0:W
+          {edge("R", s, s, 2 * s, s), edge("F0", s, 0, s, s)},               // R:S vs F0:E
+          {edge("L", -s, 2 * s, 0, 2 * s), edge("F2", 0, 2 * s, 0, 3 * s)},  // L:N vs F2:W
+          {edge("R", s, 2 * s, 2 * s, 2 * s), edge("F2", s, 2 * s, s, 3 * s)},  // R:N vs F2:E
+          {edge("L", -s, s, -s, 2 * s), edge("F3", 0, 3 * s, 0, 4 * s)},     // L:W vs F3:W
+          {edge("R", 2 * s, s, 2 * s, 2 * s), edge("F3", s, 3 * s, s, 4 * s)},  // R:E vs F3:E
+      };
+
+  double worst = 0.0;
+  for (auto& [e1, e2] : seams) {
+    Point3 w1a = e1.first->pose.Apply(e1.second.first);
+    Point3 w1b = e1.first->pose.Apply(e1.second.second);
+    Point3 w2a = e2.first->pose.Apply(e2.second.first);
+    Point3 w2b = e2.first->pose.Apply(e2.second.second);
+    double dSame = std::max(Dist3(w1a, w2a), Dist3(w1b, w2b));
+    double dSwap = std::max(Dist3(w1a, w2b), Dist3(w1b, w2a));
+    worst = std::max(worst, std::min(dSame, dSwap));
+  }
+  CHECK(worst < 1e-6);
+}
+
+TEST_CASE("ConstructPartSolid: Latin-cross cube net builds one manifold cube",
+          "[translation][construction][net]") {
+  double faceSizeMm = 50.0, thicknessMm = 1.0;
+  auto graph = MakeCrossCubeNet(faceSizeMm, thicknessMm);
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, thicknessMm);
+  REQUIRE(result.ok);
+  REQUIRE_FALSE(result.shellId.empty());
+
+  auto it = state.solids.find(result.shellId);
+  REQUIRE(it != state.solids.end());
+  BRepCheck_Analyzer analyzer(it->second.shape);
+  CHECK(analyzer.IsValid());
+  CHECK(CountSolids(it->second.shape) == 1);
+
+  // A closed 50mm cube shell of 1mm sheet: volume must be well below the
+  // naive per-face sum (6 * 50 * 50 * 1 = 15000, same "mountain overlap"
+  // bound as the tube tests above) and comfortably above a degenerate sliver.
+  double volume = SolidVolume(it->second.shape);
+  CHECK(volume < 15000.0);
+  CHECK(volume > 10000.0);
 }
 
 TEST_CASE("ConstructPartSolid: rejects a failed layout", "[translation][construction][errors]") {
