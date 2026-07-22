@@ -1,10 +1,12 @@
 # ─── Build outputs ──────────────────────────────────────────────────────────
-cpp/build/
-cpp/build-asan/
-cpp/build-debug/
-cpp/build-vcpkg/
+# Wildcard rather than enumerating each named variant (build/, build-asan/,
+# build-debug/, build-vcpkg/, build-napi/, ...) — new ad-hoc build dirs must not
+# need a .gitignore edit to stay untracked.
+cpp/build*/
+cpp/src/napi/build/
 ts/dist/
 ts/coverage/
+Testing/
 
 # ─── Dependencies ────────────────────────────────────────────────────────────
 node_modules/
