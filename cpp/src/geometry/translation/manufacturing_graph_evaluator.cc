@@ -30,13 +30,22 @@ double BendAllowanceMm(const BendSpec& bend, double thicknessMm) {
   return angleRad * (bend.radiusMm + bend.kFactor * thicknessMm);
 }
 
-// Radius of the BOTTOM surface (13 D3: what regionOf/DXF maps to). Positive
-// angleDeg = "mountain" (bottom = inner/concave, r_b = radiusMm); negative =
-// "valley" (bottom = outer/convex, r_b = radiusMm + thicknessMm — never zero,
-// since the material's own thickness can't occupy zero arc on the outer side).
+// Whether this bend's bottom (z=0) reference is the concave side — i.e.
+// whether the pivot touches it at radiusMm=0. bend.bottomIsConcave, when
+// set, is authoritative (see its own doc comment in the header: it and
+// angleDeg's sign are independent facts). Falls back to the old
+// isMountain=(angleDeg>=0) rule when unset, for graphs authored before
+// this field existed.
+bool BottomIsConcave(const BendSpec& bend) {
+  return bend.bottomIsConcave.has_value() ? *bend.bottomIsConcave : (bend.angleDeg >= 0.0);
+}
+
+// Radius of the BOTTOM surface (13 D3: what regionOf/DXF maps to). Concave
+// bottom: r_b = radiusMm (touches the pivot exactly at radiusMm=0). Convex
+// bottom: r_b = radiusMm + thicknessMm — never zero, since the material's
+// own thickness can't occupy zero arc on the convex side.
 double BottomRadiusMm(const BendSpec& bend, double thicknessMm) {
-  bool isMountain = bend.angleDeg >= 0.0;
-  return isMountain ? bend.radiusMm : bend.radiusMm + thicknessMm;
+  return BottomIsConcave(bend) ? bend.radiusMm : bend.radiusMm + thicknessMm;
 }
 
 // ─── 2D vector helpers ───────────────────────────────────────────────────────
@@ -428,9 +437,12 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
       // valley fold. At radiusMm=0 this reduces to z=0 for mountain (matches the old
       // sharp-fold pivot exactly — no regression) but z=+thicknessMm for valley (r_b
       // is never zero there), which is the derived fix for the valley-fold gap.
-      bool isMountain = bend->angleDeg >= 0.0;
+      // "Concave" here uses BottomIsConcave (bend->bottomIsConcave when set,
+      // else the same angleDeg-sign fallback) — see that function's own doc
+      // comment for why this is independent of angleDeg's sign in general.
+      bool concave = BottomIsConcave(*bend);
       double rBottom = BottomRadiusMm(*bend, graph.thicknessMm);
-      double pivotZ = isMountain ? -rBottom : rBottom;
+      double pivotZ = concave ? -rBottom : rBottom;
 
       Point3 hingeA3{bend->hingeA.x, bend->hingeA.y, pivotZ};
       Point3 hingeB3{bend->hingeB.x, bend->hingeB.y, pivotZ};

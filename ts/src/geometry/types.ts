@@ -629,6 +629,11 @@ export interface NapiBendSpec {
   angleDeg: number;
   radiusMm?: number;
   kFactor?: number;
+  // Overrides the angleDeg-sign-derived mountain/valley pivot-side
+  // classification (manufacturing_graph_evaluator.hpp's own BendSpec
+  // field doc comment has the full rationale). Unset: falls back to the
+  // old isMountain=(angleDeg>=0) rule.
+  bottomIsConcave?: boolean;
 }
 
 export interface NapiPartGraphSpec {
@@ -713,4 +718,35 @@ export interface ReconcileOutlinesResult {
   combinedOutline: NapiPoint2[];
   hingeA: NapiPoint2;
   hingeB: NapiPoint2;
+}
+
+// rebuild/13-translation-module-design.md §6 / step_reconciliation.hpp —
+// Phase 5 Slice 5. One kernel-measured flat panel piece — mirrors
+// PanelFrameResult's own shape exactly (world origin/u/v/normal + a CCW
+// ring already local to (u,v)), so getPanelFrame's own output can be
+// marshaled into this with no new kernel-side measurement.
+export interface NapiPanelPieceSpec {
+  origin: NapiPoint3;
+  uAxis: NapiPoint3;
+  vAxis: NapiPoint3;
+  normal: NapiPoint3;
+  ringLocal: NapiPoint2[];
+  thicknessMm: number;
+}
+
+// reconcilePieces' result: rootRegionPanelId and every BendSpec's parent/
+// childRegionPanelId in `graph` use temporary "piece{inputIndex}"
+// correlation ids — the caller (import_part's TS orchestration) walks
+// `graph.bends` in the returned (parent-before-child) order, remapping each
+// temp id onto the real UUID GraphStore.createPart/createBendNode mints.
+export interface ReconcilePiecesResult {
+  ok: boolean;
+  errorCode: string; // "" | "GE_TOO_FEW_PIECES" | "GE_DISCONNECTED_PIECES" |
+  // "GE_NON_DEVELOPABLE_FOLD" | "GE_RECONCILE_SELF_INTERSECTION"
+  message: string;
+  graph: NapiPartGraphSpec;
+  // Non-fatal findings — e.g. an extra (non-tree) adjacency edge between
+  // two already-placed pieces, a real physical seam (14 §2) not auto-
+  // detected/driven this slice — reported, not silently dropped.
+  notes: string[];
 }

@@ -34,6 +34,9 @@ export interface CreateBendNodeInput {
   radiusMm?: number;
   kFactor?: number;
   label?: string;
+  /** See BendRow.bottomIsConcave's own doc comment. Omitted: falls back to
+   * the angleDeg-sign rule (matches every caller before this field existed). */
+  bottomIsConcave?: boolean;
 }
 
 /**
@@ -152,6 +155,7 @@ export class GraphStore {
       angleDeg: input.angleDeg,
       radiusMm: input.radiusMm ?? 0.0,
       kFactorOverride: input.kFactor ?? null,
+      bottomIsConcave: input.bottomIsConcave ?? null,
     };
     const child: RegionPanelRow = {
       regionPanelId: childRegionPanelId,

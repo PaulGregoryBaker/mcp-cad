@@ -10,7 +10,7 @@
  */
 
 import { GraphStore, GraphStoreError } from '../graph/store';
-import { mergePartsWithBend } from '../graph/evaluate-client';
+import { mergePartsWithBend, importPart } from '../graph/evaluate-client';
 import { throwError, ErrorCodes } from '../../mcp/errors';
 import {
   requireString,
@@ -128,6 +128,26 @@ export const graphToolDefinitions = [
       required: ['part_a_id', 'part_b_id', 'edge_a', 'edge_b', 'angle_deg'],
     },
   },
+  {
+    name: 'import_part',
+    description:
+      'Ingest a STEP file into a v2 manufacturing graph (rebuild/15 §4.1, Level C): heal, decompose into flat panel pieces (Port A/B), then reconcile them into one outline + bend tree (13 §6) — the same graph shape create_part/create_node build directly. Synchronous this slice (no job/progress polling yet). Protrusions are detected and excluded from the graph, not represented.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', description: 'Path to a STEP file.' },
+        angle_threshold_deg: {
+          type: 'number',
+          description:
+            'Coplanarity threshold for panel-vs-bend face grouping (splitBodyByBends). Default 35; use a much tighter value (e.g. 0.5) for faceted/tessellated STEP exports where many nearly-coplanar triangles must merge without absorbing real fold boundaries.',
+        },
+        max_thickness_mm: { type: 'number' },
+        default_thickness_mm: { type: 'number' },
+        max_recursion_depth: { type: 'number' },
+      },
+      required: ['file'],
+    },
+  },
 ];
 
 export function dispatchGraphTool(
@@ -142,6 +162,8 @@ export function dispatchGraphTool(
       return handleCreateNode(store, args);
     case 'merge_bodies_with_bend':
       return handleMergeBodiesWithBend(store, args);
+    case 'import_part':
+      return handleImportPart(store, args);
     default:
       throwError(ErrorCodes.INTERNAL_ERROR, `Unknown v2 tool: ${name}`, false);
   }
@@ -236,6 +258,44 @@ function handleMergeBodiesWithBend(
       part_id: partAId,
       bend_id: bend.bendId,
       child_region_panel_id: childRegionPanel.regionPanelId,
+    };
+  } catch (err) {
+    if (err instanceof GraphStoreError) {
+      throwError(err.code, err.message, false);
+    }
+    throw err;
+  }
+}
+
+function handleImportPart(
+  store: GraphStore,
+  args: Record<string, unknown>,
+): {
+  part_id: string;
+  panel_count: number;
+  protrusion_count: number;
+  bend_count: number;
+  notes: string[];
+} {
+  const file = requireString(args, 'file');
+  const angleThresholdDeg = optNumber(args, 'angle_threshold_deg');
+  const maxThicknessMm = optNumber(args, 'max_thickness_mm');
+  const defaultThicknessMm = optNumber(args, 'default_thickness_mm');
+  const maxRecursionDepth = optNumber(args, 'max_recursion_depth');
+
+  try {
+    const result = importPart(store, file, {
+      angleThresholdDeg,
+      maxThicknessMm,
+      defaultThicknessMm,
+      maxRecursionDepth,
+    });
+    return {
+      part_id: result.partId,
+      panel_count: result.panelCount,
+      protrusion_count: result.protrusionCount,
+      bend_count: result.bendCount,
+      notes: result.notes,
     };
   } catch (err) {
     if (err instanceof GraphStoreError) {

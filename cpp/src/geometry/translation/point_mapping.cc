@@ -2,12 +2,29 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <string>
 
 namespace mcp_cad::translation {
 
 namespace {
 
 constexpr double kMappingEpsilonMm = 1e-6;
+// How far a query point may sit off a panel's own flat plane (MapPointToFlat)
+// or off its expected pivot-axis radius (the bridge-zone branch) and still
+// count as "on" that surface. This is a physical-noise tolerance, not a
+// numerical-robustness one (contrast kMappingEpsilonMm above, which stays
+// tiny) — matches the established ~2mm precedent
+// (MERGE_EDGE_ALIGNMENT_TOLERANCE_MM, part_merge.hpp;
+// kSelfConsistencyToleranceMm, step_reconciliation.cc) for real STEP-
+// imported panels, whose measured geometry can genuinely differ from a
+// perfectly flat/developable model by up to a couple mm at a sharp-fold
+// corner relief (confirmed on a real fixture, not measurement noise to
+// chase out). The old 1e-6*100=1e-4mm value only ever suited hand-authored,
+// exactly-flat synthetic graphs (Slices 1-4) and silently rejected valid
+// points on real imported geometry (Slice 5) as "not on the part" rather
+// than reporting a position with some residual.
+constexpr double kSurfaceResidualToleranceMm = 2.0;
 
 Point2 Sub2(const Point2& a, const Point2& b) { return {a.x - b.x, a.y - b.y}; }
 double Dot2(const Point2& a, const Point2& b) { return a.x * b.x + a.y * b.y; }
@@ -26,13 +43,19 @@ double PointSegmentDistance2(const Point2& p, const Point2& a, const Point2& b) 
 
 // Inclusive membership (a point on the boundary — e.g. a shared hinge line —
 // belongs to both neighbours, 13 §4.2/§5.1) via boundary-distance short
-// circuit, then a standard crossing-number test for the strict interior.
-bool PointInPolygon2(const Point2& p, const std::vector<Point2>& poly) {
+// circuit, then a standard crossing-number test for the strict interior
+// (the crossing test itself has no tolerance concept — the boundary
+// short-circuit is the only part physical-noise tolerance can widen).
+// `tolerance` defaults to the tiny numerical-robustness epsilon (existing
+// callers, exact synthetic graphs); MapPointToFlat's real-STEP-fixture path
+// below passes the wider kSurfaceResidualToleranceMm explicitly.
+bool PointInPolygon2(const Point2& p, const std::vector<Point2>& poly,
+                      double tolerance = kMappingEpsilonMm) {
   if (poly.size() < 3) return false;
   for (size_t i = 0; i < poly.size(); ++i) {
     const Point2& a = poly[i];
     const Point2& b = poly[(i + 1) % poly.size()];
-    if (PointSegmentDistance2(p, a, b) < kMappingEpsilonMm) return true;
+    if (PointSegmentDistance2(p, a, b) < tolerance) return true;
   }
   bool inside = false;
   for (size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++) {
@@ -138,6 +161,49 @@ ZoneLocal ResolveZoneLocal(const Point2& p, const BridgeZone& zone) {
 
 }  // namespace
 
+namespace {
+
+// Builds the world-space fold result for a query point already resolved to
+// (zone, local) — the exact same construction MapPointToWorld's exact pass
+// and its widened fallback pass both need, factored out rather than
+// duplicated.
+Point3 ApplyBridgeFold(const PartGraphSpec& graph, const BendSpec& bend, const ZoneLocal& local,
+                        const RegionPanelLayout& parentPanel, const BridgeLayout& bridge) {
+  Point2 aFlat{local.hingeOrigin.x + local.s * local.dHat.x,
+               local.hingeOrigin.y + local.s * local.dHat.y};
+  Point3 aWorld = parentPanel.pose.Apply({aFlat.x, aFlat.y, 0.0});
+
+  // Rotate "a" about the SAME axis (pivotOriginWorld/pivotAxisWorld) the
+  // evaluator itself used to fold the child (manufacturing_graph_evaluator.cc's
+  // own worldFold = RotationAboutAxis(hingeAWorld, axis, bend->angleDeg) —
+  // bridge.pivotOriginWorld/pivotAxisWorld ARE hingeAWorld/axis, verbatim),
+  // by whatever FRACTION of the full angle this query's u represents. This
+  // reuses an already-tested primitive instead of hand-deriving a sin/cos
+  // decomposition of the hinge frame — an earlier attempt at the latter had
+  // a real sign bug (n_hat/z_hat roles swapped) that this sidesteps entirely.
+  double rho = bend.radiusMm + bend.kFactor * graph.thicknessMm;
+  double phi = rho > 1e-9 ? local.u / rho : 0.0;
+  double phiDeg = phi * 180.0 / 3.14159265358979323846;
+  double signedPhiDeg = bend.angleDeg >= 0.0 ? phiDeg : -phiDeg;
+
+  Transform3 partialFold =
+      Transform3::RotationAboutAxis(bridge.pivotOriginWorld, bridge.pivotAxisWorld, signedPhiDeg);
+  return partialFold.Apply(aWorld);
+}
+
+// How far (s, u) sits outside the zone's own [sMin,sMax]x[0,ba] rectangle —
+// 0 exactly at/inside the tight band, growing outward. The widened fallback
+// pass's bridge-side residual, directly comparable to the panel-side
+// boundary-distance residual below (both are "how far outside the exact
+// membership test", in mm).
+double ZoneOutsideDistanceMm(const ZoneLocal& local, double sMin, double sMax) {
+  double dS = std::max({sMin - local.s, local.s - sMax, 0.0});
+  double dU = std::max({-local.u, local.u - local.ba, 0.0});
+  return std::hypot(dS, dU);
+}
+
+}  // namespace
+
 MapToWorldResult MapPointToWorld(const PartGraphSpec& graph, const EvaluateResult& layout,
                                   const Point2& point2d, double zMm) {
   MapToWorldResult result;
@@ -147,6 +213,10 @@ MapToWorldResult MapPointToWorld(const PartGraphSpec& graph, const EvaluateResul
     return result;
   }
 
+  // Pass 1 — exact membership, tight tolerance, panels before bridges: BYTE
+  // FOR BYTE the original (pre-Slice-5) behavior, so every graph this ran
+  // correctly on before (Slices 1-4's own hand-authored, exactly-flat
+  // synthetic graphs) is completely unaffected by anything below.
   for (const auto& panel : layout.panels) {
     if (PointInPolygon2(point2d, panel.regionOuter)) {
       result.ok = true;
@@ -155,41 +225,78 @@ MapToWorldResult MapPointToWorld(const PartGraphSpec& graph, const EvaluateResul
       return result;
     }
   }
-
   for (const auto& bend : graph.bends) {
     BridgeZone zone = FindBridgeZone(layout, bend);
     if (!zone.found) continue;
     ZoneLocal local = ResolveZoneLocal(point2d, zone);
     if (local.ba < 1e-9 || !local.inBand) continue;
-
     const RegionPanelLayout* parentPanel = FindPanel(layout, bend.parentRegionPanelId);
     const BridgeLayout* bridge = FindBridge(layout, bend.id);
     if (!parentPanel || !bridge) continue;
-
-    // "a" at this s: the point on the PARENT's own zone-boundary edge (u=0,
-    // the phi=0 reference) at the query's own axial position, in world space.
-    Point2 aFlat{local.hingeOrigin.x + local.s * local.dHat.x,
-                local.hingeOrigin.y + local.s * local.dHat.y};
-    Point3 aWorld = parentPanel->pose.Apply({aFlat.x, aFlat.y, 0.0});
-
-    // Rotate "a" about the SAME axis (pivotOriginWorld/pivotAxisWorld) the
-    // evaluator itself used to fold the child (manufacturing_graph_evaluator.cc's
-    // own worldFold = RotationAboutAxis(hingeAWorld, axis, bend->angleDeg) —
-    // bridge.pivotOriginWorld/pivotAxisWorld ARE hingeAWorld/axis, verbatim),
-    // by whatever FRACTION of the full angle this query's u represents. This
-    // reuses an already-tested primitive instead of hand-deriving a sin/cos
-    // decomposition of the hinge frame — an earlier attempt at the latter had
-    // a real sign bug (n_hat/z_hat roles swapped) that this sidesteps entirely.
-    double rho = bend.radiusMm + bend.kFactor * graph.thicknessMm;
-    double phi = rho > 1e-9 ? local.u / rho : 0.0;
-    double phiDeg = phi * 180.0 / 3.14159265358979323846;
-    double signedPhiDeg = bend.angleDeg >= 0.0 ? phiDeg : -phiDeg;
-
-    Transform3 partialFold =
-        Transform3::RotationAboutAxis(bridge->pivotOriginWorld, bridge->pivotAxisWorld, signedPhiDeg);
     result.ok = true;
     result.bendId = bend.id;
-    result.point3d = partialFold.Apply(aWorld);
+    result.point3d = ApplyBridgeFold(graph, bend, local, *parentPanel, *bridge);
+    return result;
+  }
+
+  // Pass 2 — nothing matched exactly: widen to kSurfaceResidualToleranceMm
+  // and pick whichever candidate (panel edge or bridge-zone boundary) sits
+  // CLOSEST, across both kinds together — never "first panel found," which
+  // is what let a widened panel tolerance alone swallow a point that
+  // actually belongs to an adjacent bridge zone (the real regression this
+  // two-pass structure exists to prevent). Real STEP-imported panels
+  // (Slice 5) can genuinely miss pass 1 by up to a couple mm at a
+  // sharp-fold corner relief — see kSurfaceResidualToleranceMm's own doc
+  // comment.
+  bool found = false;
+  double bestResidual = -1.0;
+  std::string bestRegionPanelId;
+  Point3 bestPoint3d{};
+  std::string bestBendId;
+
+  for (const auto& panel : layout.panels) {
+    double best = std::numeric_limits<double>::infinity();
+    size_t n = panel.regionOuter.size();
+    for (size_t i = 0; i < n; ++i) {
+      best = std::min(best, PointSegmentDistance2(point2d, panel.regionOuter[i],
+                                                    panel.regionOuter[(i + 1) % n]));
+    }
+    if (best > kSurfaceResidualToleranceMm) continue;
+    if (!found || best < bestResidual) {
+      found = true;
+      bestResidual = best;
+      bestRegionPanelId = panel.regionPanelId;
+      bestBendId.clear();
+      bestPoint3d = panel.pose.Apply({point2d.x, point2d.y, zMm});
+    }
+  }
+  for (const auto& bend : graph.bends) {
+    BridgeZone zone = FindBridgeZone(layout, bend);
+    if (!zone.found) continue;
+    ZoneLocal local = ResolveZoneLocal(point2d, zone);
+    if (local.ba < 1e-9) continue;
+    double sMin = 0.0;
+    double sMax = Dot2(Sub2(zone.parentB, zone.parentA), local.dHat);
+    if (sMin > sMax) std::swap(sMin, sMax);
+    double outside = ZoneOutsideDistanceMm(local, sMin, sMax);
+    if (outside > kSurfaceResidualToleranceMm) continue;
+    const RegionPanelLayout* parentPanel = FindPanel(layout, bend.parentRegionPanelId);
+    const BridgeLayout* bridge = FindBridge(layout, bend.id);
+    if (!parentPanel || !bridge) continue;
+    if (!found || outside < bestResidual) {
+      found = true;
+      bestResidual = outside;
+      bestRegionPanelId.clear();
+      bestBendId = bend.id;
+      bestPoint3d = ApplyBridgeFold(graph, bend, local, *parentPanel, *bridge);
+    }
+  }
+
+  if (found) {
+    result.ok = true;
+    result.regionPanelId = bestRegionPanelId;
+    result.bendId = bestBendId;
+    result.point3d = bestPoint3d;
     return result;
   }
 
@@ -215,7 +322,8 @@ MapToFlatResult MapPointToFlat(const PartGraphSpec& graph, const EvaluateResult&
     Point3 local = inv.Apply(point3d);
     double residual = std::fabs(local.z);
     Point2 flat{local.x, local.y};
-    if (residual <= kMappingEpsilonMm * 100 && PointInPolygon2(flat, panel.regionOuter)) {
+    if (residual <= kSurfaceResidualToleranceMm &&
+        PointInPolygon2(flat, panel.regionOuter, kSurfaceResidualToleranceMm)) {
       if (!found || residual < bestResidual) {
         found = true;
         bestResidual = residual;
@@ -275,7 +383,7 @@ MapToFlatResult MapPointToFlat(const PartGraphSpec& graph, const EvaluateResult&
     if (radA < 1e-9 || radX < 1e-9) continue;
 
     double residual = std::fabs(radX - radA);
-    if (residual > kMappingEpsilonMm * 100) continue;
+    if (residual > kSurfaceResidualToleranceMm) continue;
 
     double cosAngle = (perpA.x * perpX.x + perpA.y * perpX.y + perpA.z * perpX.z) / (radA * radX);
     Point3 cross = {perpA.y * perpX.z - perpA.z * perpX.y, perpA.z * perpX.x - perpA.x * perpX.z,

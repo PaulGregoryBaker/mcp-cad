@@ -18,6 +18,7 @@
 #include "../geometry/translation/manufacturing_graph_evaluator.hpp"
 #include "../geometry/translation/point_mapping.hpp"
 #include "../geometry/translation/part_merge.hpp"
+#include "../geometry/translation/step_reconciliation.hpp"
 
 #include <string>
 #include <vector>
@@ -38,6 +39,9 @@ using translation::Point2;
 using translation::Point3;
 using translation::RegionPanelLayout;
 using translation::Transform3;
+using translation::PanelPieceSpec;
+using translation::ReconcileErrorCode;
+using translation::ReconcilePiecesResult;
 
 // svc() (the single-session-per-process GeometryService instance) is already
 // declared+defined, `static`, in geometry_binding.cc — addon.cc #includes that
@@ -79,6 +83,18 @@ const char* MergeErrorCodeToString(MergeErrorCode code) {
     case MergeErrorCode::kInvalidEdgeRef: return "GE_INVALID_EDGE_REF";
     case MergeErrorCode::kMergeEdgeMismatch: return "GE_MERGE_EDGE_MISMATCH";
     case MergeErrorCode::kMergeSelfIntersecting: return "GE_MERGE_SELF_INTERSECTION";
+  }
+  return "GE_UNKNOWN_ERROR";
+}
+
+const char* ReconcileErrorCodeToString(ReconcileErrorCode code) {
+  switch (code) {
+    case ReconcileErrorCode::kNone: return "";
+    case ReconcileErrorCode::kTooFewPieces: return "GE_TOO_FEW_PIECES";
+    case ReconcileErrorCode::kDisconnectedPieces: return "GE_DISCONNECTED_PIECES";
+    case ReconcileErrorCode::kNonDevelopableFold: return "GE_NON_DEVELOPABLE_FOLD";
+    case ReconcileErrorCode::kSelfIntersecting: return "GE_RECONCILE_SELF_INTERSECTION";
+    case ReconcileErrorCode::kDownstreamPoseMismatch: return "GE_DOWNSTREAM_POSE_MISMATCH";
   }
   return "GE_UNKNOWN_ERROR";
 }
@@ -160,10 +176,34 @@ PartGraphSpec ReadPartGraphSpec(const Napi::Object& obj) {
     bend.radiusMm = radiusV.IsNumber() ? radiusV.As<Napi::Number>().DoubleValue() : 0.0;
     Napi::Value kFactorV = bendObj.Get("kFactor");
     bend.kFactor = kFactorV.IsNumber() ? kFactorV.As<Napi::Number>().DoubleValue() : 0.0;
+    Napi::Value bottomIsConcaveV = bendObj.Get("bottomIsConcave");
+    if (bottomIsConcaveV.IsBoolean()) {
+      bend.bottomIsConcave = bottomIsConcaveV.As<Napi::Boolean>().Value();
+    }
     graph.bends.push_back(std::move(bend));
   }
 
   return graph;
+}
+
+PanelPieceSpec ReadPanelPieceSpec(const Napi::Object& obj) {
+  PanelPieceSpec piece;
+  piece.origin = ReadPoint3(obj.Get("origin").As<Napi::Object>());
+  piece.uAxis = ReadPoint3(obj.Get("uAxis").As<Napi::Object>());
+  piece.vAxis = ReadPoint3(obj.Get("vAxis").As<Napi::Object>());
+  piece.normal = ReadPoint3(obj.Get("normal").As<Napi::Object>());
+  piece.ringLocal = ReadPoint2Array(obj.Get("ringLocal").As<Napi::Array>());
+  piece.thicknessMm = obj.Get("thicknessMm").As<Napi::Number>().DoubleValue();
+  return piece;
+}
+
+std::vector<PanelPieceSpec> ReadPanelPieceSpecArray(const Napi::Array& arr) {
+  std::vector<PanelPieceSpec> pieces;
+  pieces.reserve(arr.Length());
+  for (uint32_t i = 0; i < arr.Length(); ++i) {
+    pieces.push_back(ReadPanelPieceSpec(arr.Get(i).As<Napi::Object>()));
+  }
+  return pieces;
 }
 
 // ─── C++ -> JS ────────────────────────────────────────────────────────────────
@@ -343,6 +383,54 @@ Napi::Object WriteReconcileOutlinesResult(Napi::Env env, const ReconcileOutlines
   return obj;
 }
 
+// The exact inverse of ReadPartGraphSpec, field for field — the caller
+// (import_part's TS orchestration) walks the returned bends and re-issues
+// them through the ordinary create_node(bend)/GraphStore path (temp
+// "piece{N}" ids remapped onto real UUIDs there); it never round-trips this
+// object back through evaluatePartGraph directly using ITS OWN ids.
+Napi::Object WriteBendSpec(Napi::Env env, const BendSpec& bend) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("id", Napi::String::New(env, bend.id));
+  obj.Set("parentRegionPanelId", Napi::String::New(env, bend.parentRegionPanelId));
+  obj.Set("childRegionPanelId", Napi::String::New(env, bend.childRegionPanelId));
+  obj.Set("hingeA", WritePoint2(env, bend.hingeA));
+  obj.Set("hingeB", WritePoint2(env, bend.hingeB));
+  obj.Set("angleDeg", Napi::Number::New(env, bend.angleDeg));
+  obj.Set("radiusMm", Napi::Number::New(env, bend.radiusMm));
+  obj.Set("kFactor", Napi::Number::New(env, bend.kFactor));
+  if (bend.bottomIsConcave.has_value()) {
+    obj.Set("bottomIsConcave", Napi::Boolean::New(env, *bend.bottomIsConcave));
+  }
+  return obj;
+}
+
+Napi::Object WritePartGraphSpec(Napi::Env env, const PartGraphSpec& graph) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("partId", Napi::String::New(env, graph.partId));
+  obj.Set("rootRegionPanelId", Napi::String::New(env, graph.rootRegionPanelId));
+  Napi::Object outlineObj = Napi::Object::New(env);
+  outlineObj.Set("outer", WritePoint2Array(env, graph.outline.outer));
+  obj.Set("outline", outlineObj);
+  Napi::Array bendsArr = Napi::Array::New(env, graph.bends.size());
+  for (size_t i = 0; i < graph.bends.size(); ++i) bendsArr.Set(i, WriteBendSpec(env, graph.bends[i]));
+  obj.Set("bends", bendsArr);
+  obj.Set("thicknessMm", Napi::Number::New(env, graph.thicknessMm));
+  Napi::Object anchorObj = Napi::Object::New(env);
+  anchorObj.Set("transform", WriteTransform3(env, graph.anchor.transform));
+  obj.Set("anchor", anchorObj);
+  return obj;
+}
+
+Napi::Object WriteReconcilePiecesResult(Napi::Env env, const ReconcilePiecesResult& result) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("ok", Napi::Boolean::New(env, result.ok));
+  obj.Set("errorCode", Napi::String::New(env, ReconcileErrorCodeToString(result.errorCode)));
+  obj.Set("message", Napi::String::New(env, result.message));
+  obj.Set("graph", WritePartGraphSpec(env, result.graph));
+  obj.Set("notes", WriteStringArray(env, result.notes));
+  return obj;
+}
+
 }  // namespace
 
 // ─── NAPI method implementations ─────────────────────────────────────────────
@@ -460,12 +548,32 @@ Napi::Value ReconcileOutlinesBinding(const Napi::CallbackInfo& info) {
   }
 }
 
+Napi::Value ReconcilePiecesBinding(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 2 || !info[0].IsArray() || !info[1].IsNumber()) {
+    Napi::TypeError::New(env, "reconcilePieces(pieces: PanelPieceSpec[], thicknessMm: number)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    std::vector<PanelPieceSpec> pieces = ReadPanelPieceSpecArray(info[0].As<Napi::Array>());
+    double thicknessMm = info[1].As<Napi::Number>().DoubleValue();
+
+    ReconcilePiecesResult result = translation::ReconcilePieces(pieces, thicknessMm);
+    return WriteReconcilePiecesResult(env, result);
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
 void RegisterTranslationMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("evaluatePartGraph", Napi::Function::New(env, EvaluatePartGraph));
   exports.Set("constructPartSolid", Napi::Function::New(env, ConstructPartSolidBinding));
   exports.Set("mapPointToWorld", Napi::Function::New(env, MapPointToWorldBinding));
   exports.Set("mapPointToFlat", Napi::Function::New(env, MapPointToFlatBinding));
   exports.Set("reconcileOutlines", Napi::Function::New(env, ReconcileOutlinesBinding));
+  exports.Set("reconcilePieces", Napi::Function::New(env, ReconcilePiecesBinding));
 }
 
 }  // namespace mcp_cad

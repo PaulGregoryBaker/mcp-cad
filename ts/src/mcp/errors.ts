@@ -189,6 +189,26 @@ export const ErrorCodes = {
   GE_MERGE_EDGE_MISMATCH: 'GE_MERGE_EDGE_MISMATCH',
   GE_MERGE_SELF_INTERSECTION: 'GE_MERGE_SELF_INTERSECTION',
 
+  // Phase 5 Slice 5 — ingest STEP -> graph (rebuild/13-translation-module-
+  // design.md §6). Verbatim string matches for translation::ReconcileErrorCode
+  // (step_reconciliation.hpp).
+  GE_TOO_FEW_PIECES: 'GE_TOO_FEW_PIECES',
+  GE_DISCONNECTED_PIECES: 'GE_DISCONNECTED_PIECES',
+  GE_NON_DEVELOPABLE_FOLD: 'GE_NON_DEVELOPABLE_FOLD',
+  GE_RECONCILE_SELF_INTERSECTION: 'GE_RECONCILE_SELF_INTERSECTION',
+  // Caught by replaying the reconciled graph through the REAL Evaluate()
+  // pose chain, not just the reconciliation module's own math — catches
+  // input pieces that are each individually well-formed but mutually
+  // inconsistent about which physical surface they reference (found in
+  // practice: a bottom/top surface mismatch between getPanelFrame calls
+  // for different panels of the same decomposed part).
+  GE_DOWNSTREAM_POSE_MISMATCH: 'GE_DOWNSTREAM_POSE_MISMATCH',
+  // import_part's own orchestration-level errors (not from the pure
+  // reconciliation module itself — these cover the kernel-measurement steps
+  // around it: nothing survived removeProtrusions'/splitBodyByBends'
+  // panel classification, or the file path itself doesn't exist/isn't STEP).
+  GE_IMPORT_NO_PANELS_FOUND: 'GE_IMPORT_NO_PANELS_FOUND',
+
   // Internal errors
   INTERNAL_ERROR: 'INTERNAL_ERROR',
 } as const;

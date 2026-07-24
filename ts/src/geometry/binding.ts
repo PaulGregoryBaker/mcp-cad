@@ -71,6 +71,8 @@ import type {
   MapToWorldResult,
   MapToFlatResult,
   ReconcileOutlinesResult,
+  NapiPanelPieceSpec,
+  ReconcilePiecesResult,
 } from './types';
 
 // ─── Addon interface ──────────────────────────────────────────────────────────
@@ -332,6 +334,9 @@ export interface GeometryAddon {
     edgeB0: NapiPoint2,
     edgeB1: NapiPoint2,
   ): ReconcileOutlinesResult;
+
+  // ── Phase 5 Slice 5: ingest STEP -> graph piece reconciliation ────────────
+  reconcilePieces?(pieces: NapiPanelPieceSpec[], thicknessMm: number): ReconcilePiecesResult;
 }
 
 export const kerfOffsetMm = {
@@ -446,6 +451,10 @@ export class GeometryBinding {
 
   hasReconcileOutlines(): boolean {
     return typeof this.addon.reconcileOutlines === 'function';
+  }
+
+  hasReconcilePieces(): boolean {
+    return typeof this.addon.reconcilePieces === 'function';
   }
 
   loadStep(filePath: string): string {
@@ -1239,6 +1248,17 @@ export class GeometryBinding {
     }
     try {
       return this.addon.reconcileOutlines(outlineA, edgeA0, edgeA1, outlineB, edgeB0, edgeB1);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  reconcilePieces(pieces: NapiPanelPieceSpec[], thicknessMm: number): ReconcilePiecesResult {
+    if (!this.addon.reconcilePieces) {
+      throw new Error('Geometry addon does not expose reconcilePieces');
+    }
+    try {
+      return this.addon.reconcilePieces(pieces, thicknessMm);
     } catch (err) {
       throw toStructuredError(err);
     }

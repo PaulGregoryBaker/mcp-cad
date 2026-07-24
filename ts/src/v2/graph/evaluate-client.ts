@@ -18,6 +18,7 @@ import type {
   NapiPoint3,
   MapToWorldResult,
   MapToFlatResult,
+  NapiPanelPieceSpec,
 } from '../../geometry/types';
 import type { GraphStore, PartGraphSnapshot } from './store';
 import type { BendRow, Point2, RegionPanelRow } from './types';
@@ -39,6 +40,7 @@ export function toNapiPartGraphSpec(snapshot: PartGraphSnapshot): NapiPartGraphS
       angleDeg: b.angleDeg,
       radiusMm: b.radiusMm,
       kFactor: b.kFactorOverride ?? part.kFactor,
+      bottomIsConcave: b.bottomIsConcave ?? undefined,
     })),
     thicknessMm: part.thicknessMm,
     anchor: { transform: part.anchor },
@@ -248,4 +250,128 @@ export function mergePartsWithBend(
     radiusMm: input.radiusMm,
     kFactor: input.kFactor,
   });
+}
+
+export interface ImportPartOptions {
+  angleThresholdDeg?: number;
+  maxThicknessMm?: number;
+  defaultThicknessMm?: number;
+  maxRecursionDepth?: number;
+}
+
+export interface ImportPartResult {
+  partId: string;
+  panelCount: number;
+  protrusionCount: number;
+  bendCount: number;
+  notes: string[];
+}
+
+/**
+ * import_part (rebuild/15-mcp-contract.md §4.1; synchronous this slice, per
+ * the approved plan's own scope decision — the async job/progress protocol
+ * is a UX layer addable later without touching this logic). Orchestrates
+ * already-existing kernel operations (Port A/B, zero new NAPI surface:
+ * loadStep, healGeometryEx, splitBodyByBends, getPanelFrame per resulting
+ * panel shell) then the one genuinely new step — reconcilePieces (pure C++,
+ * 13 §6) — then materializes the result through the SAME createPart/
+ * createBendNode path every other v2 tool uses (no privileged bulk-insert
+ * route that could drift from createBendNode's own invariants), walking
+ * `graph.bends` in the returned parent-before-child order and remapping
+ * reconcilePieces' temporary "piece{N}" correlation ids onto the real UUIDs
+ * GraphStore mints.
+ */
+export function importPart(
+  store: GraphStore,
+  filePath: string,
+  options: ImportPartOptions = {},
+): ImportPartResult {
+  const solidId = geometryBinding.loadStep(filePath);
+  geometryBinding.healGeometryEx(solidId, true, true);
+
+  const split = geometryBinding.splitBodyByBends(
+    solidId,
+    options.angleThresholdDeg ?? 35,
+    options.maxThicknessMm,
+    options.defaultThicknessMm,
+    options.maxRecursionDepth,
+  );
+
+  if (split.panel_ids.length === 0) {
+    throwError(
+      ErrorCodes.GE_IMPORT_NO_PANELS_FOUND,
+      `splitBodyByBends found no panels for ${filePath}`,
+      false,
+    );
+  }
+
+  // Protrusions (split.protrusion_ids) are detected and excluded, not
+  // represented in the graph — an explicit, documented deferral (matching
+  // Slices 1-4's own "flagged, not silently dropped" convention), not a
+  // scope decision hidden inside the code.
+  const pieces: NapiPanelPieceSpec[] = split.panel_ids.map((shellId) => {
+    const frame = geometryBinding.getPanelFrame(shellId);
+    return {
+      origin: { x: frame.originX, y: frame.originY, z: frame.originZ },
+      uAxis: { x: frame.uX, y: frame.uY, z: frame.uZ },
+      vAxis: { x: frame.vX, y: frame.vY, z: frame.vZ },
+      normal: { x: frame.normalX, y: frame.normalY, z: frame.normalZ },
+      ringLocal: frame.ring,
+      thicknessMm: frame.thicknessMm,
+    };
+  });
+
+  // One thickness per part (14 §2 D3) — real fixtures are one material;
+  // detecting/reconciling a genuine per-panel thickness mismatch is out of
+  // this slice's scope.
+  const thicknessMm = pieces[0].thicknessMm;
+  const reconciled = geometryBinding.reconcilePieces(pieces, thicknessMm);
+  if (!reconciled.ok) {
+    throwError(
+      (reconciled.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
+      reconciled.message || 'reconcilePieces failed',
+      false,
+    );
+  }
+
+  const graph = reconciled.graph;
+  const rootPart = store.createPart({
+    name: filePath,
+    outline: graph.outline.outer,
+    thicknessMm,
+    anchor: graph.anchor?.transform,
+  });
+
+  const tempIdToRealId = new Map<string, string>();
+  tempIdToRealId.set(graph.rootRegionPanelId, rootPart.rootRegionPanelId);
+
+  for (const bend of graph.bends) {
+    const parentRealId = tempIdToRealId.get(bend.parentRegionPanelId);
+    if (parentRealId === undefined) {
+      throwError(
+        ErrorCodes.INTERNAL_ERROR,
+        `reconcilePieces returned bend ${bend.id} referencing an unknown parent ${bend.parentRegionPanelId}`,
+        false,
+      );
+    }
+    const created = store.createBendNode({
+      partId: rootPart.partId,
+      parentRegionPanelId: parentRealId,
+      hingeA: bend.hingeA,
+      hingeB: bend.hingeB,
+      angleDeg: bend.angleDeg,
+      radiusMm: bend.radiusMm,
+      kFactor: bend.kFactor,
+      bottomIsConcave: bend.bottomIsConcave,
+    });
+    tempIdToRealId.set(bend.childRegionPanelId, created.childRegionPanel.regionPanelId);
+  }
+
+  return {
+    partId: rootPart.partId,
+    panelCount: split.panel_ids.length,
+    protrusionCount: split.protrusion_ids.length,
+    bendCount: graph.bends.length,
+    notes: reconciled.notes,
+  };
 }

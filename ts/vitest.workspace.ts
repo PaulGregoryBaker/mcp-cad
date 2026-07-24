@@ -67,6 +67,16 @@ export default defineWorkspace([
     test: {
       name: 'integration',
       include: ['tests/integration/**/*.test.ts'],
+      // Excludes the v2 (Phase 5) files owned by the 'v2' project below —
+      // no file runs in both projects, keeping v1's and v2's results fully
+      // separate (v1's own pre-existing failures never show up under v2).
+      exclude: [
+        'tests/integration/suite_driver_v2.integration.test.ts',
+        'tests/integration/suite_driver_v2_nets.integration.test.ts',
+        'tests/integration/suite_driver_v2_import.integration.test.ts',
+        'tests/integration/merge_bodies_with_bend.integration.test.ts',
+        'tests/integration/point_mapping_roundtrip.integration.test.ts',
+      ],
       setupFiles: ['tests/setup/integration-reset.ts'],
       // Switched from pool:'forks' (singleFork) to pool:'threads' because
       // merge_asymmetric_flat causes a hard worker crash in forked processes.
@@ -75,6 +85,41 @@ export default defineWorkspace([
       // with GE_SHELL_NOT_FOUND due to shared state — the integration-reset
       // setup file calls clearState() between files to mitigate this.
       pool: 'threads',
+    },
+  },
+  {
+    // v2 (Phase 5, rebuild/06-plan.md) integration tests: the graph-driven
+    // GraphStore/evaluate-client/v2-tools path, entirely separate from v1's
+    // dispatchTool-based "integration" project above. v1 and v2 currently
+    // coexist in the same repo (mid-rebuild) and share the same compiled
+    // geometry_addon.node, but v2's own test surface is deliberately kept
+    // green independent of v1's pre-existing state — v1's failures (all
+    // dispatchTool/Dolt-infrastructure related, none touching this path)
+    // must never block or obscure v2 development.
+    // SUITE_V2_DRIVER=1 injected here (rather than required on the command
+    // line) so `npx vitest run --project v2` is self-contained.
+    extends: './vitest.config.ts',
+    test: {
+      name: 'v2',
+      include: [
+        'tests/integration/suite_driver_v2.integration.test.ts',
+        'tests/integration/suite_driver_v2_nets.integration.test.ts',
+        'tests/integration/suite_driver_v2_import.integration.test.ts',
+        'tests/integration/merge_bodies_with_bend.integration.test.ts',
+        'tests/integration/point_mapping_roundtrip.integration.test.ts',
+      ],
+      env: { SUITE_V2_DRIVER: '1' },
+      setupFiles: ['tests/setup/integration-reset.ts'],
+      pool: 'threads',
+      // Sequential, non-interleaved file execution — matching the
+      // 'integration' project's own documented reason above: the C++
+      // addon's g_service singleton is shared across the default
+      // (concurrent) threads pool, and two files' geometry calls
+      // interleaving mid-test produces spurious GE_SHELL_NOT_FOUND. The
+      // 'integration' project relies on running as ONE big glob (files
+      // execute in observed sequence in practice); with only 5 files here
+      // the default concurrency reliably collides, so it's pinned explicitly.
+      poolOptions: { threads: { singleThread: true } },
     },
   },
   {

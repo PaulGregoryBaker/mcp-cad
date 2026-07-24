@@ -88,8 +88,14 @@ export interface BendRow {
   hingeA: Point2;
   hingeB: Point2;
   /** Signed; positive = mountain (bottom = inner/concave), negative = valley
-   * (bottom = outer/convex) — manufacturing_graph_evaluator.hpp's convention. */
+   * (bottom = outer/convex) — manufacturing_graph_evaluator.hpp's convention,
+   * used as the pivot-side fallback whenever bottomIsConcave is null. */
   angleDeg: number;
   radiusMm: number;
   kFactorOverride: number | null;
+  /** Explicit override of the angleDeg-sign-derived pivot-side
+   * classification above — see BendSpec::bottomIsConcave's own doc comment
+   * (manufacturing_graph_evaluator.hpp) for why these are independent
+   * facts. null: falls back to the angleDeg-sign rule. */
+  bottomIsConcave: boolean | null;
 }

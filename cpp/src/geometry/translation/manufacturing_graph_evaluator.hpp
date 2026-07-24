@@ -36,6 +36,7 @@
  * way, there is no simpler "sharp-only" code path to fall back to.
  */
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -98,6 +99,24 @@ struct BendSpec {
                            // inner, negative = valley/bottom-outer) — see header.
   double radiusMm = 0.0;   // bend radius, mm; 0 is a normal value, not a special case
   double kFactor = 0.0;    // neutral-fibre position as a fraction of thickness
+  // Overrides the angleDeg-sign-derived mountain/valley pivot-side
+  // classification below (BottomRadiusMm/pivotZ in the .cc): true = this
+  // bend's "bottom" (z=0) reference is the CONCAVE side of THIS fold (the
+  // pivot touches it exactly at radiusMm=0 — what "mountain" used to
+  // always mean); false = bottom is the CONVEX side (pivot always offset
+  // by thicknessMm, never touching — what "valley" used to always mean).
+  // These are two INDEPENDENT facts — angleDeg's sign records rotation
+  // direction; this records which side of the (single, part-wide) bottom
+  // reference is concave at THIS specific crease — and a part's bottom
+  // reference is not guaranteed concave at every positive-angle bend and
+  // convex at every negative-angle one (confirmed on a real mitered-corner
+  // fixture: a bend needed bottom=convex WITH a touching, r=0 pivot, a
+  // combination the old sign-only rule could not express — see
+  // step_reconciliation.cc, the only writer of this field so far).
+  // Unset (nullopt): falls back to the old isMountain=(angleDeg>=0) rule
+  // for full backward compatibility with every graph authored before this
+  // field existed (Slices 1-4, part_merge.hpp).
+  std::optional<bool> bottomIsConcave;
 };
 
 // part.anchor_* (13 §3.1) — the root 2D->3D placement transform R.

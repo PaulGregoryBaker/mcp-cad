@@ -624,12 +624,43 @@ public:
       return out;
     }
     const TopoDS_Shape& shape = it->second.shape;
+    const SolidId parentSolidId = it->second.parentSolidId;
 
-    // Largest planar face defines the panel plane.
-    double maxArea = 0.0;
-    gp_Ax3 bestAx3;
-    TopoDS_Face bestFace;
-    bool found = false;
+    // Largest planar face defines the panel plane — but a flat panel's two
+    // parallel faces (top/bottom) have IDENTICAL area, so the OLD "area >
+    // maxArea" scan (strict inequality, first-found-wins on a tie) picked
+    // whichever face OCCT's internal TopExp_Explorer traversal happened to
+    // visit first — an order that is NOT guaranteed consistent across
+    // independently-extracted sibling shells (splitBodyByBends's thin_solid
+    // mode builds each panel via its own fresh BRepAlgoAPI_Common boolean
+    // op, per rebuild investigation). Two sibling panels of the same
+    // decomposed part could silently end up referencing OPPOSITE physical
+    // surfaces, offset by a full thicknessMm — exactly the invariant 13
+    // §3.1/D3 requires callers NOT to violate ("a panel's own two faces
+    // don't have an intrinsic up/down... requires an externally-imposed,
+    // consistently-applied choice").
+    //
+    // Fix: collect every candidate planar face tied for max area (within
+    // tolerance), using faceOutwardNormal() (geometry_service_utils.cc) for
+    // an orientation-corrected normal — the OLD code read
+    // surf.Plane().Position().Direction() directly, which is NOT corrected
+    // for TopoDS_Face::Orientation()==REVERSED, a second, compounding
+    // defect. Break a genuine tie using the SAME globally-consistent
+    // reference buildFaceGroups() already uses for its own "isOuter"
+    // classification (geometry_service_sheet_metal.cc): the ORIGINAL
+    // (pre-split) solid's own centroid, reached via ShellState::parentSolidId
+    // (confirmed to stay pinned to the top-level solid through recursive
+    // decomposition, not reassigned per recursion level) — so every sibling
+    // panel of the same part consistently picks its OUTER face, not
+    // whichever face traversal order happened to favor.
+    struct PlanarCandidate {
+      double area;
+      gp_Pnt loc;
+      gp_Pnt centroid;
+      gp_Dir normal;
+      TopoDS_Face face;
+    };
+    std::vector<PlanarCandidate> candidates;
     for (TopExp_Explorer fExp(shape, TopAbs_FACE); fExp.More(); fExp.Next()) {
       TopoDS_Face face = TopoDS::Face(fExp.Current());
       BRepAdaptor_Surface surf(face, false);
@@ -637,22 +668,104 @@ public:
       GProp_GProps fp;
       BRepGProp::SurfaceProperties(face, fp);
       double area = fp.Mass();
-      if (area > maxArea) {
-        maxArea = area;
-        bestAx3 = surf.Plane().Position();
-        bestFace = face;
-        found = true;
-      }
+      if (area < 1e-6) continue;
+      gp_Vec outward = faceOutwardNormal(face);
+      candidates.push_back({area, surf.Plane().Position().Location(), fp.CentreOfMass(),
+                             gp_Dir(outward.XYZ()), face});
     }
-    if (!found || maxArea < 1e-6) {
+    if (candidates.empty()) {
       out.ok = false;
       out.errorCode = "GE_PANEL_FRAME_FAILED";
       out.message   = "Shell has no planar faces.";
       return out;
     }
 
-    gp_Pnt loc   = bestAx3.Location();
-    gp_Dir ndir  = bestAx3.Direction();
+    // A real panel's reference surface must be a genuine outer-envelope
+    // face — the farthest point of the WHOLE shell along that face's own
+    // outward normal — not an interior step. A mitered/notched corner (a
+    // real feature on real fixtures, not an extraction artifact: confirmed
+    // present on the ORIGINAL unsplit solid before any splitting) can carve
+    // a shoulder partway through a panel's thickness, leaving an interior
+    // face whose AREA rivals or even exceeds the true top/bottom face
+    // (observed: a 40150mm² shoulder face tied against the true 40300mm²
+    // top face, well within the 10% area-tie tolerance below) — the old
+    // area-only scan had no way to tell them apart and could silently
+    // reference the shoulder, offsetting the panel's whole frame by the
+    // step height. Filter to genuinely extremal faces FIRST; only fall back
+    // to the unfiltered set if literally none qualify (should not happen
+    // for a real thin panel, which always has at least one true bounding
+    // face on each side).
+    std::vector<gp_Pnt> allVertices;
+    for (TopExp_Explorer vExp(shape, TopAbs_VERTEX); vExp.More(); vExp.Next()) {
+      allVertices.push_back(BRep_Tool::Pnt(TopoDS::Vertex(vExp.Current())));
+    }
+    constexpr double kExtremalToleranceMm = 1e-3;
+    std::vector<PlanarCandidate> extremal;
+    for (const auto& c : candidates) {
+      double locProj = gp_Vec(c.loc.XYZ()).Dot(gp_Vec(c.normal.XYZ()));
+      double maxProj = -std::numeric_limits<double>::infinity();
+      for (const gp_Pnt& v : allVertices) {
+        maxProj = std::max(maxProj, gp_Vec(v.XYZ()).Dot(gp_Vec(c.normal.XYZ())));
+      }
+      if (locProj >= maxProj - kExtremalToleranceMm) extremal.push_back(c);
+    }
+    const std::vector<PlanarCandidate>& refCandidates = extremal.empty() ? candidates : extremal;
+
+    double maxArea = 0.0;
+    for (const auto& c : refCandidates) maxArea = std::max(maxArea, c.area);
+    // Real boolean-operation-generated panels (splitMode2's per-panel
+    // BRepAlgoAPI_Common extraction) measure the "same" opposing face pair
+    // with areas differing by up to a few percent (floating-point/algorithm
+    // noise in the boolean op itself, confirmed empirically: 0.37%-2.9% on
+    // a real fixture) — an exact-equality-scale tolerance would never treat
+    // them as tied, silently falling back to whichever face has the
+    // (accidentally) larger measured area with no consistency guarantee.
+    // 10% comfortably covers real-world noise while staying far below a
+    // thin panel's typical face-area/side-wall-area ratio (confirmed
+    // empirically: next-largest non-matching candidate was over 10x
+    // smaller), so it won't misidentify an unrelated side wall as "tied."
+    constexpr double kAreaTieToleranceRel = 0.10;
+    std::vector<const PlanarCandidate*> tied;
+    for (const auto& c : refCandidates) {
+      if (c.area >= maxArea * (1.0 - kAreaTieToleranceRel)) tied.push_back(&c);
+    }
+
+    const PlanarCandidate* best = tied.front();
+    if (tied.size() > 1) {
+      auto solidIt = s_.solids.find(parentSolidId);
+      if (solidIt != s_.solids.end()) {
+        GProp_GProps vp;
+        BRepGProp::VolumeProperties(solidIt->second.shape, vp);
+        gp_Pnt solidCentroid = vp.CentreOfMass();
+        double bestDot = std::numeric_limits<double>::infinity();
+        for (const auto* c : tied) {
+          // Prefer the INNER (concave) face — matches
+          // manufacturing_graph_evaluator.hpp's own "mountain fold: bottom =
+          // inner/concave" convention (13 D3/§10), so a panel's naturally-
+          // measured relationship to its neighbour comes out mountain
+          // (angleDeg >= 0, the simpler/more common case, radiusMm=0 pivot
+          // at the exact flat hinge) rather than forcing every real fold
+          // into the valley case. normal·(faceCentroid - solidCentroid) < 0
+          // means the face points TOWARD the solid's own centroid, i.e. the
+          // inner surface — the smallest (most negative) dot product wins.
+          gp_Vec toFace(solidCentroid, c->centroid);
+          double dot = gp_Vec(c->normal.XYZ()).Dot(toFace);
+          if (dot < bestDot) {
+            bestDot = dot;
+            best = c;
+          }
+        }
+      }
+      // else: no parent solid on record (e.g. called directly on an
+      // authored/imported single shell with no sibling panels to be
+      // consistent WITH) — fall back to the first candidate found; there is
+      // no external reference to disambiguate further, and correctness
+      // does not depend on it when there are no siblings.
+    }
+
+    gp_Pnt loc   = best->loc;
+    gp_Dir ndir  = best->normal;
+    TopoDS_Face bestFace = best->face;
 
     // Derive U from the panel's own boundary rather than OCCT's internal plane
     // parameterization: align it with the longest edge of the outer wire. For
@@ -679,6 +792,28 @@ public:
         bestEdgeLen2 = len2;
         U = gp_Dir(edge);
       }
+    }
+    // Re-orthogonalize U against ndir (Gram-Schmidt) before deriving V: the
+    // raw edge direction is a real 3D vector from actual (possibly not
+    // perfectly planar, per real STEP tessellation/measurement noise on a
+    // complex face) boundary geometry, with no guarantee it's EXACTLY
+    // perpendicular to ndir — only V=ndir×U is automatically orthogonal to
+    // both operands by construction; U itself is not corrected for this.
+    // Every downstream consumer (Transform3::Inverse(), used throughout
+    // step_reconciliation.cc and elsewhere) assumes a genuinely orthonormal
+    // (U, V, normal) rotation and inverts via transpose (R^-1 = R^T) — valid
+    // ONLY for a truly orthonormal R. Confirmed on a real fixture: a
+    // non-orthonormal U (small out-of-plane component on a complex,
+    // non-axis-aligned panel) silently broke that assumption, producing a
+    // position error of >1000mm several steps downstream — invisible on
+    // simple rectangular test panels, where the longest edge is naturally
+    // already in-plane, which is exactly why this went undetected until a
+    // more complex real fixture exercised it.
+    gp_Vec uRaw(U.XYZ());
+    gp_Vec nVec(ndir.XYZ());
+    gp_Vec uOrtho = uRaw - nVec * uRaw.Dot(nVec);
+    if (uOrtho.Magnitude() > 1e-9) {
+      U = gp_Dir(uOrtho);
     }
     gp_Dir V(ndir.Crossed(U));
 
