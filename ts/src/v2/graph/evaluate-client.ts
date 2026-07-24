@@ -309,6 +309,16 @@ export function importPart(
   // represented in the graph — an explicit, documented deferral (matching
   // Slices 1-4's own "flagged, not silently dropped" convention), not a
   // scope decision hidden inside the code.
+  //
+  // The standalone removeProtrusions binding (a separate NAPI call that
+  // classifies AND returns a new "cleaned" solid id) is deliberately not
+  // called here — splitBodyByBends already performs this same
+  // classification as part of its own single decomposition pass, returning
+  // protrusion_ids directly alongside panel_ids. Calling removeProtrusions
+  // in addition would redo the same work on the original solid, and risks
+  // reporting a DIFFERENT protrusion count than splitBodyByBends's own
+  // panel_ids/protrusion_ids split if the two ever used different
+  // thresholds — one classification pass, not two independent ones.
   const pieces: NapiPanelPieceSpec[] = split.panel_ids.map((shellId) => {
     const frame = geometryBinding.getPanelFrame(shellId);
     return {

@@ -194,6 +194,12 @@ export const ErrorCodes = {
   // (step_reconciliation.hpp).
   GE_TOO_FEW_PIECES: 'GE_TOO_FEW_PIECES',
   GE_DISCONNECTED_PIECES: 'GE_DISCONNECTED_PIECES',
+  // Named IMPORT_NOT_DEVELOPABLE in 15-mcp-contract.md's error taxonomy —
+  // shipped as GE_NON_DEVELOPABLE_FOLD instead, matching the GE_* naming
+  // convention every other error in this Slice 5 block uses (verbatim
+  // strings from step_reconciliation.hpp's ReconcileErrorCode). Naming
+  // drift only, not a behavior gap — left as-is rather than renamed, since
+  // this code is already shipped/tested and renaming now is pure churn.
   GE_NON_DEVELOPABLE_FOLD: 'GE_NON_DEVELOPABLE_FOLD',
   GE_RECONCILE_SELF_INTERSECTION: 'GE_RECONCILE_SELF_INTERSECTION',
   // Caught by replaying the reconciled graph through the REAL Evaluate()
