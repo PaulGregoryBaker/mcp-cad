@@ -111,6 +111,8 @@ core is proven.)*
    *(Sub-sliced in practice as 5/5B/5C: import_part core, fixture-breadth test
    coverage, cauldron adjacent-pair merge coverage — the last of which found and
    fixed a real splitBodyByBends bug, see project memory.)*
+
+
 6. **Slices 6+ REORDERED (2026-07-25, per Paul): the objective is MVP parity on v2 —
 v1 is not usable and is being decommissioned, not maintained alongside v2. Ordering
 is now driven by which of the approved 21-tool contract's (15) still-unbuilt tools
@@ -128,6 +130,7 @@ superseded by v2-native tests. Graph CRUD completion (`update_node`/`delete_node
 `move_edge`/`smooth_edge`) is real and foundational but explicitly deprioritized
 below fuse/protrusions and DXF export, per Paul: "prioritise reaching v1 parity on
 the test coverage."
+
    6. **Slice 6 (Decompose & compose, 15 §4.2) — DONE (2026-07-25).** `fuse_bodies`:
    coplanar-only first cut (matches v1's dominant flange/tab-on-wall case; the
    footprint-CONTAINED "stacked patch" case v1 also supports — different plane,
@@ -151,9 +154,24 @@ the test coverage."
    `import_part` call. 20 new v2 integration tests, 8 new C++ unit tests, 0
    regressions (TS typecheck/lint clean; C++ ctest 121 total, same 2 pre-existing
    failures as before this slice).
-   7. Slice 7: Derive & Validate resources — flat-pattern, map-2d-3d/3d-2d, drawings,
-   findings (15 §4.4) — unfold/DXF export (~12 v1 files); a part isn't
-   manufacturable without a flat pattern out.
+   7. **Slice 7 (Derive & Validate resources, 15 §4.4) — DONE (2026-07-25),
+   scoped to flat-pattern only.** map-2d-3d/map-3d-2d were already built in
+   Slice 3; a fresh count of v1's non-v2 test files (not the earlier ~12
+   estimate) found 26 depend on unfold/DXF export vs 0 on `get_drawings` and
+   only 2 on validation/findings tools — so this slice implements
+   `graph://part/{id}/flat-pattern` only, applying the same "unblock the most
+   real test-coverage migration" rule Slice 6 used. `drawings` (07's D1-D5
+   sheet set) and `findings` (validation-rule aggregation) are deferred to a
+   later slice — 0 and 2 v1 files respectively don't justify their much
+   larger design/build cost right now. Unlike v1's per-panel `get_unfold`
+   (needs a `panel_id`), a v2 part's flat pattern is naturally ONE cut
+   boundary — the part's own outline (14 §0: region panels are derived clips
+   of it, not separate cut pieces) — so there's no per-panel DXF to
+   reassemble; the resource returns that outline, one bend-line annotation
+   per bend (from the bend's own stored hinge), and a DXF export built by a
+   new, deliberately v1-independent serializer
+   (`ts/src/v2/resources/dxf.ts` — pure string formatting, no geometric
+   computation). 4 new v2 integration tests, 0 regressions.
    8. Slice 8: Graph CRUD completion — `update_node`, `delete_node`, `move_edge`,
    `smooth_edge` (15 §4.3) + a standalone `split_body_by_bends` tool (currently
    only reachable internally via `import_part`). `update_node(part, {anchor})` is

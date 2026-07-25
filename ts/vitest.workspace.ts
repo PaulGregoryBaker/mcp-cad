@@ -79,6 +79,7 @@ export default defineWorkspace([
         'tests/integration/point_mapping_roundtrip.integration.test.ts',
         'tests/integration/cauldron_adjacent_pairs.integration.test.ts',
         'tests/integration/fuse_bodies.integration.test.ts',
+        'tests/integration/flat_pattern.integration.test.ts',
       ],
       setupFiles: ['tests/setup/integration-reset.ts'],
       // Switched from pool:'forks' (singleFork) to pool:'threads' because
@@ -113,6 +114,7 @@ export default defineWorkspace([
         'tests/integration/point_mapping_roundtrip.integration.test.ts',
         'tests/integration/cauldron_adjacent_pairs.integration.test.ts',
         'tests/integration/fuse_bodies.integration.test.ts',
+        'tests/integration/flat_pattern.integration.test.ts',
       ],
       env: { SUITE_V2_DRIVER: '1' },
       setupFiles: ['tests/setup/integration-reset.ts'],
