@@ -636,10 +636,18 @@ export interface NapiBendSpec {
   bottomIsConcave?: boolean;
 }
 
+export interface NapiCircleHole {
+  center: NapiPoint2;
+  radiusMm: number;
+}
+
 export interface NapiPartGraphSpec {
   partId: string;
   rootRegionPanelId: string;
-  outline: { outer: NapiPoint2[] };
+  // polygonHoles/circleHoles (Phase 5 Slice 9a): additive, optional — every
+  // pre-Slice-9a caller that omits them gets the C++ side's own empty
+  // default (translation_binding.cc's ReadPartGraphSpec).
+  outline: { outer: NapiPoint2[]; polygonHoles?: NapiPoint2[][]; circleHoles?: NapiCircleHole[] };
   bends: NapiBendSpec[];
   thicknessMm: number;
   anchor?: { transform: NapiTransform3 };
@@ -654,6 +662,10 @@ export interface NapiRegionPanelLayout {
   // edgeBendId[i] names the bend whose zone the edge (regionOuter[i],
   // regionOuter[i+1]) borders, or "" for a true outer boundary.
   edgeBendId: string[];
+  // Phase 5 Slice 9a: holes belonging to THIS region panel (RegionOf's own
+  // containment assignment — see manufacturing_graph_evaluator.hpp).
+  regionPolygonHoles: NapiPoint2[][];
+  regionCircleHoles: NapiCircleHole[];
 }
 
 export interface NapiBridgeLayout {
@@ -772,4 +784,19 @@ export interface PolygonBooleanResult {
   // "GE_POLYGON_MULTIPLE_LOOPS" | "GE_POLYGON_HAS_HOLES" | "GE_POLYGON_NOT_COPLANAR"
   message: string;
   outer: NapiPoint2[];
+}
+
+// rebuild/06-plan.md Phase 5 Slice 9a / cut_panel.hpp. Validates a candidate
+// hole (circle or polygon) against a set of candidate region panel outlines
+// (each caller's own `regionOuter`) and returns which one (if any) fully
+// contains it. `canonicalRing` is populated only for the polygon variant
+// (winding-canonicalized to CW); the circle variant never tessellates —
+// center+radius passes straight through unchanged, this call only validates
+// containment.
+export interface CutPanelResult {
+  ok: boolean;
+  errorCode: string; // "" | "GE_DEGENERATE_OUTLINE" | "GE_CUT_HOLE_NOT_CONTAINED"
+  message: string;
+  canonicalRing: NapiPoint2[];
+  regionIndex: number;
 }

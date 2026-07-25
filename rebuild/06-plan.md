@@ -192,10 +192,37 @@ the test coverage."
    foundational kernel data-model change that deserves its own design pass
    (matching fuse_bodies's own Slice 6 plan), not a rushed addition here. 16
    new v2 integration tests, 0 regressions.
-   9. Slice 9: remaining Decompose & compose tools — `cut_panel`, `add_flange`,
-   `generate_reliefs`, `rip_edge`, `close_gap` (v1's most FE-referenced tool, 10×),
-   `split_body_by_plane`. `synthesize_joints` stays a placeholder (joint table
-   intentionally undesigned, 14 D2.5) until specifically taken up.
+   9. **Slice 9a (Decompose & compose, 15 §4.2) — DONE (2026-07-25):
+   `cut_panel(kind=circle|polygon)`.** The largest remaining v1 unblock in this
+   slice — v1's `cut_bodies` predecessor is used in 6 test files, more than
+   `add_flange`/`rip_edge` (2 each) or `generate_reliefs`/`close_gap` (0 each;
+   `split_body_by_plane`'s only 3 v1 files turned out to be transaction-
+   logging/mocked smoke tests, not real geometric assertions). Required a
+   foundational extension first: v2's outline had **zero hole support**
+   anywhere since Slice 1 by deliberate, documented scope-cut. Added
+   `polygonHoles`/`circleHoles` to the outline representation through the
+   whole pipeline — C++ kernel (`RegionOf` now assigns each hole to whichever
+   region panel's own clipped boundary fully contains it, via a new shared
+   `ring_containment.hpp` primitive), NAPI, and the TS store — plus a new
+   `cut_panel.hpp`/`.cc` translation module (containment validation +
+   winding canonicalization, both real geometric computation kept out of TS
+   per principle IV) and `ConstructPartSolid` punching each hole into the
+   actual constructed 3D solid (never just the flat pattern — P3/L1: the
+   solid must agree with the flat pattern it was cut from). Round holes are
+   an **exact center+radius primitive, never tessellated** anywhere in this
+   pipeline (unlike v1's `CutNode`, which never punched holes into any
+   reconstructed 3D solid at all) — a hole is a wholly separate, self-
+   contained closed loop, unlike K2 `smooth_edge`'s still-deferred bulge
+   segments (spliced into the outer ring's own boundary chain), so it carries
+   none of that same representational debt. `kind=slot`/`kind=boolean` are
+   deferred (no v1 precedent for slot; boolean needs a `PolygonDifference`-
+   with-holes variant). `add_flange`, `generate_reliefs`, `rip_edge`,
+   `close_gap`, `split_body_by_plane` remain for a future Slice 9b.
+   `synthesize_joints` stays a placeholder (joint table intentionally
+   undesigned, 14 D2.5) until specifically taken up. 19 new/extended C++
+   tests + 10 new v2 integration tests, 0 regressions (C++ ctest 140 total,
+   same 2 pre-existing failures; TS typecheck/lint clean, 118/118 v2 tests
+   green).
    10. Slice 10: persistence/History — `commit`, `restore`, `branch`, `merge_branch`
     (15 §4.6, B5/B7 Dolt). `GraphStore` is in-memory-per-call only today — no
     real persistence exists yet; needed for v2 to be genuinely usable past a test

@@ -1,4 +1,5 @@
 #include "manufacturing_graph_evaluator.hpp"
+#include "ring_containment.hpp"
 
 #include <cmath>
 #include <optional>
@@ -283,6 +284,10 @@ struct RegionOfResult {
   // outer[(i+1)%n]) — see the field's doc comment on RegionPanelLayout for why this
   // is computed here (where boundingBends() already exists) and nowhere else.
   std::vector<std::string> edgeBendId;
+  // Phase 5 Slice 9a: holes belonging to this region panel (see
+  // RegionPanelLayout's own doc comment).
+  std::vector<std::vector<Point2>> polygonHoles;
+  std::vector<CircleHoleSpec> circleHoles;
 };
 
 // True if point `p` lies on the infinite line through (lineA, lineB), within
@@ -318,6 +323,19 @@ std::optional<RegionOfResult> RegionOf(const PartGraphSpec& graph,
         out.edgeBendId[i] = constraint.bendId;
         break;
       }
+    }
+  }
+
+  // Phase 5 Slice 9a: a hole belongs to this region panel iff it's fully
+  // contained in THIS panel's own just-clipped `region` — the same
+  // containment primitive cut_panel's own write-time validation uses (never
+  // a second, independently-derived containment test).
+  for (const auto& hole : graph.outline.polygonHoles) {
+    if (RingFullyInsidePolygon(hole, region)) out.polygonHoles.push_back(hole);
+  }
+  for (const auto& hole : graph.outline.circleHoles) {
+    if (CircleFullyInsidePolygon(hole.center, hole.radiusMm, region)) {
+      out.circleHoles.push_back(hole);
     }
   }
   return out;
@@ -501,6 +519,8 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
     layout.regionOuter = regionOuter;
     layout.pose = pose;
     layout.edgeBendId = regionResult->edgeBendId;
+    layout.regionPolygonHoles = regionResult->polygonHoles;
+    layout.regionCircleHoles = regionResult->circleHoles;
     layout.bottomFace.reserve(regionOuter.size());
     layout.topFace.reserve(regionOuter.size());
     for (const auto& v : regionOuter) {

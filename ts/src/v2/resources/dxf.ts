@@ -5,7 +5,7 @@
  * shared with v1's own ts/src/mcp/dxf-helpers.ts: v1 is being decommissioned
  * (rebuild/06-plan.md), so v2 should not grow a dependency on it.
  */
-import type { Point2 } from '../graph/types';
+import type { Hole, Point2 } from '../graph/types';
 
 function point2dxf(p: Point2, xCode: string, yCode: string): string[] {
   return [xCode, String(p.x), yCode, String(p.y)];
@@ -40,15 +40,49 @@ export interface FlatPatternBendLine {
   hingeB: Point2;
 }
 
+/** A circular hole as a native DXF CIRCLE entity (group codes 10/20 centre +
+ * 40 radius) — matches v1's own dxf-helpers.ts convention exactly (never a
+ * tessellated polygon: a hole never needs one anywhere in v2's pipeline, see
+ * cut_panel.hpp's own header comment). */
+function circleHoleToDxfCircle(center: Point2, radiusMm: number, layer: string): string[] {
+  return [
+    '0',
+    'CIRCLE',
+    '8',
+    layer,
+    '10',
+    String(center.x),
+    '20',
+    String(center.y),
+    '40',
+    String(radiusMm),
+  ];
+}
+
+/** One hole, on the 'CUTS' layer — v1's own convention for cut/hole entities
+ * distinct from the outer boundary's default layer. */
+function holeToDxf(hole: Hole): string[] {
+  if (hole.kind === 'circle') return circleHoleToDxfCircle(hole.center, hole.radiusMm, 'CUTS');
+  return ringToDxfLwpolyline(hole.ring, 'CUTS');
+}
+
 /** A part's whole flat pattern is ONE cut boundary (14 §0 — a part has
  * exactly one outline, in the one shared frame F; region panels are derived
  * clips of it, not separate cut pieces) plus one fold-line annotation per
- * bend — unlike v1, there is no per-panel DXF to reassemble here. */
-export function buildFlatPatternDxf(outline: Point2[], bendLines: FlatPatternBendLine[]): string {
+ * bend, plus every hole cut into it — unlike v1, there is no per-panel DXF
+ * to reassemble here. */
+export function buildFlatPatternDxf(
+  outline: Point2[],
+  bendLines: FlatPatternBendLine[],
+  holes: Hole[] = [],
+): string {
   const lines: string[] = ['0', 'SECTION', '2', 'ENTITIES'];
   lines.push(...ringToDxfLwpolyline(outline, '0'));
   for (const bendLine of bendLines) {
     lines.push(...hingeToDxfLine(bendLine.hingeA, bendLine.hingeB, 'BEND'));
+  }
+  for (const hole of holes) {
+    lines.push(...holeToDxf(hole));
   }
   lines.push('0', 'ENDSEC', '0', 'EOF');
   return lines.join('\n');

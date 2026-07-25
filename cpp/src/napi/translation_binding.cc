@@ -20,6 +20,7 @@
 #include "../geometry/translation/part_merge.hpp"
 #include "../geometry/translation/step_reconciliation.hpp"
 #include "../geometry/translation/polygon_boolean.hpp"
+#include "../geometry/translation/cut_panel.hpp"
 
 #include <string>
 #include <vector>
@@ -45,6 +46,9 @@ using translation::ReconcileErrorCode;
 using translation::ReconcilePiecesResult;
 using translation::PolygonBooleanErrorCode;
 using translation::PolygonBooleanResult;
+using translation::CircleHoleSpec;
+using translation::CutPanelErrorCode;
+using translation::CutPanelResult;
 
 // svc() (the single-session-per-process GeometryService instance) is already
 // declared+defined, `static`, in geometry_binding.cc — addon.cc #includes that
@@ -117,6 +121,17 @@ const char* PolygonBooleanErrorCodeToString(PolygonBooleanErrorCode code) {
   return "GE_UNKNOWN_ERROR";
 }
 
+const char* CutPanelErrorCodeToString(CutPanelErrorCode code) {
+  switch (code) {
+    case CutPanelErrorCode::kNone: return "";
+    // Exact semantic match with the existing outline-degeneracy code — same
+    // reuse discipline as PolygonBooleanErrorCodeToString above.
+    case CutPanelErrorCode::kDegenerateInput: return "GE_DEGENERATE_OUTLINE";
+    case CutPanelErrorCode::kHoleNotContained: return "GE_CUT_HOLE_NOT_CONTAINED";
+  }
+  return "GE_UNKNOWN_ERROR";
+}
+
 // ─── JS -> C++ ────────────────────────────────────────────────────────────────
 
 Point2 ReadPoint2(const Napi::Object& obj) {
@@ -169,6 +184,28 @@ PartGraphSpec ReadPartGraphSpec(const Napi::Object& obj) {
   Napi::Array outerArr = outlineObj.Get("outer").As<Napi::Array>();
   for (uint32_t i = 0; i < outerArr.Length(); ++i) {
     graph.outline.outer.push_back(ReadPoint2(outerArr.Get(i).As<Napi::Object>()));
+  }
+  // Phase 5 Slice 9a: polygonHoles/circleHoles are additive — default empty
+  // when the JS side omits them, so every pre-Slice-9a caller/test that
+  // constructs a NapiPartGraphSpec without holes keeps working unchanged.
+  Napi::Value polygonHolesV = outlineObj.Get("polygonHoles");
+  if (polygonHolesV.IsArray()) {
+    Napi::Array polygonHolesArr = polygonHolesV.As<Napi::Array>();
+    for (uint32_t i = 0; i < polygonHolesArr.Length(); ++i) {
+      graph.outline.polygonHoles.push_back(
+          ReadPoint2Array(polygonHolesArr.Get(i).As<Napi::Array>()));
+    }
+  }
+  Napi::Value circleHolesV = outlineObj.Get("circleHoles");
+  if (circleHolesV.IsArray()) {
+    Napi::Array circleHolesArr = circleHolesV.As<Napi::Array>();
+    for (uint32_t i = 0; i < circleHolesArr.Length(); ++i) {
+      Napi::Object circleObj = circleHolesArr.Get(i).As<Napi::Object>();
+      CircleHoleSpec circle;
+      circle.center = ReadPoint2(circleObj.Get("center").As<Napi::Object>());
+      circle.radiusMm = circleObj.Get("radiusMm").As<Napi::Number>().DoubleValue();
+      graph.outline.circleHoles.push_back(circle);
+    }
   }
 
   Napi::Value anchorV = obj.Get("anchor");
@@ -270,6 +307,25 @@ Napi::Array WriteStringArray(Napi::Env env, const std::vector<std::string>& strs
   return arr;
 }
 
+Napi::Object WriteCircleHoleSpec(Napi::Env env, const CircleHoleSpec& circle) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("center", WritePoint2(env, circle.center));
+  obj.Set("radiusMm", Napi::Number::New(env, circle.radiusMm));
+  return obj;
+}
+
+Napi::Array WritePolygonHoleArray(Napi::Env env, const std::vector<std::vector<Point2>>& holes) {
+  Napi::Array arr = Napi::Array::New(env, holes.size());
+  for (size_t i = 0; i < holes.size(); ++i) arr.Set(i, WritePoint2Array(env, holes[i]));
+  return arr;
+}
+
+Napi::Array WriteCircleHoleArray(Napi::Env env, const std::vector<CircleHoleSpec>& holes) {
+  Napi::Array arr = Napi::Array::New(env, holes.size());
+  for (size_t i = 0; i < holes.size(); ++i) arr.Set(i, WriteCircleHoleSpec(env, holes[i]));
+  return arr;
+}
+
 Napi::Object WriteRegionPanelLayout(Napi::Env env, const RegionPanelLayout& panel) {
   Napi::Object obj = Napi::Object::New(env);
   obj.Set("regionPanelId", Napi::String::New(env, panel.regionPanelId));
@@ -278,6 +334,8 @@ Napi::Object WriteRegionPanelLayout(Napi::Env env, const RegionPanelLayout& pane
   obj.Set("topFace", WritePoint3Array(env, panel.topFace));
   obj.Set("pose", WriteTransform3(env, panel.pose));
   obj.Set("edgeBendId", WriteStringArray(env, panel.edgeBendId));
+  obj.Set("regionPolygonHoles", WritePolygonHoleArray(env, panel.regionPolygonHoles));
+  obj.Set("regionCircleHoles", WriteCircleHoleArray(env, panel.regionCircleHoles));
   return obj;
 }
 
@@ -345,6 +403,31 @@ EvaluateResult ReadEvaluateResult(const Napi::Object& obj) {
     Napi::Array edgeBendIdArr = panelObj.Get("edgeBendId").As<Napi::Array>();
     for (uint32_t j = 0; j < edgeBendIdArr.Length(); ++j) {
       panel.edgeBendId.push_back(edgeBendIdArr.Get(j).As<Napi::String>().Utf8Value());
+    }
+    // Phase 5 Slice 9a: this is the exact round trip ConstructPartSolid relies
+    // on (evaluatePartGraph's JS result is passed straight back in as
+    // constructPartSolid's own input) — omitting these here would silently
+    // drop every hole RegionOf already correctly computed, producing a solid
+    // that disagrees with its own flat pattern (constitution P3/L1). Default
+    // empty if absent, for the same pre-Slice-9a backward-compatibility
+    // reason as ReadPartGraphSpec above.
+    Napi::Value regionPolygonHolesV = panelObj.Get("regionPolygonHoles");
+    if (regionPolygonHolesV.IsArray()) {
+      Napi::Array holesArr = regionPolygonHolesV.As<Napi::Array>();
+      for (uint32_t j = 0; j < holesArr.Length(); ++j) {
+        panel.regionPolygonHoles.push_back(ReadPoint2Array(holesArr.Get(j).As<Napi::Array>()));
+      }
+    }
+    Napi::Value regionCircleHolesV = panelObj.Get("regionCircleHoles");
+    if (regionCircleHolesV.IsArray()) {
+      Napi::Array circleArr = regionCircleHolesV.As<Napi::Array>();
+      for (uint32_t j = 0; j < circleArr.Length(); ++j) {
+        Napi::Object circleObj = circleArr.Get(j).As<Napi::Object>();
+        CircleHoleSpec circle;
+        circle.center = ReadPoint2(circleObj.Get("center").As<Napi::Object>());
+        circle.radiusMm = circleObj.Get("radiusMm").As<Napi::Number>().DoubleValue();
+        panel.regionCircleHoles.push_back(circle);
+      }
     }
     result.panels.push_back(std::move(panel));
   }
@@ -643,6 +726,65 @@ Napi::Value FuseCoplanarPartsBinding(const Napi::CallbackInfo& info) {
   }
 }
 
+Napi::Object WriteCutPanelResult(Napi::Env env, const CutPanelResult& result) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("ok", Napi::Boolean::New(env, result.ok));
+  obj.Set("errorCode", Napi::String::New(env, CutPanelErrorCodeToString(result.errorCode)));
+  obj.Set("message", Napi::String::New(env, result.message));
+  obj.Set("canonicalRing", WritePoint2Array(env, result.canonicalRing));
+  obj.Set("regionIndex", Napi::Number::New(env, result.regionIndex));
+  return obj;
+}
+
+std::vector<std::vector<Point2>> ReadPoint2ArrayArray(const Napi::Array& arr) {
+  std::vector<std::vector<Point2>> rings;
+  rings.reserve(arr.Length());
+  for (uint32_t i = 0; i < arr.Length(); ++i) {
+    rings.push_back(ReadPoint2Array(arr.Get(i).As<Napi::Array>()));
+  }
+  return rings;
+}
+
+Napi::Value PrepareCircleCutBinding(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 3 || !info[0].IsObject() || !info[1].IsNumber() || !info[2].IsArray()) {
+    Napi::TypeError::New(
+        env, "prepareCircleCut(center: Point2, radiusMm: number, candidateRegions: Point2[][])")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    Point2 center = ReadPoint2(info[0].As<Napi::Object>());
+    double radiusMm = info[1].As<Napi::Number>().DoubleValue();
+    std::vector<std::vector<Point2>> candidateRegions =
+        ReadPoint2ArrayArray(info[2].As<Napi::Array>());
+    CutPanelResult result = translation::PrepareCircleCut(center, radiusMm, candidateRegions);
+    return WriteCutPanelResult(env, result);
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
+Napi::Value PreparePolygonCutBinding(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 2 || !info[0].IsArray() || !info[1].IsArray()) {
+    Napi::TypeError::New(env, "preparePolygonCut(ring: Point2[], candidateRegions: Point2[][])")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    std::vector<Point2> ring = ReadPoint2Array(info[0].As<Napi::Array>());
+    std::vector<std::vector<Point2>> candidateRegions =
+        ReadPoint2ArrayArray(info[1].As<Napi::Array>());
+    CutPanelResult result = translation::PreparePolygonCut(ring, candidateRegions);
+    return WriteCutPanelResult(env, result);
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
 Napi::Value ReconcilePiecesBinding(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   if (info.Length() < 2 || !info[0].IsArray() || !info[1].IsNumber()) {
@@ -672,6 +814,8 @@ void RegisterTranslationMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("polygonUnion", Napi::Function::New(env, PolygonUnionBinding));
   exports.Set("polygonDifference", Napi::Function::New(env, PolygonDifferenceBinding));
   exports.Set("fuseCoplanarParts", Napi::Function::New(env, FuseCoplanarPartsBinding));
+  exports.Set("prepareCircleCut", Napi::Function::New(env, PrepareCircleCutBinding));
+  exports.Set("preparePolygonCut", Napi::Function::New(env, PreparePolygonCutBinding));
 }
 
 }  // namespace mcp_cad

@@ -4,6 +4,8 @@
 
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepCheck_Analyzer.hxx>
@@ -15,6 +17,8 @@
 #include <TopoDS_Solid.hxx>
 #include <TopExp_Explorer.hxx>
 #include <gp_Ax1.hxx>
+#include <gp_Ax2.hxx>
+#include <gp_Circ.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
@@ -106,6 +110,49 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
         result.errorCode = "GE_POLYGON_BUILD_FAILED";
         result.message = "failed to build a face for region panel " + panel.regionPanelId;
         return result;
+      }
+
+      // Phase 5 Slice 9a: punch each hole belonging to this panel (already
+      // resolved by RegionOf, never re-derived here) into the same face,
+      // before thickening — so the constructed 3D solid matches the flat
+      // pattern it was cut from exactly (constitution P3/L1: one geometric
+      // solution, never a solid that silently disagrees with its own flat
+      // pattern). Hole wires are stored/generated with the opposite winding
+      // from the outer wire, OCCT's own convention for a face's inner loops.
+      for (const auto& holeRing : panel.regionPolygonHoles) {
+        BRepBuilderAPI_MakePolygon holePolyMaker;
+        for (const auto& v : holeRing) {
+          holePolyMaker.Add(gp_Pnt(v.x, v.y, 0.0));
+        }
+        holePolyMaker.Close();
+        if (!holePolyMaker.IsDone()) {
+          result.errorCode = "GE_POLYGON_BUILD_FAILED";
+          result.message = "failed to build a hole wire for region panel " + panel.regionPanelId;
+          return result;
+        }
+        faceMaker.Add(holePolyMaker.Wire());
+      }
+      for (const auto& circleHole : panel.regionCircleHoles) {
+        // -Z axis direction winds the circle CW as seen from +Z, opposite the
+        // outer wire's CCW — a true circular wire, never tessellated.
+        gp_Circ circ(gp_Ax2(gp_Pnt(circleHole.center.x, circleHole.center.y, 0.0),
+                             gp_Dir(0.0, 0.0, -1.0)),
+                     circleHole.radiusMm);
+        BRepBuilderAPI_MakeEdge edgeMaker(circ);
+        if (!edgeMaker.IsDone()) {
+          result.errorCode = "GE_POLYGON_BUILD_FAILED";
+          result.message = "failed to build a circular hole edge for region panel " +
+                            panel.regionPanelId;
+          return result;
+        }
+        BRepBuilderAPI_MakeWire circleWireMaker(edgeMaker.Edge());
+        if (!circleWireMaker.IsDone()) {
+          result.errorCode = "GE_POLYGON_BUILD_FAILED";
+          result.message = "failed to build a circular hole wire for region panel " +
+                            panel.regionPanelId;
+          return result;
+        }
+        faceMaker.Add(circleWireMaker.Wire());
       }
 
       BRepPrimAPI_MakePrism prism(faceMaker.Face(), gp_Vec(0.0, 0.0, thicknessMm), true);

@@ -74,6 +74,7 @@ import type {
   NapiPanelPieceSpec,
   ReconcilePiecesResult,
   PolygonBooleanResult,
+  CutPanelResult,
   NapiTransform3,
 } from './types';
 
@@ -349,6 +350,14 @@ export interface GeometryAddon {
     outlineB: NapiPoint2[],
     anchorB: NapiTransform3,
   ): PolygonBooleanResult;
+
+  // ── Phase 5 Slice 9a: cut_panel(kind=circle|polygon) ──────────────────────
+  prepareCircleCut?(
+    center: NapiPoint2,
+    radiusMm: number,
+    candidateRegions: NapiPoint2[][],
+  ): CutPanelResult;
+  preparePolygonCut?(ring: NapiPoint2[], candidateRegions: NapiPoint2[][]): CutPanelResult;
 }
 
 export const kerfOffsetMm = {
@@ -479,6 +488,14 @@ export class GeometryBinding {
 
   hasFuseCoplanarParts(): boolean {
     return typeof this.addon.fuseCoplanarParts === 'function';
+  }
+
+  hasPrepareCircleCut(): boolean {
+    return typeof this.addon.prepareCircleCut === 'function';
+  }
+
+  hasPreparePolygonCut(): boolean {
+    return typeof this.addon.preparePolygonCut === 'function';
   }
 
   loadStep(filePath: string): string {
@@ -1321,6 +1338,32 @@ export class GeometryBinding {
     }
     try {
       return this.addon.fuseCoplanarParts(outlineA, anchorA, outlineB, anchorB);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  prepareCircleCut(
+    center: NapiPoint2,
+    radiusMm: number,
+    candidateRegions: NapiPoint2[][],
+  ): CutPanelResult {
+    if (!this.addon.prepareCircleCut) {
+      throw new Error('Geometry addon does not expose prepareCircleCut');
+    }
+    try {
+      return this.addon.prepareCircleCut(center, radiusMm, candidateRegions);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  preparePolygonCut(ring: NapiPoint2[], candidateRegions: NapiPoint2[][]): CutPanelResult {
+    if (!this.addon.preparePolygonCut) {
+      throw new Error('Geometry addon does not expose preparePolygonCut');
+    }
+    try {
+      return this.addon.preparePolygonCut(ring, candidateRegions);
     } catch (err) {
       throw toStructuredError(err);
     }

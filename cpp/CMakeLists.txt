@@ -88,6 +88,8 @@ add_library(geometry_engine STATIC
   src/geometry/translation/part_merge.cc
   src/geometry/translation/step_reconciliation.cc
   src/geometry/translation/polygon_boolean.cc
+  src/geometry/translation/ring_containment.cc
+  src/geometry/translation/cut_panel.cc
   src/acl/feature_extractor.cc
 )
 
@@ -125,6 +127,8 @@ add_executable(geometry_tests
   tests/part_merge_test.cc
   tests/step_reconciliation_test.cc
   tests/polygon_boolean_test.cc
+  tests/ring_containment_test.cc
+  tests/cut_panel_test.cc
 )
 
 target_include_directories(geometry_tests PRIVATE

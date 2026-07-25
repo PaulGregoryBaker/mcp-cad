@@ -35,6 +35,24 @@ export function identityTransform(): Transform3Row {
   return { r: [1, 0, 0, 0, 1, 0, 0, 0, 1], t: [0, 0, 0] };
 }
 
+/** Phase 5 Slice 9a (cut_panel) — a hole cut into the part's outline. `circle`
+ * is an exact center+radius primitive, never tessellated into a polygon
+ * anywhere in this pipeline (a hole is a wholly separate, self-contained
+ * closed loop, unlike K2 smooth_edge's still-deferred bulge segments, which
+ * are spliced into the outer ring's own boundary chain). `polygon`'s `ring`
+ * is winding-canonicalized (CW, opposite the outer ring's CCW) by
+ * cut_panel.hpp before it's ever stored here. */
+export interface PolygonHole {
+  kind: 'polygon';
+  ring: Point2[];
+}
+export interface CircleHole {
+  kind: 'circle';
+  center: Point2;
+  radiusMm: number;
+}
+export type Hole = PolygonHole | CircleHole;
+
 /** `part` (14 §2) — owns the one flat outline, in one shared flat frame F. */
 export interface PartRow {
   partId: string;
@@ -42,6 +60,9 @@ export interface PartRow {
   rootRegionPanelId: string;
   /** The part's one flat outline (its cut profile), in F. CCW winding. */
   outline: Point2[];
+  /** Phase 5 Slice 9a: holes cut into that same outline (default []) —
+   * cut_panel is the only writer; every other v2 tool leaves this untouched. */
+  holes: Hole[];
   /** R: embeds F into world (13 §3.1). Defaults to identity. */
   anchor: Transform3Row;
   materialId: string;

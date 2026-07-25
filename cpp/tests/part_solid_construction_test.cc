@@ -154,6 +154,45 @@ TEST_CASE("ConstructPartSolid: single flat panel produces one valid manifold sol
   CHECK(SolidVolume(it->second.shape) == Approx(100.0 * 60.0 * 2.0).epsilon(0.01));
 }
 
+TEST_CASE("ConstructPartSolid: a panel with a circular hole and a polygon hole has "
+          "correctly reduced volume",
+          "[translation][construction][holes]") {
+  PartGraphSpec graph;
+  graph.partId = "with-holes";
+  graph.rootRegionPanelId = "only";
+  graph.outline.outer = {{0, 0}, {100, 0}, {100, 60}, {0, 60}};
+  graph.outline.circleHoles.push_back({/*center=*/{20.0, 30.0}, /*radiusMm=*/5.0});
+  // CW winding (opposite the outer ring's CCW) — holes are stored CW, per
+  // this codebase's own canonical convention (PreparePolygonCut/cut_panel.cc
+  // canonicalizes to this automatically; this test authors it directly).
+  graph.outline.polygonHoles.push_back({{60, 20}, {60, 30}, {70, 30}, {70, 20}});
+  graph.thicknessMm = 2.0;
+
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+  REQUIRE(layout.panels.size() == 1);
+  CHECK(layout.panels[0].regionCircleHoles.size() == 1);
+  CHECK(layout.panels[0].regionPolygonHoles.size() == 1);
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, graph.thicknessMm);
+  REQUIRE(result.ok);
+
+  auto it = state.solids.find(result.shellId);
+  REQUIRE(it != state.solids.end());
+  BRepCheck_Analyzer analyzer(it->second.shape);
+  CHECK(analyzer.IsValid());
+
+  // Full panel (100x60x2) minus the circular hole (pi*5^2 area) and the
+  // 10x10 polygon hole, each times thickness — a real oracle (not bbox),
+  // matching 09's O1-O4 standard.
+  constexpr double kPi = 3.14159265358979323846;
+  double circleAreaMm2 = kPi * 5.0 * 5.0;
+  double polygonAreaMm2 = 10.0 * 10.0;
+  double expectedVolume = (100.0 * 60.0 - circleAreaMm2 - polygonAreaMm2) * 2.0;
+  CHECK(SolidVolume(it->second.shape) == Approx(expectedVolume).epsilon(0.001));
+}
+
 // A genuinely sharp (zero-radius) fold does not keep BOTH surfaces continuous across
 // the hinge: the inside (bottomFace) stays exactly continuous by construction, but
 // the outside (topFace) either overlaps ("mountain" folds, like this one) or leaves a

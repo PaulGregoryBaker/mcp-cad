@@ -183,6 +183,9 @@ export const ErrorCodes = {
   // panel-level merge, 14 §2.1.1; move_edge's vertex_range bounds check).
   GRAPH_BEND_NOT_FOUND: 'GRAPH_BEND_NOT_FOUND',
   GRAPH_INVALID_VERTEX_RANGE: 'GRAPH_INVALID_VERTEX_RANGE',
+  // Phase 5 Slice 9a: cut_panel — a candidate hole (circle or polygon) does
+  // not fit fully within any live region panel (cut_panel.hpp).
+  GE_CUT_HOLE_NOT_CONTAINED: 'GE_CUT_HOLE_NOT_CONTAINED',
 
   // Phase 5 Slice 3 — point mapping (rebuild/13-translation-module-design.md §4/§5).
   // Verbatim string matches for translation::MapErrorCode, same convention as

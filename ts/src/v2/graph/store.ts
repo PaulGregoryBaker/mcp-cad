@@ -12,7 +12,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { BendRow, PartRow, Point2, RegionPanelRow, Transform3Row } from './types';
+import type { BendRow, Hole, PartRow, Point2, RegionPanelRow, Transform3Row } from './types';
 import { identityTransform } from './types';
 import { ErrorCodes, type ErrorCode } from '../../mcp/errors';
 
@@ -127,6 +127,21 @@ export interface MoveEdgeInput {
   newPoints: Point2[];
 }
 
+/** cut_panel (Phase 5 Slice 9a, 15 §4.2/§4.3) — the hole itself has already
+ * been validated (containment check, winding canonicalization for polygons)
+ * by geometryBinding.prepareCircleCut/preparePolygonCut; this is pure
+ * bookkeeping, appending it to the part's own holes list. `regionPanelId` is
+ * accepted for the same alias-liveness check every other mutation makes, but
+ * — unlike a bend's parent/child region panels — is NOT stored per-hole
+ * (14 D2's own feature table, which WOULD track that, is still a future
+ * slice; RegionOf's own containment check re-derives which panel a hole
+ * belongs to on every read, so no stored back-reference is needed yet). */
+export interface AddCutHoleInput {
+  partId: string;
+  regionPanelId: string;
+  hole: Hole;
+}
+
 export class GraphStoreError extends Error {
   constructor(
     message: string,
@@ -169,6 +184,7 @@ export class GraphStore {
       name: input.name,
       rootRegionPanelId,
       outline: input.outline,
+      holes: [],
       anchor: input.anchor ?? identityTransform(),
       materialId: input.materialId ?? 'default',
       thicknessMm: input.thicknessMm,
@@ -510,6 +526,36 @@ export class GraphStore {
       );
     }
     part.outline = newOutline;
+    return { part };
+  }
+
+  /** cut_panel (Phase 5 Slice 9a, 15 §4.2/§4.3). */
+  addCutHole(input: AddCutHoleInput): { part: PartRow } {
+    const part = this.parts.get(input.partId);
+    if (!part) {
+      throw new GraphStoreError(`no part with id ${input.partId}`, ErrorCodes.GRAPH_PART_NOT_FOUND);
+    }
+    if (part.mergedIntoPartId !== null) {
+      throw new GraphStoreError(
+        `part ${input.partId} is an alias (already merged), not a live part`,
+        ErrorCodes.GRAPH_PART_ALIASED,
+      );
+    }
+    const regionPanel = this.regionPanels.get(input.regionPanelId);
+    if (!regionPanel || regionPanel.partId !== input.partId) {
+      throw new GraphStoreError(
+        `no live region panel ${input.regionPanelId} on part ${input.partId}`,
+        ErrorCodes.GRAPH_REGION_PANEL_NOT_FOUND,
+      );
+    }
+    if (regionPanel.mergedIntoRegionPanelId !== null) {
+      throw new GraphStoreError(
+        `region panel ${input.regionPanelId} is an alias (merged), not a live tree member`,
+        ErrorCodes.GRAPH_REGION_PANEL_ALIASED,
+      );
+    }
+
+    part.holes.push(input.hole);
     return { part };
   }
 

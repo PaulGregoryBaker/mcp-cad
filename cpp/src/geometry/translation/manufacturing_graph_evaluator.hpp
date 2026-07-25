@@ -80,10 +80,29 @@ struct Transform3 {
 
 // ─── Input: authored graph data (mirrors rebuild/14-graph-schema.md §2's rows) ──
 
-// part_ring(kind=outline) + ring_vertex rows. Slice 1: one outer ring, no holes,
-// no bulge (straight segments only — arcs are a documented future extension).
+// An exact circular hole — center + radius, never tessellated into a polygon
+// anywhere in this pipeline (Phase 5 Slice 9a): containment against a region
+// panel is an exact point-to-line-distance test (ring_containment.hpp), and
+// ConstructPartSolid builds a true circular OCCT wire natively. Unlike a
+// polygon hole, there is no "canonicalize winding" step needed at the data
+// level (only at solid-construction time, choosing which way to wind the
+// generated wire).
+struct CircleHoleSpec {
+  Point2 center;
+  double radiusMm = 0.0;
+};
+
+// part_ring(kind=outline) + ring_vertex rows. Slice 1: one outer ring, no bulge
+// (straight segments only on the outer ring — arcs are a documented future
+// extension, K2 smooth_edge). Holes added Phase 5 Slice 9a (rebuild/06-plan.md):
+// a hole is a wholly separate, self-contained closed loop (unlike a bulge
+// segment spliced into the outer ring's own chain), so it needed no change to
+// the outer ring's own representation — polygonHoles/circleHoles are simply
+// additive, empty-by-default fields.
 struct RingSpec {
   std::vector<Point2> outer;  // CCW, per 13 §3.1's canonicalization convention
+  std::vector<std::vector<Point2>> polygonHoles;  // each CW, opposite outer's winding
+  std::vector<CircleHoleSpec> circleHoles;        // exact center+radius, never tessellated
 };
 
 // One `bend` row (14 §2): hinge CENTRELINE in F (the part's one shared flat
@@ -153,6 +172,13 @@ struct RegionPanelLayout {
   // side-wall quad only where this is "" — a non-empty entry means the neighbouring
   // material is real bridge (curved) geometry instead, see EvaluateResult::bridges.
   std::vector<std::string> edgeBendId;
+  // Phase 5 Slice 9a: the subset of graph.outline.polygonHoles/circleHoles that
+  // belong to THIS region panel — computed once, in RegionOf, via
+  // ring_containment.hpp's containment check against this panel's own
+  // just-clipped regionOuter (never re-derived independently downstream,
+  // matching edgeBendId's own "computed once, here" discipline above).
+  std::vector<std::vector<Point2>> regionPolygonHoles;
+  std::vector<CircleHoleSpec> regionCircleHoles;
 };
 
 // One bend's realized bridge geometry (13 §4.3's Z_i, the cylindrical chart) —

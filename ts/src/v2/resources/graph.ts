@@ -51,7 +51,7 @@ export const graphResourceTemplates = [
     uriTemplate: 'graph://part/{part_id}/flat-pattern{?resolution}',
     name: 'part-flat-pattern',
     description:
-      "The part's whole flat pattern (13 §3.3): one cut boundary (the part's own outline — unlike v1, there is no per-panel DXF to reassemble, since region panels are derived clips of this one outline, not separate cut pieces), one fold-line annotation per bend, and a DXF export (LWPOLYLINE on layer '0' + one LINE per bend hinge on layer 'BEND'). `resolution` (mm) is accepted for forward compatibility with 14 §2's future bulge/arc ring segments but currently has no effect — no v2 outline can contain one yet (K2 move-edge/smooth-edge is a later slice).",
+      "The part's whole flat pattern (13 §3.3): one cut boundary (the part's own outline — unlike v1, there is no per-panel DXF to reassemble, since region panels are derived clips of this one outline, not separate cut pieces), every hole cut into it (cut_panel, Phase 5 Slice 9a — circle holes stay exact center+radius, never tessellated), one fold-line annotation per bend, and a DXF export (LWPOLYLINE on layer '0', holes and cuts on layer 'CUTS' — a native CIRCLE entity for round holes, matching v1's own convention — bend hinges as LINE entities on layer 'BEND'). `resolution` (mm) is accepted for forward compatibility with 14 §2's future bulge/arc OUTER-ring segments but currently has no effect — no v2 outline can contain one yet (K2 move-edge/smooth-edge is a later slice).",
     mimeType: 'application/json',
   },
 ];
@@ -208,9 +208,10 @@ function readFlatPattern(store: GraphStore, partId: string): unknown {
     thicknessMm: part.thicknessMm,
     kFactor: part.kFactor,
     outline: part.outline,
+    holes: part.holes,
     regionPanels,
     bendLines,
-    dxf: buildFlatPatternDxf(part.outline, bendLines),
+    dxf: buildFlatPatternDxf(part.outline, bendLines, part.holes),
   };
 }
 

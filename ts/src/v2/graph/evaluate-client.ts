@@ -21,16 +21,27 @@ import type {
   NapiPanelPieceSpec,
 } from '../../geometry/types';
 import type { GraphStore, PartGraphSnapshot } from './store';
-import type { BendRow, PartRow, Point2, RegionPanelRow } from './types';
+import type { BendRow, Hole, PartRow, Point2, RegionPanelRow } from './types';
 
 /** PartGraphSnapshot (this store's row shape) -> NapiPartGraphSpec (the addon's
- * input shape) — a direct field mapping, not a re-derivation of any fact. */
+ * input shape) — a direct field mapping, not a re-derivation of any fact.
+ * `part.holes` (a tagged union) is split into the wire format's two parallel
+ * arrays here — still no geometric computation, just reshaping already-
+ * decided data (constitution v2.0.0 principle IV). */
 export function toNapiPartGraphSpec(snapshot: PartGraphSnapshot): NapiPartGraphSpec {
   const { part, bends } = snapshot;
   return {
     partId: part.partId,
     rootRegionPanelId: part.rootRegionPanelId,
-    outline: { outer: part.outline },
+    outline: {
+      outer: part.outline,
+      polygonHoles: part.holes
+        .filter((h): h is Extract<Hole, { kind: 'polygon' }> => h.kind === 'polygon')
+        .map((h) => h.ring),
+      circleHoles: part.holes
+        .filter((h): h is Extract<Hole, { kind: 'circle' }> => h.kind === 'circle')
+        .map((h) => ({ center: h.center, radiusMm: h.radiusMm })),
+    },
     bends: bends.map((b) => ({
       id: b.bendId,
       parentRegionPanelId: b.parentRegionPanelId,
@@ -303,6 +314,115 @@ export function fuseBodies(store: GraphStore, input: FuseBodiesInput): { part: P
     unionOutlineA: fused.outer,
     targetRegionPanelIdOnA: input.targetRegionPanelId,
   });
+}
+
+export interface CutPanelInput {
+  partId: string;
+  kind: 'circle' | 'polygon';
+  circle?: { center: Point2; radiusMm: number };
+  polygonRing?: Point2[];
+  /** Optional: narrow the containment search to just this one region panel
+   * instead of every live one. */
+  regionPanelId?: string;
+}
+
+/**
+ * cut_panel(kind=circle|polygon) (Phase 5 Slice 9a, rebuild/06-plan.md,
+ * 15 §4.2). Evaluates the part fresh to get every live region panel's own
+ * `regionOuter` as the candidate containment set, calls the matching C++
+ * primitive (tessellation-free for circles, winding-canonicalization for
+ * polygons — both real geometric computation, constitution v2.0.0 principle
+ * IV, so neither happens here), maps the returned candidate index back to
+ * the real regionPanelId, then applies the pure bookkeeping mutation.
+ */
+export function cutPanel(
+  store: GraphStore,
+  input: CutPanelInput,
+): { part: PartRow; regionPanelId: string } {
+  const part = store.getPart(input.partId);
+  if (!part) {
+    throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${input.partId}`, false);
+  }
+
+  const evaluated = evaluatePart(store, input.partId);
+  if (!evaluated.ok) {
+    throwError(
+      (evaluated.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
+      evaluated.message || `evaluatePartGraph failed for part ${input.partId}`,
+      false,
+    );
+  }
+  const candidatePanels =
+    input.regionPanelId !== undefined
+      ? evaluated.panels.filter((p) => p.regionPanelId === input.regionPanelId)
+      : evaluated.panels;
+  if (input.regionPanelId !== undefined && candidatePanels.length === 0) {
+    throwError(
+      ErrorCodes.GRAPH_REGION_PANEL_NOT_FOUND,
+      `no live region panel ${input.regionPanelId} on part ${input.partId}`,
+      false,
+    );
+  }
+  const candidateRegions = candidatePanels.map((p) => p.regionOuter);
+
+  let hole: Hole;
+  let regionIndex: number;
+  let errorCode: string;
+  let errorMessage: string;
+  let ok: boolean;
+  if (input.kind === 'circle') {
+    const circle = requireCircleParams(input);
+    const result = geometryBinding.prepareCircleCut(
+      circle.center,
+      circle.radiusMm,
+      candidateRegions,
+    );
+    ({ ok, errorCode, message: errorMessage, regionIndex } = result);
+    hole = { kind: 'circle', center: circle.center, radiusMm: circle.radiusMm };
+  } else {
+    const ring = requirePolygonRing(input);
+    const result = geometryBinding.preparePolygonCut(ring, candidateRegions);
+    ({ ok, errorCode, message: errorMessage, regionIndex } = result);
+    hole = { kind: 'polygon', ring: result.canonicalRing };
+  }
+
+  if (!ok) {
+    throwError(
+      (errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
+      errorMessage || 'cut_panel failed',
+      true,
+    );
+  }
+
+  const targetRegionPanelId = candidatePanels[regionIndex]?.regionPanelId;
+  if (!targetRegionPanelId) {
+    throwError(
+      ErrorCodes.INTERNAL_ERROR,
+      `cut_panel returned an out-of-range regionIndex ${regionIndex}`,
+      false,
+    );
+  }
+
+  const { part: updated } = store.addCutHole({
+    partId: input.partId,
+    regionPanelId: targetRegionPanelId,
+    hole,
+  });
+  return { part: updated, regionPanelId: targetRegionPanelId };
+}
+
+function requireCircleParams(input: CutPanelInput): { center: Point2; radiusMm: number } {
+  if (!input.circle) {
+    throwError(ErrorCodes.INTERNAL_ERROR, 'cut_panel(kind=circle) requires a circle spec', false);
+  }
+  return input.circle;
+}
+
+function requirePolygonRing(input: CutPanelInput): Point2[] {
+  if (!input.polygonRing) {
+    throwError(ErrorCodes.INTERNAL_ERROR, 'cut_panel(kind=polygon) requires a polygon_ring', false);
+  }
+  return input.polygonRing;
 }
 
 export interface ImportPartOptions {

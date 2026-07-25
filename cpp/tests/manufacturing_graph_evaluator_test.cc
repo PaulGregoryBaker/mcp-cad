@@ -616,6 +616,36 @@ TEST_CASE("GraphEvaluator: regionOf subdivides the outline into equal segments",
   }
 }
 
+TEST_CASE("GraphEvaluator: a hole is assigned only to the region panel that contains it",
+          "[translation][region][holes]") {
+  // A 2-segment strip: seg0 spans roughly F in [0,100], seg1 roughly [100,200]
+  // (bend near F=100, zero radius/k-factor -> negligible bend allowance).
+  auto graph = MakeStrip(2, 100.0, 50.0, /*thicknessMm=*/1.0, 90.0);
+
+  // A circle well within seg0's own territory, far from the hinge.
+  graph.outline.circleHoles.push_back({/*center=*/{20.0, 25.0}, /*radiusMm=*/5.0});
+  // A polygon hole well within seg1's own territory.
+  graph.outline.polygonHoles.push_back(
+      {{150.0, 10.0}, {160.0, 10.0}, {160.0, 20.0}, {150.0, 20.0}});
+
+  EvaluateResult result = Evaluate(graph);
+  REQUIRE(result.ok);
+
+  const RegionPanelLayout* seg0 = nullptr;
+  const RegionPanelLayout* seg1 = nullptr;
+  for (auto& p : result.panels) {
+    if (p.regionPanelId == "seg0") seg0 = &p;
+    if (p.regionPanelId == "seg1") seg1 = &p;
+  }
+  REQUIRE(seg0 != nullptr);
+  REQUIRE(seg1 != nullptr);
+
+  CHECK(seg0->regionCircleHoles.size() == 1);
+  CHECK(seg0->regionPolygonHoles.empty());
+  CHECK(seg1->regionCircleHoles.empty());
+  CHECK(seg1->regionPolygonHoles.size() == 1);
+}
+
 TEST_CASE("GraphEvaluator: boundingBends clip order does not affect the result",
           "[translation][region]") {
   // A middle segment of a longer chain has two touching bends (one as child, one as

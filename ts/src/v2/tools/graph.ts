@@ -15,6 +15,7 @@ import {
   importPart,
   fuseBodies,
   splitBodyByBendsStandalone,
+  cutPanel,
 } from '../graph/evaluate-client';
 import { throwError, ErrorCodes } from '../../mcp/errors';
 import {
@@ -249,6 +250,47 @@ export const graphToolDefinitions = [
       required: ['file'],
     },
   },
+  {
+    name: 'cut_panel',
+    description:
+      "Cut a hole into a part's outline (rebuild/06 Slice 9a, rebuild/15 §4.2). kind=circle: an exact center+radius primitive — never tessellated into a polygon, all the way through to the constructed 3D solid (a true OCCT circular wire). kind=polygon: an exact ring, winding-canonicalized automatically. The hole is validated against every live region panel's own current outline and must fit fully within exactly one (optionally narrowed to region_panel_id); it must not straddle a bend zone. kind=slot and kind=boolean are not supported this slice (see rebuild/06-plan.md's own deferred-scope note).",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        part_id: { type: 'string' },
+        kind: { type: 'string', enum: ['circle', 'polygon'] },
+        circle: {
+          type: 'object',
+          description: 'Required when kind=circle.',
+          properties: {
+            center: {
+              type: 'object',
+              properties: { x: { type: 'number' }, y: { type: 'number' } },
+              required: ['x', 'y'],
+            },
+            radius_mm: { type: 'number', exclusiveMinimum: 0 },
+          },
+          required: ['center', 'radius_mm'],
+        },
+        polygon_ring: {
+          type: 'array',
+          description: 'Required when kind=polygon. At least 3 {x,y} points.',
+          items: {
+            type: 'object',
+            properties: { x: { type: 'number' }, y: { type: 'number' } },
+            required: ['x', 'y'],
+          },
+          minItems: 3,
+        },
+        region_panel_id: {
+          type: 'string',
+          description:
+            "Optional: narrow the containment search to just one of the part's region panels.",
+        },
+      },
+      required: ['part_id', 'kind'],
+    },
+  },
 ];
 
 export function dispatchGraphTool(
@@ -275,6 +317,8 @@ export function dispatchGraphTool(
       return handleMoveEdge(store, args);
     case 'split_body_by_bends':
       return handleSplitBodyByBends(args);
+    case 'cut_panel':
+      return handleCutPanel(store, args);
     default:
       throwError(ErrorCodes.INTERNAL_ERROR, `Unknown v2 tool: ${name}`, false);
   }
@@ -595,4 +639,51 @@ function handleSplitBodyByBends(args: Record<string, unknown>): {
     panels: result.panels.map(toJson),
     protrusions: result.protrusions.map(toJson),
   };
+}
+
+function handleCutPanel(
+  store: GraphStore,
+  args: Record<string, unknown>,
+): { part_id: string; region_panel_id: string } {
+  const partId = requireString(args, 'part_id');
+  const kind = requireString(args, 'kind');
+  if (kind !== 'circle' && kind !== 'polygon') {
+    throwError(
+      ErrorCodes.INTERNAL_ERROR,
+      `Unsupported cut_panel kind "${kind}" — Slice 9a supports "circle" and "polygon" only ` +
+        `("slot" and "boolean" are deferred, see rebuild/06-plan.md)`,
+      false,
+    );
+  }
+  const regionPanelId = optString(args, 'region_panel_id');
+
+  let circle: { center: { x: number; y: number }; radiusMm: number } | undefined;
+  if (kind === 'circle') {
+    const circleArg = args['circle'];
+    if (typeof circleArg !== 'object' || circleArg === null) {
+      throwError(ErrorCodes.INTERNAL_ERROR, 'cut_panel(kind=circle) requires a circle spec', false);
+    }
+    const circleObj = circleArg as Record<string, unknown>;
+    circle = {
+      center: requirePoint2(circleObj, 'center'),
+      radiusMm: requireNumber(circleObj, 'radius_mm'),
+    };
+  }
+  const polygonRing = kind === 'polygon' ? requirePoint2Array(args, 'polygon_ring') : undefined;
+
+  try {
+    const { part, regionPanelId: resolvedRegionPanelId } = cutPanel(store, {
+      partId,
+      kind,
+      circle,
+      polygonRing,
+      regionPanelId,
+    });
+    return { part_id: part.partId, region_panel_id: resolvedRegionPanelId };
+  } catch (err) {
+    if (err instanceof GraphStoreError) {
+      throwError(err.code, err.message, false);
+    }
+    throw err;
+  }
 }
