@@ -756,3 +756,20 @@ export interface ReconcilePiecesResult {
   // created single-panel Parts built from the same input pieces.
   pieceEdgeMatches: Array<{ parentEdgeIndex: number; childEdgeIndex: number }>;
 }
+
+// rebuild/06-plan.md Phase 5 Slice 6 / polygon_boolean.hpp. A general 2D
+// polygon union/difference — shared by GraphStore.fuseBodies (union) and
+// GraphStore.extractProtrusions (difference, subtracting a protrusion's
+// footprint from its host). Deliberately OCCT-backed under the hood (unlike
+// step_reconciliation/part_merge's pure math) — see polygon_boolean.hpp's
+// own header comment — but the TS-facing shape is still plain Point2 arrays
+// in and out. First-cut scope: the result must be exactly one simple closed
+// loop with no holes and no disjoint pieces, or this returns a typed error
+// rather than silently dropping a loop.
+export interface PolygonBooleanResult {
+  ok: boolean;
+  errorCode: string; // "" | "GE_POLYGON_DEGENERATE_INPUT" | "GE_POLYGON_BOOLEAN_FAILED" |
+  // "GE_POLYGON_MULTIPLE_LOOPS" | "GE_POLYGON_HAS_HOLES" | "GE_POLYGON_NOT_COPLANAR"
+  message: string;
+  outer: NapiPoint2[];
+}

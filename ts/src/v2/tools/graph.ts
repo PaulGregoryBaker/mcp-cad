@@ -10,7 +10,7 @@
  */
 
 import { GraphStore, GraphStoreError } from '../graph/store';
-import { mergePartsWithBend, importPart } from '../graph/evaluate-client';
+import { mergePartsWithBend, importPart, fuseBodies } from '../graph/evaluate-client';
 import { throwError, ErrorCodes } from '../../mcp/errors';
 import {
   requireString,
@@ -131,7 +131,7 @@ export const graphToolDefinitions = [
   {
     name: 'import_part',
     description:
-      'Ingest a STEP file into a v2 manufacturing graph (rebuild/15 §4.1, Level C): heal, decompose into flat panel pieces (Port A/B), then reconcile them into one outline + bend tree (13 §6) — the same graph shape create_part/create_node build directly. Synchronous this slice (no job/progress polling yet). Protrusions are detected and excluded from the graph, not represented.',
+      "Ingest a STEP file into a v2 manufacturing graph (rebuild/15 §4.1, Level C): heal, decompose into flat panel pieces (Port A/B), then reconcile them into one outline + bend tree (13 §6) — the same graph shape create_part/create_node build directly. Synchronous this slice (no job/progress polling yet). Each detected protrusion (flange/tab) becomes its own simple, independent v2 Part — see protrusion_part_ids in the result — rather than being represented within the main part's own outline/bend tree.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -146,6 +146,24 @@ export const graphToolDefinitions = [
         max_recursion_depth: { type: 'number' },
       },
       required: ['file'],
+    },
+  },
+  {
+    name: 'fuse_bodies',
+    description:
+      "Absorb a simple flat part B (no bends of its own) into part A by boolean-unioning their outlines (rebuild/06 Slice 6, rebuild/15 §4.2). Coplanar-only first cut: A and B's own anchors must place them in the same plane, touching or overlapping. Unlike merge_bodies_with_bend, no new bend is created and no edge_refs are needed — the two parts are matched by their own 3D anchors, not a caller-specified seam. B is aliased via merged_into_part_id, never deleted.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        part_a_id: { type: 'string' },
+        part_b_id: { type: 'string' },
+        target_region_panel_id: {
+          type: 'string',
+          description:
+            "Which of A's region panels the fused material belongs to. Defaults to A's root region panel.",
+        },
+      },
+      required: ['part_a_id', 'part_b_id'],
     },
   },
 ];
@@ -164,6 +182,8 @@ export function dispatchGraphTool(
       return handleMergeBodiesWithBend(store, args);
     case 'import_part':
       return handleImportPart(store, args);
+    case 'fuse_bodies':
+      return handleFuseBodies(store, args);
     default:
       throwError(ErrorCodes.INTERNAL_ERROR, `Unknown v2 tool: ${name}`, false);
   }
@@ -267,6 +287,22 @@ function handleMergeBodiesWithBend(
   }
 }
 
+function handleFuseBodies(store: GraphStore, args: Record<string, unknown>): { part_id: string } {
+  const partAId = requireString(args, 'part_a_id');
+  const partBId = requireString(args, 'part_b_id');
+  const targetRegionPanelId = optString(args, 'target_region_panel_id');
+
+  try {
+    const { part } = fuseBodies(store, { partAId, partBId, targetRegionPanelId });
+    return { part_id: part.partId };
+  } catch (err) {
+    if (err instanceof GraphStoreError) {
+      throwError(err.code, err.message, false);
+    }
+    throw err;
+  }
+}
+
 function handleImportPart(
   store: GraphStore,
   args: Record<string, unknown>,
@@ -276,6 +312,7 @@ function handleImportPart(
   protrusion_count: number;
   bend_count: number;
   notes: string[];
+  protrusion_part_ids: string[];
 } {
   const file = requireString(args, 'file');
   const angleThresholdDeg = optNumber(args, 'angle_threshold_deg');
@@ -296,6 +333,7 @@ function handleImportPart(
       protrusion_count: result.protrusionCount,
       bend_count: result.bendCount,
       notes: result.notes,
+      protrusion_part_ids: result.protrusionPartIds,
     };
   } catch (err) {
     if (err instanceof GraphStoreError) {

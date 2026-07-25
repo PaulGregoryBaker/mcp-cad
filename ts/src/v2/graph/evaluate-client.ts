@@ -21,7 +21,7 @@ import type {
   NapiPanelPieceSpec,
 } from '../../geometry/types';
 import type { GraphStore, PartGraphSnapshot } from './store';
-import type { BendRow, Point2, RegionPanelRow } from './types';
+import type { BendRow, PartRow, Point2, RegionPanelRow } from './types';
 
 /** PartGraphSnapshot (this store's row shape) -> NapiPartGraphSpec (the addon's
  * input shape) — a direct field mapping, not a re-derivation of any fact. */
@@ -252,6 +252,59 @@ export function mergePartsWithBend(
   });
 }
 
+export interface FuseBodiesInput {
+  partAId: string;
+  partBId: string;
+  targetRegionPanelId?: string;
+}
+
+/**
+ * fuse_bodies (Phase 5 Slice 6, first-cut scope — rebuild/06-plan.md):
+ * coplanar-only fuse of a simple flat part B onto part A. Unlike
+ * mergePartsWithBend, no edge_refs are needed — the two parts are matched
+ * by their own already-known 3D anchors, not a specific seam edge — so this
+ * calls `geometryBinding.fuseCoplanarParts` directly on each part's stored
+ * outline/anchor (no evaluatePart round trip needed first: outline/anchor
+ * are plain stored PartRow fields, not derived per-region-panel data).
+ * `fuseCoplanarParts` itself performs the anchor-relative transform and
+ * coplanarity check in C++ (constitution v2.0.0 principle IV — no
+ * geometric computation in TypeScript, not even the relative-transform
+ * math). A geometry failure (not coplanar, disjoint, would produce a hole)
+ * is a normal, typed, retryable outcome — same convention as
+ * mergePartsWithBend's own reconcileOutlines failure path.
+ */
+export function fuseBodies(store: GraphStore, input: FuseBodiesInput): { part: PartRow } {
+  const partA = store.getPart(input.partAId);
+  if (!partA) {
+    throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${input.partAId}`, false);
+  }
+  const partB = store.getPart(input.partBId);
+  if (!partB) {
+    throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${input.partBId}`, false);
+  }
+
+  const fused = geometryBinding.fuseCoplanarParts(
+    partA.outline,
+    partA.anchor,
+    partB.outline,
+    partB.anchor,
+  );
+  if (!fused.ok) {
+    throwError(
+      (fused.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
+      fused.message || 'fuseCoplanarParts failed',
+      true,
+    );
+  }
+
+  return store.fuseBodies({
+    partAId: input.partAId,
+    partBId: input.partBId,
+    unionOutlineA: fused.outer,
+    targetRegionPanelIdOnA: input.targetRegionPanelId,
+  });
+}
+
 export interface ImportPartOptions {
   angleThresholdDeg?: number;
   maxThicknessMm?: number;
@@ -265,6 +318,15 @@ export interface ImportPartResult {
   protrusionCount: number;
   bendCount: number;
   notes: string[];
+  /** One v2 Part id per detected protrusion (Phase 5 Slice 6 — rebuild/06-
+   * plan.md), in the same order as splitBodyByBends's own protrusion_ids.
+   * The "protrusion metadata/flag" this slice's remove_protrusions design
+   * settled on: rather than a standalone tool re-running detection on an
+   * already-existing v2 Part (which has no backing OCCT shell to detect
+   * from — see this function's own doc comment), each protrusion becomes
+   * its own ordinary, simple v2 Part here, while a live shell still exists
+   * to measure it from. Empty when the fixture has no protrusions. */
+  protrusionPartIds: string[];
 }
 
 /**
@@ -305,10 +367,11 @@ export function importPart(
     );
   }
 
-  // Protrusions (split.protrusion_ids) are detected and excluded, not
-  // represented in the graph — an explicit, documented deferral (matching
-  // Slices 1-4's own "flagged, not silently dropped" convention), not a
-  // scope decision hidden inside the code.
+  // Protrusions (split.protrusion_ids) are each turned into their own
+  // simple, independent v2 Part below (Phase 5 Slice 6) — NOT merged into
+  // the host's own reconciled outline/pieces array, matching v1's own
+  // "each protrusion is its own part/graph, not a flagged sub-region"
+  // precedent (see this session's remove_protrusions design note).
   //
   // The standalone removeProtrusions binding (a separate NAPI call that
   // classifies AND returns a new "cleaned" solid id) is deliberately not
@@ -318,7 +381,12 @@ export function importPart(
   // in addition would redo the same work on the original solid, and risks
   // reporting a DIFFERENT protrusion count than splitBodyByBends's own
   // panel_ids/protrusion_ids split if the two ever used different
-  // thresholds — one classification pass, not two independent ones.
+  // thresholds — one classification pass, not two independent ones. This is
+  // also why a separate standalone remove_protrusions MCP tool doesn't
+  // exist in v2: a v2 Part has no backing OCCT shell once created (mutations
+  // never touch OCCT), so there is nothing for a later, separate call to
+  // re-detect protrusions FROM — this import-time extraction, while a live
+  // shell still exists, is the only point protrusions can ever be found.
   const pieces: NapiPanelPieceSpec[] = split.panel_ids.map((shellId) => {
     const frame = geometryBinding.getPanelFrame(shellId);
     return {
@@ -377,11 +445,48 @@ export function importPart(
     tempIdToRealId.set(bend.childRegionPanelId, created.childRegionPanel.regionPanelId);
   }
 
+  // Each protrusion becomes its own simple (zero-bend) v2 Part — same
+  // getPanelFrame-measure + reconcilePieces(n=1) + createPart pattern the
+  // root panel above used, reused rather than re-derived (P3 — one
+  // geometric solution). reconcilePieces(n=1) still matters here even
+  // though there is no splicing to do: it canonicalizes winding and
+  // validates the single ring exactly like the main panels went through,
+  // so a protrusion Part's outline is held to the same invariant as any
+  // other v2 Part's, not a raw unvalidated copy of getPanelFrame's output.
+  const protrusionPartIds: string[] = [];
+  for (const shellId of split.protrusion_ids) {
+    const frame = geometryBinding.getPanelFrame(shellId);
+    const piece: NapiPanelPieceSpec = {
+      origin: { x: frame.originX, y: frame.originY, z: frame.originZ },
+      uAxis: { x: frame.uX, y: frame.uY, z: frame.uZ },
+      vAxis: { x: frame.vX, y: frame.vY, z: frame.vZ },
+      normal: { x: frame.normalX, y: frame.normalY, z: frame.normalZ },
+      ringLocal: frame.ring,
+      thicknessMm: frame.thicknessMm,
+    };
+    const reconciledProtrusion = geometryBinding.reconcilePieces([piece], frame.thicknessMm);
+    if (!reconciledProtrusion.ok) {
+      throwError(
+        (reconciledProtrusion.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
+        reconciledProtrusion.message || `reconcilePieces failed for protrusion ${shellId}`,
+        false,
+      );
+    }
+    const protrusionPart = store.createPart({
+      name: `${filePath}#protrusion`,
+      outline: reconciledProtrusion.graph.outline.outer,
+      thicknessMm: frame.thicknessMm,
+      anchor: reconciledProtrusion.graph.anchor?.transform,
+    });
+    protrusionPartIds.push(protrusionPart.partId);
+  }
+
   return {
     partId: rootPart.partId,
     panelCount: split.panel_ids.length,
     protrusionCount: split.protrusion_ids.length,
     bendCount: graph.bends.length,
     notes: reconciled.notes,
+    protrusionPartIds,
   };
 }

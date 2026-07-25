@@ -73,6 +73,8 @@ import type {
   ReconcileOutlinesResult,
   NapiPanelPieceSpec,
   ReconcilePiecesResult,
+  PolygonBooleanResult,
+  NapiTransform3,
 } from './types';
 
 // ─── Addon interface ──────────────────────────────────────────────────────────
@@ -337,6 +339,16 @@ export interface GeometryAddon {
 
   // ── Phase 5 Slice 5: ingest STEP -> graph piece reconciliation ────────────
   reconcilePieces?(pieces: NapiPanelPieceSpec[], thicknessMm: number): ReconcilePiecesResult;
+
+  // ── Phase 5 Slice 6: fuse_bodies / remove_protrusions polygon boolean ─────
+  polygonUnion?(ringA: NapiPoint2[], ringB: NapiPoint2[]): PolygonBooleanResult;
+  polygonDifference?(ringA: NapiPoint2[], ringB: NapiPoint2[]): PolygonBooleanResult;
+  fuseCoplanarParts?(
+    outlineA: NapiPoint2[],
+    anchorA: NapiTransform3,
+    outlineB: NapiPoint2[],
+    anchorB: NapiTransform3,
+  ): PolygonBooleanResult;
 }
 
 export const kerfOffsetMm = {
@@ -455,6 +467,18 @@ export class GeometryBinding {
 
   hasReconcilePieces(): boolean {
     return typeof this.addon.reconcilePieces === 'function';
+  }
+
+  hasPolygonUnion(): boolean {
+    return typeof this.addon.polygonUnion === 'function';
+  }
+
+  hasPolygonDifference(): boolean {
+    return typeof this.addon.polygonDifference === 'function';
+  }
+
+  hasFuseCoplanarParts(): boolean {
+    return typeof this.addon.fuseCoplanarParts === 'function';
   }
 
   loadStep(filePath: string): string {
@@ -1259,6 +1283,44 @@ export class GeometryBinding {
     }
     try {
       return this.addon.reconcilePieces(pieces, thicknessMm);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  polygonUnion(ringA: NapiPoint2[], ringB: NapiPoint2[]): PolygonBooleanResult {
+    if (!this.addon.polygonUnion) {
+      throw new Error('Geometry addon does not expose polygonUnion');
+    }
+    try {
+      return this.addon.polygonUnion(ringA, ringB);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  polygonDifference(ringA: NapiPoint2[], ringB: NapiPoint2[]): PolygonBooleanResult {
+    if (!this.addon.polygonDifference) {
+      throw new Error('Geometry addon does not expose polygonDifference');
+    }
+    try {
+      return this.addon.polygonDifference(ringA, ringB);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  fuseCoplanarParts(
+    outlineA: NapiPoint2[],
+    anchorA: NapiTransform3,
+    outlineB: NapiPoint2[],
+    anchorB: NapiTransform3,
+  ): PolygonBooleanResult {
+    if (!this.addon.fuseCoplanarParts) {
+      throw new Error('Geometry addon does not expose fuseCoplanarParts');
+    }
+    try {
+      return this.addon.fuseCoplanarParts(outlineA, anchorA, outlineB, anchorB);
     } catch (err) {
       throw toStructuredError(err);
     }

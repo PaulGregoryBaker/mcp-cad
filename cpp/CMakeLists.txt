@@ -87,6 +87,7 @@ add_library(geometry_engine STATIC
   src/geometry/translation/point_mapping.cc
   src/geometry/translation/part_merge.cc
   src/geometry/translation/step_reconciliation.cc
+  src/geometry/translation/polygon_boolean.cc
   src/acl/feature_extractor.cc
 )
 
@@ -123,6 +124,7 @@ add_executable(geometry_tests
   tests/point_mapping_test.cc
   tests/part_merge_test.cc
   tests/step_reconciliation_test.cc
+  tests/polygon_boolean_test.cc
 )
 
 target_include_directories(geometry_tests PRIVATE

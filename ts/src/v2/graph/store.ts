@@ -61,6 +61,26 @@ export interface MergePartsWithBendInput {
   kFactor?: number;
 }
 
+/**
+ * fuse_bodies (Phase 5 Slice 6, first-cut scope — rebuild/06-plan.md):
+ * absorbs a simple flat part B into part A by replacing A's outline with the
+ * ALREADY-COMPUTED 2D union (real geometry, computed once in C++ via
+ * `geometryBinding.fuseCoplanarParts` — this store never derives it, only
+ * applies the result, same discipline as `mergePartsWithBend`). Unlike a
+ * bend-join, no new bend row is created (there is no fold — B's material
+ * becomes part of A's SAME shared flat frame): B's own root region panel is
+ * aliased directly onto A's target region panel instead.
+ */
+export interface FuseBodiesInput {
+  partAId: string;
+  partBId: string;
+  unionOutlineA: Point2[];
+  /** Which of A's (possibly several, if A has its own bends) region panels
+   * the fused material logically belongs to. Defaults to A's root region
+   * panel. */
+  targetRegionPanelIdOnA?: string;
+}
+
 export class GraphStoreError extends Error {
   constructor(
     message: string,
@@ -230,6 +250,81 @@ export class GraphStore {
       radiusMm: input.radiusMm,
       kFactor: input.kFactor,
     });
+  }
+
+  /**
+   * fuse_bodies (Phase 5 Slice 6): (1) replace A's outline with the
+   * already-unioned outline, (2) alias B's part row AND its root region
+   * panel row directly onto A / A's target region panel — no re-parenting
+   * loop and no new bend, since B (first-cut scope: guaranteed bend-free,
+   * checked below) contributes no rows into A's tree beyond its own now-
+   * absorbed outline material. B is never deleted.
+   */
+  fuseBodies(input: FuseBodiesInput): { part: PartRow } {
+    const partA = this.parts.get(input.partAId);
+    if (!partA) {
+      throw new GraphStoreError(
+        `no part with id ${input.partAId}`,
+        ErrorCodes.GRAPH_PART_NOT_FOUND,
+      );
+    }
+    const partB = this.parts.get(input.partBId);
+    if (!partB) {
+      throw new GraphStoreError(
+        `no part with id ${input.partBId}`,
+        ErrorCodes.GRAPH_PART_NOT_FOUND,
+      );
+    }
+    if (partA.mergedIntoPartId !== null) {
+      throw new GraphStoreError(
+        `part ${input.partAId} is an alias (already merged), not a live part`,
+        ErrorCodes.GRAPH_PART_ALIASED,
+      );
+    }
+    if (partB.mergedIntoPartId !== null) {
+      throw new GraphStoreError(
+        `part ${input.partBId} is an alias (already merged), not a live part`,
+        ErrorCodes.GRAPH_PART_ALIASED,
+      );
+    }
+
+    const bHasBends = [...this.bends.values()].some((b) => b.partId === input.partBId);
+    if (bHasBends) {
+      throw new GraphStoreError(
+        `part ${input.partBId} has its own bends — fuse_bodies' first-cut scope only ` +
+          `supports fusing a simple flat part (see rebuild/06-plan.md Slice 6)`,
+        ErrorCodes.GRAPH_FUSE_PART_B_NOT_SIMPLE,
+      );
+    }
+
+    const targetRegionPanelId = input.targetRegionPanelIdOnA ?? partA.rootRegionPanelId;
+    const targetPanel = this.regionPanels.get(targetRegionPanelId);
+    if (!targetPanel || targetPanel.partId !== input.partAId) {
+      throw new GraphStoreError(
+        `no live region panel ${targetRegionPanelId} on part ${input.partAId}`,
+        ErrorCodes.GRAPH_REGION_PANEL_NOT_FOUND,
+      );
+    }
+    if (targetPanel.mergedIntoRegionPanelId !== null) {
+      throw new GraphStoreError(
+        `region panel ${targetRegionPanelId} is an alias (merged), not a live tree member`,
+        ErrorCodes.GRAPH_REGION_PANEL_ALIASED,
+      );
+    }
+
+    partA.outline = input.unionOutlineA;
+
+    const bRoot = this.regionPanels.get(partB.rootRegionPanelId);
+    if (!bRoot) {
+      throw new GraphStoreError(
+        `part ${input.partBId}'s own root region panel ${partB.rootRegionPanelId} is missing`,
+        ErrorCodes.GRAPH_REGION_PANEL_NOT_FOUND,
+      );
+    }
+    bRoot.mergedIntoRegionPanelId = targetRegionPanelId;
+    partB.mergedIntoPartId = input.partAId;
+
+    return { part: partA };
   }
 
   getPart(partId: string): PartRow | undefined {

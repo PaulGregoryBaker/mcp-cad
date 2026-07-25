@@ -108,11 +108,73 @@ core is proven.)*
 5. Slice 5 (Level C): ingest STEP → graph (clean/heal/decompose/split). **v1's red
    cases go green here: C05 cauldron pair (1,0), C08 refold-2-solids, C13 cauldron
    bounds** — they need real imported geometry, which is why they gate this slice.
-6. Slice 6: curved-bend nodes (initial-version scope per C5; covered on paper in
-   Phase 2.1 — this slice proves it).
-7. Slice 7+: detailing, FR-K editing verbs, validation, nesting, export, rolled
-   sections (committed, post-initial per C5), per agreed scope.
-- v1 retired only when the acceptance suite is green on v2.
+   *(Sub-sliced in practice as 5/5B/5C: import_part core, fixture-breadth test
+   coverage, cauldron adjacent-pair merge coverage — the last of which found and
+   fixed a real splitBodyByBends bug, see project memory.)*
+6. **Slices 6+ REORDERED (2026-07-25, per Paul): the objective is MVP parity on v2 —
+v1 is not usable and is being decommissioned, not maintained alongside v2. Ordering
+is now driven by which of the approved 21-tool contract's (15) still-unbuilt tools
+unblock the most real v1 test-coverage migration, not by risk-proving order.** Only
+4 of 21 contract tools are built so far (`create_part`, `create_node`(bend-only),
+`merge_bodies_with_bend`, `import_part`). A full inventory of v1's ~66
+non-v2 integration test files (2026-07-25) found: 14 depend on `fuse_bodies`/
+`remove_protrusions` (no v2 equivalent yet), 12 depend on unfold/DXF export
+(`flat-pattern`/`drawings` resources, planned but unbuilt), ~10 depend on tools
+**deliberately CUT** from v2 per 10-tool-triage.md (assembly family, `rotate_body`/
+`scale_body`/`mirror_body`/`align_to_face`, `chamfer_edges`, generic
+transaction primitives — B5d dissolves these into `commit`/`restore`) and should be
+retired, not migrated; the rest is v1-only test infra/diagnostics or already
+superseded by v2-native tests. Graph CRUD completion (`update_node`/`delete_node`/
+`move_edge`/`smooth_edge`) is real and foundational but explicitly deprioritized
+below fuse/protrusions and DXF export, per Paul: "prioritise reaching v1 parity on
+the test coverage."
+   6. **Slice 6 (Decompose & compose, 15 §4.2) — DONE (2026-07-25).** `fuse_bodies`:
+   coplanar-only first cut (matches v1's dominant flange/tab-on-wall case; the
+   footprint-CONTAINED "stacked patch" case v1 also supports — different plane,
+   same normal — stays deferred), backed by a new general-purpose OCCT polygon
+   union/difference primitive (`cpp/src/geometry/translation/polygon_boolean.*`,
+   `FuseCoplanarParts` doing the anchor-relative transform + coplanarity check in
+   C++ per constitution principle IV). `remove_protrusions` — REDESIGNED per Paul
+   (no v2 Part has a backing OCCT shell to re-detect protrusions from, unlike v1):
+   folded into `import_part` itself, which already runs `splitBodyByBends` and now
+   extracts each detected protrusion into its own independent, simple v2 Part
+   (`protrusion_part_ids` in the result) instead of a standalone tool. Real-fixture
+   finding: `cube_with_flanges.stp`'s wall+flange pairs turned out to BE the
+   deferred stacked-patch case (0/45 candidate pairs coplanar under the true 3D
+   anchor check) — `fuse_bodies`' tests use hand-authored synthetic panels instead,
+   following v1's own precedent for this exact in-scope case
+   (`fuse_bodies_coplanar_orientation.integration.test.ts`'s second describe
+   block). `testcube.step` (the only fixture with protrusions) independently
+   refuses `import_part`'s main-panel reconciliation with `GE_DISCONNECTED_PIECES`
+   for an unrelated, pre-existing reason, so the extraction mechanism itself is
+   tested directly against real `splitBodyByBends` output rather than via a full
+   `import_part` call. 20 new v2 integration tests, 8 new C++ unit tests, 0
+   regressions (TS typecheck/lint clean; C++ ctest 121 total, same 2 pre-existing
+   failures as before this slice).
+   7. Slice 7: Derive & Validate resources — flat-pattern, map-2d-3d/3d-2d, drawings,
+   findings (15 §4.4) — unfold/DXF export (~12 v1 files); a part isn't
+   manufacturable without a flat pattern out.
+   8. Slice 8: Graph CRUD completion — `update_node`, `delete_node`, `move_edge`,
+   `smooth_edge` (15 §4.3) + a standalone `split_body_by_bends` tool (currently
+   only reachable internally via `import_part`). `update_node(part, {anchor})` is
+   the planned replacement for v1's `translate_body`.
+   9. Slice 9: remaining Decompose & compose tools — `cut_panel`, `add_flange`,
+   `generate_reliefs`, `rip_edge`, `close_gap` (v1's most FE-referenced tool, 10×),
+   `split_body_by_plane`. `synthesize_joints` stays a placeholder (joint table
+   intentionally undesigned, 14 D2.5) until specifically taken up.
+   10. Slice 10: persistence/History — `commit`, `restore`, `branch`, `merge_branch`
+    (15 §4.6, B5/B7 Dolt). `GraphStore` is in-memory-per-call only today — no
+    real persistence exists yet; needed for v2 to be genuinely usable past a test
+    run, not just testable.
+   11. Slice 11: Produce — `simulate_nesting`, `export_production_pack`, `get_job`/
+    async job protocol (15 §4.5). `import_part` is synchronous today; the
+    contract specifies it as an async job with granular progress (N9a).
+   12. Slice 12 (last, per Paul 2026-07-25): curved-bend nodes (initial-version scope
+    per C5; covered on paper in Phase 2.1 — this slice proves it). Deliberately
+    pushed behind the rest of the MVP tool surface rather than proven early.
+- v1 retired once v2 reaches this MVP tool surface (not the full 21-tool contract
+  necessarily — CUT items never block retirement) and the acceptance suite is
+  green on v2.
 
 ## Risks
 - **R1. Requirements nostalgia:** carrying v1 tools without justification. Mitigation:

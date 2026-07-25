@@ -160,6 +160,9 @@ export const ErrorCodes = {
   GE_INVALID_LAYOUT: 'GE_INVALID_LAYOUT',
   GE_EMPTY_LAYOUT: 'GE_EMPTY_LAYOUT',
   GE_POLYGON_BUILD_FAILED: 'GE_POLYGON_BUILD_FAILED',
+  // Phase 5 Slice 6 (fuse_bodies / remove_protrusions polygon_boolean.hpp).
+  GE_POLYGON_BOOLEAN_FAILED: 'GE_POLYGON_BOOLEAN_FAILED',
+  GE_POLYGON_HAS_HOLES: 'GE_POLYGON_HAS_HOLES',
   GE_EXTRUDE_FAILED: 'GE_EXTRUDE_FAILED',
   GE_BRIDGE_EDGE_NOT_FOUND: 'GE_BRIDGE_EDGE_NOT_FOUND',
   GE_BRIDGE_UNSUPPORTED_TOPOLOGY: 'GE_BRIDGE_UNSUPPORTED_TOPOLOGY',
@@ -172,6 +175,10 @@ export const ErrorCodes = {
   // (mergedIntoPartId != null) can't be a merge participant again — mirrors
   // GRAPH_REGION_PANEL_ALIASED one level up.
   GRAPH_PART_ALIASED: 'GRAPH_PART_ALIASED',
+  // Phase 5 Slice 6: fuse_bodies' first-cut scope guard — part B must be a
+  // simple flat part (no bends of its own) to be fused onto another part.
+  // See rebuild/06-plan.md Slice 6's own deferred-scope note.
+  GRAPH_FUSE_PART_B_NOT_SIMPLE: 'GRAPH_FUSE_PART_B_NOT_SIMPLE',
 
   // Phase 5 Slice 3 — point mapping (rebuild/13-translation-module-design.md §4/§5).
   // Verbatim string matches for translation::MapErrorCode, same convention as

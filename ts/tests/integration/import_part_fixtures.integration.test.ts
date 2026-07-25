@@ -70,6 +70,7 @@ import { GraphStore } from '../../src/v2/graph/store';
 import { dispatchGraphTool } from '../../src/v2/tools/graph';
 import { evaluatePart, mapPointToWorld, mapPointToFlat } from '../../src/v2/graph/evaluate-client';
 import { toStructuredError } from '../../src/mcp/errors';
+import { geometryBinding } from '../../src/geometry/binding';
 
 const ENABLED = process.env.SUITE_V2_DRIVER === '1';
 const d = ENABLED ? describe : describe.skip;
@@ -82,6 +83,7 @@ interface ImportToolResult {
   protrusion_count: number;
   bend_count: number;
   notes: string[];
+  protrusion_part_ids: string[];
 }
 
 function importFixture(
@@ -153,6 +155,7 @@ d('import_part integration suite (real STEP fixtures)', () => {
     expect(result.panel_count).toBe(2);
     expect(result.bend_count).toBe(1);
     expect(result.protrusion_count).toBe(0);
+    expect(result.protrusion_part_ids).toEqual([]);
     expect(result.notes).toEqual([]);
     probeRoundTripSelfConsistent(store, result.part_id, 0.001);
   });
@@ -163,6 +166,7 @@ d('import_part integration suite (real STEP fixtures)', () => {
     expect(result.panel_count).toBe(2);
     expect(result.bend_count).toBe(1);
     expect(result.protrusion_count).toBe(0);
+    expect(result.protrusion_part_ids).toEqual([]);
     probeRoundTripSelfConsistent(store, result.part_id, 0.001);
   });
 
@@ -171,12 +175,14 @@ d('import_part integration suite (real STEP fixtures)', () => {
     const resultDefault = importFixture(store, 'angle_bracket_15deg.stp');
     expect(resultDefault.panel_count).toBe(2);
     expect(resultDefault.bend_count).toBe(1);
+    expect(resultDefault.protrusion_part_ids).toEqual([]);
     probeRoundTripSelfConsistent(store, resultDefault.part_id, 2.0);
 
     const store2 = new GraphStore();
     const result = importFixture(store2, 'angle_bracket_15deg.stp', 10);
     expect(result.panel_count).toBe(2);
     expect(result.bend_count).toBe(1);
+    expect(result.protrusion_part_ids).toEqual([]);
     probeRoundTripSelfConsistent(store2, result.part_id, 2.0);
   });
 
@@ -185,12 +191,14 @@ d('import_part integration suite (real STEP fixtures)', () => {
     const resultDefault = importFixture(store, 'angle_bracket_30deg.stp');
     expect(resultDefault.panel_count).toBe(2);
     expect(resultDefault.bend_count).toBe(1);
+    expect(resultDefault.protrusion_part_ids).toEqual([]);
     probeRoundTripSelfConsistent(store, resultDefault.part_id, 2.0);
 
     const store2 = new GraphStore();
     const result = importFixture(store2, 'angle_bracket_30deg.stp', 20);
     expect(result.panel_count).toBe(2);
     expect(result.bend_count).toBe(1);
+    expect(result.protrusion_part_ids).toEqual([]);
     probeRoundTripSelfConsistent(store2, result.part_id, 2.0);
   });
 
@@ -199,6 +207,7 @@ d('import_part integration suite (real STEP fixtures)', () => {
     const result = importFixture(store, 'simple_box.stp');
     expect(result.panel_count).toBe(6);
     expect(result.bend_count).toBe(5);
+    expect(result.protrusion_part_ids).toEqual([]);
     expect(result.notes.length).toBeGreaterThan(0); // extra (non-tree) adjacency, expected for a closed loop
     probeRoundTripSelfConsistent(store, result.part_id, 0.001);
   });
@@ -208,6 +217,7 @@ d('import_part integration suite (real STEP fixtures)', () => {
     const result = importFixture(store, 'hollow_cube.stp');
     expect(result.panel_count).toBe(6);
     expect(result.bend_count).toBe(5);
+    expect(result.protrusion_part_ids).toEqual([]);
     expect(result.notes.length).toBeGreaterThan(0);
     probeRoundTripSelfConsistent(store, result.part_id, 0.001);
   });
@@ -250,5 +260,60 @@ d('import_part integration suite (real STEP fixtures)', () => {
   it('nonexistent file path is a typed error', () => {
     const store = new GraphStore();
     expectTypedError(() => importFixture(store, 'does_not_exist_1234.stp'), 'GE_IMPORT_FAILED');
+  });
+});
+
+d('import_part integration suite — protrusion extraction (Phase 5 Slice 6)', () => {
+  // testcube.step is the only committed fixture with detected protrusions
+  // (its two hollow cubes are joined by bridge flanges -- splitBodyByBends
+  // classifies each flange as a protrusion, separate from the 12 main wall
+  // panels). Its MAIN panels correctly refuse reconciliation with
+  // GE_DISCONNECTED_PIECES (see the dedicated test above) for a reason
+  // entirely unrelated to protrusions -- that refusal happens in
+  // importPart's reconcilePieces call, which runs BEFORE the protrusion
+  // loop (evaluate-client.ts), so dispatchGraphTool('import_part', ...)
+  // never reaches protrusion extraction for this fixture. No committed
+  // fixture combines "has protrusions" with "main panels reconcile", so
+  // the extraction mechanism itself -- getPanelFrame -> reconcilePieces
+  // (n=1) -> createPart, exactly the loop importPart runs internally -- is
+  // exercised directly here, against the same real splitBodyByBends output
+  // the full import_part tool would see.
+  it('testcube.step: protrusion extraction mechanism succeeds for all 4 detected protrusions', () => {
+    const fixturePath = path.join(FIXTURES_DIR, 'testcube.step');
+    const solidId = geometryBinding.loadStep(fixturePath);
+    geometryBinding.healGeometryEx(solidId, true, true);
+    const split = geometryBinding.splitBodyByBends(solidId, 35, undefined, undefined, undefined);
+    expect(split.protrusion_ids.length).toBe(4);
+
+    const store = new GraphStore();
+    const protrusionPartIds: string[] = [];
+    for (const shellId of split.protrusion_ids) {
+      const frame = geometryBinding.getPanelFrame(shellId);
+      const piece = {
+        origin: { x: frame.originX, y: frame.originY, z: frame.originZ },
+        uAxis: { x: frame.uX, y: frame.uY, z: frame.uZ },
+        vAxis: { x: frame.vX, y: frame.vY, z: frame.vZ },
+        normal: { x: frame.normalX, y: frame.normalY, z: frame.normalZ },
+        ringLocal: frame.ring,
+        thicknessMm: frame.thicknessMm,
+      };
+      const reconciled = geometryBinding.reconcilePieces([piece], frame.thicknessMm);
+      expect(
+        reconciled.ok,
+        `protrusion ${shellId}: ${reconciled.errorCode} ${reconciled.message}`,
+      ).toBe(true);
+
+      const part = store.createPart({
+        name: `${fixturePath}#protrusion`,
+        outline: reconciled.graph.outline.outer,
+        thicknessMm: frame.thicknessMm,
+        anchor: reconciled.graph.anchor?.transform,
+      });
+      expect(part.outline.length).toBeGreaterThanOrEqual(3);
+      protrusionPartIds.push(part.partId);
+    }
+
+    expect(protrusionPartIds.length).toBe(4);
+    expect(new Set(protrusionPartIds).size).toBe(4); // every protrusion is its own independent Part
   });
 });

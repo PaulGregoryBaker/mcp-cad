@@ -19,6 +19,7 @@
 #include "../geometry/translation/point_mapping.hpp"
 #include "../geometry/translation/part_merge.hpp"
 #include "../geometry/translation/step_reconciliation.hpp"
+#include "../geometry/translation/polygon_boolean.hpp"
 
 #include <string>
 #include <vector>
@@ -42,6 +43,8 @@ using translation::Transform3;
 using translation::PanelPieceSpec;
 using translation::ReconcileErrorCode;
 using translation::ReconcilePiecesResult;
+using translation::PolygonBooleanErrorCode;
+using translation::PolygonBooleanResult;
 
 // svc() (the single-session-per-process GeometryService instance) is already
 // declared+defined, `static`, in geometry_binding.cc — addon.cc #includes that
@@ -95,6 +98,21 @@ const char* ReconcileErrorCodeToString(ReconcileErrorCode code) {
     case ReconcileErrorCode::kNonDevelopableFold: return "GE_NON_DEVELOPABLE_FOLD";
     case ReconcileErrorCode::kSelfIntersecting: return "GE_RECONCILE_SELF_INTERSECTION";
     case ReconcileErrorCode::kDownstreamPoseMismatch: return "GE_DOWNSTREAM_POSE_MISMATCH";
+  }
+  return "GE_UNKNOWN_ERROR";
+}
+
+const char* PolygonBooleanErrorCodeToString(PolygonBooleanErrorCode code) {
+  switch (code) {
+    case PolygonBooleanErrorCode::kNone: return "";
+    case PolygonBooleanErrorCode::kDegenerateInput: return "GE_DEGENERATE_OUTLINE";
+    case PolygonBooleanErrorCode::kOperationFailed: return "GE_POLYGON_BOOLEAN_FAILED";
+    // Reuses v1's own name (ts/src/mcp/errors.ts) for the identical concept —
+    // a boolean result that came out as more than one disjoint piece —
+    // rather than inventing a second name for the same fact.
+    case PolygonBooleanErrorCode::kMultipleLoops: return "GE_FUSE_DISJOINT_RESULT";
+    case PolygonBooleanErrorCode::kHasHoles: return "GE_POLYGON_HAS_HOLES";
+    case PolygonBooleanErrorCode::kNotCoplanar: return "GE_FUSE_NOT_COPLANAR";
   }
   return "GE_UNKNOWN_ERROR";
 }
@@ -556,6 +574,75 @@ Napi::Value ReconcileOutlinesBinding(const Napi::CallbackInfo& info) {
   }
 }
 
+Napi::Object WritePolygonBooleanResult(Napi::Env env, const PolygonBooleanResult& result) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("ok", Napi::Boolean::New(env, result.ok));
+  obj.Set("errorCode", Napi::String::New(env, PolygonBooleanErrorCodeToString(result.errorCode)));
+  obj.Set("message", Napi::String::New(env, result.message));
+  obj.Set("outer", WritePoint2Array(env, result.outer));
+  return obj;
+}
+
+Napi::Value PolygonUnionBinding(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 2 || !info[0].IsArray() || !info[1].IsArray()) {
+    Napi::TypeError::New(env, "polygonUnion(ringA: Point2[], ringB: Point2[])")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    std::vector<Point2> ringA = ReadPoint2Array(info[0].As<Napi::Array>());
+    std::vector<Point2> ringB = ReadPoint2Array(info[1].As<Napi::Array>());
+    PolygonBooleanResult result = translation::PolygonUnion(ringA, ringB);
+    return WritePolygonBooleanResult(env, result);
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
+Napi::Value PolygonDifferenceBinding(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 2 || !info[0].IsArray() || !info[1].IsArray()) {
+    Napi::TypeError::New(env, "polygonDifference(ringA: Point2[], ringB: Point2[])")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    std::vector<Point2> ringA = ReadPoint2Array(info[0].As<Napi::Array>());
+    std::vector<Point2> ringB = ReadPoint2Array(info[1].As<Napi::Array>());
+    PolygonBooleanResult result = translation::PolygonDifference(ringA, ringB);
+    return WritePolygonBooleanResult(env, result);
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
+Napi::Value FuseCoplanarPartsBinding(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 4 || !info[0].IsArray() || !info[1].IsObject() || !info[2].IsArray() ||
+      !info[3].IsObject()) {
+    Napi::TypeError::New(
+        env, "fuseCoplanarParts(outlineA: Point2[], anchorA: Transform3, outlineB: "
+             "Point2[], anchorB: Transform3)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    std::vector<Point2> outlineA = ReadPoint2Array(info[0].As<Napi::Array>());
+    Transform3 anchorA = ReadTransform3(info[1].As<Napi::Object>());
+    std::vector<Point2> outlineB = ReadPoint2Array(info[2].As<Napi::Array>());
+    Transform3 anchorB = ReadTransform3(info[3].As<Napi::Object>());
+    PolygonBooleanResult result =
+        translation::FuseCoplanarParts(outlineA, anchorA, outlineB, anchorB);
+    return WritePolygonBooleanResult(env, result);
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
 Napi::Value ReconcilePiecesBinding(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   if (info.Length() < 2 || !info[0].IsArray() || !info[1].IsNumber()) {
@@ -582,6 +669,9 @@ void RegisterTranslationMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("mapPointToFlat", Napi::Function::New(env, MapPointToFlatBinding));
   exports.Set("reconcileOutlines", Napi::Function::New(env, ReconcileOutlinesBinding));
   exports.Set("reconcilePieces", Napi::Function::New(env, ReconcilePiecesBinding));
+  exports.Set("polygonUnion", Napi::Function::New(env, PolygonUnionBinding));
+  exports.Set("polygonDifference", Napi::Function::New(env, PolygonDifferenceBinding));
+  exports.Set("fuseCoplanarParts", Napi::Function::New(env, FuseCoplanarPartsBinding));
 }
 
 }  // namespace mcp_cad
