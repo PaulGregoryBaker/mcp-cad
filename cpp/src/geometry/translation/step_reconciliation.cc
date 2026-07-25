@@ -514,6 +514,7 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
     bend.kFactor = 0.0;
     bend.bottomIsConcave = winner.bottomIsConcave;
     graph.bends.push_back(bend);
+    result.pieceEdgeMatches.push_back({pEdgeIdx, cEdgeIdx});
 
     childAtParentEdge[p][pEdgeIdx] = static_cast<int>(i);
     childSharedEdgeIndex[i] = cEdgeIdx;

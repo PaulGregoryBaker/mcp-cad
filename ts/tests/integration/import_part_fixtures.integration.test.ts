@@ -22,10 +22,16 @@
  * Every fixture's actual behaviour below was determined by RUNNING it first
  * (investigation scripts, not committed), not assumed -- several genuinely
  * needed root-causing before a correct assertion could be written:
- *   - angle_bracket_{15,30}deg.stp: the default angle_threshold_deg=35
- *     over-fragments a fold whose own dihedral angle sits close to the
- *     threshold (splitBodyByBends misclassifies panel/bend faces) -- a
- *     tighter value fixes it cleanly. Not a step_reconciliation bug.
+ *   - angle_bracket_{15,30}deg.stp: succeed cleanly even at the default
+ *     angle_threshold_deg=35. (Historical note: earlier in the rebuild
+ *     these needed a manually-tightened threshold to work around a real
+ *     splitBodyByBends bug -- buildFaceGroups' region-growing BFS decided
+ *     "same panel" using only the dihedral angle between immediate
+ *     neighbouring faces against angleThresholdDeg itself, which could
+ *     transitively over-merge a shallow-but-real fold's two panels into
+ *     one. Fixed by replacing that with a coplanarity test against each
+ *     group's own fixed seed plane -- angleThresholdDeg is no longer the
+ *     primary discriminator, so these fixtures no longer need tuning.)
  *   - simple_box.stp / hollow_cube.stp: closed 6-panel loop topology. A
  *     naive "round-trip must return to the SAME panel" oracle is WRONG for
  *     these -- a box's corner is physically shared by 3 faces, and
@@ -160,12 +166,12 @@ d('import_part integration suite (real STEP fixtures)', () => {
     probeRoundTripSelfConsistent(store, result.part_id, 0.001);
   });
 
-  it('angle_bracket_15deg.stp: succeeds with a tighter angle_threshold_deg (default over-fragments)', () => {
+  it('angle_bracket_15deg.stp: succeeds at both the default and a tighter angle_threshold_deg', () => {
     const store = new GraphStore();
-    expectTypedError(
-      () => importFixture(store, 'angle_bracket_15deg.stp'),
-      'GE_IMPORT_NO_PANELS_FOUND',
-    );
+    const resultDefault = importFixture(store, 'angle_bracket_15deg.stp');
+    expect(resultDefault.panel_count).toBe(2);
+    expect(resultDefault.bend_count).toBe(1);
+    probeRoundTripSelfConsistent(store, resultDefault.part_id, 2.0);
 
     const store2 = new GraphStore();
     const result = importFixture(store2, 'angle_bracket_15deg.stp', 10);
@@ -174,12 +180,12 @@ d('import_part integration suite (real STEP fixtures)', () => {
     probeRoundTripSelfConsistent(store2, result.part_id, 2.0);
   });
 
-  it('angle_bracket_30deg.stp: succeeds with a tighter angle_threshold_deg (default over-fragments)', () => {
+  it('angle_bracket_30deg.stp: succeeds at both the default and a tighter angle_threshold_deg', () => {
     const store = new GraphStore();
-    expectTypedError(
-      () => importFixture(store, 'angle_bracket_30deg.stp'),
-      'GE_DISCONNECTED_PIECES',
-    );
+    const resultDefault = importFixture(store, 'angle_bracket_30deg.stp');
+    expect(resultDefault.panel_count).toBe(2);
+    expect(resultDefault.bend_count).toBe(1);
+    probeRoundTripSelfConsistent(store, resultDefault.part_id, 2.0);
 
     const store2 = new GraphStore();
     const result = importFixture(store2, 'angle_bracket_30deg.stp', 20);

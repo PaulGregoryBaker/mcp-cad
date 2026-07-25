@@ -77,6 +77,7 @@ export default defineWorkspace([
         'tests/integration/import_part_fixtures.integration.test.ts',
         'tests/integration/merge_bodies_with_bend.integration.test.ts',
         'tests/integration/point_mapping_roundtrip.integration.test.ts',
+        'tests/integration/cauldron_adjacent_pairs.integration.test.ts',
       ],
       setupFiles: ['tests/setup/integration-reset.ts'],
       // Switched from pool:'forks' (singleFork) to pool:'threads' because
@@ -109,6 +110,7 @@ export default defineWorkspace([
         'tests/integration/import_part_fixtures.integration.test.ts',
         'tests/integration/merge_bodies_with_bend.integration.test.ts',
         'tests/integration/point_mapping_roundtrip.integration.test.ts',
+        'tests/integration/cauldron_adjacent_pairs.integration.test.ts',
       ],
       env: { SUITE_V2_DRIVER: '1' },
       setupFiles: ['tests/setup/integration-reset.ts'],

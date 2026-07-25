@@ -749,4 +749,10 @@ export interface ReconcilePiecesResult {
   // two already-placed pieces, a real physical seam (14 §2) not auto-
   // detected/driven this slice — reported, not silently dropped.
   notes: string[];
+  // Parallel to graph.bends (same index, same order): each bend's hinge
+  // traced back to the ORIGINAL piece-local ring-edge index it came from
+  // (before flattening into the shared flat frame) — e.g. for driving
+  // merge_bodies_with_bend's own edge_a/edge_b refs against independently-
+  // created single-panel Parts built from the same input pieces.
+  pieceEdgeMatches: Array<{ parentEdgeIndex: number; childEdgeIndex: number }>;
 }

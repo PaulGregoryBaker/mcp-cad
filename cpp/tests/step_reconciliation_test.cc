@@ -73,6 +73,36 @@ TEST_CASE("ReconcilePieces: 2-piece L reproduces true 3D positions via MapPointT
   CHECK(result.graph.bends.size() == 1);
   CHECK(result.graph.rootRegionPanelId == "piece0");
 
+  // pieceEdgeMatches must be parallel to graph.bends and correctly trace
+  // back to the ORIGINAL piece-local edge each hinge came from — verified
+  // by hand: piece0's ring is {(0,0),(10,0),(10,5),(0,5)}, so its shared
+  // edge (world (10,0,0)-(10,5,0), the seam with piece1) is edge index 1
+  // ((10,0)->(10,5)); piece1's ring is {(0,0),(5,0),(5,8),(0,8)}, so its
+  // own shared edge (local (0,0)->(5,0), which maps to the SAME world seam
+  // per piece1's origin/uAxis) is edge index 0. Checked via each edge's own
+  // hand-verified length (5, the seam's true length) rather than the raw
+  // index alone, so this doesn't silently pass if BOTH indices happened to
+  // shift by the same wrong amount.
+  REQUIRE(result.pieceEdgeMatches.size() == result.graph.bends.size());
+  const auto& match0 = result.pieceEdgeMatches[0];
+  REQUIRE(match0.parentEdgeIndex >= 0);
+  REQUIRE(match0.parentEdgeIndex < static_cast<int>(pieces[0].ringLocal.size()));
+  REQUIRE(match0.childEdgeIndex >= 0);
+  REQUIRE(match0.childEdgeIndex < static_cast<int>(pieces[1].ringLocal.size()));
+  {
+    const auto& ring0 = pieces[0].ringLocal;
+    size_t ea = static_cast<size_t>(match0.parentEdgeIndex);
+    double lenParent = std::hypot(ring0[(ea + 1) % ring0.size()].x - ring0[ea].x,
+                                   ring0[(ea + 1) % ring0.size()].y - ring0[ea].y);
+    CHECK(lenParent == Approx(5.0));
+
+    const auto& ring1 = pieces[1].ringLocal;
+    size_t eb = static_cast<size_t>(match0.childEdgeIndex);
+    double lenChild = std::hypot(ring1[(eb + 1) % ring1.size()].x - ring1[eb].x,
+                                  ring1[(eb + 1) % ring1.size()].y - ring1[eb].y);
+    CHECK(lenChild == Approx(5.0));
+  }
+
   // Hand-verified combined outline (matches part_merge_test.cc's own worked
   // 18x5 rectangle for the identical geometry): piece1 (5 wide along the
   // seam, 8 tall) attaches outward from piece0's right edge.

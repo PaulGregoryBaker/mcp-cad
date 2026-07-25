@@ -428,6 +428,14 @@ Napi::Object WriteReconcilePiecesResult(Napi::Env env, const ReconcilePiecesResu
   obj.Set("message", Napi::String::New(env, result.message));
   obj.Set("graph", WritePartGraphSpec(env, result.graph));
   obj.Set("notes", WriteStringArray(env, result.notes));
+  Napi::Array matchesArr = Napi::Array::New(env, result.pieceEdgeMatches.size());
+  for (size_t i = 0; i < result.pieceEdgeMatches.size(); ++i) {
+    Napi::Object m = Napi::Object::New(env);
+    m.Set("parentEdgeIndex", Napi::Number::New(env, result.pieceEdgeMatches[i].parentEdgeIndex));
+    m.Set("childEdgeIndex", Napi::Number::New(env, result.pieceEdgeMatches[i].childEdgeIndex));
+    matchesArr.Set(static_cast<uint32_t>(i), m);
+  }
+  obj.Set("pieceEdgeMatches", matchesArr);
   return obj;
 }
 

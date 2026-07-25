@@ -279,30 +279,66 @@ public:
     bool    isOuter;  // N ┬À (centroid - solidCentroid) > 0
   };
 
+  // A candidate face joins a group iff it is COPLANAR with the group's own
+  // FIXED seed plane (established once, from the group's first/start face —
+  // never re-derived per BFS step): perpendicular distance from every one
+  // of the candidate's own vertices to that fixed plane must stay within
+  // kCoplanarLinearToleranceMm. This is the physically correct test, not a
+  // proxy: two faces genuinely belonging to the SAME flat panel (split by
+  // STEP tessellation/faceting) lie on the identical plane to
+  // floating-point precision, while two DIFFERENT panels joined at a real
+  // fold diverge measurably in perpendicular distance across the panel's
+  // own size — even a shallow few-degree fold on a real, human-scale panel
+  // produces tens of mm of deviation by its far edge, far beyond this
+  // tolerance. An angle-only threshold (the previous approach) can't
+  // distinguish that from "same panel, split by tessellation" once a
+  // design intentionally uses many panels at shallow (well under any
+  // single global angle threshold) mutual folds — confirmed on a real
+  // fixture (cauldron.step, a vessel built from many flat panels wrapping
+  // its own circumference): several genuinely separate, intentionally-flat
+  // panels at shallow mutual angles got transitively flooded into one
+  // "panel" group spanning a huge chunk of the vessel, corrupting every
+  // downstream panel-face measurement that touched it. Comparing against
+  // the group's own FIXED seed plane (not the immediately-preceding BFS
+  // neighbour) additionally makes gradual multi-step drift accumulation
+  // structurally impossible, not just less likely.
+  static bool IsCoplanarWithSeed(const gp_Pnt& seedPoint, const gp_Dir& seedNormal,
+                                  const TopoDS_Face& candidate,
+                                  double coplanarToleranceMm) {
+    for (TopExp_Explorer vExp(candidate, TopAbs_VERTEX); vExp.More(); vExp.Next()) {
+      gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(vExp.Current()));
+      double dist = std::abs(gp_Vec(seedPoint, p).Dot(gp_Vec(seedNormal.XYZ())));
+      if (dist > coplanarToleranceMm) return false;
+    }
+    return true;
+  }
+
   static std::vector<FaceGroup> buildFaceGroups(
       const TopoDS_Shape& shape,
       const TopTools_IndexedMapOfShape& faceMap,
       double angleThresholdDeg,
       const gp_Pnt& solidCentroid)
   {
+    constexpr double kCoplanarLinearToleranceMm = 0.1;
+
     int nFaces = faceMap.Extent();
     TopTools_IndexedDataMapOfShapeListOfShape edgeToFaces;
     TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edgeToFaces);
 
-    std::vector<std::vector<int>> coplanar(nFaces + 1);
+    // Topology only here (which faces share an edge with which) — no angle
+    // or coplanarity judgment yet; that's decided per-candidate against
+    // each GROUP's own fixed seed plane inside the BFS below, not
+    // precomputed pairwise between immediate neighbours (see this
+    // function's own doc comment above).
+    std::vector<std::vector<int>> adjacency(nFaces + 1);
     for (int i = 1; i <= edgeToFaces.Extent(); ++i) {
       const TopTools_ListOfShape& fl = edgeToFaces(i);
       if (fl.Extent() != 2) continue;
-      const TopoDS_Face& fA = TopoDS::Face(fl.First());
-      const TopoDS_Face& fB = TopoDS::Face(fl.Last());
-      double angle = computeDihedralAngle(fA, fB, TopoDS::Edge(edgeToFaces.FindKey(i)));
-      if (angle <= angleThresholdDeg) {
-        int idxA = faceMap.FindIndex(fA);
-        int idxB = faceMap.FindIndex(fB);
-        if (idxA > 0 && idxB > 0) {
-          coplanar[idxA].push_back(idxB);
-          coplanar[idxB].push_back(idxA);
-        }
+      int idxA = faceMap.FindIndex(fl.First());
+      int idxB = faceMap.FindIndex(fl.Last());
+      if (idxA > 0 && idxB > 0) {
+        adjacency[idxA].push_back(idxB);
+        adjacency[idxB].push_back(idxA);
       }
     }
 
@@ -312,13 +348,33 @@ public:
     for (int start = 1; start <= nFaces; ++start) {
       if (visited[start]) continue;
       FaceGroup grp;
-      std::vector<int> queue = {start};
       visited[start] = true;
+
+      const TopoDS_Face& seedFace = TopoDS::Face(faceMap(start));
+      BRepAdaptor_Surface seedSurf(seedFace, false);
+      gp_Pnt seedPoint = seedSurf.Plane().Location();
+      gp_Dir seedNormal(faceOutwardNormal(seedFace).XYZ());
+
+      std::vector<int> queue = {start};
       while (!queue.empty()) {
         int cur = queue.back(); queue.pop_back();
         grp.faceIndices.push_back(cur);
-        for (int nbr : coplanar[cur]) {
-          if (!visited[nbr]) { visited[nbr] = true; queue.push_back(nbr); }
+        for (int nbr : adjacency[cur]) {
+          if (visited[nbr]) continue;
+          // Angle kept as an outer sanity gate (still respects the
+          // caller's own bend-sharpness intent — e.g. protrusion
+          // detection's own semantics elsewhere) but is no longer the
+          // primary discriminator; coplanarity below is.
+          double angle = computeDihedralAngle(TopoDS::Face(faceMap(cur)),
+                                               TopoDS::Face(faceMap(nbr)),
+                                               TopoDS_Edge());
+          if (angle > angleThresholdDeg) continue;
+          if (!IsCoplanarWithSeed(seedPoint, seedNormal, TopoDS::Face(faceMap(nbr)),
+                                   kCoplanarLinearToleranceMm)) {
+            continue;
+          }
+          visited[nbr] = true;
+          queue.push_back(nbr);
         }
       }
 
@@ -1423,18 +1479,12 @@ public:
       gp_Pnt origin(U.XYZ() * uMin + V.XYZ() * vMin + N.XYZ() * (nValue - bestDist - 0.5));
       gp_Ax2 localSystem(origin, N, U);
 
-      std::cout << "[DEBUG splitMode2] Box solid info:" << std::endl;
-      std::cout << "  origin: (" << origin.X() << ", " << origin.Y() << ", " << origin.Z() << ")" << std::endl;
-      std::cout << "  N: (" << N.X() << ", " << N.Y() << ", " << N.Z() << ")" << std::endl;
-      std::cout << "  U: (" << U.X() << ", " << U.Y() << ", " << U.Z() << ")" << std::endl;
-      std::cout << "  dx=" << dx << ", dy=" << dy << ", dz=" << dz << std::endl;
-
       BRepPrimAPI_MakeBox boxMaker(localSystem, dx, dy, dz);
       boxMaker.Build();
       if (!boxMaker.IsDone()) continue;
-      TopoDS_Solid boxSolid = boxMaker.Solid();
+      TopoDS_Solid cutterSolid = boxMaker.Solid();
 
-      // Extract panel slab = ORIGINAL_SOLID Ôê® boxSolid (not remainder).
+      // Extract panel slab = ORIGINAL_SOLID ∩ cutterSolid (not remainder).
       //
       // Extracting from the remainder caused successive panels to be trimmed
       // at the corners where earlier panels had already been cut out. The
@@ -1445,7 +1495,7 @@ public:
       // overlap at corners (as adjacent sheet metal walls physically do)
       // give a clean fuse with the corner absorbed into the merged solid,
       // and the seam edge sits right on both inputs.
-      BRepAlgoAPI_Common extract(solid, boxSolid);
+      BRepAlgoAPI_Common extract(solid, cutterSolid);
       extract.Build();
       if (!extract.IsDone() || extract.Shape().IsNull()) continue;
 
@@ -1466,8 +1516,8 @@ public:
       (void)protrusionIds;       // reserved for future post-cut handling
       (void)protrusionParents;   // reserved for future post-cut handling
 
-      // Remainder = remainder minus the boxSolid
-      BRepAlgoAPI_Cut cutRemainder(remainder, boxSolid);
+      // Remainder = remainder minus the cutterSolid
+      BRepAlgoAPI_Cut cutRemainder(remainder, cutterSolid);
       cutRemainder.Build();
       if (historyOut && cutRemainder.IsDone()) {
         auto records = captureHistory(cutRemainder, remainder,
@@ -1642,12 +1692,27 @@ public:
       TopExp::MapShapes(shape, TopAbs_FACE, faceMapInput);
 
       // US1: Facet Unification Pass - Merge adjacent coplanar/planar triangular facets
-      // of complex segmented models (like cauldron.step) before decomposition
+      // of complex segmented models (like cauldron.step) before decomposition.
+      //
+      // Uses a small, FIXED tolerance (0.5deg) rather than angleThresholdDeg
+      // itself. angleThresholdDeg is a BEND-detection threshold (how sharp a
+      // fold must be to count as a real fold, typically tens of degrees) —
+      // a wholly different question from "are these adjacent STEP facets
+      // just tessellation noise that should merge into one clean face"
+      // (which should be tiny — real STEP tessellation seams are near-exact
+      // coplanar, not off by tens of degrees). Reusing angleThresholdDeg
+      // here silently let a real fixture's default 35deg bend threshold act
+      // as the UNIFICATION tolerance too — confirmed on a real fixture
+      // (cauldron.step) to merge a wide swath of a curved dome's genuinely
+      // separate, only-shallowly-angled facets into one abnormally large
+      // (~5.5 million mm2) face, corrupting every downstream panel-face
+      // selection (getPanelFrame) that touched it. A real fold this pass
+      // should NOT swallow is always far sharper than a tessellation seam,
+      // so a small fixed tolerance safely serves both cases.
+      constexpr double kFacetUnifyAngularToleranceRad = 0.0087;  // ~0.5 degrees
       try {
         ShapeUpgrade_UnifySameDomain unifier(shape, Standard_True, Standard_True, Standard_True);
-        double angTolRad = angleThresholdDeg * M_PI / 180.0;
-        if (angTolRad < 1e-6) angTolRad = 0.0087; // default 0.5 degrees
-        unifier.SetAngularTolerance(angTolRad);
+        unifier.SetAngularTolerance(kFacetUnifyAngularToleranceRad);
         unifier.SetLinearTolerance(0.05); // slightly looser linear tol to heal facets
         unifier.Build();
         TopoDS_Shape unifiedShape = unifier.Shape();

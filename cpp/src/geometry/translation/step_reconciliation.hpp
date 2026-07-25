@@ -76,6 +76,20 @@ enum class ReconcileErrorCode {
   kDownstreamPoseMismatch,
 };
 
+// A bend's hinge, traced back to the original per-piece ring-edge index it
+// came from (BEFORE any flattening/splicing into the shared flat frame) —
+// e.g. needed by a caller wanting to drive merge_bodies_with_bend's own
+// edge_a/edge_b refs {region_panel_id, edge_index} against independently-
+// created single-panel Parts built directly from the same input pieces.
+// Not used by ReconcilePieces' own graph construction (BendSpec.hingeA/
+// hingeB, already in the shared flat frame, are sufficient there) — this
+// exists purely to expose an already-computed internal value to callers
+// that need to correlate back to piece-local geometry.
+struct PieceEdgeMatch {
+  int parentEdgeIndex = -1;  // edge index within the PARENT piece's own ringLocal
+  int childEdgeIndex = -1;   // edge index within the CHILD piece's own ringLocal
+};
+
 struct ReconcilePiecesResult {
   bool ok = false;
   ReconcileErrorCode errorCode = ReconcileErrorCode::kNone;
@@ -93,6 +107,8 @@ struct ReconcilePiecesResult {
   // not auto-detected/driven this slice) is reported here, not silently
   // dropped and not a hard failure.
   std::vector<std::string> notes;
+  // Parallel to `graph.bends` (same index, same order) — see PieceEdgeMatch.
+  std::vector<PieceEdgeMatch> pieceEdgeMatches;
 };
 
 ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
