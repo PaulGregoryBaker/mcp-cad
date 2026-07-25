@@ -126,3 +126,73 @@ export function requirePoint2Array(args: Record<string, unknown>, key: string): 
     return { x: item['x'] as number, y: item['y'] as number };
   });
 }
+
+/** Like requirePoint2Array, but with no minimum length — move_edge (14 §2.2
+ * K2) may replace a vertex range with FEWER points than it removes (or even
+ * zero, deleting them outright); the resulting outline's own >=3-vertex
+ * floor is GraphStore.moveEdge's concern, not this parser's. */
+export function requirePoint2ArrayAllowEmpty(args: Record<string, unknown>, key: string): Point2[] {
+  const val = args[key];
+  if (!Array.isArray(val)) {
+    throwError(ErrorCodes.INTERNAL_ERROR, `${key} must be an array of {x,y} points`, false);
+  }
+  return val.map((item, i) => {
+    if (!isPoint2Like(item)) {
+      throwError(ErrorCodes.INTERNAL_ERROR, `${key}[${i}] must be an {x,y} point`, false);
+    }
+    return { x: item['x'] as number, y: item['y'] as number };
+  });
+}
+
+/** move_edge's vertex_range param — {start_index, end_index}, both inclusive
+ * integer indices into the part's one outline array. */
+export function requireVertexRange(
+  args: Record<string, unknown>,
+  key: string,
+): { startIndex: number; endIndex: number } {
+  const val = args[key];
+  if (typeof val !== 'object' || val === null) {
+    throwError(
+      ErrorCodes.INTERNAL_ERROR,
+      `${key} must be a {start_index, end_index} vertex range`,
+      false,
+    );
+  }
+  const obj = val as Record<string, unknown>;
+  const startIndex = obj['start_index'];
+  const endIndex = obj['end_index'];
+  if (typeof startIndex !== 'number' || typeof endIndex !== 'number') {
+    throwError(
+      ErrorCodes.INTERNAL_ERROR,
+      `${key} must be a {start_index: number, end_index: number} vertex range`,
+      false,
+    );
+  }
+  return { startIndex, endIndex };
+}
+
+/** A patch field that may be omitted (unchanged), explicitly `null` (clear
+ * the override), or a finite number — distinguishes "not in the patch" from
+ * "clear this value" the way a plain optNumber (undefined-only) can't. */
+export function optNullableNumber(
+  args: Record<string, unknown>,
+  key: string,
+): number | null | undefined {
+  if (!(key in args)) return undefined;
+  const val = args[key];
+  if (val === null) return null;
+  if (typeof val === 'number' && Number.isFinite(val)) return val;
+  throwError(ErrorCodes.INTERNAL_ERROR, `${key} must be a number or null`, false);
+}
+
+/** Same distinction as optNullableNumber, for boolean patch fields. */
+export function optNullableBoolean(
+  args: Record<string, unknown>,
+  key: string,
+): boolean | null | undefined {
+  if (!(key in args)) return undefined;
+  const val = args[key];
+  if (val === null) return null;
+  if (typeof val === 'boolean') return val;
+  throwError(ErrorCodes.INTERNAL_ERROR, `${key} must be a boolean or null`, false);
+}

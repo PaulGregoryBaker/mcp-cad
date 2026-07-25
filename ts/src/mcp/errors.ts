@@ -179,6 +179,10 @@ export const ErrorCodes = {
   // simple flat part (no bends of its own) to be fused onto another part.
   // See rebuild/06-plan.md Slice 6's own deferred-scope note.
   GRAPH_FUSE_PART_B_NOT_SIMPLE: 'GRAPH_FUSE_PART_B_NOT_SIMPLE',
+  // Phase 5 Slice 8: Graph CRUD completion (delete_node(kind=bend) = the
+  // panel-level merge, 14 §2.1.1; move_edge's vertex_range bounds check).
+  GRAPH_BEND_NOT_FOUND: 'GRAPH_BEND_NOT_FOUND',
+  GRAPH_INVALID_VERTEX_RANGE: 'GRAPH_INVALID_VERTEX_RANGE',
 
   // Phase 5 Slice 3 — point mapping (rebuild/13-translation-module-design.md §4/§5).
   // Verbatim string matches for translation::MapErrorCode, same convention as

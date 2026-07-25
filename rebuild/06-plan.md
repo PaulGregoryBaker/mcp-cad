@@ -172,10 +172,26 @@ the test coverage."
    new, deliberately v1-independent serializer
    (`ts/src/v2/resources/dxf.ts` — pure string formatting, no geometric
    computation). 4 new v2 integration tests, 0 regressions.
-   8. Slice 8: Graph CRUD completion — `update_node`, `delete_node`, `move_edge`,
-   `smooth_edge` (15 §4.3) + a standalone `split_body_by_bends` tool (currently
-   only reachable internally via `import_part`). `update_node(part, {anchor})` is
-   the planned replacement for v1's `translate_body`.
+   8. **Slice 8 (Graph CRUD completion, 15 §4.3) — DONE (2026-07-25), 4 of 5
+   tools.** `update_node` (kind=part/bend/region_panel field patches —
+   `update_node(part, {anchor})` is the planned replacement for v1's
+   `translate_body`, now built), `delete_node` (kind=bend only — the panel-
+   level merge, 14 §2.1.1: the exact inverse of `create_node(bend)`, entirely
+   a pure re-parent + alias, no geometry call), `move_edge` (K2: a pure
+   vertex-range splice on the part's one shared outline — no geometry call
+   either, a bad result surfaces at the next evaluate/construct instead of
+   being pre-validated here), and the standalone `split_body_by_bends` tool
+   (runs the same loadStep/heal/split pipeline `import_part` uses internally
+   but stops before reconciliation — useful for inspecting a fixture's raw
+   decomposition even when `import_part` itself refuses it, e.g.
+   `testcube.step`). `smooth_edge` is DEFERRED: a grep across v1's entire
+   test suite found zero references to it or to `move_edge` (both are net-new
+   v2 capabilities, not v1 ports, so neither has test-migration urgency), and
+   unlike `move_edge`, `smooth_edge` needs `Point2` to carry a stored bulge
+   value everywhere the C++ translation module represents an outline — a
+   foundational kernel data-model change that deserves its own design pass
+   (matching fuse_bodies's own Slice 6 plan), not a rushed addition here. 16
+   new v2 integration tests, 0 regressions.
    9. Slice 9: remaining Decompose & compose tools — `cut_panel`, `add_flange`,
    `generate_reliefs`, `rip_edge`, `close_gap` (v1's most FE-referenced tool, 10×),
    `split_body_by_plane`. `synthesize_joints` stays a placeholder (joint table

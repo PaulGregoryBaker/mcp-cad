@@ -490,3 +490,74 @@ export function importPart(
     protrusionPartIds,
   };
 }
+
+export interface SplitBodyByBendsOptions {
+  angleThresholdDeg?: number;
+  maxThicknessMm?: number;
+  defaultThicknessMm?: number;
+  maxRecursionDepth?: number;
+}
+
+export interface SplitPieceInfo {
+  shellId: string;
+  origin: NapiPoint3;
+  uAxis: NapiPoint3;
+  vAxis: NapiPoint3;
+  normal: NapiPoint3;
+  ringLocal: Point2[];
+  thicknessMm: number;
+}
+
+export interface SplitBodyByBendsResult {
+  panels: SplitPieceInfo[];
+  protrusions: SplitPieceInfo[];
+}
+
+/**
+ * Standalone split_body_by_bends (Phase 5 Slice 8, rebuild/06-plan.md — "a
+ * standalone split_body_by_bends tool (currently only reachable internally
+ * via import_part)"). Runs the SAME loadStep/healGeometryEx/splitBodyByBends/
+ * getPanelFrame sequence importPart's own pipeline already uses (no second
+ * decomposition algorithm, P3), but stops there — no reconcilePieces, no
+ * GraphStore mutation. This is a pure inspection utility: it lets a caller
+ * see a STEP file's raw per-piece decomposition even when the file's own
+ * main panels would refuse reconcilePieces (e.g. testcube.step,
+ * cube_with_flanges.stp — both GE_DISCONNECTED_PIECES via import_part for
+ * reasons unrelated to their individual pieces' own measurements, see Slice
+ * 6/7's test suites), and does not depend on any v2 Part existing (unlike
+ * every other v2 tool, it takes a file path, not a part_id — the graph
+ * mutation it could otherwise feed is exactly what import_part already does
+ * with this same data, one call further).
+ */
+export function splitBodyByBendsStandalone(
+  filePath: string,
+  options: SplitBodyByBendsOptions = {},
+): SplitBodyByBendsResult {
+  const solidId = geometryBinding.loadStep(filePath);
+  geometryBinding.healGeometryEx(solidId, true, true);
+  const split = geometryBinding.splitBodyByBends(
+    solidId,
+    options.angleThresholdDeg ?? 35,
+    options.maxThicknessMm,
+    options.defaultThicknessMm,
+    options.maxRecursionDepth,
+  );
+
+  const toPieceInfo = (shellId: string): SplitPieceInfo => {
+    const frame = geometryBinding.getPanelFrame(shellId);
+    return {
+      shellId,
+      origin: { x: frame.originX, y: frame.originY, z: frame.originZ },
+      uAxis: { x: frame.uX, y: frame.uY, z: frame.uZ },
+      vAxis: { x: frame.vX, y: frame.vY, z: frame.vZ },
+      normal: { x: frame.normalX, y: frame.normalY, z: frame.normalZ },
+      ringLocal: frame.ring,
+      thicknessMm: frame.thicknessMm,
+    };
+  };
+
+  return {
+    panels: split.panel_ids.map(toPieceInfo),
+    protrusions: split.protrusion_ids.map(toPieceInfo),
+  };
+}

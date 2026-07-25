@@ -81,6 +81,52 @@ export interface FuseBodiesInput {
   targetRegionPanelIdOnA?: string;
 }
 
+/** update_node(kind=part) (15 §4.3) — a plain field patch, no re-derivation:
+ * only fields actually present (`!== undefined`) are applied, so a patch can
+ * still explicitly clear a nullable field without touching the others. */
+export interface UpdatePartInput {
+  partId: string;
+  name?: string;
+  materialId?: string;
+  kFactor?: number;
+  anchor?: Transform3Row;
+}
+
+/** update_node(kind=bend) (15 §4.3) — bend angle/radius/k-factor-override/
+ * pivot-side edits. `kFactorOverride`/`bottomIsConcave` accept `null`
+ * (explicit clear) distinctly from `undefined` (field omitted, unchanged). */
+export interface UpdateBendInput {
+  bendId: string;
+  angleDeg?: number;
+  radiusMm?: number;
+  kFactorOverride?: number | null;
+  bottomIsConcave?: boolean | null;
+}
+
+/** update_node(kind=region_panel) (15 §4.3) — label/k-factor-override edits. */
+export interface UpdateRegionPanelInput {
+  regionPanelId: string;
+  label?: string;
+  kFactorOverride?: number | null;
+}
+
+/** move_edge (15 §4.3, 14 §2.2 K2) — replaces vertices [startIndex, endIndex]
+ * (inclusive) of the part's ONE shared outline with `newPoints` (which may
+ * be a different length than the replaced range, so this also covers
+ * inserting/removing vertices, not just translating existing ones). A pure
+ * array splice — no geometric computation (constitution v2.0.0 principle
+ * IV); a resulting self-intersecting or mis-wound outline is NOT pre-
+ * validated here, it surfaces as a typed error the next time evaluatePart/
+ * constructPart actually walks it (same "no silent fallback" discipline as
+ * every other mutation — the geometry engine is the one place that check
+ * belongs, not a second copy of it in TypeScript). */
+export interface MoveEdgeInput {
+  partId: string;
+  startIndex: number;
+  endIndex: number;
+  newPoints: Point2[];
+}
+
 export class GraphStoreError extends Error {
   constructor(
     message: string,
@@ -325,6 +371,146 @@ export class GraphStore {
     partB.mergedIntoPartId = input.partAId;
 
     return { part: partA };
+  }
+
+  /** update_node(kind=part) (Phase 5 Slice 8, 15 §4.3). */
+  updatePart(input: UpdatePartInput): PartRow {
+    const part = this.parts.get(input.partId);
+    if (!part) {
+      throw new GraphStoreError(`no part with id ${input.partId}`, ErrorCodes.GRAPH_PART_NOT_FOUND);
+    }
+    if (part.mergedIntoPartId !== null) {
+      throw new GraphStoreError(
+        `part ${input.partId} is an alias (already merged), not a live part`,
+        ErrorCodes.GRAPH_PART_ALIASED,
+      );
+    }
+    if (input.name !== undefined) part.name = input.name;
+    if (input.materialId !== undefined) part.materialId = input.materialId;
+    if (input.kFactor !== undefined) part.kFactor = input.kFactor;
+    if (input.anchor !== undefined) part.anchor = input.anchor;
+    return part;
+  }
+
+  /** update_node(kind=bend) (Phase 5 Slice 8, 15 §4.3). */
+  updateBendNode(input: UpdateBendInput): BendRow {
+    const bend = this.bends.get(input.bendId);
+    if (!bend) {
+      throw new GraphStoreError(`no bend with id ${input.bendId}`, ErrorCodes.GRAPH_BEND_NOT_FOUND);
+    }
+    if (input.angleDeg !== undefined) bend.angleDeg = input.angleDeg;
+    if (input.radiusMm !== undefined) bend.radiusMm = input.radiusMm;
+    if (input.kFactorOverride !== undefined) bend.kFactorOverride = input.kFactorOverride;
+    if (input.bottomIsConcave !== undefined) bend.bottomIsConcave = input.bottomIsConcave;
+    return bend;
+  }
+
+  /** update_node(kind=region_panel) (Phase 5 Slice 8, 15 §4.3). */
+  updateRegionPanel(input: UpdateRegionPanelInput): RegionPanelRow {
+    const panel = this.regionPanels.get(input.regionPanelId);
+    if (!panel) {
+      throw new GraphStoreError(
+        `no region panel with id ${input.regionPanelId}`,
+        ErrorCodes.GRAPH_REGION_PANEL_NOT_FOUND,
+      );
+    }
+    if (panel.mergedIntoRegionPanelId !== null) {
+      throw new GraphStoreError(
+        `region panel ${input.regionPanelId} is an alias (merged), not a live tree member`,
+        ErrorCodes.GRAPH_REGION_PANEL_ALIASED,
+      );
+    }
+    if (input.label !== undefined) panel.label = input.label;
+    if (input.kFactorOverride !== undefined) panel.kFactorOverride = input.kFactorOverride;
+    return panel;
+  }
+
+  /**
+   * delete_node(kind=bend) (Phase 5 Slice 8, 14 §2.1.1) — the PANEL-level
+   * merge: the inverse of createBendNode, entirely within one part (unlike
+   * mergePartsWithBend/fuseBodies's PART-level merge, no part aliasing is
+   * involved here). Deletes the bend row outright (not aliased — unlike a
+   * part or region panel, nothing else in the current schema references a
+   * bend by id once it's gone), re-parents any bends that hung directly off
+   * the removed bend's child region panel onto the removed bend's OWN
+   * parent (promoted one level up — exactly mergePartsWithBend's re-
+   * parenting pattern, applied to one edge instead of a whole part's rows),
+   * and aliases the child region panel onto that same parent so any
+   * existing reference to it keeps resolving.
+   */
+  deleteBendNode(bendId: string): {
+    partId: string;
+    mergedRegionPanelId: string;
+    ontoRegionPanelId: string;
+  } {
+    const bend = this.bends.get(bendId);
+    if (!bend) {
+      throw new GraphStoreError(`no bend with id ${bendId}`, ErrorCodes.GRAPH_BEND_NOT_FOUND);
+    }
+    const childPanel = this.regionPanels.get(bend.childRegionPanelId);
+    if (!childPanel) {
+      throw new GraphStoreError(
+        `bend ${bendId}'s own child region panel ${bend.childRegionPanelId} is missing`,
+        ErrorCodes.GRAPH_REGION_PANEL_NOT_FOUND,
+      );
+    }
+
+    for (const child of this.bends.values()) {
+      if (child.parentRegionPanelId === bend.childRegionPanelId) {
+        child.parentRegionPanelId = bend.parentRegionPanelId;
+      }
+    }
+
+    childPanel.mergedIntoRegionPanelId = bend.parentRegionPanelId;
+    this.bends.delete(bendId);
+
+    return {
+      partId: bend.partId,
+      mergedRegionPanelId: bend.childRegionPanelId,
+      ontoRegionPanelId: bend.parentRegionPanelId,
+    };
+  }
+
+  /** move_edge (Phase 5 Slice 8, 15 §4.3, 14 §2.2 K2). */
+  moveEdge(input: MoveEdgeInput): { part: PartRow } {
+    const part = this.parts.get(input.partId);
+    if (!part) {
+      throw new GraphStoreError(`no part with id ${input.partId}`, ErrorCodes.GRAPH_PART_NOT_FOUND);
+    }
+    if (part.mergedIntoPartId !== null) {
+      throw new GraphStoreError(
+        `part ${input.partId} is an alias (already merged), not a live part`,
+        ErrorCodes.GRAPH_PART_ALIASED,
+      );
+    }
+    const n = part.outline.length;
+    if (
+      input.startIndex < 0 ||
+      input.endIndex < input.startIndex ||
+      input.endIndex >= n ||
+      !Number.isInteger(input.startIndex) ||
+      !Number.isInteger(input.endIndex)
+    ) {
+      throw new GraphStoreError(
+        `vertex_range [${input.startIndex}, ${input.endIndex}] is out of bounds for a ` +
+          `${n}-vertex outline`,
+        ErrorCodes.GRAPH_INVALID_VERTEX_RANGE,
+      );
+    }
+
+    const newOutline = [
+      ...part.outline.slice(0, input.startIndex),
+      ...input.newPoints,
+      ...part.outline.slice(input.endIndex + 1),
+    ];
+    if (newOutline.length < 3) {
+      throw new GraphStoreError(
+        `resulting outline would have only ${newOutline.length} vertices (minimum 3)`,
+        ErrorCodes.GE_DEGENERATE_OUTLINE,
+      );
+    }
+    part.outline = newOutline;
+    return { part };
   }
 
   getPart(partId: string): PartRow | undefined {
