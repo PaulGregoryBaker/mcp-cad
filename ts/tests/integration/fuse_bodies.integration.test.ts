@@ -149,6 +149,45 @@ d('[v2] fuse_bodies (Phase 5 Slice 6) — success cases', () => {
     expect(shoelaceArea(requirePart(store, partA.part_id).outline)).toBeCloseTo(175, 6);
   });
 
+  /**
+   * v2 port of v1's fuse_y_contact.integration.test.ts scenario 2 (Phase 5
+   * test migration, 2026-07-26): a STAGGERED shared edge — B's edge touches
+   * A's edge along only PART of its length (offset 0.3mm perpendicular to
+   * the shared boundary), not a full flush edge (the "touching rectangles"
+   * case above) and not a footprint overlap (the "overlapping rectangles"
+   * case above). A genuinely distinct touching topology, confirmed via a
+   * scratch script to not already be exercised by either existing case.
+   *
+   * v1's own file had a THIRD scenario: a deliberate, artificial sub-mm GAP
+   * (translating B by thickness+0.3mm) exercising v1's own "DXF Y-gap
+   * correction" — a compensating-offset fallback in v1's separate DXF-
+   * reconstruction step for panels that were "physically touching in 3D" but
+   * whose independently-computed DXF outlines drifted apart. That mechanism
+   * has no v2 counterpart: v2's fuseCoplanarParts operates on ONE outline
+   * (constitution v2 principle III — one geometric solution), and a scratch
+   * check confirmed v2 currently rejects any gap at all, even 0.01mm
+   * (GE_FUSE_DISJOINT_RESULT via the underlying PolygonUnion's kMultipleLoops
+   * case) — matching the existing "rejects disjoint" test below. Adding gap
+   * tolerance would be exactly the "compensating offset" this rebuild's
+   * constitution prohibits (principle III/VI) for a case that, unlike v1's,
+   * never arises here: v2 measures a real STEP-derived panel's outline once,
+   * from one ring, not via a second independently-reconstructed DXF pass —
+   * so two panels genuinely touching in 3D do not drift into a fake gap. Not
+   * ported.
+   */
+  it('fuses two coplanar rectangles along a STAGGERED (partial, offset) shared edge', () => {
+    const store = new GraphStore();
+    const partA = createRectPart(store, 'stagger-a', { x0: 0, y0: 0, x1: 10, y1: 5 });
+    // B's left edge (x=10) touches A's right edge (x=10) but B is shifted
+    // 0.3mm in Y — only 4.7mm of the 5mm edge actually coincides, and the
+    // remaining 0.3mm forms an L-shaped step, not a flush line.
+    const partB = createRectPart(store, 'stagger-b', { x0: 10, y0: 0.3, x1: 15, y1: 5.3 });
+
+    fuse(store, partA.part_id, partB.part_id);
+
+    expect(shoelaceArea(requirePart(store, partA.part_id).outline)).toBeCloseTo(10 * 5 + 5 * 5, 6);
+  });
+
   it('fuses two coplanar rectangles anchored on a tilted (X-normal) plane', () => {
     const store = new GraphStore();
     const partA = createRectPart(

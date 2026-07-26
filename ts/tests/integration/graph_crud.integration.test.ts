@@ -24,6 +24,8 @@ import * as path from 'node:path';
 import { GraphStore } from '../../src/v2/graph/store';
 import { dispatchGraphTool } from '../../src/v2/tools/graph';
 import { McpToolError } from '../../src/mcp/errors';
+import { geometryBinding } from '../../src/geometry/binding';
+import type { BoundingBoxResult } from '../../src/geometry/types';
 
 const ENABLED = process.env.SUITE_V2_DRIVER === '1';
 const d = ENABLED ? describe : describe.skip;
@@ -354,6 +356,115 @@ d('[v2] split_body_by_bends (standalone tool, Phase 5 Slice 8)', () => {
     for (const p of result.protrusions) {
       expect(p.ring_local.length).toBeGreaterThanOrEqual(3);
       expect(p.thickness_mm).toBeGreaterThan(0);
+    }
+  });
+
+  // Ported from v1's own split_by_bends.integration.test.ts — a real
+  // regression guard against half-space extraction over-capturing an entire
+  // panel slab as a "protrusion" (a real protrusion is a localized feature:
+  // a tab, boss, or bridge flange, never panel-sized).
+  it('testcube.step: protrusion bboxes are localized features, not panel-sized', () => {
+    const result = dispatchGraphTool(new GraphStore(), 'split_body_by_bends', {
+      file: path.join(FIXTURES_DIR, 'testcube.step'),
+      angle_threshold_deg: 45,
+      max_thickness_mm: 2.0,
+      max_recursion_depth: 2,
+    }) as {
+      panel_count: number;
+      protrusion_count: number;
+      panels: Array<{ shell_id: string }>;
+      protrusions: Array<{ shell_id: string }>;
+    };
+    expect(result.panel_count).toBe(12);
+    expect(result.protrusion_count).toBe(4);
+
+    const bboxVolume = (b: BoundingBoxResult): number =>
+      (b.x_max - b.x_min) * (b.y_max - b.y_min) * (b.z_max - b.z_min);
+    const maxDim = (b: BoundingBoxResult): number =>
+      Math.max(b.x_max - b.x_min, b.y_max - b.y_min, b.z_max - b.z_min);
+
+    const panelBboxes = result.panels.map((p) => geometryBinding.computeBoundingBox(p.shell_id));
+    const protrusionBboxes = result.protrusions.map((p) =>
+      geometryBinding.computeBoundingBox(p.shell_id),
+    );
+    const largestPanelVolume = Math.max(...panelBboxes.map(bboxVolume));
+    const largestPanelMaxDim = Math.max(...panelBboxes.map(maxDim));
+
+    // Volume cap (25%) catches plate-style misdetections where a half-space
+    // cut over-extracts an entire wall slab. The max-dimension cap (85%)
+    // accommodates bridge flanges that legitimately span most of the inner
+    // cube's own height.
+    for (const bbox of protrusionBboxes) {
+      expect(bboxVolume(bbox)).toBeLessThan(largestPanelVolume * 0.25);
+      expect(maxDim(bbox)).toBeLessThan(largestPanelMaxDim * 0.85);
+    }
+  });
+
+  it('cube_with_flanges.stp: 10 clean isolated panels (6 walls + 4 flanges), 0 protrusions', () => {
+    const result = dispatchGraphTool(new GraphStore(), 'split_body_by_bends', {
+      file: path.join(FIXTURES_DIR, 'cube_with_flanges.stp'),
+    }) as { panel_count: number; protrusion_count: number };
+
+    expect(result.panel_count).toBe(10);
+    expect(result.protrusion_count).toBe(0);
+  });
+
+  /**
+   * v2 port of v1's split_thickness_consistency.integration.test.ts's real
+   * claim (Phase 5 test migration, 2026-07-26) — but investigated and fixed
+   * at its actual root cause rather than ported as-is: v1's own fix was a
+   * post-hoc "cross-panel midplane-offset correction" pass
+   * (shape-ops.ts:2504) that re-derives a panel's thickness by comparing it
+   * against a NEIGHBORING panel after the fact — exactly the kind of
+   * cross-panel heuristic/case-arbitration this rebuild's constitution
+   * restricts (principle VI). Investigation found the REAL root cause: every
+   * panel splitMode2 extracts is deliberately cut 1mm larger than its own
+   * correctly-measured true thickness ("0.5mm bleed on each side" — see
+   * geometry_service_sheet_metal.cc's splitMode2 comment, a safety margin
+   * for the boolean extraction itself) — for cube_with_flanges.stp, each
+   * flange sits close enough to its host wall that this bleed margin
+   * captures real neighboring material, and getPanelFrame's own
+   * thicknessMm (which re-measures the EXTRACTED, already-bled solid's own
+   * full vertex extent) reports the inflated result. The true per-panel
+   * thickness (`bestDist`, the outer/inner face-group pairing distance) was
+   * ALREADY being computed correctly upstream in splitMode2 — it just
+   * wasn't propagated anywhere. Fixed by threading it through as
+   * `DecomposedByBendsResult.panelThicknessMm` (parallel to panelIds) ->
+   * NAPI `panel_thickness_mm` -> this tool's own `thickness_mm` field,
+   * bypassing getPanelFrame's re-derivation entirely — the manufacturing
+   * graph now reports each panel's own correctly-measured thickness
+   * directly, no cross-panel comparison needed.
+   *
+   * cube_with_flanges.stp's 6 walls now all correctly measure 1mm (matching
+   * generate_fixtures.cc's exact ground truth: a 200mm outer cube with a
+   * 198mm hollow, 1mm wall on every side) — previously 1.5mm/2mm depending
+   * on which neighboring feature fell within the bleed margin. The 4
+   * flanges still honestly report 2mm: unlike the walls, a flange's own
+   * natural inner face genuinely no longer exists once boolean-fused with
+   * zero gap to its host wall (BRepAlgoAPI_Fuse erases that seam), so its
+   * own outer/inner pairing correctly matches against the host wall's own
+   * far face instead — a real, information-theoretic ambiguity (not a bug)
+   * that only cross-panel inference could resolve, which is deliberately
+   * out of scope here (see this comment's opening paragraph).
+   */
+  it('cube_with_flanges.stp: every wall panel measures the true 1mm thickness (not the bled/inflated slab extent)', () => {
+    const result = dispatchGraphTool(new GraphStore(), 'split_body_by_bends', {
+      file: path.join(FIXTURES_DIR, 'cube_with_flanges.stp'),
+    }) as {
+      panels: Array<{ shell_id: string; thickness_mm: number }>;
+    };
+    expect(result.panels).toHaveLength(10);
+
+    const walls = result.panels.filter((p) => {
+      const bbox = geometryBinding.computeBoundingBox(p.shell_id);
+      const dims = [bbox.x_max - bbox.x_min, bbox.y_max - bbox.y_min, bbox.z_max - bbox.z_min].sort(
+        (a, b) => a - b,
+      );
+      return dims[1] > 150 && dims[2] > 150;
+    });
+    expect(walls).toHaveLength(6);
+    for (const wall of walls) {
+      expect(wall.thickness_mm).toBeCloseTo(1, 6);
     }
   });
 });

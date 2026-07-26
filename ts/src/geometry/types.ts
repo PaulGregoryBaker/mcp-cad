@@ -529,6 +529,13 @@ export interface AlignmentResult {
 export interface SplitBodyByBendsResult {
   panel_ids: string[];
   panel_count: number;
+  /** True material thickness per panel (parallel to panel_ids), measured at
+   * cut time from the panel's own outer/inner face-group pairing — NOT
+   * re-derived from the extracted solid's own vertex extent (getPanelFrame's
+   * thicknessMm), which inflates whenever real neighboring material (e.g. a
+   * zero-gap-fused flange) falls within the cutter geometry's own safety-
+   * margin bleed. See geometry_service.hpp's DecomposedByBendsResult. */
+  panel_thickness_mm: number[];
   panel_bboxes: Array<{
     x_min: number;
     y_min: number;

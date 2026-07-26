@@ -1151,6 +1151,10 @@ Napi::Value SplitBodyByBends(const Napi::CallbackInfo& info) {
     for (size_t i = 0; i < res.panelIds.size(); ++i)
       panelArr.Set(static_cast<uint32_t>(i), Napi::String::New(env, res.panelIds[i]));
 
+    Napi::Array panelThicknessArr = Napi::Array::New(env, res.panelThicknessMm.size());
+    for (size_t i = 0; i < res.panelThicknessMm.size(); ++i)
+      panelThicknessArr.Set(static_cast<uint32_t>(i), Napi::Number::New(env, res.panelThicknessMm[i]));
+
     Napi::Array protrusionArr = Napi::Array::New(env, res.protrusionIds.size());
     for (size_t i = 0; i < res.protrusionIds.size(); ++i)
       protrusionArr.Set(static_cast<uint32_t>(i), Napi::String::New(env, res.protrusionIds[i]));
@@ -1192,6 +1196,7 @@ Napi::Value SplitBodyByBends(const Napi::CallbackInfo& info) {
     }
 
     result.Set("panel_ids",           panelArr);
+    result.Set("panel_thickness_mm",  panelThicknessArr);
     result.Set("panel_bboxes",        serializeBboxes(res.panelBboxes));
     result.Set("protrusion_ids",      protrusionArr);
     result.Set("protrusion_bboxes",   serializeBboxes(res.protrusionBboxes));

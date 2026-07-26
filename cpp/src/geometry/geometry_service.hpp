@@ -407,6 +407,15 @@ struct ProtrusionParent {
 
 struct DecomposedByBendsResult {
   std::vector<ShellId>          panelIds;           // flat solid panels
+  // True material thickness per panel (parallel to panelIds), measured at
+  // cut time from the panel's own outer/inner face-group pairing — BEFORE
+  // the cutter geometry's own safety-margin bleed (splitMode2's "0.5mm
+  // bleed on each side") inflates the extracted solid. getPanelFrame's own
+  // thicknessMm re-measures the (deliberately oversized) extracted slab's
+  // full vertex extent, which is corrupted whenever real neighboring
+  // material (e.g. a zero-gap-fused flange) falls within that bleed margin
+  // — this field is the panel's own already-correct measurement instead.
+  std::vector<double>           panelThicknessMm;
   std::vector<BBox3D>           panelBboxes;        // AABB for each panel (parallel to panelIds)
   std::vector<ShellId>          protrusionIds;      // flanges / tabs extracted from the solid
   std::vector<BBox3D>           protrusionBboxes;   // AABB for each protrusion

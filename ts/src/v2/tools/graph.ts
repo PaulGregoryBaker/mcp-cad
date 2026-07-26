@@ -23,6 +23,7 @@ import {
   requireNumber,
   optNumber,
   optString,
+  optBoolean,
   optTransform,
   requirePoint2,
   requirePoint2Array,
@@ -134,6 +135,11 @@ export const graphToolDefinitions = [
         },
         radius_mm: { type: 'number', minimum: 0 },
         k_factor: { type: 'number', minimum: 0, maximum: 1 },
+        bottom_is_concave: {
+          type: 'boolean',
+          description:
+            "Overrides the angle_deg-sign-derived mountain/valley pivot-side default (see BendRow.bottomIsConcave's own doc comment) — a caller that already knows the true pivot side (e.g. from reconcilePieces' own measured bend) should pass it explicitly; the sign-derived rule is a default, not an invariant.",
+        },
       },
       required: ['part_a_id', 'part_b_id', 'edge_a', 'edge_b', 'angle_deg'],
     },
@@ -398,6 +404,7 @@ function handleMergeBodiesWithBend(
   const angleDeg = requireNumber(args, 'angle_deg');
   const radiusMm = optNumber(args, 'radius_mm');
   const kFactor = optNumber(args, 'k_factor');
+  const bottomIsConcave = optBoolean(args, 'bottom_is_concave');
 
   try {
     const { bend, childRegionPanel } = mergePartsWithBend(store, {
@@ -408,6 +415,7 @@ function handleMergeBodiesWithBend(
       angleDeg,
       radiusMm,
       kFactor,
+      bottomIsConcave,
     });
     return {
       part_id: partAId,

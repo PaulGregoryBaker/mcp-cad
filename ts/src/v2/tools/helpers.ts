@@ -35,6 +35,11 @@ export function optString(args: Record<string, unknown>, key: string): string | 
   return typeof val === 'string' ? val : undefined;
 }
 
+export function optBoolean(args: Record<string, unknown>, key: string): boolean | undefined {
+  const val = args[key];
+  return typeof val === 'boolean' ? val : undefined;
+}
+
 function isPoint2Like(val: unknown): val is Record<string, unknown> {
   return (
     typeof val === 'object' &&

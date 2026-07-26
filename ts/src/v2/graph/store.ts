@@ -59,6 +59,9 @@ export interface MergePartsWithBendInput {
   angleDeg: number;
   radiusMm?: number;
   kFactor?: number;
+  /** See BendRow.bottomIsConcave's own doc comment. Omitted: falls back to
+   * the angleDeg-sign rule (matches every caller before this field existed). */
+  bottomIsConcave?: boolean;
 }
 
 /**
@@ -311,6 +314,7 @@ export class GraphStore {
       angleDeg: input.angleDeg,
       radiusMm: input.radiusMm,
       kFactor: input.kFactor,
+      bottomIsConcave: input.bottomIsConcave,
     });
   }
 

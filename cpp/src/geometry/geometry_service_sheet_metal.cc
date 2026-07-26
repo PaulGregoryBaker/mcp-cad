@@ -1155,6 +1155,7 @@ public:
                      double angleThresholdDeg,
                      double defaultThicknessMm,
                      std::vector<ShellId>& panelIds,
+                     std::vector<double>& panelThicknessMm,
                      std::vector<ShapeHistoryRecord>* historyOut = nullptr)
   {
     TopTools_IndexedMapOfShape faceMap;
@@ -1209,6 +1210,7 @@ public:
         ShellId sid = generateUUID();
         s_.shells[sid] = ShellState{sid, parentId, sh};
         panelIds.push_back(sid);
+        panelThicknessMm.push_back(0.0);  // zero-thickness shell fallback
         continue;
       }
 
@@ -1303,6 +1305,8 @@ public:
       ShellId sid = generateUUID();
       s_.shells[sid] = ShellState{sid, parentId, prism.Shape()};
       panelIds.push_back(sid);
+      // Extruded by exactly defaultThicknessMm — exact, not a measurement.
+      panelThicknessMm.push_back(defaultThicknessMm);
     }
   }
 
@@ -1321,6 +1325,7 @@ public:
                   double angleThresholdDeg,
                   double maxThicknessMm,
                   std::vector<ShellId>& panelIds,
+                  std::vector<double>& panelThicknessMm,
                   std::vector<ShellId>& protrusionIds,
                   std::vector<ProtrusionParent>& protrusionParents,
                   TopoDS_Shape* remainderOut = nullptr,
@@ -1513,6 +1518,11 @@ public:
       ShellId panelId = generateUUID();
       s_.shells[panelId] = ShellState{panelId, parentId, extract.Shape()};
       panelIds.push_back(panelId);
+      // bestDist is this panel's own outer/inner face-group distance,
+      // measured BEFORE the cutter box's own dz=bestDist+1.0 safety-margin
+      // bleed below — the correct true thickness, not the (possibly
+      // material-inflated) extracted slab's own vertex extent.
+      panelThicknessMm.push_back(bestDist);
       (void)protrusionIds;       // reserved for future post-cut handling
       (void)protrusionParents;   // reserved for future post-cut handling
 
@@ -1542,6 +1552,7 @@ public:
       double               defaultThicknessMm,
       int                  remainingDepth,
       std::vector<ShellId>&        panelIds,
+      std::vector<double>&        panelThicknessMm,
       std::vector<ShellId>&        protrusionIds,
       std::vector<ProtrusionParent>& protrusionParents)
   {
@@ -1619,7 +1630,7 @@ public:
       if (components.size() > 1) {
         for (const auto& comp : components) {
           recursiveDecompose(comp, parentId, angleThresholdDeg, maxThicknessMm,
-                             defaultThicknessMm, remainingDepth, panelIds,
+                             defaultThicknessMm, remainingDepth, panelIds, panelThicknessMm,
                              protrusionIds, protrusionParents);
         }
         return;
@@ -1629,9 +1640,10 @@ public:
     TopoDS_Shape childRemainder;
     if (mode == "thin_solid") {
       splitMode2(workShape, localHalfSize, parentId, angleThresholdDeg, maxThicknessMm,
-                 panelIds, protrusionIds, protrusionParents, &childRemainder);
+                 panelIds, panelThicknessMm, protrusionIds, protrusionParents, &childRemainder);
     } else {
-      splitMode1BFS(workShape, parentId, angleThresholdDeg, defaultThicknessMm, panelIds);
+      splitMode1BFS(workShape, parentId, angleThresholdDeg, defaultThicknessMm, panelIds,
+                    panelThicknessMm);
       return;  // surface mode has no structured remainder
     }
 
@@ -1641,14 +1653,14 @@ public:
     bool hadSolid = false;
     for (TopExp_Explorer ex(childRemainder, TopAbs_SOLID); ex.More(); ex.Next()) {
       recursiveDecompose(ex.Current(), parentId, angleThresholdDeg, maxThicknessMm,
-                         defaultThicknessMm, remainingDepth - 1, panelIds, protrusionIds,
-                         protrusionParents);
+                         defaultThicknessMm, remainingDepth - 1, panelIds, panelThicknessMm,
+                         protrusionIds, protrusionParents);
       hadSolid = true;
     }
     if (!hadSolid) {
       recursiveDecompose(childRemainder, parentId, angleThresholdDeg, maxThicknessMm,
-                         defaultThicknessMm, remainingDepth - 1, panelIds, protrusionIds,
-                         protrusionParents);
+                         defaultThicknessMm, remainingDepth - 1, panelIds, panelThicknessMm,
+                         protrusionIds, protrusionParents);
     }
   }
   // ÔöÇÔöÇ Main entry point ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
@@ -1775,6 +1787,7 @@ public:
 
       // T019 ÔÇö Detect and extract protrusions before panel cutting.
       std::vector<ShellId>         panelIds;
+      std::vector<double>          panelThicknessMm;
       std::vector<ShellId>         protrusionIds;
       std::vector<ProtrusionParent> protrusionParents;
 
@@ -1946,14 +1959,15 @@ public:
         for (const auto& comp : wsComponents) {
           recursiveDecompose(comp, parentId, angleThresholdDeg, maxThicknessMm,
                              defaultThicknessMm, /*depth=*/1,
-                             panelIds, protrusionIds, protrusionParents);
+                             panelIds, panelThicknessMm, protrusionIds, protrusionParents);
         }
       } else if (mode == "thin_solid") {
         splitMode2(workShape, planeHalfSize, parentId, angleThresholdDeg, maxThicknessMm,
-                   panelIds, protrusionIds, protrusionParents, &firstPassRemainder, &shapeHistory);
+                   panelIds, panelThicknessMm, protrusionIds, protrusionParents,
+                   &firstPassRemainder, &shapeHistory);
       } else {
         splitMode1BFS(workShape, parentId, angleThresholdDeg, defaultThicknessMm, panelIds,
-                      &shapeHistory);
+                      panelThicknessMm, &shapeHistory);
       }
 
       // T022 ÔÇö Recursive decomposition into remainder solid(s)
@@ -1961,13 +1975,13 @@ public:
         bool hadSolid = false;
         for (TopExp_Explorer ex(firstPassRemainder, TopAbs_SOLID); ex.More(); ex.Next()) {
           recursiveDecompose(ex.Current(), parentId, angleThresholdDeg, maxThicknessMm,
-                             defaultThicknessMm, maxRecursionDepth - 1, panelIds,
+                             defaultThicknessMm, maxRecursionDepth - 1, panelIds, panelThicknessMm,
                              protrusionIds, protrusionParents);
           hadSolid = true;
         }
         if (!hadSolid) {
           recursiveDecompose(firstPassRemainder, parentId, angleThresholdDeg, maxThicknessMm,
-                             defaultThicknessMm, maxRecursionDepth - 1, panelIds,
+                             defaultThicknessMm, maxRecursionDepth - 1, panelIds, panelThicknessMm,
                              protrusionIds, protrusionParents);
         }
       }
@@ -2036,7 +2050,7 @@ public:
       auto protrusionBboxes = computeBboxes(protrusionIds);
 
       return DecomposedByBendsResult{
-          std::move(panelIds), std::move(panelBboxes),
+          std::move(panelIds), std::move(panelThicknessMm), std::move(panelBboxes),
           std::move(protrusionIds), std::move(protrusionBboxes),
           std::move(protrusionParents),
           token, mode, std::move(shapeHistory)};

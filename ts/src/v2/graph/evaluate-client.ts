@@ -188,6 +188,13 @@ export interface MergePartsWithBendInput {
   angleDeg: number;
   radiusMm?: number;
   kFactor?: number;
+  /** See BendRow.bottomIsConcave's own doc comment (manufacturing_graph_
+   * evaluator.hpp) — omitted: falls back to the angleDeg-sign-derived rule,
+   * which is not guaranteed correct for every real fold (that rule is a
+   * default, not an invariant). A caller that already knows the true pivot
+   * side (e.g. reconcilePieces' own measured bend) should pass it through
+   * explicitly rather than rely on the fallback. */
+  bottomIsConcave?: boolean;
 }
 
 /**
@@ -260,6 +267,7 @@ export function mergePartsWithBend(
     angleDeg: input.angleDeg,
     radiusMm: input.radiusMm,
     kFactor: input.kFactor,
+    bottomIsConcave: input.bottomIsConcave,
   });
 }
 
@@ -507,7 +515,7 @@ export function importPart(
   // never touch OCCT), so there is nothing for a later, separate call to
   // re-detect protrusions FROM — this import-time extraction, while a live
   // shell still exists, is the only point protrusions can ever be found.
-  const pieces: NapiPanelPieceSpec[] = split.panel_ids.map((shellId) => {
+  const pieces: NapiPanelPieceSpec[] = split.panel_ids.map((shellId, i) => {
     const frame = geometryBinding.getPanelFrame(shellId);
     return {
       origin: { x: frame.originX, y: frame.originY, z: frame.originZ },
@@ -515,14 +523,25 @@ export function importPart(
       vAxis: { x: frame.vX, y: frame.vY, z: frame.vZ },
       normal: { x: frame.normalX, y: frame.normalY, z: frame.normalZ },
       ringLocal: frame.ring,
-      thicknessMm: frame.thicknessMm,
+      // split.panel_thickness_mm (the manufacturing graph's own per-panel
+      // measurement, taken at cut time from the panel's own outer/inner
+      // face-group pairing) — NOT frame.thicknessMm, which re-measures the
+      // extracted solid's own full vertex extent and inflates whenever real
+      // neighboring material (e.g. a flange boolean-fused with zero gap to
+      // its host wall) falls within the cutter geometry's own safety-margin
+      // bleed. See geometry_service.hpp's DecomposedByBendsResult.
+      thicknessMm: split.panel_thickness_mm[i],
     };
   });
 
   // One thickness per part (14 §2 D3) — real fixtures are one material;
   // detecting/reconciling a genuine per-panel thickness mismatch is out of
-  // this slice's scope.
-  const thicknessMm = pieces[0].thicknessMm;
+  // this slice's scope. The MINIMUM across all panels (not pieces[0]) is the
+  // correct single estimator: a panel's own measurement can only ever be
+  // INFLATED by neighboring material within the bleed margin (never
+  // under-measured), so the true material thickness is never larger than
+  // the smallest honestly-measured panel.
+  const thicknessMm = Math.min(...pieces.map((p) => p.thicknessMm));
   const reconciled = geometryBinding.reconcilePieces(pieces, thicknessMm);
   if (!reconciled.ok) {
     throwError(
@@ -663,7 +682,7 @@ export function splitBodyByBendsStandalone(
     options.maxRecursionDepth,
   );
 
-  const toPieceInfo = (shellId: string): SplitPieceInfo => {
+  const toPieceInfo = (shellId: string, thicknessMmOverride?: number): SplitPieceInfo => {
     const frame = geometryBinding.getPanelFrame(shellId);
     return {
       shellId,
@@ -672,12 +691,21 @@ export function splitBodyByBendsStandalone(
       vAxis: { x: frame.vX, y: frame.vY, z: frame.vZ },
       normal: { x: frame.normalX, y: frame.normalY, z: frame.normalZ },
       ringLocal: frame.ring,
-      thicknessMm: frame.thicknessMm,
+      // split.panel_thickness_mm (the manufacturing graph's own per-panel
+      // measurement, taken at cut time from the panel's own outer/inner
+      // face-group pairing) when available — NOT frame.thicknessMm, which
+      // re-measures the extracted solid's own full vertex extent and
+      // inflates whenever real neighboring material (e.g. a flange
+      // boolean-fused with zero gap to its host wall) falls within the
+      // cutter geometry's own safety-margin bleed. Protrusions have no
+      // parallel array (a structurally different extraction path — see
+      // extractProtrusion), so they fall back to frame.thicknessMm.
+      thicknessMm: thicknessMmOverride ?? frame.thicknessMm,
     };
   };
 
   return {
-    panels: split.panel_ids.map(toPieceInfo),
-    protrusions: split.protrusion_ids.map(toPieceInfo),
+    panels: split.panel_ids.map((id, i) => toPieceInfo(id, split.panel_thickness_mm[i])),
+    protrusions: split.protrusion_ids.map((id) => toPieceInfo(id)),
   };
 }

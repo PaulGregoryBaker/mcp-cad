@@ -232,6 +232,7 @@ export interface GeometryAddon {
     maxRecursionDepth?: number,
   ): {
     panel_ids: string[];
+    panel_thickness_mm: number[];
     panel_bboxes: Array<{
       x_min: number;
       y_min: number;
@@ -1086,6 +1087,7 @@ export class GeometryBinding {
       return {
         panel_ids: res.panel_ids,
         panel_count: res.panel_ids.length,
+        panel_thickness_mm: res.panel_thickness_mm,
         panel_bboxes: res.panel_bboxes,
         protrusion_ids: res.protrusion_ids,
         protrusion_count: res.protrusion_ids.length,
