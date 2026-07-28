@@ -840,3 +840,10 @@ export interface NapiManufacturingProfile {
     minFlangeWidthFactor?: number;
   };
 }
+
+/** computeCloseGapDelta return — the 2D delta to apply via move_edge. */
+export interface CloseGapDeltaResult {
+  deltaX: number;
+  deltaY: number;
+  gapMm: number;
+}

@@ -21,6 +21,7 @@
 #include "../geometry/translation/step_reconciliation.hpp"
 #include "../geometry/translation/polygon_boolean.hpp"
 #include "../geometry/translation/cut_panel.hpp"
+#include "../geometry/translation/close_gap.hpp"
 #include "../geometry/validation/rules_engine.hpp"
 #include "../geometry/validation/profile.hpp"
 
@@ -172,6 +173,15 @@ std::vector<Point2> ReadPoint2Array(const Napi::Array& arr) {
   pts.reserve(arr.Length());
   for (uint32_t i = 0; i < arr.Length(); ++i) {
     pts.push_back(ReadPoint2(arr.Get(i).As<Napi::Object>()));
+  }
+  return pts;
+}
+
+std::vector<Point3> ReadPoint3Array(const Napi::Array& arr) {
+  std::vector<Point3> pts;
+  pts.reserve(arr.Length());
+  for (uint32_t i = 0; i < arr.Length(); ++i) {
+    pts.push_back(ReadPoint3(arr.Get(i).As<Napi::Object>()));
   }
   return pts;
 }
@@ -911,6 +921,34 @@ Napi::Value EvaluateFindingsBinding(const Napi::CallbackInfo& info) {
   }
 }
 
+// ─── computeCloseGapDelta ────────────────────────────────────────────────────
+
+Napi::Value ComputeCloseGapDeltaBinding(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 3 || !info[0].IsArray() || !info[1].IsArray() || !info[2].IsObject()) {
+    Napi::TypeError::New(env, "computeCloseGapDelta(edgeA3d: Point3[], edgeB3d: Point3[], "
+                             "panelBPose: Transform3)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    std::vector<Point3> edgeA = ReadPoint3Array(info[0].As<Napi::Array>());
+    std::vector<Point3> edgeB = ReadPoint3Array(info[1].As<Napi::Array>());
+    Transform3 pose = ReadTransform3(info[2].As<Napi::Object>());
+
+    auto result = translation::ComputeCloseGapDelta(edgeA, edgeB, pose);
+
+    Napi::Object obj = Napi::Object::New(env);
+    obj.Set("deltaX", Napi::Number::New(env, result.deltaX));
+    obj.Set("deltaY", Napi::Number::New(env, result.deltaY));
+    obj.Set("gapMm", Napi::Number::New(env, result.gapMm));
+    return obj;
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
 void RegisterTranslationMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("evaluatePartGraph", Napi::Function::New(env, EvaluatePartGraph));
   exports.Set("constructPartSolid", Napi::Function::New(env, ConstructPartSolidBinding));
@@ -924,6 +962,7 @@ void RegisterTranslationMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("prepareCircleCut", Napi::Function::New(env, PrepareCircleCutBinding));
   exports.Set("preparePolygonCut", Napi::Function::New(env, PreparePolygonCutBinding));
   exports.Set("evaluateFindings", Napi::Function::New(env, EvaluateFindingsBinding));
+  exports.Set("computeCloseGapDelta", Napi::Function::New(env, ComputeCloseGapDeltaBinding));
 }
 
 }  // namespace mcp_cad

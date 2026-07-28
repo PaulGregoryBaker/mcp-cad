@@ -16,6 +16,7 @@ import type {
   EvaluatePartGraphResult,
   ConstructPartSolidResult,
   NapiPoint3,
+  NapiTransform3,
   MapToWorldResult,
   MapToFlatResult,
   NapiPanelPieceSpec,
@@ -762,4 +763,102 @@ export function evaluateFindings(
     profile ?? DEFAULT_MANUFACTURING_PROFILE,
     layout,
   );
+}
+
+// ── close_gap (Phase 5 Slice 9b) ────────────────────────────────────────────
+
+export interface CloseGapInput {
+  partId: string;
+  edgeA: EdgeRef;
+  edgeB: EdgeRef;
+}
+
+/**
+ * Resolves a free edge to its 3D bottom-face vertex positions, for gap
+ * measurement. Like resolveFreeEdge but returns 3D data.
+ */
+function resolveFreeEdge3d(
+  partId: string,
+  layout: EvaluatePartGraphResult,
+  ref: EdgeRef,
+): { panelPose: { r: number[]; t: number[] }; bottomFace: NapiPoint3[] } {
+  const panel = layout.panels.find((p) => p.regionPanelId === ref.regionPanelId);
+  if (!panel) {
+    throwError(
+      ErrorCodes.GE_INVALID_EDGE_REF,
+      `no live region panel ${ref.regionPanelId} on part ${partId}`,
+      false,
+    );
+  }
+  const n = panel.regionOuter.length;
+  if (!Number.isInteger(ref.edgeIndex) || ref.edgeIndex < 0 || ref.edgeIndex >= n) {
+    throwError(
+      ErrorCodes.GE_INVALID_EDGE_REF,
+      `edgeIndex ${ref.edgeIndex} out of range for region panel ${ref.regionPanelId} (${n} edges)`,
+      false,
+    );
+  }
+  if (panel.edgeBendId[ref.edgeIndex] !== '') {
+    throwError(
+      ErrorCodes.GE_INVALID_EDGE_REF,
+      `edge ${ref.edgeIndex} of region panel ${ref.regionPanelId} is a bend zone boundary, not a free edge`,
+      false,
+    );
+  }
+  // The edge runs from bottomFace[i] to bottomFace[i+1].
+  return {
+    panelPose: panel.pose,
+    bottomFace: [panel.bottomFace[ref.edgeIndex], panel.bottomFace[(ref.edgeIndex + 1) % n]],
+  };
+}
+
+/**
+ * close_gap (rebuild/15-mcp-contract.md §4.2, Phase 5 Slice 9b).
+ *
+ * Graph-first: identifies the 3D gap between two free edges on the same
+ * part, computes the 2D translation to close it via C++ (close_gap.hpp),
+ * and applies it as a move_edge on edge_b's outline vertices.  The 3D solid
+ * is then reconstructed from the updated graph — no OCCT mutations.
+ *
+ * A gap of zero (edges already touch) is not an error — it produces a no-op
+ * move_edge (delta=0) and still succeeds.
+ */
+export function closeGap(store: GraphStore, input: CloseGapInput): { gapMm: number } {
+  if (!store.getPart(input.partId)) {
+    throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${input.partId}`, false);
+  }
+
+  const layout = evaluatePart(store, input.partId);
+  if (!layout.ok) {
+    throwError(
+      (layout.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
+      layout.message || `evaluatePartGraph failed for part ${input.partId}`,
+      false,
+    );
+  }
+
+  const edgeA = resolveFreeEdge3d(input.partId, layout, input.edgeA);
+  const edgeB = resolveFreeEdge3d(input.partId, layout, input.edgeB);
+
+  const delta = geometryBinding.computeCloseGapDelta(
+    edgeA.bottomFace,
+    edgeB.bottomFace,
+    edgeB.panelPose as NapiTransform3,
+  );
+
+  // Apply the 2D delta to edge_b's outline vertices via move_edge.
+  const panel = layout.panels.find((p) => p.regionPanelId === input.edgeB.regionPanelId)!;
+  const startIndex = input.edgeB.edgeIndex;
+  const endIndex = input.edgeB.edgeIndex + 1; // move_edge range is inclusive
+  const oldPoints = [panel.regionOuter[startIndex], panel.regionOuter[endIndex % panel.regionOuter.length]];
+  const newPoints = oldPoints.map((p) => ({ x: p.x + delta.deltaX, y: p.y + delta.deltaY }));
+
+  store.moveEdge({
+    partId: input.partId,
+    startIndex,
+    endIndex,
+    newPoints,
+  });
+
+  return { gapMm: delta.gapMm };
 }

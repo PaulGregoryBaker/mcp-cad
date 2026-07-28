@@ -90,6 +90,7 @@ add_library(geometry_engine STATIC
   src/geometry/translation/polygon_boolean.cc
   src/geometry/translation/ring_containment.cc
   src/geometry/translation/cut_panel.cc
+  src/geometry/translation/close_gap.cc
   src/geometry/validation/rules_engine.cc
   src/geometry/validation/rules/bend_radius.cc
   src/geometry/validation/rules/bend_angle.cc
@@ -138,6 +139,7 @@ add_executable(geometry_tests
   tests/ring_containment_test.cc
   tests/cut_panel_test.cc
   tests/validation_rules_test.cc
+  tests/close_gap_test.cc
 )
 
 target_include_directories(geometry_tests PRIVATE

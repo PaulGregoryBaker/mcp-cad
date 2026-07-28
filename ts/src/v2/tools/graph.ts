@@ -16,6 +16,7 @@ import {
   fuseBodies,
   splitBodyByBendsStandalone,
   cutPanel,
+  closeGap,
 } from '../graph/evaluate-client';
 import { throwError, ErrorCodes } from '../../mcp/errors';
 import {
@@ -297,6 +298,34 @@ export const graphToolDefinitions = [
       required: ['part_id', 'kind'],
     },
   },
+  {
+    name: 'close_gap',
+    description:
+      'Close a 3D gap between two free edges on the same part (rebuild/15 §4.2, Phase 5 Slice 9b). Graph-first: measures the 3D gap via evaluatePart, computes the 2D outline delta via C++, then applies move_edge. No OCCT mutations — the solid is reconstructed from the updated graph.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        part_id: { type: 'string' },
+        edge_a: {
+          type: 'object',
+          properties: {
+            region_panel_id: { type: 'string' },
+            edge_index: { type: 'integer', minimum: 0 },
+          },
+          required: ['region_panel_id', 'edge_index'],
+        },
+        edge_b: {
+          type: 'object',
+          properties: {
+            region_panel_id: { type: 'string' },
+            edge_index: { type: 'integer', minimum: 0 },
+          },
+          required: ['region_panel_id', 'edge_index'],
+        },
+      },
+      required: ['part_id', 'edge_a', 'edge_b'],
+    },
+  },
 ];
 
 export function dispatchGraphTool(
@@ -325,6 +354,8 @@ export function dispatchGraphTool(
       return handleSplitBodyByBends(args);
     case 'cut_panel':
       return handleCutPanel(store, args);
+    case 'close_gap':
+      return handleCloseGap(store, args);
     default:
       throwError(ErrorCodes.INTERNAL_ERROR, `Unknown v2 tool: ${name}`, false);
   }
@@ -688,6 +719,25 @@ function handleCutPanel(
       regionPanelId,
     });
     return { part_id: part.partId, region_panel_id: resolvedRegionPanelId };
+  } catch (err) {
+    if (err instanceof GraphStoreError) {
+      throwError(err.code, err.message, false);
+    }
+    throw err;
+  }
+}
+
+function handleCloseGap(
+  store: GraphStore,
+  args: Record<string, unknown>,
+): { gap_mm: number } {
+  const partId = requireString(args, 'part_id');
+  const edgeA = requireEdgeRef(args, 'edge_a');
+  const edgeB = requireEdgeRef(args, 'edge_b');
+
+  try {
+    const result = closeGap(store, { partId, edgeA, edgeB });
+    return { gap_mm: result.gapMm };
   } catch (err) {
     if (err instanceof GraphStoreError) {
       throwError(err.code, err.message, false);

@@ -78,6 +78,7 @@ import type {
   NapiTransform3,
   EvaluateFindingsResult,
   NapiManufacturingProfile,
+  CloseGapDeltaResult,
 } from './types';
 
 // ─── Addon interface ──────────────────────────────────────────────────────────
@@ -368,6 +369,13 @@ export interface GeometryAddon {
     profile: NapiManufacturingProfile,
     layout: EvaluatePartGraphResult | null,
   ): EvaluateFindingsResult;
+
+  // ── Phase 5 Slice 9b: close_gap ───────────────────────────────────────
+  computeCloseGapDelta?(
+    edgeA3d: NapiPoint3[],
+    edgeB3d: NapiPoint3[],
+    panelBPose: NapiTransform3,
+  ): CloseGapDeltaResult;
 }
 
 export const kerfOffsetMm = {
@@ -510,6 +518,10 @@ export class GeometryBinding {
 
   hasEvaluateFindings(): boolean {
     return typeof this.addon.evaluateFindings === 'function';
+  }
+
+  hasComputeCloseGapDelta(): boolean {
+    return typeof this.addon.computeCloseGapDelta === 'function';
   }
 
   loadStep(filePath: string): string {
@@ -1394,6 +1406,21 @@ export class GeometryBinding {
     }
     try {
       return this.addon.evaluateFindings(graph, profile, layout);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  computeCloseGapDelta(
+    edgeA3d: NapiPoint3[],
+    edgeB3d: NapiPoint3[],
+    panelBPose: NapiTransform3,
+  ): CloseGapDeltaResult {
+    if (!this.addon.computeCloseGapDelta) {
+      throw new Error('Geometry addon does not expose computeCloseGapDelta');
+    }
+    try {
+      return this.addon.computeCloseGapDelta(edgeA3d, edgeB3d, panelBPose);
     } catch (err) {
       throw toStructuredError(err);
     }
