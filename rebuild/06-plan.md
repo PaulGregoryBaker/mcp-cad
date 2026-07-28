@@ -118,7 +118,10 @@ v1 is not usable and is being decommissioned, not maintained alongside v2. Order
 is now driven by which of the approved 21-tool contract's (15) still-unbuilt tools
 unblock the most real v1 test-coverage migration, not by risk-proving order.** Only
 4 of 21 contract tools are built so far (`create_part`, `create_node`(bend-only),
-`merge_bodies_with_bend`, `import_part`). A full inventory of v1's ~66
+`merge_bodies_with_bend`, `import_part`) *(status 2026-07-28: 10 of 21 now built —
+see Slices 6-9a below; `fuse_bodies`, `cut_panel`, `update_node`, `delete_node`,
+`move_edge`, `split_body_by_bends` added since this paragraph was written)*. A full
+inventory of v1's ~66
 non-v2 integration test files (2026-07-25) found: 14 depend on `fuse_bodies`/
 `remove_protrusions` (no v2 equivalent yet), 12 depend on unfold/DXF export
 (`flat-pattern`/`drawings` resources, planned but unbuilt), ~10 depend on tools
@@ -223,6 +226,103 @@ the test coverage."
    tests + 10 new v2 integration tests, 0 regressions (C++ ctest 140 total,
    same 2 pre-existing failures; TS typecheck/lint clean, 118/118 v2 tests
    green).
+   **Test-coverage migration (2026-07-26, cross-cutting — not a new-capability
+   slice).** Per Paul: "Stop building new capability, start migrating tests."
+   Of the "WORTH PORTING" v1 test files identified by an earlier audit, 7 were
+   worked through to a real disposition each: `unequal_leg_bracket_orientation`,
+   `fuse_y_contact` (a staggered-partial-edge-touch case), and
+   `chained_merge_protrusion_fuse_rotation` (`fuse_bodies` onto an
+   already-bend-merged composite part) were ported as new v2-native tests.
+   `merge_edge_alignment` was investigated and found NOT APPLICABLE: v2's
+   `edge_a`/`edge_b` refs are topological (by index into each part's own
+   outline), so `merge_bodies_with_bend` never depends on the two parts'
+   pre-existing 3D positions already agreeing — the entire "misaligned edge
+   from imprecise prior placement" bug class v1 had is structurally
+   impossible in v2. `merge_tab_bracket` (a T-shaped, asymmetric-seam merge)
+   was confirmed as an already-supported case, just reachable a different way
+   (pre-split the parent's outline into collinear sub-edges) — ported with no
+   new capability. Porting `split_thickness_consistency` surfaced a real,
+   previously-unknown kernel bug (not a v1-only artifact): `splitBodyByBends`'s
+   panel extraction cuts every slab 1mm larger than its own true thickness (a
+   deliberate boolean-extraction safety margin), and when real neighboring
+   material (e.g. a flange fused with zero gap to its host wall) falls within
+   that margin, the panel's re-derived `thicknessMm` silently reports the
+   inflated value. Root-caused and fixed: the correctly-measured true
+   thickness was already being computed upstream (`bestDist`, pre-bleed) —
+   it just wasn't propagated. Threaded through as
+   `DecomposedByBendsResult.panelThicknessMm` → NAPI `panel_thickness_mm` →
+   both `import_part`'s reconciliation and the standalone `split_body_by_bends`
+   tool, replacing the buggy re-derivation everywhere it was used.
+   `cube_with_flanges.stp`'s 6 walls now all correctly measure 1mm (previously
+   1.5mm/2mm depending on neighboring features). C++ ctest 138/140 (2
+   pre-existing, unrelated failures); v2 vitest 132/132. **Separately
+   important, not really a code finding:** v1's own full integration suite is
+   *expected* to show MORE failures after a shared-kernel fix like this one
+   (v1's tests were calibrated to the old, wrong behavior) — that's not a
+   regression to chase, since v1 is being decommissioned; v2's own suite + the
+   C++ ctest baseline is the actual regression gate going forward.
+   **Slice 7b (Derive & Validate resources, 15 §3.2/3.3, continuing Slice
+   7) — DONE (2026-07-28).** Triggered by a different driver than 6-9a: Paul
+   identified that v2 had no way to actually SEE a part — `graph://part/{id}/mesh`
+   and `.../boundary` (the contract's viewport resources) didn't exist, and
+   neither did `graph://parts`/`.../full` (needed just to know what parts
+   exist and inspect their structure), making v2 "impossible to test
+   manually" even though the underlying geometry pipeline was solid. Built
+   all 4: `graph://parts` and `graph://part/{id}/full` are inline JSON
+   (structural, no geometry, per 15 §3.0 — `full`'s `findings` field is
+   honestly `[]`, no manufacturability rules engine exists in v2 yet).
+   `graph://part/{id}/boundary` (exact 3D point arrays, no tessellation) and
+   `.../mesh` (tessellated GLB via the existing `constructPart` +
+   `exportGlb` — no new C++ needed) are served as a `Ref` (15 §3.0), backed
+   by a new TTL-bounded blob cache + HTTP server
+   (`ts/src/v2/blob-cache.ts`/`blob-server.ts`, port 3101 default,
+   `V2_BLOB_PORT`/`V2_BLOB_TTL_MS` env vars) — **with one deliberate
+   deviation from 14 §3.1's literal spec**, per Paul's own correction mid-design:
+   the blob URL is stable per part (not content-hash-keyed), so a client
+   holds one URL for a part's whole lifetime rather than re-discovering a new
+   one after every edit; staleness is checked via content hash internally
+   and the blob is rebuilt in place under the same key/URL. Paired with a
+   real MCP `resources/subscribe` + `notifications/resources/updated` push
+   (verified against the installed `@modelcontextprotocol/sdk@^1.0.0`, not
+   invented) so a subscribed client is told when to re-fetch — though a
+   plain resource read always self-heals via the same hash check regardless
+   of subscription, so correctness never depends on the push firing. Found
+   and fixed a real test-infrastructure bug along the way (unrelated to
+   product code): `http.Server.close()` hangs indefinitely on lingering
+   `fetch()` keep-alive sockets — fixed with `Connection: close` plus
+   `closeAllConnections()` in test cleanup. `docs/UI_V2_GEOMETRY_INTEGRATION.md`
+   written for the Form.AI.tion UI team, grounded in the actual implementation
+   (verified end-to-end via a real smoke test: create part → fetch real GLB
+   bytes over HTTP → valid glTF magic bytes). 147 v2 integration tests + 286
+   unit tests passing, 0 regressions. `findings` and `drawings` resources
+   remain not built — no rules engine, no drawing pipeline.
+
+   **Status as of 2026-07-28 — what's next:** 10 of 21 contract tools built
+   (Slices 1-9a), 3 of ~7 Derive/Validate resources built (Slice 7 + 7b:
+   `flat-pattern`, `boundary`, `mesh`, plus the structural `full`/`parts`
+   list resources — `findings` and `drawings` are the two still missing).
+   In priority order for whoever picks this up next:
+   1. **`findings`** (validation-rule aggregation, 15 §3.2) — needs a
+      manufacturability rules engine that doesn't exist anywhere in v2 yet;
+      this is a real design pass, not a quick add (confirmed by two separate
+      investigations this session that ruled out a shortcut).
+   2. **Slice 9b** — `add_flange`, `generate_reliefs`, `rip_edge`,
+      `close_gap`, `split_body_by_plane` (the remaining Decompose & compose
+      tools; each is its own primitive, lower v1 test-migration urgency than
+      6-9a per the original file-count audit).
+   3. **Slice 10 (persistence)** — genuinely blocks v2 being usable past a
+      single test run; see its own entry below.
+   4. **Slice 11 (Produce/async jobs)**, **Slice 12 (curved bends)** — as
+      already ordered.
+   5. **`drawings`** (07's D1-D5 sheet set) — 0 v1 test files depended on it
+      as of the last count; lowest priority of the remaining resources.
+
+   For the UI/Form.AI.tion side specifically: `docs/UI_V2_GEOMETRY_INTEGRATION.md`
+   is the integration guide for what's live today (parts list, structure,
+   mesh/boundary viewport geometry, the subscribe/push pattern) — anything
+   beyond that (findings panel, drawings download, working across a server
+   restart) isn't built and shouldn't be designed against yet.
+
    10. Slice 10: persistence/History — `commit`, `restore`, `branch`, `merge_branch`
     (15 §4.6, B5/B7 Dolt). `GraphStore` is in-memory-per-call only today — no
     real persistence exists yet; needed for v2 to be genuinely usable past a test

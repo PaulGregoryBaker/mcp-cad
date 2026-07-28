@@ -25,12 +25,29 @@
 
 import { throwError, ErrorCodes, type ErrorCode } from '../../mcp/errors';
 import type { GraphStore } from '../graph/store';
-import { evaluatePart, mapPointToWorld, mapPointToFlat } from '../graph/evaluate-client';
+import {
+  evaluatePart,
+  constructPart,
+  mapPointToWorld,
+  mapPointToFlat,
+} from '../graph/evaluate-client';
+import { geometryBinding } from '../../geometry/binding';
 import { buildFlatPatternDxf } from './dxf';
+import {
+  v2BlobCache,
+  computePartContentHash,
+  buildBlobCacheKey,
+  buildV2BlobUrl,
+  type BlobCacheEntry,
+} from '../blob-cache';
 
+const PARTS_LIST_PATTERN = /^graph:\/\/parts$/;
 const MAP_2D_3D_PATTERN = /^graph:\/\/part\/([^/]+)\/map-2d-3d$/;
 const MAP_3D_2D_PATTERN = /^graph:\/\/part\/([^/]+)\/map-3d-2d$/;
 const FLAT_PATTERN_PATTERN = /^graph:\/\/part\/([^/]+)\/flat-pattern$/;
+const FULL_PATTERN = /^graph:\/\/part\/([^/]+)\/full$/;
+const BOUNDARY_PATTERN = /^graph:\/\/part\/([^/]+)\/boundary$/;
+const MESH_PATTERN = /^graph:\/\/part\/([^/]+)\/mesh$/;
 
 export const graphResourceTemplates = [
   {
@@ -54,10 +71,40 @@ export const graphResourceTemplates = [
       "The part's whole flat pattern (13 §3.3): one cut boundary (the part's own outline — unlike v1, there is no per-panel DXF to reassemble, since region panels are derived clips of this one outline, not separate cut pieces), every hole cut into it (cut_panel, Phase 5 Slice 9a — circle holes stay exact center+radius, never tessellated), one fold-line annotation per bend, and a DXF export (LWPOLYLINE on layer '0', holes and cuts on layer 'CUTS' — a native CIRCLE entity for round holes, matching v1's own convention — bend hinges as LINE entities on layer 'BEND'). `resolution` (mm) is accepted for forward compatibility with 14 §2's future bulge/arc OUTER-ring segments but currently has no effect — no v2 outline can contain one yet (K2 move-edge/smooth-edge is a later slice).",
     mimeType: 'application/json',
   },
+  {
+    uriTemplate: 'graph://parts',
+    name: 'parts-list',
+    description:
+      'List every live part in the store (id, name, material, root region). `commit` is accepted for forward compatibility with future persistence (Slice 10, unbuilt) but currently has no effect — GraphStore is in-memory-per-process only today.',
+    mimeType: 'application/json',
+  },
+  {
+    uriTemplate: 'graph://part/{part_id}/full',
+    name: 'part-full',
+    description:
+      'The complete graph for one part (14 B3a): every node (part/region-panel/bend row) — no geometry (§3.0). `findings` is always [] today — no manufacturability rules engine exists in v2 yet (deferred, same computation should back a dedicated findings resource later).',
+    mimeType: 'application/json',
+  },
+  {
+    uriTemplate: 'graph://part/{part_id}/boundary',
+    name: 'part-boundary',
+    description:
+      "The part's exact 3D boundary (13 §3.3, no tessellation): per-region bottomFace/topFace point arrays, hole rings, and per-bridge pivot/radius/hinge parametric data. Served as a Ref (15 §3.0) — a stable HTTP URL per part_id, not re-minted on every edit; the underlying blob is rebuilt in place when the part's own rows change.",
+    mimeType: 'application/json',
+  },
+  {
+    uriTemplate: 'graph://part/{part_id}/mesh{?resolution}',
+    name: 'part-mesh',
+    description:
+      "A tessellated GLB of the part's constructed 3D solid, served as a Ref (15 §3.0) at a stable HTTP URL per part_id. `resolution` (mm) is accepted for forward compatibility but currently has no effect — exportGlb has no resolution parameter yet.",
+    mimeType: 'application/json',
+  },
 ];
 
 export function matchesGraphResource(uri: string): boolean {
-  return uri.startsWith('graph://part/');
+  // Covers both graph://part/{id}/... (per-part resources) and the
+  // project-level graph://parts list (no trailing part id).
+  return uri.startsWith('graph://part');
 }
 
 interface VertexMapping {
@@ -215,8 +262,177 @@ function readFlatPattern(store: GraphStore, partId: string): unknown {
   };
 }
 
+interface PartsListEntry {
+  partId: string;
+  name: string;
+  materialId: string;
+  rootRegionPanelId: string;
+}
+
+function readPartsList(store: GraphStore): unknown {
+  const { parts } = store.serialize();
+  // mergedIntoPartId is always null today (no cross-part merge/fuse tool
+  // aliases a part away permanently from this list's own point of view —
+  // filtered defensively so this list stays correct if that ever changes).
+  const entries: PartsListEntry[] = parts
+    .filter((p) => p.mergedIntoPartId === null)
+    .map((p) => ({
+      partId: p.partId,
+      name: p.name,
+      materialId: p.materialId,
+      rootRegionPanelId: p.rootRegionPanelId,
+    }));
+  return { parts: entries };
+}
+
+function readFull(store: GraphStore, partId: string): unknown {
+  const part = store.getPart(partId);
+  if (!part) {
+    throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${partId}`, false);
+  }
+  const snapshot = store.snapshotPart(partId);
+  return {
+    partId,
+    part: snapshot.part,
+    regionPanels: snapshot.regionPanels,
+    bends: snapshot.bends,
+    // No manufacturability rules engine exists anywhere in v2 yet — a
+    // dedicated graph://part/{id}/findings resource is deferred until one
+    // does. Per 15 §3.2's "one computation, two projections" rule, that
+    // same (currently nonexistent) computation should back this field too —
+    // honestly empty, not a fabricated placeholder.
+    findings: [],
+  };
+}
+
+interface BoundaryRegionPanel {
+  regionPanelId: string;
+  bottomFace: Array<{ x: number; y: number; z: number }>;
+  topFace: Array<{ x: number; y: number; z: number }>;
+  regionPolygonHoles: Array<Array<{ x: number; y: number }>>;
+  regionCircleHoles: Array<{ center: { x: number; y: number }; radiusMm: number }>;
+}
+
+interface BoundaryBridge {
+  bendId: string;
+  parentRegionPanelId: string;
+  childRegionPanelId: string;
+  pivotOriginWorld: { x: number; y: number; z: number };
+  pivotAxisWorld: { x: number; y: number; z: number };
+  angleDeg: number;
+  radiusMm: number;
+  hingeA: { x: number; y: number };
+  hingeB: { x: number; y: number };
+}
+
+/** Builds the boundary JSON blob's bytes and returns whether the cache entry
+ * changed as a result (no prior entry, or the hash actually differed) —
+ * `changed` lets a caller (e.g. a subscription drift check) decide whether a
+ * `notifications/resources/updated` push is warranted. Shared by the
+ * `graph://part/{id}/boundary` resource read AND server.ts's own
+ * subscription drift check — one computation, not two independently
+ * maintained ones. */
+export function ensureBoundaryBlobFresh(
+  store: GraphStore,
+  partId: string,
+): { entry: BlobCacheEntry; changed: boolean } {
+  const evaluated = evaluatePart(store, partId);
+  if (!evaluated.ok) {
+    throwError(
+      (evaluated.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
+      evaluated.message || `evaluatePartGraph failed for part ${partId}`,
+      false,
+    );
+  }
+  const snapshot = store.snapshotPart(partId);
+  const bendsById = new Map(snapshot.bends.map((b) => [b.bendId, b]));
+
+  const regionPanels: BoundaryRegionPanel[] = evaluated.panels.map((p) => ({
+    regionPanelId: p.regionPanelId,
+    bottomFace: p.bottomFace,
+    topFace: p.topFace,
+    regionPolygonHoles: p.regionPolygonHoles,
+    regionCircleHoles: p.regionCircleHoles,
+  }));
+  const bridges: BoundaryBridge[] = evaluated.bridges.map((br) => {
+    const bend = bendsById.get(br.bendId);
+    if (!bend) {
+      throwError(ErrorCodes.INTERNAL_ERROR, `bridge references unknown bend ${br.bendId}`, false);
+    }
+    return {
+      bendId: br.bendId,
+      parentRegionPanelId: br.parentRegionPanelId,
+      childRegionPanelId: br.childRegionPanelId,
+      pivotOriginWorld: br.pivotOriginWorld,
+      pivotAxisWorld: br.pivotAxisWorld,
+      angleDeg: br.angleDeg,
+      radiusMm: bend.radiusMm,
+      hingeA: bend.hingeA,
+      hingeB: bend.hingeB,
+    };
+  });
+
+  const key = buildBlobCacheKey(partId, 'boundary', 'default');
+  const currentHash = computePartContentHash(store, partId);
+  const before = v2BlobCache.get(key);
+  const entry = v2BlobCache.getOrRebuild(key, 'application/json', currentHash, () =>
+    Buffer.from(JSON.stringify({ partId, regionPanels, bridges }), 'utf8'),
+  );
+  const changed = !before || before.builtFromContentHash !== entry.builtFromContentHash;
+  return { entry, changed };
+}
+
+/** Same role as `ensureBoundaryBlobFresh`, for the tessellated GLB. */
+export function ensureMeshBlobFresh(
+  store: GraphStore,
+  partId: string,
+): { entry: BlobCacheEntry; changed: boolean } {
+  const key = buildBlobCacheKey(partId, 'mesh', 'default');
+  const currentHash = computePartContentHash(store, partId);
+  const before = v2BlobCache.get(key);
+  const entry = v2BlobCache.getOrRebuild(key, 'model/gltf-binary', currentHash, () => {
+    const constructed = constructPart(store, partId);
+    return geometryBinding.exportGlb(constructed.shellId);
+  });
+  const changed = !before || before.builtFromContentHash !== entry.builtFromContentHash;
+  return { entry, changed };
+}
+
+function toRef(entry: BlobCacheEntry, url: string): unknown {
+  return {
+    url,
+    contentType: entry.contentType,
+    byteSize: entry.buffer.length,
+    expiresAt: new Date(entry.expiresAt).toISOString(),
+  };
+}
+
+function readBoundary(store: GraphStore, partId: string): unknown {
+  const part = store.getPart(partId);
+  if (!part) {
+    throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${partId}`, false);
+  }
+  const { entry } = ensureBoundaryBlobFresh(store, partId);
+  const key = buildBlobCacheKey(partId, 'boundary', 'default');
+  return { partId, ref: toRef(entry, buildV2BlobUrl(key)) };
+}
+
+function readMesh(store: GraphStore, partId: string): unknown {
+  const part = store.getPart(partId);
+  if (!part) {
+    throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${partId}`, false);
+  }
+  const { entry } = ensureMeshBlobFresh(store, partId);
+  const key = buildBlobCacheKey(partId, 'mesh', 'default');
+  return { partId, ref: toRef(entry, buildV2BlobUrl(key)) };
+}
+
 export function readGraphResource(store: GraphStore, rawUri: string): unknown {
   const [uri, queryString] = rawUri.split('?', 2);
+
+  if (PARTS_LIST_PATTERN.exec(uri ?? '')) {
+    return readPartsList(store);
+  }
 
   const map2d3dMatch = MAP_2D_3D_PATTERN.exec(uri ?? '');
   if (map2d3dMatch) {
@@ -231,6 +447,21 @@ export function readGraphResource(store: GraphStore, rawUri: string): unknown {
   const flatPatternMatch = FLAT_PATTERN_PATTERN.exec(uri ?? '');
   if (flatPatternMatch) {
     return readFlatPattern(store, decodeURIComponent(flatPatternMatch[1]));
+  }
+
+  const fullMatch = FULL_PATTERN.exec(uri ?? '');
+  if (fullMatch) {
+    return readFull(store, decodeURIComponent(fullMatch[1]));
+  }
+
+  const boundaryMatch = BOUNDARY_PATTERN.exec(uri ?? '');
+  if (boundaryMatch) {
+    return readBoundary(store, decodeURIComponent(boundaryMatch[1]));
+  }
+
+  const meshMatch = MESH_PATTERN.exec(uri ?? '');
+  if (meshMatch) {
+    return readMesh(store, decodeURIComponent(meshMatch[1]));
   }
 
   throwError(ErrorCodes.INTERNAL_ERROR, `Unrecognized v2 graph resource URI: ${rawUri}`, false);
