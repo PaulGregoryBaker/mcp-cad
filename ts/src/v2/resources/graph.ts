@@ -1,14 +1,10 @@
 /**
  * v2 graph resources — graph://part/{part_id}/map-2d-3d[?point=x,y] (Phase 5
  * Slice 1), graph://part/{part_id}/map-3d-2d?point=x,y,z (Phase 5 Slice 3,
- * rebuild/13-translation-module-design.md §4/§5), and
- * graph://part/{part_id}/flat-pattern (Phase 5 Slice 7, rebuild/06-plan.md
- * §4.4 — the single highest-value remaining Derive resource: a 2026-07-25
- * inventory of v1's non-v2 test files found 26 depend on unfold/DXF export
- * vs 0 on `get_drawings` and 2 on validation/findings tools, so this slice
- * scopes to flat-pattern only; drawings/findings are deferred to a later
- * slice, same "unblock the most real test-coverage migration" discipline
- * Slice 6 used).
+ * rebuild/13-translation-module-design.md §4/§5),
+ * graph://part/{part_id}/flat-pattern (Phase 5 Slice 7),
+ * graph://part/{part_id}/findings (Phase 5 — manufacturability rules engine,
+ * rebuild/06-plan.md), and viewport geometry resources (boundary, mesh).
  *
  * Read-only: evaluates the part (via evaluate-client.ts, the ONE place graph
  * rows become addon calls) and returns either the full per-region-panel 2D
@@ -19,7 +15,7 @@
  * mapPointToFlat) — an ARBITRARY point within a region or bend-bridge zone,
  * not limited to the outline's own vertices the way Slice 1's original
  * exact-match-only `point` query was. That generalization is what makes this
- * resource the actual `map_2d_to_3d`/`map_3d_to_2d` resources 15-mcp-contract.md
+ * resource the actual `map_2d_to_3d`/`map_3d_to_3d` resources 15-mcp-contract.md
  * §4.4 specifies, not just a Slice-1-scoped placeholder.
  */
 
@@ -30,6 +26,7 @@ import {
   constructPart,
   mapPointToWorld,
   mapPointToFlat,
+  evaluateFindings,
 } from '../graph/evaluate-client';
 import { geometryBinding } from '../../geometry/binding';
 import { buildFlatPatternDxf } from './dxf';
@@ -48,6 +45,7 @@ const FLAT_PATTERN_PATTERN = /^graph:\/\/part\/([^/]+)\/flat-pattern$/;
 const FULL_PATTERN = /^graph:\/\/part\/([^/]+)\/full$/;
 const BOUNDARY_PATTERN = /^graph:\/\/part\/([^/]+)\/boundary$/;
 const MESH_PATTERN = /^graph:\/\/part\/([^/]+)\/mesh$/;
+const FINDINGS_PATTERN = /^graph:\/\/part\/([^/]+)\/findings$/;
 
 export const graphResourceTemplates = [
   {
@@ -82,7 +80,7 @@ export const graphResourceTemplates = [
     uriTemplate: 'graph://part/{part_id}/full',
     name: 'part-full',
     description:
-      'The complete graph for one part (14 B3a): every node (part/region-panel/bend row) — no geometry (§3.0). `findings` is always [] today — no manufacturability rules engine exists in v2 yet (deferred, same computation should back a dedicated findings resource later).',
+      "The complete graph for one part (14 B3a): every node (part/region-panel/bend row) plus current validation findings — no geometry (§3.0). Same computation backs graph://part/{id}/findings (15 §3.2: one computation, two projections).",
     mimeType: 'application/json',
   },
   {
@@ -90,6 +88,13 @@ export const graphResourceTemplates = [
     name: 'part-boundary',
     description:
       "The part's exact 3D boundary (13 §3.3, no tessellation): per-region bottomFace/topFace point arrays, hole rings, and per-bridge pivot/radius/hinge parametric data. Served as a Ref (15 §3.0) — a stable HTTP URL per part_id, not re-minted on every edit; the underlying blob is rebuilt in place when the part's own rows change.",
+    mimeType: 'application/json',
+  },
+  {
+    uriTemplate: 'graph://part/{part_id}/findings',
+    name: 'part-findings',
+    description:
+      'Every current manufacturability finding for this part (15 §3.2): rule violations, K5 3D conflicts, I3e stale anchors, seam residual violations — one aggregated, always-current list. Same shape as full\'s embedded findings (one computation, two projections — per 15 §3.2). An empty findings array means everything passes at the current profile.',
     mimeType: 'application/json',
   },
   {
@@ -291,18 +296,25 @@ function readFull(store: GraphStore, partId: string): unknown {
     throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${partId}`, false);
   }
   const snapshot = store.snapshotPart(partId);
+  const findingsResult = evaluateFindings(store, partId);
   return {
     partId,
     part: snapshot.part,
     regionPanels: snapshot.regionPanels,
     bends: snapshot.bends,
-    // No manufacturability rules engine exists anywhere in v2 yet — a
-    // dedicated graph://part/{id}/findings resource is deferred until one
-    // does. Per 15 §3.2's "one computation, two projections" rule, that
-    // same (currently nonexistent) computation should back this field too —
-    // honestly empty, not a fabricated placeholder.
-    findings: [],
+    findings: findingsResult.findings,
   };
+}
+
+/** Dedicated findings resource — same computation as full's embedded
+ * findings (15 §3.2's "one computation, two projections" rule), fetched
+ * directly without the rest of the graph structure. */
+function readFindings(store: GraphStore, partId: string): unknown {
+  if (!store.getPart(partId)) {
+    throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${partId}`, false);
+  }
+  const result = evaluateFindings(store, partId);
+  return { partId, findings: result.findings };
 }
 
 interface BoundaryRegionPanel {
@@ -462,6 +474,11 @@ export function readGraphResource(store: GraphStore, rawUri: string): unknown {
   const meshMatch = MESH_PATTERN.exec(uri ?? '');
   if (meshMatch) {
     return readMesh(store, decodeURIComponent(meshMatch[1]));
+  }
+
+  const findingsMatch = FINDINGS_PATTERN.exec(uri ?? '');
+  if (findingsMatch) {
+    return readFindings(store, decodeURIComponent(findingsMatch[1]));
   }
 
   throwError(ErrorCodes.INTERNAL_ERROR, `Unrecognized v2 graph resource URI: ${rawUri}`, false);

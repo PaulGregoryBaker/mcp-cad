@@ -90,6 +90,14 @@ add_library(geometry_engine STATIC
   src/geometry/translation/polygon_boolean.cc
   src/geometry/translation/ring_containment.cc
   src/geometry/translation/cut_panel.cc
+  src/geometry/validation/rules_engine.cc
+  src/geometry/validation/rules/bend_radius.cc
+  src/geometry/validation/rules/bend_angle.cc
+  src/geometry/validation/rules/hole_diameter.cc
+  src/geometry/validation/rules/hole_to_bend.cc
+  src/geometry/validation/rules/hole_to_edge.cc
+  src/geometry/validation/rules/hole_to_hole.cc
+  src/geometry/validation/rules/flange_width.cc
   src/acl/feature_extractor.cc
 )
 
@@ -129,6 +137,7 @@ add_executable(geometry_tests
   tests/polygon_boolean_test.cc
   tests/ring_containment_test.cc
   tests/cut_panel_test.cc
+  tests/validation_rules_test.cc
 )
 
 target_include_directories(geometry_tests PRIVATE

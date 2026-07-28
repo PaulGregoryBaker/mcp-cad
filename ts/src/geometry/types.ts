@@ -807,3 +807,36 @@ export interface CutPanelResult {
   canonicalRing: NapiPoint2[];
   regionIndex: number;
 }
+
+// ─── Manufacturability Rules Engine (rebuild/06-plan.md, Phase 5 findings) ───
+
+/** One finding — the exact shape the MCP contract specifies (15 §1). */
+export interface NapiFinding {
+  code: string;
+  severity: 'error' | 'warning' | 'info';
+  message: string;
+  anchors: Array<{ kind: string; id: string }>;
+  recommendedFix: { tool: string; params: Record<string, unknown> } | null;
+}
+
+/** evaluateFindings NAPI return — always succeeds (never errors). */
+export interface EvaluateFindingsResult {
+  findings: NapiFinding[];
+}
+
+/** Thresholds for manufacturability rules. Every factor is × thicknessMm
+ * unless the field name says Mm (absolute). The C++ side has the same struct
+ * with the same defaults — this is the TS-facing marshaling shape. */
+export interface NapiManufacturingProfile {
+  profileId?: string;
+  name?: string;
+  rules?: {
+    minBendRadiusFactor?: number;
+    maxBendAngleDeg?: number;
+    minHoleDiameterFactor?: number;
+    minHoleToBendClearanceMm?: number;
+    minHoleToEdgeClearanceMm?: number;
+    minHoleToHoleDistanceMm?: number;
+    minFlangeWidthFactor?: number;
+  };
+}

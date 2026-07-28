@@ -19,6 +19,8 @@ import type {
   MapToWorldResult,
   MapToFlatResult,
   NapiPanelPieceSpec,
+  EvaluateFindingsResult,
+  NapiManufacturingProfile,
 } from '../../geometry/types';
 import type { GraphStore, PartGraphSnapshot } from './store';
 import type { BendRow, Hole, PartRow, Point2, RegionPanelRow } from './types';
@@ -708,4 +710,56 @@ export function splitBodyByBendsStandalone(
     panels: split.panel_ids.map((id, i) => toPieceInfo(id, split.panel_thickness_mm[i])),
     protrusions: split.protrusion_ids.map((id) => toPieceInfo(id)),
   };
+}
+
+/**
+ * Manufacturability rules engine (Phase 5 findings, rebuild/06-plan.md).
+ *
+ * A pure read: evaluates every rule against the given part's graph snapshot
+ * and (optionally) its evaluated layout.  Always returns successfully — even
+ * when evaluatePartGraph fails (layout=null), all structural-only rules
+ * still produce findings.  The profile is optional; defaults to the C++ side's
+ * own sensible profile (same defaults as validation/profile.hpp).
+ *
+ * No geometric computation happens here — constitution v2.0.0 principle IV:
+ * the graph snapshot is a plain data reshuffle (toNapiPartGraphSpec), and
+ * the findings come back as plain structs from C++.
+ */
+export const DEFAULT_MANUFACTURING_PROFILE: NapiManufacturingProfile = {
+  profileId: 'default',
+  name: 'Default sheet metal',
+  rules: {
+    minBendRadiusFactor: 1.0,
+    maxBendAngleDeg: 180.0,
+    minHoleDiameterFactor: 1.0,
+    minHoleToBendClearanceMm: 2.0,
+    minHoleToEdgeClearanceMm: 1.5,
+    minHoleToHoleDistanceMm: 3.0,
+    minFlangeWidthFactor: 4.0,
+  },
+};
+
+export function evaluateFindings(
+  store: GraphStore,
+  partId: string,
+  profile?: NapiManufacturingProfile,
+): EvaluateFindingsResult {
+  const snapshot = store.snapshotPart(partId);
+  const graph = toNapiPartGraphSpec(snapshot);
+
+  // Evaluate the layout — geometry-dependent rules (flange width) need it,
+  // but a failure doesn't block structural-only rules (bend radius, etc.)
+  let layout: EvaluatePartGraphResult | null = null;
+  try {
+    const result = geometryBinding.evaluatePartGraph(graph);
+    if (result.ok) layout = result;
+  } catch {
+    // evaluatePartGraph threw — layout stays null, geometry-dependent rules skip
+  }
+
+  return geometryBinding.evaluateFindings(
+    graph,
+    profile ?? DEFAULT_MANUFACTURING_PROFILE,
+    layout,
+  );
 }

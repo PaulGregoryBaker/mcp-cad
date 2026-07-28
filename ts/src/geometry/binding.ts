@@ -76,6 +76,8 @@ import type {
   PolygonBooleanResult,
   CutPanelResult,
   NapiTransform3,
+  EvaluateFindingsResult,
+  NapiManufacturingProfile,
 } from './types';
 
 // ─── Addon interface ──────────────────────────────────────────────────────────
@@ -359,6 +361,13 @@ export interface GeometryAddon {
     candidateRegions: NapiPoint2[][],
   ): CutPanelResult;
   preparePolygonCut?(ring: NapiPoint2[], candidateRegions: NapiPoint2[][]): CutPanelResult;
+
+  // ── Phase 5 findings: manufacturability rules engine ────────────────────
+  evaluateFindings?(
+    graph: NapiPartGraphSpec,
+    profile: NapiManufacturingProfile,
+    layout: EvaluatePartGraphResult | null,
+  ): EvaluateFindingsResult;
 }
 
 export const kerfOffsetMm = {
@@ -497,6 +506,10 @@ export class GeometryBinding {
 
   hasPreparePolygonCut(): boolean {
     return typeof this.addon.preparePolygonCut === 'function';
+  }
+
+  hasEvaluateFindings(): boolean {
+    return typeof this.addon.evaluateFindings === 'function';
   }
 
   loadStep(filePath: string): string {
@@ -1366,6 +1379,21 @@ export class GeometryBinding {
     }
     try {
       return this.addon.preparePolygonCut(ring, candidateRegions);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  evaluateFindings(
+    graph: NapiPartGraphSpec,
+    profile: NapiManufacturingProfile,
+    layout: EvaluatePartGraphResult | null,
+  ): EvaluateFindingsResult {
+    if (!this.addon.evaluateFindings) {
+      throw new Error('Geometry addon does not expose evaluateFindings');
+    }
+    try {
+      return this.addon.evaluateFindings(graph, profile, layout);
     } catch (err) {
       throw toStructuredError(err);
     }

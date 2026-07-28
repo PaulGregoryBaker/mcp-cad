@@ -21,6 +21,8 @@
 #include "../geometry/translation/step_reconciliation.hpp"
 #include "../geometry/translation/polygon_boolean.hpp"
 #include "../geometry/translation/cut_panel.hpp"
+#include "../geometry/validation/rules_engine.hpp"
+#include "../geometry/validation/profile.hpp"
 
 #include <string>
 #include <vector>
@@ -804,6 +806,111 @@ Napi::Value ReconcilePiecesBinding(const Napi::CallbackInfo& info) {
   }
 }
 
+// ─── evaluateFindings ───────────────────────────────────────────────────────
+
+namespace {
+
+validation::ManufacturingProfile ReadProfile(const Napi::Object& obj) {
+  validation::ManufacturingProfile profile;
+  // profileId and name are optional — defaults are fine
+  Napi::Value idV = obj.Get("profileId");
+  if (idV.IsString()) profile.profileId = idV.As<Napi::String>().Utf8Value();
+  Napi::Value nameV = obj.Get("name");
+  if (nameV.IsString()) profile.name = nameV.As<Napi::String>().Utf8Value();
+
+  Napi::Value rulesV = obj.Get("rules");
+  if (rulesV.IsObject()) {
+    Napi::Object rules = rulesV.As<Napi::Object>();
+    auto readD = [&](const char* key, double& out) {
+      Napi::Value v = rules.Get(key);
+      if (v.IsNumber()) out = v.As<Napi::Number>().DoubleValue();
+    };
+    readD("minBendRadiusFactor", profile.minBendRadiusFactor);
+    readD("maxBendAngleDeg", profile.maxBendAngleDeg);
+    readD("minHoleDiameterFactor", profile.minHoleDiameterFactor);
+    readD("minHoleToBendClearanceMm", profile.minHoleToBendClearanceMm);
+    readD("minHoleToEdgeClearanceMm", profile.minHoleToEdgeClearanceMm);
+    readD("minHoleToHoleDistanceMm", profile.minHoleToHoleDistanceMm);
+    readD("minFlangeWidthFactor", profile.minFlangeWidthFactor);
+  }
+  return profile;
+}
+
+const char* SeverityToString(validation::FindingSeverity severity) {
+  switch (severity) {
+    case validation::FindingSeverity::kError: return "error";
+    case validation::FindingSeverity::kWarning: return "warning";
+    case validation::FindingSeverity::kInfo: return "info";
+  }
+  return "error";
+}
+
+Napi::Object WriteFinding(Napi::Env env, const validation::Finding& f) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("code", Napi::String::New(env, f.code));
+  obj.Set("severity", Napi::String::New(env, SeverityToString(f.severity)));
+  obj.Set("message", Napi::String::New(env, f.message));
+
+  Napi::Array anchorsArr = Napi::Array::New(env, f.anchors.size());
+  for (size_t i = 0; i < f.anchors.size(); ++i) {
+    Napi::Object anchorObj = Napi::Object::New(env);
+    anchorObj.Set("kind", Napi::String::New(env, f.anchors[i].kind));
+    anchorObj.Set("id", Napi::String::New(env, f.anchors[i].id));
+    anchorsArr.Set(i, anchorObj);
+  }
+  obj.Set("anchors", anchorsArr);
+
+  if (f.recommendedFix.has_value()) {
+    Napi::Object fixObj = Napi::Object::New(env);
+    fixObj.Set("tool", Napi::String::New(env, f.recommendedFix->tool));
+    // paramsJson is a JSON string — parse on the TS side
+    fixObj.Set("params", Napi::String::New(env, f.recommendedFix->paramsJson));
+    obj.Set("recommendedFix", fixObj);
+  } else {
+    obj.Set("recommendedFix", env.Null());
+  }
+
+  return obj;
+}
+
+}  // namespace
+
+Napi::Value EvaluateFindingsBinding(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 2 || !info[0].IsObject() || !info[1].IsObject()) {
+    Napi::TypeError::New(
+        env, "evaluateFindings(graph: PartGraphSpec, profile: ManufacturingProfile, "
+             "layout?: EvaluateResult | null)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    PartGraphSpec graph = ReadPartGraphSpec(info[0].As<Napi::Object>());
+    auto profile = ReadProfile(info[1].As<Napi::Object>());
+
+    // layout is optional (3rd arg) — null means geometry-dependent rules skip
+    const EvaluateResult* layoutPtr = nullptr;
+    EvaluateResult layoutCopy;
+    if (info.Length() >= 3 && !info[2].IsNull() && !info[2].IsUndefined()) {
+      layoutCopy = ReadEvaluateResult(info[2].As<Napi::Object>());
+      layoutPtr = &layoutCopy;
+    }
+
+    auto findings = validation::EvaluateFindings(graph, layoutPtr, profile);
+
+    Napi::Object result = Napi::Object::New(env);
+    Napi::Array findingsArr = Napi::Array::New(env, findings.size());
+    for (size_t i = 0; i < findings.size(); ++i) {
+      findingsArr.Set(i, WriteFinding(env, findings[i]));
+    }
+    result.Set("findings", findingsArr);
+    return result;
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
 void RegisterTranslationMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("evaluatePartGraph", Napi::Function::New(env, EvaluatePartGraph));
   exports.Set("constructPartSolid", Napi::Function::New(env, ConstructPartSolidBinding));
@@ -816,6 +923,7 @@ void RegisterTranslationMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("fuseCoplanarParts", Napi::Function::New(env, FuseCoplanarPartsBinding));
   exports.Set("prepareCircleCut", Napi::Function::New(env, PrepareCircleCutBinding));
   exports.Set("preparePolygonCut", Napi::Function::New(env, PreparePolygonCutBinding));
+  exports.Set("evaluateFindings", Napi::Function::New(env, EvaluateFindingsBinding));
 }
 
 }  // namespace mcp_cad

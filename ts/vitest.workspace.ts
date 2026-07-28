@@ -92,6 +92,7 @@ export default defineWorkspace([
         'tests/integration/boundary_resource.integration.test.ts',
         'tests/integration/mesh_resource.integration.test.ts',
         'tests/integration/mesh_subscription.integration.test.ts',
+        'tests/integration/findings_resource.integration.test.ts',
       ],
       setupFiles: ['tests/setup/integration-reset.ts'],
       // Switched from pool:'forks' (singleFork) to pool:'threads' because
@@ -138,6 +139,7 @@ export default defineWorkspace([
         'tests/integration/boundary_resource.integration.test.ts',
         'tests/integration/mesh_resource.integration.test.ts',
         'tests/integration/mesh_subscription.integration.test.ts',
+        'tests/integration/findings_resource.integration.test.ts',
       ],
       env: { SUITE_V2_DRIVER: '1' },
       setupFiles: ['tests/setup/integration-reset.ts'],

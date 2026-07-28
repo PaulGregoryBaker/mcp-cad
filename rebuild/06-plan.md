@@ -298,23 +298,22 @@ the test coverage."
    remain not built — no rules engine, no drawing pipeline.
 
    **Status as of 2026-07-28 — what's next:** 10 of 21 contract tools built
-   (Slices 1-9a), 3 of ~7 Derive/Validate resources built (Slice 7 + 7b:
+   (Slices 1-9a), 4 of ~7 Derive/Validate resources built (Slice 7 + 7b:
    `flat-pattern`, `boundary`, `mesh`, plus the structural `full`/`parts`
-   list resources — `findings` and `drawings` are the two still missing).
+   list resources, and **`findings`** — the manufacturability rules engine
+   is now built as a pure C++ validation module
+   (`cpp/src/geometry/validation/`) with 7 rules, NAPI binding, and wired
+   into both `graph://part/{id}/findings` and `full`'s embedded findings
+   field — `drawings` is the only remaining unbuilt resource).
    In priority order for whoever picks this up next:
-   1. **`findings`** (validation-rule aggregation, 15 §3.2) — needs a
-      manufacturability rules engine that doesn't exist anywhere in v2 yet;
-      this is a real design pass, not a quick add (confirmed by two separate
-      investigations this session that ruled out a shortcut).
-   2. **Slice 9b** — `add_flange`, `generate_reliefs`, `rip_edge`,
+   1. **Slice 9b** — `add_flange`, `generate_reliefs`, `rip_edge`,
       `close_gap`, `split_body_by_plane` (the remaining Decompose & compose
-      tools; each is its own primitive, lower v1 test-migration urgency than
-      6-9a per the original file-count audit).
-   3. **Slice 10 (persistence)** — genuinely blocks v2 being usable past a
+      tools; each is its own primitive).
+   2. **Slice 10 (persistence)** — genuinely blocks v2 being usable past a
       single test run; see its own entry below.
-   4. **Slice 11 (Produce/async jobs)**, **Slice 12 (curved bends)** — as
+   3. **Slice 11 (Produce/async jobs)**, **Slice 12 (curved bends)** — as
       already ordered.
-   5. **`drawings`** (07's D1-D5 sheet set) — 0 v1 test files depended on it
+   4. **`drawings`** (07's D1-D5 sheet set) — 0 v1 test files depended on it
       as of the last count; lowest priority of the remaining resources.
 
    For the UI/Form.AI.tion side specifically: `docs/UI_V2_GEOMETRY_INTEGRATION.md`
