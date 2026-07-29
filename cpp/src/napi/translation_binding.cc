@@ -22,6 +22,9 @@
 #include "../geometry/translation/polygon_boolean.hpp"
 #include "../geometry/translation/cut_panel.hpp"
 #include "../geometry/translation/close_gap.hpp"
+#include "../geometry/translation/add_flange.hpp"
+#include "../geometry/translation/rip_edge.hpp"
+#include "../geometry/translation/generate_reliefs.hpp"
 #include "../geometry/validation/rules_engine.hpp"
 #include "../geometry/validation/profile.hpp"
 
@@ -949,6 +952,98 @@ Napi::Value ComputeCloseGapDeltaBinding(const Napi::CallbackInfo& info) {
   }
 }
 
+// ─── computeFlangeOutline ────────────────────────────────────────────────────
+
+Napi::Value ComputeFlangeOutlineBinding(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 3 || !info[0].IsArray() || !info[1].IsNumber() || !info[2].IsNumber()) {
+    Napi::TypeError::New(env, "computeFlangeOutline(outline: Point2[], edgeIndex: number, "
+                             "flangeLengthMm: number)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    std::vector<Point2> outline = ReadPoint2Array(info[0].As<Napi::Array>());
+    int edgeIndex = info[1].As<Napi::Number>().Int32Value();
+    double flangeLengthMm = info[2].As<Napi::Number>().DoubleValue();
+
+    auto result = translation::ComputeFlangeOutline(outline, edgeIndex, flangeLengthMm);
+
+    Napi::Object obj = Napi::Object::New(env);
+    obj.Set("newOutline", WritePoint2Array(env, result.newOutline));
+    obj.Set("hingeA", WritePoint2(env, result.hingeA));
+    obj.Set("hingeB", WritePoint2(env, result.hingeB));
+    return obj;
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
+// ─── computeRipEdge ──────────────────────────────────────────────────────────
+
+Napi::Value ComputeRipEdgeBinding(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 3 || !info[0].IsArray() || !info[1].IsNumber() || !info[2].IsNumber()) {
+    Napi::TypeError::New(env, "computeRipEdge(outline: Point2[], edgeIndex: number, gapMm: number)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    auto outline = ReadPoint2Array(info[0].As<Napi::Array>());
+    int edgeIndex = info[1].As<Napi::Number>().Int32Value();
+    double gapMm = info[2].As<Napi::Number>().DoubleValue();
+    auto result = translation::ComputeRipEdge(outline, edgeIndex, gapMm);
+    Napi::Object obj = Napi::Object::New(env);
+    obj.Set("newOutline", WritePoint2Array(env, result.newOutline));
+    return obj;
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
+// ─── computeReliefPolygons ───────────────────────────────────────────────────
+
+Napi::Value ComputeReliefPolygonsBinding(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 4 || !info[0].IsArray() || !info[1].IsString() ||
+      !info[2].IsNumber() || !info[3].IsNumber()) {
+    Napi::TypeError::New(env, "computeReliefPolygons(bends: BendSpec[], reliefType: string, "
+                             "radiusMm: number, thicknessMm: number)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    std::vector<BendSpec> bends;
+    Napi::Array bendsArr = info[0].As<Napi::Array>();
+    for (uint32_t i = 0; i < bendsArr.Length(); ++i) {
+      Napi::Object bendObj = bendsArr.Get(i).As<Napi::Object>();
+      BendSpec b;
+      b.id = bendObj.Get("id").As<Napi::String>().Utf8Value();
+      b.parentRegionPanelId = bendObj.Get("parentRegionPanelId").As<Napi::String>().Utf8Value();
+      b.childRegionPanelId = bendObj.Get("childRegionPanelId").As<Napi::String>().Utf8Value();
+      b.hingeA = ReadPoint2(bendObj.Get("hingeA").As<Napi::Object>());
+      b.hingeB = ReadPoint2(bendObj.Get("hingeB").As<Napi::Object>());
+      bends.push_back(b);
+    }
+    std::string reliefType = info[1].As<Napi::String>().Utf8Value();
+    double radiusMm = info[2].As<Napi::Number>().DoubleValue();
+    double thicknessMm = info[3].As<Napi::Number>().DoubleValue();
+
+    auto results = translation::ComputeReliefPolygons(bends, reliefType, radiusMm, thicknessMm);
+
+    Napi::Array arr = Napi::Array::New(env, results.size());
+    for (size_t i = 0; i < results.size(); ++i) {
+      arr.Set(i, WritePoint2Array(env, results[i].polygon));
+    }
+    return arr;
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
 void RegisterTranslationMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("evaluatePartGraph", Napi::Function::New(env, EvaluatePartGraph));
   exports.Set("constructPartSolid", Napi::Function::New(env, ConstructPartSolidBinding));
@@ -963,6 +1058,9 @@ void RegisterTranslationMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("preparePolygonCut", Napi::Function::New(env, PreparePolygonCutBinding));
   exports.Set("evaluateFindings", Napi::Function::New(env, EvaluateFindingsBinding));
   exports.Set("computeCloseGapDelta", Napi::Function::New(env, ComputeCloseGapDeltaBinding));
+  exports.Set("computeFlangeOutline", Napi::Function::New(env, ComputeFlangeOutlineBinding));
+  exports.Set("computeRipEdge", Napi::Function::New(env, ComputeRipEdgeBinding));
+  exports.Set("computeReliefPolygons", Napi::Function::New(env, ComputeReliefPolygonsBinding));
 }
 
 }  // namespace mcp_cad

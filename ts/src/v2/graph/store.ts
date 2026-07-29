@@ -587,6 +587,26 @@ export class GraphStore {
   }
 
   /** Every row in the store — 14 §6's replay path: serialize -> re-read -> compare. */
+  /**
+   * Replace a part's outline (e.g. when adding a flange).  The new outline
+   * must have at least 3 vertices and be CCW.  Holes are preserved — only
+   * the outer ring is replaced.
+   */
+  replaceOutline(partId: string, newOutline: Point2[]): PartRow {
+    const part = this.parts.get(partId);
+    if (!part) {
+      throw new GraphStoreError(`no part with id ${partId}`, ErrorCodes.GRAPH_PART_NOT_FOUND);
+    }
+    if (newOutline.length < 3) {
+      throw new GraphStoreError(
+        `new outline must have at least 3 vertices, got ${newOutline.length}`,
+        ErrorCodes.GE_DEGENERATE_OUTLINE,
+      );
+    }
+    part.outline = newOutline;
+    return part;
+  }
+
   serialize(): { parts: PartRow[]; regionPanels: RegionPanelRow[]; bends: BendRow[] } {
     return {
       parts: [...this.parts.values()],

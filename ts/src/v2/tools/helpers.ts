@@ -17,6 +17,19 @@ export function requireString(args: Record<string, unknown>, key: string): strin
   return val;
 }
 
+export function requireStringArray(args: Record<string, unknown>, key: string): string[] {
+  const val = args[key];
+  if (!Array.isArray(val) || val.length === 0) {
+    throwError(ErrorCodes.INTERNAL_ERROR, `Missing required string array parameter: ${key}`, false);
+  }
+  for (const item of val) {
+    if (typeof item !== 'string') {
+      throwError(ErrorCodes.INTERNAL_ERROR, `Parameter ${key} must be an array of strings`, false);
+    }
+  }
+  return val as string[];
+}
+
 export function requireNumber(args: Record<string, unknown>, key: string): number {
   const val = args[key];
   if (typeof val !== 'number' || !Number.isFinite(val)) {

@@ -847,3 +847,15 @@ export interface CloseGapDeltaResult {
   deltaY: number;
   gapMm: number;
 }
+
+/** computeFlangeOutline return — extended outline + hinge for a new flange. */
+export interface FlangeOutlineResult {
+  newOutline: NapiPoint2[];
+  hingeA: NapiPoint2;
+  hingeB: NapiPoint2;
+}
+
+/** computeRipEdge return — outline with a gap replacing the ripped edge. */
+export interface NapiRipEdgeResult {
+  newOutline: NapiPoint2[];
+}

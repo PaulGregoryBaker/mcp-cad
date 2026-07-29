@@ -79,6 +79,9 @@ import type {
   EvaluateFindingsResult,
   NapiManufacturingProfile,
   CloseGapDeltaResult,
+  FlangeOutlineResult,
+  NapiRipEdgeResult,
+  NapiBendSpec,
 } from './types';
 
 // ─── Addon interface ──────────────────────────────────────────────────────────
@@ -376,6 +379,28 @@ export interface GeometryAddon {
     edgeB3d: NapiPoint3[],
     panelBPose: NapiTransform3,
   ): CloseGapDeltaResult;
+
+  // ── Phase 5 Slice 9b: add_flange ───────────────────────────────────────
+  computeFlangeOutline?(
+    outline: NapiPoint2[],
+    edgeIndex: number,
+    flangeLengthMm: number,
+  ): FlangeOutlineResult;
+
+  // ── Phase 5 Slice 9b: rip_edge ────────────────────────────────────────
+  computeRipEdge?(
+    outline: NapiPoint2[],
+    edgeIndex: number,
+    gapMm: number,
+  ): NapiRipEdgeResult;
+
+  // ── Phase 5 Slice 9b: generate_reliefs ──────────────────────────────────
+  computeReliefPolygons?(
+    bends: NapiBendSpec[],
+    reliefType: string,
+    radiusMm: number,
+    thicknessMm: number,
+  ): NapiPoint2[][];
 }
 
 export const kerfOffsetMm = {
@@ -522,6 +547,18 @@ export class GeometryBinding {
 
   hasComputeCloseGapDelta(): boolean {
     return typeof this.addon.computeCloseGapDelta === 'function';
+  }
+
+  hasComputeFlangeOutline(): boolean {
+    return typeof this.addon.computeFlangeOutline === 'function';
+  }
+
+  hasComputeRipEdge(): boolean {
+    return typeof this.addon.computeRipEdge === 'function';
+  }
+
+  hasComputeReliefPolygons(): boolean {
+    return typeof this.addon.computeReliefPolygons === 'function';
   }
 
   loadStep(filePath: string): string {
@@ -1421,6 +1458,52 @@ export class GeometryBinding {
     }
     try {
       return this.addon.computeCloseGapDelta(edgeA3d, edgeB3d, panelBPose);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  computeFlangeOutline(
+    outline: NapiPoint2[],
+    edgeIndex: number,
+    flangeLengthMm: number,
+  ): FlangeOutlineResult {
+    if (!this.addon.computeFlangeOutline) {
+      throw new Error('Geometry addon does not expose computeFlangeOutline');
+    }
+    try {
+      return this.addon.computeFlangeOutline(outline, edgeIndex, flangeLengthMm);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  computeRipEdge(
+    outline: NapiPoint2[],
+    edgeIndex: number,
+    gapMm: number,
+  ): NapiRipEdgeResult {
+    if (!this.addon.computeRipEdge) {
+      throw new Error('Geometry addon does not expose computeRipEdge');
+    }
+    try {
+      return this.addon.computeRipEdge(outline, edgeIndex, gapMm);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  computeReliefPolygons(
+    bends: NapiBendSpec[],
+    reliefType: string,
+    radiusMm: number,
+    thicknessMm: number,
+  ): NapiPoint2[][] {
+    if (!this.addon.computeReliefPolygons) {
+      throw new Error('Geometry addon does not expose computeReliefPolygons');
+    }
+    try {
+      return this.addon.computeReliefPolygons(bends, reliefType, radiusMm, thicknessMm);
     } catch (err) {
       throw toStructuredError(err);
     }

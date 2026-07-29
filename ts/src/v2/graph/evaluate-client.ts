@@ -862,3 +862,147 @@ export function closeGap(store: GraphStore, input: CloseGapInput): { gapMm: numb
 
   return { gapMm: delta.gapMm };
 }
+
+// ── add_flange (Phase 5 Slice 9b) ──────────────────────────────────────────
+
+export interface AddFlangeInput {
+  partId: string;
+  edge: EdgeRef;
+  lengthMm: number;
+  angleDeg: number;
+  radiusMm?: number;
+  kFactor?: number;
+}
+
+/**
+ * add_flange (rebuild/15-mcp-contract.md §4.2, Phase 5 Slice 9b).
+ *
+ * Graph-first: adds a rectangular flange to a free edge of the part's
+ * outline.  C++ computes the extended outline + hinge; the mutation is pure
+ * graph bookkeeping (replace outline, create bend, create child region panel).
+ * The 3D solid is reconstructed from the updated graph — no OCCT mutations.
+ */
+export function addFlange(
+  store: GraphStore,
+  input: AddFlangeInput,
+): { bend: BendRow; childRegionPanel: RegionPanelRow } {
+  const part = store.getPart(input.partId);
+  if (!part) {
+    throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${input.partId}`, false);
+  }
+
+  const layout = evaluatePart(store, input.partId);
+  if (!layout.ok) {
+    throwError(
+      (layout.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
+      layout.message || `evaluatePartGraph failed for part ${input.partId}`,
+      false,
+    );
+  }
+
+  // Validate the edge is free
+  resolveFreeEdge(input.partId, layout, input.edge);
+
+  // C++ computes the extended outline + hinge
+  const flange = geometryBinding.computeFlangeOutline(
+    part.outline,
+    input.edge.edgeIndex,
+    input.lengthMm,
+  );
+
+  // Replace the part's outline with the flange-extended version
+  store.replaceOutline(input.partId, flange.newOutline);
+
+  // Create the bend connecting the parent panel to the new flange panel.
+  // The child panel's shape is derived by RegionOf from the new outline
+  // + this hinge — no separate panel creation needed.
+  return store.createBendNode({
+    partId: input.partId,
+    parentRegionPanelId: input.edge.regionPanelId,
+    hingeA: flange.hingeA,
+    hingeB: flange.hingeB,
+    angleDeg: input.angleDeg,
+    radiusMm: input.radiusMm,
+    kFactor: input.kFactor,
+  });
+}
+
+// ── rip_edge (Phase 5 Slice 9b) ────────────────────────────────────────────
+
+export interface RipEdgeInput {
+  partId: string;
+  edge: EdgeRef;
+  gapMm?: number;
+}
+
+export function ripEdge(store: GraphStore, input: RipEdgeInput): void {
+  const part = store.getPart(input.partId);
+  if (!part) {
+    throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${input.partId}`, false);
+  }
+  const layout = evaluatePart(store, input.partId);
+  if (!layout.ok) {
+    throwError(
+      (layout.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
+      layout.message || `evaluatePartGraph failed for part ${input.partId}`,
+      false,
+    );
+  }
+  resolveFreeEdge(input.partId, layout, input.edge);
+  const result = geometryBinding.computeRipEdge(
+    part.outline, input.edge.edgeIndex, input.gapMm ?? 0.5,
+  );
+  store.replaceOutline(input.partId, result.newOutline);
+}
+
+// ── generate_reliefs (Phase 5 Slice 9b) ────────────────────────────────────
+
+export interface GenerateReliefsInput {
+  partId: string;
+  bendIds: string[];
+  reliefType: 'dogbone' | 'circular';
+  radiusMm: number;
+}
+
+export function generateReliefs(store: GraphStore, input: GenerateReliefsInput): void {
+  const part = store.getPart(input.partId);
+  if (!part) {
+    throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${input.partId}`, false);
+  }
+  const snapshot = store.snapshotPart(input.partId);
+  const matchedBends = snapshot.bends.filter((b) => input.bendIds.includes(b.bendId));
+  if (matchedBends.length === 0) {
+    throwError(ErrorCodes.INTERNAL_ERROR, 'no matching bends found', false);
+  }
+
+  const bendSpecs = matchedBends.map((b) => ({
+    id: b.bendId,
+    parentRegionPanelId: b.parentRegionPanelId,
+    childRegionPanelId: b.childRegionPanelId,
+    hingeA: b.hingeA,
+    hingeB: b.hingeB,
+    angleDeg: b.angleDeg,
+    radiusMm: 0,
+    kFactor: 0,
+  }));
+
+  const reliefPolygons = geometryBinding.computeReliefPolygons(
+    bendSpecs, input.reliefType, input.radiusMm, part.thicknessMm,
+  );
+
+  for (const poly of reliefPolygons) {
+    if (poly.length < 3) continue;
+    const evaluated = evaluatePart(store, input.partId);
+    if (!evaluated.ok) continue;
+    const candidateRegions = evaluated.panels.map((p) => p.regionOuter);
+    const result = geometryBinding.preparePolygonCut(poly, candidateRegions);
+    if (!result.ok) continue;
+    const targetPanel = evaluated.panels[result.regionIndex];
+    if (!targetPanel) continue;
+    store.addCutHole({
+      partId: input.partId,
+      regionPanelId: targetPanel.regionPanelId,
+      hole: { kind: 'polygon', ring: result.canonicalRing },
+    });
+  }
+}

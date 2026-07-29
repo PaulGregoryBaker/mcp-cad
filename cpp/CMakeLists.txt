@@ -91,6 +91,9 @@ add_library(geometry_engine STATIC
   src/geometry/translation/ring_containment.cc
   src/geometry/translation/cut_panel.cc
   src/geometry/translation/close_gap.cc
+  src/geometry/translation/add_flange.cc
+  src/geometry/translation/rip_edge.cc
+  src/geometry/translation/generate_reliefs.cc
   src/geometry/validation/rules_engine.cc
   src/geometry/validation/rules/bend_radius.cc
   src/geometry/validation/rules/bend_angle.cc
@@ -140,6 +143,7 @@ add_executable(geometry_tests
   tests/cut_panel_test.cc
   tests/validation_rules_test.cc
   tests/close_gap_test.cc
+  tests/add_flange_test.cc
 )
 
 target_include_directories(geometry_tests PRIVATE

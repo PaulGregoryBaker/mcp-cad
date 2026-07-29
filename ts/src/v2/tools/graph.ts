@@ -17,10 +17,14 @@ import {
   splitBodyByBendsStandalone,
   cutPanel,
   closeGap,
+  addFlange,
+  ripEdge,
+  generateReliefs,
 } from '../graph/evaluate-client';
 import { throwError, ErrorCodes } from '../../mcp/errors';
 import {
   requireString,
+  requireStringArray,
   requireNumber,
   optNumber,
   optString,
@@ -326,6 +330,69 @@ export const graphToolDefinitions = [
       required: ['part_id', 'edge_a', 'edge_b'],
     },
   },
+  {
+    name: 'add_flange',
+    description:
+      'Add a rectangular flange to a free edge of the part (rebuild/15 §4.2, Phase 5 Slice 9b). Graph-first: C++ computes the extended outline, then the mutation is pure graph bookkeeping (replace outline, create bend, create child panel).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        part_id: { type: 'string' },
+        edge: {
+          type: 'object',
+          properties: {
+            region_panel_id: { type: 'string' },
+            edge_index: { type: 'integer', minimum: 0 },
+          },
+          required: ['region_panel_id', 'edge_index'],
+        },
+        length_mm: { type: 'number', exclusiveMinimum: 0, description: 'Flange length in mm' },
+        angle_deg: { type: 'number', description: 'Bend angle in degrees' },
+        radius_mm: { type: 'number', minimum: 0, description: 'Bend radius in mm' },
+      },
+      required: ['part_id', 'edge', 'length_mm', 'angle_deg'],
+    },
+  },
+  {
+    name: 'rip_edge',
+    description:
+      'Split material along a free edge, creating a seam gap (rebuild/15 §4.2, Phase 5 Slice 9b). Graph-first: C++ computes the new outline with a gap, then replaceOutline applies it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        part_id: { type: 'string' },
+        edge: {
+          type: 'object',
+          properties: {
+            region_panel_id: { type: 'string' },
+            edge_index: { type: 'integer', minimum: 0 },
+          },
+          required: ['region_panel_id', 'edge_index'],
+        },
+        gap_mm: { type: 'number', minimum: 0, description: 'Seam gap width in mm (default: 0.5)' },
+      },
+      required: ['part_id', 'edge'],
+    },
+  },
+  {
+    name: 'generate_reliefs',
+    description:
+      'Add corner reliefs at bend intersections (rebuild/15 §4.2, Phase 5 Slice 9b). Computes relief polygons via C++, then applies them as polygon cuts via cut_panel.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        part_id: { type: 'string' },
+        bend_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Bend IDs whose intersections should receive reliefs',
+        },
+        relief_type: { type: 'string', enum: ['dogbone', 'circular'] },
+        radius_mm: { type: 'number', minimum: 0.5 },
+      },
+      required: ['part_id', 'bend_ids', 'relief_type', 'radius_mm'],
+    },
+  },
 ];
 
 export function dispatchGraphTool(
@@ -356,6 +423,12 @@ export function dispatchGraphTool(
       return handleCutPanel(store, args);
     case 'close_gap':
       return handleCloseGap(store, args);
+    case 'add_flange':
+      return handleAddFlange(store, args);
+    case 'rip_edge':
+      return handleRipEdge(store, args);
+    case 'generate_reliefs':
+      return handleGenerateReliefs(store, args);
     default:
       throwError(ErrorCodes.INTERNAL_ERROR, `Unknown v2 tool: ${name}`, false);
   }
@@ -738,6 +811,75 @@ function handleCloseGap(
   try {
     const result = closeGap(store, { partId, edgeA, edgeB });
     return { gap_mm: result.gapMm };
+  } catch (err) {
+    if (err instanceof GraphStoreError) {
+      throwError(err.code, err.message, false);
+    }
+    throw err;
+  }
+}
+
+function handleAddFlange(
+  store: GraphStore,
+  args: Record<string, unknown>,
+): { bend_id: string; child_region_panel_id: string } {
+  const partId = requireString(args, 'part_id');
+  const edge = requireEdgeRef(args, 'edge');
+  const lengthMm = requireNumber(args, 'length_mm');
+  const angleDeg = requireNumber(args, 'angle_deg');
+  const radiusMm = optNumber(args, 'radius_mm');
+
+  try {
+    const result = addFlange(store, {
+      partId,
+      edge,
+      lengthMm,
+      angleDeg,
+      radiusMm,
+    });
+    return {
+      bend_id: result.bend.bendId,
+      child_region_panel_id: result.childRegionPanel.regionPanelId,
+    };
+  } catch (err) {
+    if (err instanceof GraphStoreError) {
+      throwError(err.code, err.message, false);
+    }
+    throw err;
+  }
+}
+
+function handleRipEdge(
+  store: GraphStore,
+  args: Record<string, unknown>,
+): Record<string, never> {
+  const partId = requireString(args, 'part_id');
+  const edge = requireEdgeRef(args, 'edge');
+  const gapMm = optNumber(args, 'gap_mm') ?? 0.5;
+
+  try {
+    ripEdge(store, { partId, edge, gapMm });
+    return {};
+  } catch (err) {
+    if (err instanceof GraphStoreError) {
+      throwError(err.code, err.message, false);
+    }
+    throw err;
+  }
+}
+
+function handleGenerateReliefs(
+  store: GraphStore,
+  args: Record<string, unknown>,
+): Record<string, never> {
+  const partId = requireString(args, 'part_id');
+  const bendIds = requireStringArray(args, 'bend_ids');
+  const reliefType = requireString(args, 'relief_type') as 'dogbone' | 'circular';
+  const radiusMm = requireNumber(args, 'radius_mm');
+
+  try {
+    generateReliefs(store, { partId, bendIds, reliefType, radiusMm });
+    return {};
   } catch (err) {
     if (err instanceof GraphStoreError) {
       throwError(err.code, err.message, false);
