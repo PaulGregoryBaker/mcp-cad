@@ -25,6 +25,7 @@
 #include "../geometry/translation/add_flange.hpp"
 #include "../geometry/translation/rip_edge.hpp"
 #include "../geometry/translation/generate_reliefs.hpp"
+#include "../geometry/translation/split_by_plane.hpp"
 #include "../geometry/validation/rules_engine.hpp"
 #include "../geometry/validation/profile.hpp"
 
@@ -1044,6 +1045,41 @@ Napi::Value ComputeReliefPolygonsBinding(const Napi::CallbackInfo& info) {
   }
 }
 
+// ─── computeSplitByPlane ─────────────────────────────────────────────────────
+
+Napi::Value ComputeSplitByPlaneBinding(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 5 || !info[0].IsObject() || !info[1].IsNumber() ||
+      !info[2].IsNumber() || !info[3].IsNumber() || !info[4].IsNumber()) {
+    Napi::TypeError::New(env, "computeSplitByPlane(layout: EvaluateResult, "
+                             "nx: number, ny: number, nz: number, d: number)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    EvaluateResult layout = ReadEvaluateResult(info[0].As<Napi::Object>());
+    double nx = info[1].As<Napi::Number>().DoubleValue();
+    double ny = info[2].As<Napi::Number>().DoubleValue();
+    double nz = info[3].As<Napi::Number>().DoubleValue();
+    double d = info[4].As<Napi::Number>().DoubleValue();
+
+    auto result = translation::ComputeSplitByPlane(layout, nx, ny, nz, d);
+
+    Napi::Array arr = Napi::Array::New(env, result.fragments.size());
+    for (size_t i = 0; i < result.fragments.size(); ++i) {
+      Napi::Object frag = Napi::Object::New(env);
+      frag.Set("regionPanelId", Napi::String::New(env, result.fragments[i].regionPanelId));
+      frag.Set("positiveSide", Napi::Boolean::New(env, result.fragments[i].positiveSide));
+      frag.Set("polygon", WritePoint2Array(env, result.fragments[i].polygon));
+      arr.Set(i, frag);
+    }
+    return arr;
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
 void RegisterTranslationMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("evaluatePartGraph", Napi::Function::New(env, EvaluatePartGraph));
   exports.Set("constructPartSolid", Napi::Function::New(env, ConstructPartSolidBinding));
@@ -1061,6 +1097,7 @@ void RegisterTranslationMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("computeFlangeOutline", Napi::Function::New(env, ComputeFlangeOutlineBinding));
   exports.Set("computeRipEdge", Napi::Function::New(env, ComputeRipEdgeBinding));
   exports.Set("computeReliefPolygons", Napi::Function::New(env, ComputeReliefPolygonsBinding));
+  exports.Set("computeSplitByPlane", Napi::Function::New(env, ComputeSplitByPlaneBinding));
 }
 
 }  // namespace mcp_cad

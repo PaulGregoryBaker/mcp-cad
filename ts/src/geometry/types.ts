@@ -859,3 +859,10 @@ export interface FlangeOutlineResult {
 export interface NapiRipEdgeResult {
   newOutline: NapiPoint2[];
 }
+
+/** computeSplitByPlane fragment — one clipped panel fragment. */
+export interface NapiPanelFragment {
+  regionPanelId: string;
+  positiveSide: boolean;
+  polygon: NapiPoint2[];
+}

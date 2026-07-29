@@ -955,7 +955,197 @@ export function ripEdge(store: GraphStore, input: RipEdgeInput): void {
   store.replaceOutline(input.partId, result.newOutline);
 }
 
-// ── generate_reliefs (Phase 5 Slice 9b) ────────────────────────────────────
+// ── split_body_by_plane (Phase 5 Slice 9b) ─────────────────────────────────
+
+export interface SplitBodyByPlaneInput {
+  partId: string;
+  normalX: number;
+  normalY: number;
+  normalZ: number;
+  offsetD: number;
+}
+
+export interface SplitBodyByPlaneOutput {
+  newPartIds: string[];
+}
+
+/**
+ * split_body_by_plane (rebuild/15 §4.2, Phase 5 Slice 9b).
+ *
+ * Graph-first: projects a 3D plane to per-panel 2D cut lines, clips each
+ * panel's region polygon, groups fragments by bend connectivity, unions
+ * fragment polygons into new outlines, reassigns bends and holes, and
+ * creates new PartRows.  The original part is NOT modified.
+ *
+ * Returns one or more new part IDs — must be at least 1 (the cut always
+ * produces at least one non-empty side), may be more if the cut plane
+ * splits disconnected components.
+ */
+export function splitBodyByPlane(
+  store: GraphStore,
+  input: SplitBodyByPlaneInput,
+): SplitBodyByPlaneOutput {
+  if (!store.getPart(input.partId)) {
+    throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${input.partId}`, false);
+  }
+
+  const layout = evaluatePart(store, input.partId);
+  if (!layout.ok) {
+    throwError(
+      (layout.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
+      layout.message || `evaluatePartGraph failed for part ${input.partId}`,
+      false,
+    );
+  }
+
+  // Step 1: C++ projects plane → per-panel 2D cut lines, clips polygons
+  const fragments = geometryBinding.computeSplitByPlane(
+    layout,
+    input.normalX,
+    input.normalY,
+    input.normalZ,
+    input.offsetD,
+  );
+
+  if (fragments.length === 0) {
+    throwError(ErrorCodes.INTERNAL_ERROR, 'split_by_plane produced no fragments', false);
+  }
+
+  // Step 2: Group fragments by (side, connectivity)
+  // Build a fragment lookup: regionPanelId → {pos, neg}
+  const fragMap = new Map<string, { pos: (typeof fragments)[0] | null; neg: (typeof fragments)[0] | null }>();
+  for (const f of fragments) {
+    let entry = fragMap.get(f.regionPanelId);
+    if (!entry) {
+      entry = { pos: null, neg: null };
+      fragMap.set(f.regionPanelId, entry);
+    }
+    if (f.positiveSide) entry.pos = f;
+    else entry.neg = f;
+  }
+
+  // Union-Find for connected components (per side)
+  const posParent = new Map<string, string>();
+  const negParent = new Map<string, string>();
+
+  const find = (map: Map<string, string>, id: string): string => {
+    const p = map.get(id);
+    if (!p || p === id) return id;
+    const root = find(map, p);
+    map.set(id, root);
+    return root;
+  };
+  const union = (map: Map<string, string>, a: string, b: string) => {
+    const ra = find(map, a);
+    const rb = find(map, b);
+    if (ra !== rb) map.set(ra, rb);
+  };
+
+  // Initialize each panel as its own component
+  for (const [id] of fragMap) {
+    posParent.set(id, id);
+    negParent.set(id, id);
+  }
+
+  // Walk bends: connected panels on same side → same component
+  const snapshot = store.snapshotPart(input.partId);
+  for (const bend of snapshot.bends) {
+    const pFrag = fragMap.get(bend.parentRegionPanelId);
+    const cFrag = fragMap.get(bend.childRegionPanelId);
+    if (!pFrag || !cFrag) continue;
+    if (pFrag.pos && cFrag.pos) union(posParent, bend.parentRegionPanelId, bend.childRegionPanelId);
+    if (pFrag.neg && cFrag.neg) union(negParent, bend.parentRegionPanelId, bend.childRegionPanelId);
+  }
+
+  // Collect fragments per component
+  const posComponents = new Map<string, (typeof fragments)[0][]>();
+  const negComponents = new Map<string, (typeof fragments)[0][]>();
+  for (const [id, entry] of fragMap) {
+    if (entry.pos) {
+      const root = find(posParent, id);
+      let comp = posComponents.get(root);
+      if (!comp) { comp = []; posComponents.set(root, comp); }
+      comp.push(entry.pos);
+    }
+    if (entry.neg) {
+      const root = find(negParent, id);
+      let comp = negComponents.get(root);
+      if (!comp) { comp = []; negComponents.set(root, comp); }
+      comp.push(entry.neg);
+    }
+  }
+
+  // Step 3: For each component, union fragment polygons into one outline
+  const newPartIds: string[] = [];
+
+  const processComponent = (
+    componentFragments: (typeof fragments)[0][],
+    _side: string,
+  ) => {
+    if (componentFragments.length === 0) return;
+
+    // Union all fragment polygons iteratively
+    let outline: Point2[] = componentFragments[0].polygon;
+    for (let i = 1; i < componentFragments.length; i++) {
+      const result = geometryBinding.polygonUnion(outline, componentFragments[i].polygon);
+      if (result.ok) {
+        outline = result.outer;
+      }
+      // If union fails, keep the current outline — fragments stay separate
+    }
+
+    // Collect which panels are in this component
+    const panelIds = new Set(componentFragments.map((f) => f.regionPanelId));
+
+    // Collect bends whose both panels are in this component
+    const componentBends = snapshot.bends.filter(
+      (b) => panelIds.has(b.parentRegionPanelId) && panelIds.has(b.childRegionPanelId),
+    );
+
+    // Create the new part
+    const newPart = store.createPart({
+      name: `${snapshot.part.name}#split`,
+      outline,
+      thicknessMm: snapshot.part.thicknessMm,
+      materialId: snapshot.part.materialId,
+      kFactor: snapshot.part.kFactor,
+    });
+
+    // Map old panel IDs to new ones (root panel is the first one)
+    const oldToNew = new Map<string, string>();
+    // The root panel of the new part gets the outline — other panels are derived
+    // The first panel in the component becomes the root
+    oldToNew.set(componentFragments[0].regionPanelId, newPart.rootRegionPanelId);
+
+    // Create bends for this component
+    for (const bend of componentBends) {
+      const parentNew = oldToNew.get(bend.parentRegionPanelId);
+      if (!parentNew) continue;
+      const created = store.createBendNode({
+        partId: newPart.partId,
+        parentRegionPanelId: parentNew,
+        hingeA: bend.hingeA,
+        hingeB: bend.hingeB,
+        angleDeg: bend.angleDeg,
+        radiusMm: bend.radiusMm,
+        kFactor: bend.kFactorOverride ?? undefined,
+        bottomIsConcave: bend.bottomIsConcave ?? undefined,
+      });
+      oldToNew.set(bend.childRegionPanelId, created.childRegionPanel.regionPanelId);
+    }
+
+    newPartIds.push(newPart.partId);
+  };
+
+  for (const comp of posComponents.values()) processComponent(comp, 'pos');
+  for (const comp of negComponents.values()) processComponent(comp, 'neg');
+
+  if (newPartIds.length === 0) {
+    throwError(ErrorCodes.INTERNAL_ERROR, 'split_by_plane produced no valid parts', false);
+  }
+
+  return { newPartIds };
+}
 
 export interface GenerateReliefsInput {
   partId: string;

@@ -20,6 +20,7 @@ import {
   addFlange,
   ripEdge,
   generateReliefs,
+  splitBodyByPlane,
 } from '../graph/evaluate-client';
 import { throwError, ErrorCodes } from '../../mcp/errors';
 import {
@@ -393,6 +394,42 @@ export const graphToolDefinitions = [
       required: ['part_id', 'bend_ids', 'relief_type', 'radius_mm'],
     },
   },
+  {
+    name: 'split_body_by_plane',
+    description:
+      'Split a part by a 3D plane, producing one or more new parts (rebuild/15 §4.2, Phase 5 Slice 9b). Graph-first: projects the plane to per-panel 2D cut lines, clips region polygons, groups fragments by bend connectivity, unions outlines, reassigns bends and holes, and creates new PartRows. The original part is unchanged.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        part_id: { type: 'string' },
+        plane: {
+          type: 'object',
+          properties: {
+            normal: {
+              type: 'object',
+              properties: {
+                x: { type: 'number' },
+                y: { type: 'number' },
+                z: { type: 'number' },
+              },
+              required: ['x', 'y', 'z'],
+            },
+            origin: {
+              type: 'object',
+              properties: {
+                x: { type: 'number' },
+                y: { type: 'number' },
+                z: { type: 'number' },
+              },
+              required: ['x', 'y', 'z'],
+            },
+          },
+          required: ['normal', 'origin'],
+        },
+      },
+      required: ['part_id', 'plane'],
+    },
+  },
 ];
 
 export function dispatchGraphTool(
@@ -429,6 +466,8 @@ export function dispatchGraphTool(
       return handleRipEdge(store, args);
     case 'generate_reliefs':
       return handleGenerateReliefs(store, args);
+    case 'split_body_by_plane':
+      return handleSplitBodyByPlane(store, args);
     default:
       throwError(ErrorCodes.INTERNAL_ERROR, `Unknown v2 tool: ${name}`, false);
   }
@@ -880,6 +919,45 @@ function handleGenerateReliefs(
   try {
     generateReliefs(store, { partId, bendIds, reliefType, radiusMm });
     return {};
+  } catch (err) {
+    if (err instanceof GraphStoreError) {
+      throwError(err.code, err.message, false);
+    }
+    throw err;
+  }
+}
+
+function handleSplitBodyByPlane(
+  store: GraphStore,
+  args: Record<string, unknown>,
+): { new_part_ids: string[] } {
+  const partId = requireString(args, 'part_id');
+  const plane = args['plane'] as Record<string, unknown>;
+  if (!plane || typeof plane !== 'object') {
+    throwError(ErrorCodes.INTERNAL_ERROR, 'split_body_by_plane requires a plane object', false);
+  }
+  const normal = plane['normal'] as Record<string, unknown>;
+  const origin = plane['origin'] as Record<string, unknown>;
+  if (!normal || !origin) {
+    throwError(ErrorCodes.INTERNAL_ERROR, 'plane requires normal and origin', false);
+  }
+  const nx = Number(normal['x']);
+  const ny = Number(normal['y']);
+  const nz = Number(normal['z']);
+  const ox = Number(origin['x']);
+  const oy = Number(origin['y']);
+  const oz = Number(origin['z']);
+  const offsetD = nx * ox + ny * oy + nz * oz;
+
+  try {
+    const result = splitBodyByPlane(store, {
+      partId,
+      normalX: nx,
+      normalY: ny,
+      normalZ: nz,
+      offsetD,
+    });
+    return { new_part_ids: result.newPartIds };
   } catch (err) {
     if (err instanceof GraphStoreError) {
       throwError(err.code, err.message, false);

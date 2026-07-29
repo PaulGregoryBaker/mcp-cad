@@ -94,6 +94,7 @@ add_library(geometry_engine STATIC
   src/geometry/translation/add_flange.cc
   src/geometry/translation/rip_edge.cc
   src/geometry/translation/generate_reliefs.cc
+  src/geometry/translation/split_by_plane.cc
   src/geometry/validation/rules_engine.cc
   src/geometry/validation/rules/bend_radius.cc
   src/geometry/validation/rules/bend_angle.cc

@@ -82,6 +82,7 @@ import type {
   FlangeOutlineResult,
   NapiRipEdgeResult,
   NapiBendSpec,
+  NapiPanelFragment,
 } from './types';
 
 // ─── Addon interface ──────────────────────────────────────────────────────────
@@ -401,6 +402,15 @@ export interface GeometryAddon {
     radiusMm: number,
     thicknessMm: number,
   ): NapiPoint2[][];
+
+  // ── Phase 5 Slice 9b: split_body_by_plane ──────────────────────────────
+  computeSplitByPlane?(
+    layout: EvaluatePartGraphResult,
+    nx: number,
+    ny: number,
+    nz: number,
+    d: number,
+  ): NapiPanelFragment[];
 }
 
 export const kerfOffsetMm = {
@@ -559,6 +569,10 @@ export class GeometryBinding {
 
   hasComputeReliefPolygons(): boolean {
     return typeof this.addon.computeReliefPolygons === 'function';
+  }
+
+  hasComputeSplitByPlane(): boolean {
+    return typeof this.addon.computeSplitByPlane === 'function';
   }
 
   loadStep(filePath: string): string {
@@ -1504,6 +1518,23 @@ export class GeometryBinding {
     }
     try {
       return this.addon.computeReliefPolygons(bends, reliefType, radiusMm, thicknessMm);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  computeSplitByPlane(
+    layout: EvaluatePartGraphResult,
+    nx: number,
+    ny: number,
+    nz: number,
+    d: number,
+  ): NapiPanelFragment[] {
+    if (!this.addon.computeSplitByPlane) {
+      throw new Error('Geometry addon does not expose computeSplitByPlane');
+    }
+    try {
+      return this.addon.computeSplitByPlane(layout, nx, ny, nz, d);
     } catch (err) {
       throw toStructuredError(err);
     }
