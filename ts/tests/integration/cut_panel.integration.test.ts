@@ -15,12 +15,15 @@
  * Gated behind SUITE_V2_DRIVER=1, consistent with this session's other v2
  * drivers.
  */
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 
 import { GraphStore } from '../../src/v2/graph/store';
 import { dispatchGraphTool } from '../../src/v2/tools/graph';
 import { constructPart, evaluatePart } from '../../src/v2/graph/evaluate-client';
 import { readGraphResource } from '../../src/v2/resources/graph';
+import { startV2BlobServer } from '../../src/v2/blob-server';
 import { geometryBinding } from '../../src/geometry/binding';
 import { McpToolError } from '../../src/mcp/errors';
 
@@ -85,21 +88,49 @@ function catchToolError(fn: () => void): McpToolError {
   throw new Error('expected fn() to throw');
 }
 
+interface Ref {
+  url: string;
+  contentType: string;
+  byteSize: number;
+  expiresAt: string;
+}
+
 interface FlatPatternResult {
   outline: Array<{ x: number; y: number }>;
   holes: Array<
     | { kind: 'circle'; center: { x: number; y: number }; radiusMm: number }
     | { kind: 'polygon'; ring: Array<{ x: number; y: number }> }
   >;
-  dxf: string;
+  ref: Ref;
 }
 
 function readFlatPattern(store: GraphStore, partId: string): FlatPatternResult {
   return readGraphResource(store, `graph://part/${partId}/flat-pattern`) as FlatPatternResult;
 }
 
+async function fetchDxf(flat: FlatPatternResult): Promise<string> {
+  const response = await fetch(flat.ref.url);
+  return response.text();
+}
+
 d('[v2] cut_panel (Phase 5 Slice 9a) — success cases', () => {
-  it('kind=circle: stores an exact center+radius hole, visible in the flat pattern as a DXF CIRCLE', () => {
+  let server: Server;
+  const originalPort = process.env['V2_BLOB_PORT'];
+
+  beforeAll(() => {
+    server = startV2BlobServer(0);
+    const port = (server.address() as AddressInfo).port;
+    process.env['V2_BLOB_PORT'] = String(port);
+  });
+
+  afterAll(() => {
+    server.closeAllConnections();
+    server.close();
+    if (originalPort === undefined) delete process.env['V2_BLOB_PORT'];
+    else process.env['V2_BLOB_PORT'] = originalPort;
+  });
+
+  it('kind=circle: stores an exact center+radius hole, visible in the flat pattern as a DXF CIRCLE', async () => {
     const store = new GraphStore();
     const part = createRectPart(store, 'cut-circle');
 
@@ -109,11 +140,12 @@ d('[v2] cut_panel (Phase 5 Slice 9a) — success cases', () => {
 
     const flat = readFlatPattern(store, part.part_id);
     expect(flat.holes).toEqual([{ kind: 'circle', center: { x: 20, y: 30 }, radiusMm: 5.0 }]);
-    expect(flat.dxf).toContain('CIRCLE');
-    expect(flat.dxf).toContain('CUTS');
+    const dxf = await fetchDxf(flat);
+    expect(dxf).toContain('CIRCLE');
+    expect(dxf).toContain('CUTS');
   });
 
-  it('kind=polygon: canonicalizes winding, visible in the flat pattern as a DXF LWPOLYLINE on CUTS', () => {
+  it('kind=polygon: canonicalizes winding, visible in the flat pattern as a DXF LWPOLYLINE on CUTS', async () => {
     const store = new GraphStore();
     const part = createRectPart(store, 'cut-polygon');
 
@@ -127,8 +159,9 @@ d('[v2] cut_panel (Phase 5 Slice 9a) — success cases', () => {
     const flat = readFlatPattern(store, part.part_id);
     expect(flat.holes.length).toBe(1);
     expect(flat.holes[0]?.kind).toBe('polygon');
-    expect(flat.dxf).toContain('LWPOLYLINE');
-    expect(flat.dxf).toContain('CUTS');
+    const dxf = await fetchDxf(flat);
+    expect(dxf).toContain('LWPOLYLINE');
+    expect(dxf).toContain('CUTS');
   });
 
   it('the constructed 3D solid has both holes actually punched out (measurably reduced volume)', () => {

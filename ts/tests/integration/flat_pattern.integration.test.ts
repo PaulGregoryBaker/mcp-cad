@@ -17,15 +17,22 @@
  * so there is no per-panel DXF to reassemble; this suite's oracles reflect
  * that directly rather than mirroring v1's per-panel shape.
  *
+ * `dxf` is served as a `Ref` (15 §3.0/§3.3), not inline — added 2026-07-28
+ * once the blob-cache infra existed (Slice 7b); mirrors
+ * boundary_resource.integration.test.ts's blob-server setup for fetching it.
+ *
  * Gated behind SUITE_V2_DRIVER=1, consistent with this session's other v2
  * drivers.
  */
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as path from 'node:path';
+import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 
 import { GraphStore } from '../../src/v2/graph/store';
 import { dispatchGraphTool } from '../../src/v2/tools/graph';
 import { readGraphResource } from '../../src/v2/resources/graph';
+import { startV2BlobServer } from '../../src/v2/blob-server';
 import { McpToolError } from '../../src/mcp/errors';
 
 const ENABLED = process.env.SUITE_V2_DRIVER === '1';
@@ -36,6 +43,13 @@ const FIXTURES_DIR = path.resolve(__dirname, '../../../cpp/tests/fixtures');
 interface CreatePartResult {
   part_id: string;
   root_region_panel_id: string;
+}
+
+interface Ref {
+  url: string;
+  contentType: string;
+  byteSize: number;
+  expiresAt: string;
 }
 
 interface FlatPatternResult {
@@ -51,11 +65,18 @@ interface FlatPatternResult {
     angleDeg: number;
     radiusMm: number;
   }>;
-  dxf: string;
+  ref: Ref;
 }
 
 function readFlatPattern(store: GraphStore, partId: string): FlatPatternResult {
   return readGraphResource(store, `graph://part/${partId}/flat-pattern`) as FlatPatternResult;
+}
+
+async function fetchDxf(flat: FlatPatternResult): Promise<string> {
+  const response = await fetch(flat.ref.url);
+  expect(response.status).toBe(200);
+  expect(response.headers.get('content-type')).toBe('application/dxf');
+  return response.text();
 }
 
 function shoelaceArea(ring: Array<{ x: number; y: number }>): number {
@@ -69,7 +90,23 @@ function shoelaceArea(ring: Array<{ x: number; y: number }>): number {
 }
 
 d('[v2] flat-pattern resource (Phase 5 Slice 7)', () => {
-  it('single-panel part (no bends): flat pattern is exactly the part outline, no bend lines', () => {
+  let server: Server;
+  const originalPort = process.env['V2_BLOB_PORT'];
+
+  beforeAll(() => {
+    server = startV2BlobServer(0);
+    const port = (server.address() as AddressInfo).port;
+    process.env['V2_BLOB_PORT'] = String(port);
+  });
+
+  afterAll(() => {
+    server.closeAllConnections();
+    server.close();
+    if (originalPort === undefined) delete process.env['V2_BLOB_PORT'];
+    else process.env['V2_BLOB_PORT'] = originalPort;
+  });
+
+  it('single-panel part (no bends): flat pattern is exactly the part outline, no bend lines', async () => {
     const store = new GraphStore();
     const part = dispatchGraphTool(store, 'create_part', {
       name: 'flat-single',
@@ -94,11 +131,12 @@ d('[v2] flat-pattern resource (Phase 5 Slice 7)', () => {
     expect(flat.regionPanels.length).toBe(1);
     expect(flat.regionPanels[0]?.outer).toEqual(flat.outline);
     expect(flat.bendLines).toEqual([]);
-    expect(flat.dxf).toContain('LWPOLYLINE');
-    expect(flat.dxf).not.toContain('BEND');
+    const dxf = await fetchDxf(flat);
+    expect(dxf).toContain('LWPOLYLINE');
+    expect(dxf).not.toContain('BEND');
   });
 
-  it('two-panel part (one bend): bend line matches the hinge, region panels split around it', () => {
+  it('two-panel part (one bend): bend line matches the hinge, region panels split around it', async () => {
     const store = new GraphStore();
     const part = dispatchGraphTool(store, 'create_part', {
       name: 'flat-bent',
@@ -134,8 +172,9 @@ d('[v2] flat-pattern resource (Phase 5 Slice 7)', () => {
     expect(flat.bendLines[0]?.hingeA).toEqual({ x: 5, y: 0 });
     expect(flat.bendLines[0]?.hingeB).toEqual({ x: 5, y: 5 });
     expect(flat.bendLines[0]?.angleDeg).toBe(90);
-    expect(flat.dxf).toContain('LWPOLYLINE');
-    expect(flat.dxf).toContain('BEND');
+    const dxf = await fetchDxf(flat);
+    expect(dxf).toContain('LWPOLYLINE');
+    expect(dxf).toContain('BEND');
 
     // Region panels are clipped PAST the bend's own radius/width zone (14
     // §2.1's boundingBends), so their combined area is strictly less than
@@ -159,7 +198,7 @@ d('[v2] flat-pattern resource (Phase 5 Slice 7)', () => {
     expect((caught as McpToolError).structured.code).toBe('GRAPH_PART_NOT_FOUND');
   });
 
-  it('l_bracket_corner_90deg.stp (real fixture): flat pattern reflects the imported bend', () => {
+  it('l_bracket_corner_90deg.stp (real fixture): flat pattern reflects the imported bend', async () => {
     const store = new GraphStore();
     const imported = dispatchGraphTool(store, 'import_part', {
       file: path.join(FIXTURES_DIR, 'l_bracket_corner_90deg.stp'),
@@ -180,7 +219,8 @@ d('[v2] flat-pattern resource (Phase 5 Slice 7)', () => {
     // <=, not a strict <.
     expect(regionArea).toBeLessThanOrEqual(outlineArea);
     expect(regionArea).toBeGreaterThan(0);
-    expect(flat.dxf).toContain('LWPOLYLINE');
-    expect(flat.dxf).toContain('BEND');
+    const dxf = await fetchDxf(flat);
+    expect(dxf).toContain('LWPOLYLINE');
+    expect(dxf).toContain('BEND');
   });
 });

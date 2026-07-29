@@ -1,7 +1,7 @@
 /**
  * v2 geometry blob cache (Phase 5, rebuild/14-graph-schema.md §3.1 "Layer 3").
  *
- * A part's mesh/boundary blob URL is stable per (part_id, resource_type,
+ * A part's mesh/boundary/flat-pattern blob URL is stable per (part_id, resource_type,
  * params) — NOT keyed by content hash — so a client can hold one URL for a
  * part's whole lifetime. The content hash is still computed and stored, but
  * only as an internal freshness check: `getOrRebuild` rebuilds in place under
@@ -83,7 +83,7 @@ export function computePartContentHash(store: GraphStore, partId: string): strin
   return createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
 }
 
-export type V2BlobResourceType = 'mesh' | 'boundary';
+export type V2BlobResourceType = 'mesh' | 'boundary' | 'flat-pattern';
 
 export function buildBlobCacheKey(
   partId: string,

@@ -255,6 +255,9 @@ function readFlatPattern(store: GraphStore, partId: string): unknown {
     radiusMm: b.radiusMm,
   }));
 
+  const { entry } = ensureFlatPatternDxfBlobFresh(store, partId);
+  const key = buildBlobCacheKey(partId, 'flat-pattern', 'default');
+
   return {
     partId,
     thicknessMm: part.thicknessMm,
@@ -263,8 +266,48 @@ function readFlatPattern(store: GraphStore, partId: string): unknown {
     holes: part.holes,
     regionPanels,
     bendLines,
-    dxf: buildFlatPatternDxf(part.outline, bendLines, part.holes),
+    ref: toRef(entry, buildV2BlobUrl(key)),
   };
+}
+
+/** Builds the flat-pattern DXF blob's bytes (15 §3.0/§3.3 — geometry
+ * payloads, including flat-pattern point/DXF data, are always a `Ref`, never
+ * inline). Same role as `ensureBoundaryBlobFresh`/`ensureMeshBlobFresh`, and
+ * shared with `checkSubscriptionsForDrift` the same way (server.ts's
+ * `GEOMETRY_RESOURCE_PATTERN` includes `flat-pattern` alongside mesh/boundary).
+ *
+ * Added 2026-07-28: flat-pattern (Slice 7) predates the blob-cache
+ * infrastructure (Slice 7b) — this was the one geometry resource still
+ * returning its payload inline, an implementation gap against 15 §3.3, not a
+ * deliberate deviation (unlike mesh/boundary's documented stable-URL choice,
+ * see the file header comment). `outline`/`holes`/`regionPanels`/`bendLines`
+ * stay inline: they're the same small structural-metadata scale as
+ * `bendLines` always was, not the unbounded-size concern `dxf` text is for a
+ * real multi-entity drawing. */
+export function ensureFlatPatternDxfBlobFresh(
+  store: GraphStore,
+  partId: string,
+): { entry: BlobCacheEntry; changed: boolean } {
+  const part = store.getPart(partId);
+  if (!part) {
+    throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${partId}`, false);
+  }
+  const snapshot = store.snapshotPart(partId);
+  const bendLines: FlatPatternBend[] = snapshot.bends.map((b) => ({
+    bendId: b.bendId,
+    hingeA: b.hingeA,
+    hingeB: b.hingeB,
+    angleDeg: b.angleDeg,
+    radiusMm: b.radiusMm,
+  }));
+  const key = buildBlobCacheKey(partId, 'flat-pattern', 'default');
+  const currentHash = computePartContentHash(store, partId);
+  const before = v2BlobCache.get(key);
+  const entry = v2BlobCache.getOrRebuild(key, 'application/dxf', currentHash, () =>
+    Buffer.from(buildFlatPatternDxf(part.outline, bendLines, part.holes), 'utf8'),
+  );
+  const changed = !before || before.builtFromContentHash !== entry.builtFromContentHash;
+  return { entry, changed };
 }
 
 interface PartsListEntry {

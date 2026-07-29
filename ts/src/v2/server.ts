@@ -28,11 +28,12 @@ import {
   readGraphResource,
   ensureMeshBlobFresh,
   ensureBoundaryBlobFresh,
+  ensureFlatPatternDxfBlobFresh,
 } from './resources/graph';
 import { startV2BlobServer } from './blob-server';
 import { resolveV2BlobPort } from './blob-cache';
 
-const GEOMETRY_RESOURCE_PATTERN = /^graph:\/\/part\/([^/]+)\/(mesh|boundary)$/;
+const GEOMETRY_RESOURCE_PATTERN = /^graph:\/\/part\/([^/]+)\/(mesh|boundary|flat-pattern)$/;
 
 /**
  * Builds a fully wired v2 Server instance (tool/resource handlers, resource
@@ -71,8 +72,8 @@ export function createV2Server(store: GraphStore = new GraphStore()): Server {
   });
 
   /**
-   * After a mutation, rebuild any subscribed mesh/boundary blob whose
-   * content hash no longer matches the part's current rows, and push
+   * After a mutation, rebuild any subscribed mesh/boundary/flat-pattern blob
+   * whose content hash no longer matches the part's current rows, and push
    * `notifications/resources/updated` for exactly the ones that changed.
    * Iterates `subscribedUris` rather than inspecting the mutating tool's own
    * result — correct regardless of which tool ran (result shapes differ
@@ -96,7 +97,9 @@ export function createV2Server(store: GraphStore = new GraphStore()): Server {
         const { changed } =
           resourceType === 'mesh'
             ? ensureMeshBlobFresh(store, partId)
-            : ensureBoundaryBlobFresh(store, partId);
+            : resourceType === 'boundary'
+              ? ensureBoundaryBlobFresh(store, partId)
+              : ensureFlatPatternDxfBlobFresh(store, partId);
         if (changed) {
           void server.notification({ method: 'notifications/resources/updated', params: { uri } });
         }
@@ -104,8 +107,9 @@ export function createV2Server(store: GraphStore = new GraphStore()): Server {
         // A rebuild failure here (e.g. GE_INVALID_SHEET_METAL after an edit
         // that produced unconstructible geometry) is surfaced to the client
         // on their next explicit resource read, which throws the same
-        // structured error readMesh/readBoundary would — no need to also
-        // notify of a failed rebuild; there is nothing new to fetch.
+        // structured error readMesh/readBoundary/readFlatPattern would — no
+        // need to also notify of a failed rebuild; there is nothing new to
+        // fetch.
       }
     }
   }
