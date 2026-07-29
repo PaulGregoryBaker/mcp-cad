@@ -297,24 +297,46 @@ the test coverage."
    unit tests passing, 0 regressions. `findings` and `drawings` resources
    remain not built — no rules engine, no drawing pipeline.
 
-   **Status as of 2026-07-28 — what's next:** 10 of 21 contract tools built
-   (Slices 1-9a), 4 of ~7 Derive/Validate resources built (Slice 7 + 7b:
-   `flat-pattern`, `boundary`, `mesh`, plus the structural `full`/`parts`
-   list resources, and **`findings`** — the manufacturability rules engine
-   is now built as a pure C++ validation module
-   (`cpp/src/geometry/validation/`) with 7 rules, NAPI binding, and wired
-   into both `graph://part/{id}/findings` and `full`'s embedded findings
-   field — `drawings` is the only remaining unbuilt resource).
-   In priority order for whoever picks this up next:
-   1. **Slice 9b** — `add_flange`, `generate_reliefs`, `rip_edge`,
-      `close_gap`, `split_body_by_plane` (the remaining Decompose & compose
-      tools; each is its own primitive).
-   2. **Slice 10 (persistence)** — genuinely blocks v2 being usable past a
-      single test run; see its own entry below.
-   3. **Slice 11 (Produce/async jobs)**, **Slice 12 (curved bends)** — as
-      already ordered.
-   4. **`drawings`** (07's D1-D5 sheet set) — 0 v1 test files depended on it
-      as of the last count; lowest priority of the remaining resources.
+   **Status as of 2026-07-29 — what's next:** 15 of 21 contract tools built
+   (Slices 1-9b complete), 4 of ~7 Derive/Validate resources built
+   (`flat-pattern`, `boundary`, `mesh`, `findings` + structural `full`/`parts`
+   list — `drawings` is the only remaining unbuilt resource).
+
+   **Slice 9b complete (2026-07-29):** all 5 Decompose & Compose tools built
+   graph-first with zero OCCT mutations:
+   - `close_gap` — 3D gap measured via evaluatePart, 2D delta computed in
+     C++ (`ComputeCloseGapDelta`), applied via `move_edge` (3 C++ + 2 TS tests)
+   - `add_flange` — C++ `computeFlangeOutline` extends outline with
+     rectangular flange, TS applies `replaceOutline` + `createBendNode`
+     (2 C++ + 2 TS tests)
+   - `rip_edge` — C++ `computeRipEdge` splits edge at midpoint with gap,
+     TS applies `replaceOutline` (2 C++ + 2 TS tests)
+   - `generate_reliefs` — C++ `computeReliefPolygons` finds bend corner
+     intersections, computes dogbone/circular polygons, TS applies via
+     `preparePolygonCut` + `addCutHole` (3 C++ + 2 TS tests)
+   - `split_body_by_plane` — C++ `ComputeSplitByPlane` projects 3D plane
+     to per-panel 2D cut lines (Sutherland-Hodgman clip), TS groups
+     fragments by bend connectivity (Union-Find), unions outlines via
+     `PolygonUnion`, reassigns bends/holes, creates new PartRows
+     (2 C++ + 2 TS tests) — the only tool in this slice that produces
+     multiple output parts
+   - Store: added `GraphStore.replaceOutline()` for outline-mutating tools
+
+   **Test coverage (2026-07-29):** 172 C++ ctest (same 2 pre-existing
+   failures), 22 v2-specific C++ tests across findings + Slice 9b, 22 TS
+   integration tests aligned 1:1 with C++ scenarios where feasible,
+   TS typecheck clean.
+
+   In priority order:
+   1. **Slice 10 (persistence)** — `commit`, `restore`, `branch`,
+      `merge_branch` via Dolt (B5/B7). Genuinely blocks v2 being usable
+      past a single test run — `GraphStore` is in-memory-per-call only
+      today.
+   2. **Slice 11 (Produce/async jobs)** — `simulate_nesting`,
+      `export_production_pack`, `get_job` (15 §4.5).
+   3. **Slice 12 (curved bends)** — last, per Paul 2026-07-25.
+   4. **`drawings`** (07's D1-D5 sheet set) — 0 v1 test dependencies,
+      lowest priority.
 
    For the UI/Form.AI.tion side specifically: `docs/UI_V2_GEOMETRY_INTEGRATION.md`
    is the integration guide for what's live today (parts list, structure,
