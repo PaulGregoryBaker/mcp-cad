@@ -22,6 +22,7 @@ import {
   generateReliefs,
   splitBodyByPlane,
 } from '../graph/evaluate-client';
+import { V2DoltStore, type V2DoltStoreOptions } from '../persistence/dolt-store';
 import { throwError, ErrorCodes } from '../../mcp/errors';
 import {
   requireString,
@@ -430,6 +431,32 @@ export const graphToolDefinitions = [
       required: ['part_id', 'plane'],
     },
   },
+  {
+    name: 'commit',
+    description:
+      'Record the current graph as a named version in Dolt (rebuild/15 §4.6, B5a). Saves the part\'s entire graph snapshot to the Dolt-backed v2_part table and creates a Dolt commit.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        part_id: { type: 'string' },
+        message: { type: 'string', description: 'Commit message' },
+      },
+      required: ['part_id', 'message'],
+    },
+  },
+  {
+    name: 'restore',
+    description:
+      'Reset the working state to a prior Dolt commit (rebuild/15 §4.6, B5b). Checks out the commit, loads the part from Dolt, and replaces the in-memory GraphStore state.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        part_id: { type: 'string' },
+        commit_hash: { type: 'string', description: 'Dolt commit hash to restore to' },
+      },
+      required: ['part_id', 'commit_hash'],
+    },
+  },
 ];
 
 export function dispatchGraphTool(
@@ -468,6 +495,14 @@ export function dispatchGraphTool(
       return handleGenerateReliefs(store, args);
     case 'split_body_by_plane':
       return handleSplitBodyByPlane(store, args);
+    case 'commit':
+      return handleCommit(store, args);
+    case 'restore':
+      return handleRestore(store, args);
+    case 'branch':
+      return handleBranch(store, args);
+    case 'merge_branch':
+      return handleMergeBranch(store, args);
     default:
       throwError(ErrorCodes.INTERNAL_ERROR, `Unknown v2 tool: ${name}`, false);
   }
@@ -964,4 +999,111 @@ function handleSplitBodyByPlane(
     }
     throw err;
   }
+}
+
+// ── Dolt persistence (Slice 10) ─────────────────────────────────────────────
+
+let doltStore: V2DoltStore | null = null;
+
+export function initDoltStore(options: V2DoltStoreOptions): V2DoltStore {
+  doltStore = new V2DoltStore(options);
+  return doltStore;
+}
+
+export async function connectDoltStore(): Promise<void> {
+  if (doltStore) await doltStore.connect();
+}
+
+export async function disconnectDoltStore(): Promise<void> {
+  if (doltStore) await doltStore.disconnect();
+}
+
+export function getDoltStore(): V2DoltStore | null {
+  return doltStore;
+}
+
+async function handleCommit(
+  store: GraphStore,
+  args: Record<string, unknown>,
+): Promise<{ commit_hash: string }> {
+  if (!doltStore) {
+    throwError(ErrorCodes.INTERNAL_ERROR, 'Dolt persistence is not configured', false);
+  }
+  const partId = requireString(args, 'part_id');
+  const message = requireString(args, 'message');
+
+  if (!store.getPart(partId)) {
+    throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${partId}`, false);
+  }
+
+  const snapshot = store.snapshotPart(partId);
+  await doltStore.savePart(partId, snapshot);
+  const hash = await doltStore.doltCommit(message);
+  return { commit_hash: hash };
+}
+
+async function handleRestore(
+  store: GraphStore,
+  args: Record<string, unknown>,
+): Promise<{ part_id: string }> {
+  if (!doltStore) {
+    throwError(ErrorCodes.INTERNAL_ERROR, 'Dolt persistence is not configured', false);
+  }
+  const partId = requireString(args, 'part_id');
+  const commitHash = requireString(args, 'commit_hash');
+
+  await doltStore.doltCheckout(commitHash);
+  const snapshot = await doltStore.loadPart(partId);
+  if (!snapshot) {
+    throwError(ErrorCodes.INTERNAL_ERROR, `part ${partId} not found in commit ${commitHash}`, true);
+  }
+
+  const newPart = store.createPart({
+    name: snapshot.part.name,
+    outline: snapshot.part.outline,
+    thicknessMm: snapshot.part.thicknessMm,
+    materialId: snapshot.part.materialId,
+    kFactor: snapshot.part.kFactor,
+    anchor: snapshot.part.anchor,
+  });
+
+  for (const bend of snapshot.bends) {
+    store.createBendNode({
+      partId: newPart.partId,
+      parentRegionPanelId: bend.parentRegionPanelId,
+      hingeA: bend.hingeA,
+      hingeB: bend.hingeB,
+      angleDeg: bend.angleDeg,
+      radiusMm: bend.radiusMm,
+      kFactor: bend.kFactorOverride ?? undefined,
+      bottomIsConcave: bend.bottomIsConcave ?? undefined,
+    });
+  }
+
+  return { part_id: newPart.partId };
+}
+
+async function handleBranch(
+  _store: GraphStore,
+  args: Record<string, unknown>,
+): Promise<Record<string, never>> {
+  if (!doltStore) {
+    throwError(ErrorCodes.INTERNAL_ERROR, 'Dolt persistence is not configured', false);
+  }
+  const name = requireString(args, 'name');
+  const fromRef = optString(args, 'from_commit');
+  await doltStore.doltBranch(name, fromRef);
+  return {};
+}
+
+async function handleMergeBranch(
+  _store: GraphStore,
+  args: Record<string, unknown>,
+): Promise<Record<string, never>> {
+  if (!doltStore) {
+    throwError(ErrorCodes.INTERNAL_ERROR, 'Dolt persistence is not configured', false);
+  }
+  const branch = requireString(args, 'source_branch');
+  await doltStore.doltMerge(branch);
+  return {};
 }
