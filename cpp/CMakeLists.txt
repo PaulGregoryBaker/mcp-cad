@@ -145,6 +145,9 @@ add_executable(geometry_tests
   tests/validation_rules_test.cc
   tests/close_gap_test.cc
   tests/add_flange_test.cc
+  tests/rip_edge_test.cc
+  tests/generate_reliefs_test.cc
+  tests/split_by_plane_test.cc
 )
 
 target_include_directories(geometry_tests PRIVATE
