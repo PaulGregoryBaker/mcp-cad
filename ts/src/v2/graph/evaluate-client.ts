@@ -458,6 +458,16 @@ export interface ImportPartResult {
    * its own ordinary, simple v2 Part here, while a live shell still exists
    * to measure it from. Empty when the fixture has no protrusions. */
   protrusionPartIds: string[];
+  /** One v2 Part id per disconnected component reconcilePieces couldn't
+   * splice into the main graph (reconciled.graphs[1:] — e.g. a physically
+   * separate sub-assembly, or panels whose shared edge failed to match
+   * within tolerance). These ARE created in the store via the same
+   * createPart/createBendNode path as the main part — they are real, valid
+   * parts, just not part of `partId`'s own graph. Omitting them from this
+   * result (while still creating them) would silently strand them: nothing
+   * else references a store part except by id. Empty for fully-connected
+   * fixtures. */
+  componentPartIds: string[];
 }
 
 /**
@@ -646,6 +656,7 @@ export function importPart(
     bendCount: totalBendCount,
     notes: reconciled.notes,
     protrusionPartIds,
+    componentPartIds: allPartIds.slice(1),
   };
 }
 

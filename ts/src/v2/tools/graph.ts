@@ -688,6 +688,7 @@ function handleImportPart(
   bend_count: number;
   notes: string[];
   protrusion_part_ids: string[];
+  component_part_ids: string[];
 } {
   const file = requireString(args, 'file');
   const angleThresholdDeg = optNumber(args, 'angle_threshold_deg');
@@ -709,6 +710,7 @@ function handleImportPart(
       bend_count: result.bendCount,
       notes: result.notes,
       protrusion_part_ids: result.protrusionPartIds,
+      component_part_ids: result.componentPartIds,
     };
   } catch (err) {
     if (err instanceof GraphStoreError) {

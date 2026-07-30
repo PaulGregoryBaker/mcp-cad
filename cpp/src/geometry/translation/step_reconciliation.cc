@@ -718,8 +718,12 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
 
   result.ok = true;
   result.graph = std::move(graph);
-  // Populate graphs list: root component first, then any disconnected pieces
-  result.graphs.push_back(result.graph);
+  // Populate graphs list: root component first, then any disconnected pieces.
+  // The solo-graph loop above (step 4) already appended one entry per
+  // disconnected piece to result.graphs — insert the root component at the
+  // front rather than appending, so result.graphs[0] is always the main
+  // component regardless of how many disconnected pieces were found.
+  result.graphs.insert(result.graphs.begin(), result.graph);
   return result;
 }
 
