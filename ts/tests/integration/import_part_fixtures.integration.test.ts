@@ -41,14 +41,26 @@
  *     point, reproduces the exact same 3D position). These use a
  *     self-consistency oracle instead (round-trip lands SOMEWHERE that
  *     forward-maps back to the same 3D point), not a same-panel oracle.
- *   - angle_bracket_45deg.stp, testcube.step, cube_with_flanges.stp: refuse
- *     with GE_DISCONNECTED_PIECES identically across every angle_threshold_deg
- *     tried (35/20/10/1) -- not a threshold-tuning issue. testcube.step
- *     matches v1's own description of it as two hollow cubes fused via
- *     bridge flanges (tests/integration/split_body_by_bends.integration.test.ts);
- *     a flange/tab joint is a different physical connection than a shared
- *     sharp-fold edge, so refusal is the correct, expected outcome here,
- *     not a bug.
+ *   - angle_bracket_45deg.stp: originally refused with GE_DISCONNECTED_PIECES
+ *     identically across every angle_threshold_deg tried (35/20/10/1); a
+ *     later getPanelFrame face-selection fix (commit c00e758) resolved the
+ *     underlying edge-match failure, so this fixture now reconciles fully
+ *     (one part, no disconnected components).
+ *   - testcube.step, cube_with_flanges.stp: used to hard-refuse with
+ *     GE_DISCONNECTED_PIECES. testcube.step matches v1's own description of
+ *     it as two hollow cubes fused via bridge flanges
+ *     (tests/integration/split_body_by_bends.integration.test.ts); a
+ *     flange/tab joint is a different physical connection than a shared
+ *     sharp-fold edge, so import_part no longer hard-refuses these
+ *     (commits 4f89251/09fb9fb) -- it now imports the main component as
+ *     `part_id` and returns each flange-joined piece's own component as a
+ *     standalone part in `component_part_ids`, rather than failing outright.
+ *     (hollow_cube.stp below is the OPPOSITE case: a closed 6-panel loop
+ *     that SHOULD reconcile into one part like simple_box.stp does, but
+ *     currently splits into disconnected components too -- a real
+ *     getPanelFrame/edge-matching bug, not a legitimate multi-component
+ *     fixture like this pair. Tracked separately, see
+ *     docs/BUG_REPORT_import_part_edge_match_winding_mismatch.md.)
  *   - sheet_1panel.stp / sheet_3panel.stp: GE_IMPORT_NO_PANELS_FOUND
  *     regardless of angle_threshold_deg -- splitBodyByBends finds no
  *     planar faces to classify at all, consistent with these being
@@ -84,6 +96,7 @@ interface ImportToolResult {
   bend_count: number;
   notes: string[];
   protrusion_part_ids: string[];
+  component_part_ids: string[];
 }
 
 function importFixture(
@@ -160,6 +173,13 @@ d('import_part integration suite (real STEP fixtures)', () => {
     probeRoundTripSelfConsistent(store, result.part_id, 0.001);
   });
 
+  // KNOWN FAILING (real bug, same root cause as hollow_cube.stp above): the
+  // two panels' shared edge matches in the SAME winding order instead of
+  // reversed (~1.4mm apart, consistent with getPanelFrame picking the
+  // wrong face on one panel), so reconcilePieces treats them as
+  // disconnected instead of finding the one expected bend. See
+  // docs/BUG_REPORT_import_part_edge_match_winding_mismatch.md. Left
+  // failing deliberately rather than relaxed to match the wrong output.
   it('unequal_leg_bracket_90deg.stp: 2-panel asymmetric fold reconciles and round-trips exactly', () => {
     const store = new GraphStore();
     const result = importFixture(store, 'unequal_leg_bracket_90deg.stp');
@@ -212,6 +232,16 @@ d('import_part integration suite (real STEP fixtures)', () => {
     probeRoundTripSelfConsistent(store, result.part_id, 0.001);
   });
 
+  // KNOWN FAILING (real bug, not a stale assertion): hollow_cube.stp is
+  // topologically identical to simple_box.stp above (a closed 6-panel
+  // loop, every face genuinely adjacent to two others) but currently
+  // splits into a 4-panel main component + 2 disconnected singles instead
+  // of one fully-connected 6-panel part. Root-caused to a reversed-vs-
+  // same-order edge-winding mismatch (~1.4mm offset between the two
+  // panels' supposedly-shared edge, consistent with getPanelFrame picking
+  // the wrong face on one panel) -- see
+  // docs/BUG_REPORT_import_part_edge_match_winding_mismatch.md. Left
+  // failing deliberately rather than relaxed to match the wrong output.
   it('hollow_cube.stp: closed 6-panel loop reconciles via a spanning tree; self-consistent round-trip', () => {
     const store = new GraphStore();
     const result = importFixture(store, 'hollow_cube.stp');
@@ -230,24 +260,33 @@ d('import_part integration suite (real STEP fixtures)', () => {
     );
   });
 
-  it('angle_bracket_45deg.stp: correctly refused (disconnected, independent of angle_threshold_deg)', () => {
+  it('angle_bracket_45deg.stp: reconciles fully at both the default and a tighter angle_threshold_deg', () => {
     for (const threshold of [35, 10]) {
       const store = new GraphStore();
-      expectTypedError(
-        () => importFixture(store, 'angle_bracket_45deg.stp', threshold),
-        'GE_DISCONNECTED_PIECES',
-      );
+      const result = importFixture(store, 'angle_bracket_45deg.stp', threshold);
+      expect(result.panel_count).toBe(2);
+      expect(result.bend_count).toBe(1);
+      expect(result.component_part_ids).toEqual([]);
+      probeRoundTripSelfConsistent(store, result.part_id, 2.0);
     }
   });
 
-  it('testcube.step: correctly refused (fused multi-body via bridge flanges, not a simple sharp edge)', () => {
+  it('testcube.step: main component imports; flange-joined pieces surface as component_part_ids', () => {
     const store = new GraphStore();
-    expectTypedError(() => importFixture(store, 'testcube.step'), 'GE_DISCONNECTED_PIECES');
+    const result = importFixture(store, 'testcube.step');
+    expect(result.panel_count).toBe(12);
+    // Not a single-tree fixture (two hollow cubes fused via bridge flanges,
+    // see this file's header comment) -- component_part_ids carries every
+    // piece reconcilePieces couldn't splice into the main part's graph.
+    expect(result.component_part_ids.length).toBeGreaterThan(0);
+    probeRoundTripSelfConsistent(store, result.part_id, 2.0);
   });
 
-  it('cube_with_flanges.stp: correctly refused (flange join, not a simple sharp edge)', () => {
+  it('cube_with_flanges.stp: main component imports; flange-joined pieces surface as component_part_ids', () => {
     const store = new GraphStore();
-    expectTypedError(() => importFixture(store, 'cube_with_flanges.stp'), 'GE_DISCONNECTED_PIECES');
+    const result = importFixture(store, 'cube_with_flanges.stp');
+    expect(result.component_part_ids.length).toBeGreaterThan(0);
+    probeRoundTripSelfConsistent(store, result.part_id, 2.0);
   });
 
   it('sheet_1panel.stp / sheet_3panel.stp: correctly refused (surface-only STEP, no solid thickness)', () => {
@@ -267,17 +306,11 @@ d('import_part integration suite — protrusion extraction (Phase 5 Slice 6)', (
   // testcube.step is the only committed fixture with detected protrusions
   // (its two hollow cubes are joined by bridge flanges -- splitBodyByBends
   // classifies each flange as a protrusion, separate from the 12 main wall
-  // panels). Its MAIN panels correctly refuse reconciliation with
-  // GE_DISCONNECTED_PIECES (see the dedicated test above) for a reason
-  // entirely unrelated to protrusions -- that refusal happens in
-  // importPart's reconcilePieces call, which runs BEFORE the protrusion
-  // loop (evaluate-client.ts), so dispatchGraphTool('import_part', ...)
-  // never reaches protrusion extraction for this fixture. No committed
-  // fixture combines "has protrusions" with "main panels reconcile", so
-  // the extraction mechanism itself -- getPanelFrame -> reconcilePieces
-  // (n=1) -> createPart, exactly the loop importPart runs internally -- is
-  // exercised directly here, against the same real splitBodyByBends output
-  // the full import_part tool would see.
+  // panels). This test exercises the extraction mechanism itself --
+  // getPanelFrame -> reconcilePieces(n=1) -> createPart, exactly the loop
+  // importPart runs internally -- directly against the same real
+  // splitBodyByBends output the full import_part tool would see, rather
+  // than depending on the dedicated import_part test above.
   it('testcube.step: protrusion extraction mechanism succeeds for all 4 detected protrusions', () => {
     const fixturePath = path.join(FIXTURES_DIR, 'testcube.step');
     const solidId = geometryBinding.loadStep(fixturePath);
