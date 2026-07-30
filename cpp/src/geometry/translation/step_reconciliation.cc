@@ -299,10 +299,126 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
 
   for (size_t i = 0; i < n; ++i) {
     if (!visited[i]) {
-      // Disconnected piece — create a simple single-piece graph for it
-      // rather than failing.  The root component is already reconciled
-      // below; disconnected pieces become their own standalone parts
-      // (no bends, their own outline = their measured ringLocal).
+      result.notes.push_back(
+          "piece " + std::to_string(i) + " shares no measured edge with the "
+          "root component (piece " + std::to_string(rootIndex) +
+          ") — returned as a separate, standalone part");
+    }
+  }
+
+  // If the initial root is in a small component and a larger connected
+  // component exists among the unvisited pieces, swap: the largest
+  // component becomes the main graph, and the old root's component
+  // becomes a set of disconnected solo graphs.
+  {
+    size_t visitedCount = 0;
+    for (size_t i = 0; i < n; ++i) if (visited[i]) ++visitedCount;
+
+    // Find connected components among unvisited pieces via BFS.
+    std::vector<bool> unvisitedSeen(n, false);
+    std::vector<std::vector<size_t>> unvisitedComponents;
+    for (size_t start = 0; start < n; ++start) {
+      if (visited[start] || unvisitedSeen[start]) continue;
+      std::vector<size_t> comp;
+      std::vector<size_t> q = {start};
+      unvisitedSeen[start] = true;
+      for (size_t qi = 0; qi < q.size(); ++qi) {
+        size_t cur = q[qi];
+        comp.push_back(cur);
+        auto it = adjList.find(cur);
+        if (it == adjList.end()) continue;
+        for (size_t eIdx : it->second) {
+          size_t other = (edges[eIdx].pieceA == cur) ? edges[eIdx].pieceB : edges[eIdx].pieceA;
+          if (!visited[other] && !unvisitedSeen[other]) {
+            unvisitedSeen[other] = true;
+            q.push_back(other);
+          }
+        }
+      }
+      unvisitedComponents.push_back(std::move(comp));
+    }
+
+    // If any unvisited component is larger than the visited component,
+    // swap: the largest becomes the new main graph.
+    size_t largestCompIdx = SIZE_MAX;
+    size_t largestCompSize = visitedCount;
+    for (size_t ci = 0; ci < unvisitedComponents.size(); ++ci) {
+      if (unvisitedComponents[ci].size() > largestCompSize) {
+        largestCompSize = unvisitedComponents[ci].size();
+        largestCompIdx = ci;
+      }
+    }
+
+    if (largestCompIdx != SIZE_MAX) {
+      // Mark old visited as disconnected, clear old graph state.
+      result.notes.push_back(
+          "switching main component from piece " + std::to_string(rootIndex) +
+          " (size " + std::to_string(visitedCount) + ") to component of size " +
+          std::to_string(largestCompSize));
+      for (size_t i = 0; i < n; ++i) visited[i] = false;
+
+      // New root: piece with most edges in the largest unvisited component.
+      rootIndex = unvisitedComponents[largestCompIdx][0];
+      size_t bestEdgeCount = 0;
+      for (size_t ci : unvisitedComponents[largestCompIdx]) {
+        auto it = adjList.find(ci);
+        size_t ec = (it != adjList.end()) ? it->second.size() : 0;
+        if (ec > bestEdgeCount) { bestEdgeCount = ec; rootIndex = ci; }
+      }
+      rootFrame = BuildPieceFrame(simplifiedPieces[rootIndex]);
+      rootFrameInv = rootFrame.Inverse();
+
+      // Re-relabel true positions into new root-local space.
+      for (size_t i = 0; i < n; ++i) {
+        Transform3 pieceFrame = BuildPieceFrame(simplifiedPieces[i]);
+        Transform3 inRootLocal = rootFrameInv.Compose(pieceFrame);
+        for (size_t k = 0; k < simplifiedPieces[i].ringLocal.size(); ++k) {
+          Point3 local{simplifiedPieces[i].ringLocal[k].x,
+                       simplifiedPieces[i].ringLocal[k].y, 0.0};
+          trueRootLocalRing[i][k] = inRootLocal.Apply(local);
+        }
+      }
+
+      // Redo BFS from new root.
+      visited[rootIndex] = true;
+      bfsOrder.clear();
+      bfsOrder.push_back(rootIndex);
+      queue.clear();
+      queue.push_back(rootIndex);
+      for (size_t qi = 0; qi < queue.size(); ++qi) {
+        size_t cur = queue[qi];
+        for (size_t eIdx : adjList[cur]) {
+          const AdjacencyEdge& ae = edges[eIdx];
+          size_t other = (ae.pieceA == cur) ? ae.pieceB : ae.pieceA;
+          if (visited[other]) {
+            if (other != cur && !usedAsTreeEdge[eIdx]) {
+              result.notes.push_back("extra (non-tree) adjacency between piece " +
+                                     std::to_string(std::min(cur, other)) + " and piece " +
+                                     std::to_string(std::max(cur, other)) +
+                                     " — not used for placement (checked-not-driven seam candidate)");
+            }
+            continue;
+          }
+          usedAsTreeEdge[eIdx] = true;
+          visited[other] = true;
+          parentOf[other] = static_cast<int>(cur);
+          if (ae.pieceA == cur) {
+            edgeInParent[other] = static_cast<int>(ae.edgeA);
+            edgeInChild[other] = static_cast<int>(ae.edgeB);
+          } else {
+            edgeInParent[other] = static_cast<int>(ae.edgeB);
+            edgeInChild[other] = static_cast<int>(ae.edgeA);
+          }
+          bfsOrder.push_back(other);
+          queue.push_back(other);
+        }
+      }
+    }
+  }
+
+  // Emit solo graphs for all unvisited pieces.
+  for (size_t i = 0; i < n; ++i) {
+    if (!visited[i]) {
       PartGraphSpec soloGraph;
       soloGraph.partId = "reconciled";
       soloGraph.rootRegionPanelId = "piece" + std::to_string(i);
@@ -310,10 +426,6 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
       soloGraph.anchor.transform = BuildPieceFrame(simplifiedPieces[i]);
       soloGraph.outline.outer = simplifiedPieces[i].ringLocal;
       result.graphs.push_back(std::move(soloGraph));
-      result.notes.push_back(
-          "piece " + std::to_string(i) + " shares no measured edge with the "
-          "root component (piece " + std::to_string(rootIndex) +
-          ") — returned as a separate, standalone part");
     }
   }
 
@@ -566,6 +678,10 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
     return result;
   }
   for (size_t i = 0; i < n; ++i) {
+    // Disconnected pieces already have their own solo graphs above;
+    // only validate the pieces that are actually in this graph.
+    if (!visited[i]) continue;
+
     const RegionPanelLayout* panel = nullptr;
     for (const auto& p : layout.panels) {
       if (p.regionPanelId == "piece" + std::to_string(i)) {

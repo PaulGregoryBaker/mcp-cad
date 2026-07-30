@@ -96,6 +96,7 @@ export default defineWorkspace([
         'tests/integration/slice_9b_tools.integration.test.ts',
         'tests/integration/slice_10_dolt_persistence.integration.test.ts',
         'tests/integration/slice_11_async_jobs.integration.test.ts',
+        'tests/integration/import_fixture_validation.integration.test.ts',
       ],
       setupFiles: ['tests/setup/integration-reset.ts'],
       // Switched from pool:'forks' (singleFork) to pool:'threads' because
@@ -146,6 +147,7 @@ export default defineWorkspace([
         'tests/integration/slice_9b_tools.integration.test.ts',
         'tests/integration/slice_10_dolt_persistence.integration.test.ts',
         'tests/integration/slice_11_async_jobs.integration.test.ts',
+        'tests/integration/import_fixture_validation.integration.test.ts',
       ],
       env: { SUITE_V2_DRIVER: '1' },
       setupFiles: ['tests/setup/integration-reset.ts'],
