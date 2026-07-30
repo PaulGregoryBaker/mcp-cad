@@ -711,60 +711,132 @@ public:
     }
     const std::vector<PlanarCandidate>& refCandidates = extremal.empty() ? candidates : extremal;
 
-    double maxArea = 0.0;
-    for (const auto& c : refCandidates) maxArea = std::max(maxArea, c.area);
-    // Real boolean-operation-generated panels (splitMode2's per-panel
-    // BRepAlgoAPI_Common extraction) measure the "same" opposing face pair
-    // with areas differing by up to a few percent (floating-point/algorithm
-    // noise in the boolean op itself, confirmed empirically: 0.37%-2.9% on
-    // a real fixture) — an exact-equality-scale tolerance would never treat
-    // them as tied, silently falling back to whichever face has the
-    // (accidentally) larger measured area with no consistency guarantee.
-    // 10% comfortably covers real-world noise while staying far below a
-    // thin panel's typical face-area/side-wall-area ratio (confirmed
-    // empirically: next-largest non-matching candidate was over 10x
-    // smaller), so it won't misidentify an unrelated side wall as "tied."
-    constexpr double kAreaTieToleranceRel = 0.10;
-    std::vector<const PlanarCandidate*> tied;
-    for (const auto& c : refCandidates) {
-      if (c.area >= maxArea * (1.0 - kAreaTieToleranceRel)) tied.push_back(&c);
+    // Select by smallest shell-extent (material-thickness direction).
+    // Then take a BRepAlgoAPI_Section at the mid-plane — one OCCT call
+    // that handles concave outlines correctly, no face fusion needed.
+    const PlanarCandidate* best = &refCandidates.front();
+    {
+      double bestExtent = 1e30;
+      for (const auto& c : refCandidates) {
+        double nMin = 1e30, nMax = -1e30;
+        gp_Vec nVec(c.normal.XYZ());
+        for (const gp_Pnt& v : allVertices) {
+          double proj = gp_Vec(v.XYZ()).Dot(nVec);
+          nMin = std::min(nMin, proj); nMax = std::max(nMax, proj);
+        }
+        double extent = nMax - nMin;
+        if (extent > 0.01 && extent < bestExtent) { bestExtent = extent; best = &c; }
+      }
     }
 
-    const PlanarCandidate* best = tied.front();
-    if (tied.size() > 1) {
-      auto solidIt = s_.solids.find(parentSolidId);
-      if (solidIt != s_.solids.end()) {
-        GProp_GProps vp;
-        BRepGProp::VolumeProperties(solidIt->second.shape, vp);
-        gp_Pnt solidCentroid = vp.CentreOfMass();
-        double bestDot = std::numeric_limits<double>::infinity();
-        for (const auto* c : tied) {
-          // Prefer the INNER (concave) face — matches
-          // manufacturing_graph_evaluator.hpp's own "mountain fold: bottom =
-          // inner/concave" convention (13 D3/§10), so a panel's naturally-
-          // measured relationship to its neighbour comes out mountain
-          // (angleDeg >= 0, the simpler/more common case, radiusMm=0 pivot
-          // at the exact flat hinge) rather than forcing every real fold
-          // into the valley case. normal·(faceCentroid - solidCentroid) < 0
-          // means the face points TOWARD the solid's own centroid, i.e. the
-          // inner surface — the smallest (most negative) dot product wins.
-          gp_Vec toFace(solidCentroid, c->centroid);
-          double dot = gp_Vec(c->normal.XYZ()).Dot(toFace);
-          if (dot < bestDot) {
-            bestDot = dot;
-            best = c;
+    // Compute thickness along the winning normal
+    gp_Dir ndir = best->normal;
+    double nMinT = 1e30, nMaxT = -1e30;
+    { gp_Vec nv(ndir.XYZ());
+      for (const gp_Pnt& v : allVertices) {
+        double proj = gp_Vec(v.XYZ()).Dot(nv);
+        nMinT = std::min(nMinT, proj); nMaxT = std::max(nMaxT, proj);
+      }
+    }
+
+    // Section at mid-plane: single OCCT call that handles concave
+    // outlines correctly for any shape (panel or protrusion).
+    // Chain the resulting edges into a closed wire for a valid ring.
+    {
+      double midN = (nMinT + nMaxT) * 0.5;
+      gp_Pnt refPt = allVertices.empty() ? best->loc : allVertices[0];
+      gp_Vec nv(ndir.XYZ());
+      double refN = gp_Vec(refPt.XYZ()).Dot(nv);
+      gp_Pnt midPt(refPt.XYZ() + nv.XYZ() * (midN - refN));
+      gp_Pln secPlane(midPt, ndir);
+      BRepBuilderAPI_MakeFace pf(secPlane, -1e4, 1e4, -1e4, 1e4);
+      if (pf.IsDone()) {
+        BRepAlgoAPI_Section sec(shape, pf.Face());
+        sec.Build();
+        if (sec.IsDone()) {
+          // Build U,V from section plane
+          gp_Dir U = ndir.IsParallel(gp_Dir(1,0,0),0.99) ? gp_Dir(0,1,0) : gp_Dir(1,0,0);
+          gp_Vec uOrtho = gp_Vec(U.XYZ()) - nv * U.Dot(ndir);
+          if (uOrtho.Magnitude() > 1e-9) U = gp_Dir(uOrtho);
+          gp_Dir V(ndir.Crossed(U));
+
+          // Collect edges with start/end points, then chain into a wire
+          struct SecEdge { gp_Pnt p0, p1; };
+          std::vector<SecEdge> edges;
+          for (TopExp_Explorer eExp(sec.Shape(), TopAbs_EDGE); eExp.More(); eExp.Next()) {
+            const TopoDS_Edge& edge = TopoDS::Edge(eExp.Current());
+            Standard_Real f, l;
+            Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, f, l);
+            if (curve.IsNull()) continue;
+            edges.push_back({curve->Value(f), curve->Value(l)});
+          }
+          if (edges.size() >= 3) {
+            // Chain edges: each p1 connects to next p0
+            std::vector<gp_Pnt> secRing;
+            secRing.push_back(edges[0].p0);
+            secRing.push_back(edges[0].p1);
+            std::vector<bool> used(edges.size(), false);
+            used[0] = true;
+            for (size_t chain = 1; chain < edges.size(); ++chain) {
+              bool found = false;
+              for (size_t i = 0; i < edges.size(); ++i) {
+                if (used[i]) continue;
+                if (secRing.back().Distance(edges[i].p0) < 1e-6) {
+                  secRing.push_back(edges[i].p1);
+                  used[i] = true; found = true; break;
+                }
+                if (secRing.back().Distance(edges[i].p1) < 1e-6) {
+                  secRing.push_back(edges[i].p0);
+                  used[i] = true; found = true; break;
+                }
+              }
+              if (!found) break;
+            }
+            // Close: last point should match first
+            if (secRing.size() >= 3 &&
+                secRing.back().Distance(secRing.front()) < 1e-6)
+              secRing.pop_back();
+
+            if (secRing.size() >= 3) {
+              // Project to (U,V)
+              gp_Pnt loc = secRing[0];
+              double uMin = 1e30, uMax = -1e30, vMin = 1e30, vMax = -1e30;
+              std::vector<std::pair<double,double>> raw;
+              for (const gp_Pnt& p : secRing) {
+                gp_Vec rel(loc, p);
+                double pu = rel.Dot(gp_Vec(U.XYZ())), pv = rel.Dot(gp_Vec(V.XYZ()));
+                raw.emplace_back(pu, pv);
+                uMin=std::min(uMin,pu); uMax=std::max(uMax,pu);
+                vMin=std::min(vMin,pv); vMax=std::max(vMax,pv);
+              }
+              std::vector<std::pair<double,double>> rl;
+              for (auto [pu,pv] : raw) rl.emplace_back(pu-uMin, pv-vMin);
+              // CCW winding
+              double sa = 0;
+              for (size_t i=0;i<rl.size();++i) {
+                auto& a=rl[i]; auto& b=rl[(i+1)%rl.size()];
+                sa += a.first*b.second - b.first*a.second;
+              }
+              if (sa < 0) std::reverse(rl.begin(), rl.end());
+
+              gp_Pnt corner(loc.XYZ() + U.XYZ()*uMin + V.XYZ()*vMin);
+              out.ok = true;
+              out.originX=corner.X(); out.originY=corner.Y(); out.originZ=corner.Z();
+              out.uX=U.X(); out.uY=U.Y(); out.uZ=U.Z();
+              out.vX=V.X(); out.vY=V.Y(); out.vZ=V.Z();
+              out.normalX=ndir.X(); out.normalY=ndir.Y(); out.normalZ=ndir.Z();
+              out.uExtentMm=uMax-uMin; out.vExtentMm=vMax-vMin;
+              out.thicknessMm=nMaxT-nMinT;
+              out.ringLocal = std::move(rl);
+              return out;
+            }
           }
         }
       }
-      // else: no parent solid on record (e.g. called directly on an
-      // authored/imported single shell with no sibling panels to be
-      // consistent WITH) — fall back to the first candidate found; there is
-      // no external reference to disambiguate further, and correctness
-      // does not depend on it when there are no siblings.
     }
 
+    // Fallback: original face-wire ring extraction (should rarely be reached)
     gp_Pnt loc   = best->loc;
-    gp_Dir ndir  = best->normal;
     TopoDS_Face bestFace = best->face;
 
     // Derive U from the panel's own boundary rather than OCCT's internal plane
