@@ -299,35 +299,21 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
 
   for (size_t i = 0; i < n; ++i) {
     if (!visited[i]) {
-      double closest = std::numeric_limits<double>::infinity();
-      size_t closestJ = i, closestEa = 0, closestEb = 0;
-      size_t ni = trueRootLocalRing[i].size();
-      for (size_t j = 0; j < n; ++j) {
-        if (j == i) continue;
-        size_t nj = trueRootLocalRing[j].size();
-        for (size_t ea = 0; ea < ni; ++ea) {
-          const Point3& a0 = trueRootLocalRing[i][ea];
-          const Point3& a1 = trueRootLocalRing[i][(ea + 1) % ni];
-          for (size_t eb = 0; eb < nj; ++eb) {
-            const Point3& b0 = trueRootLocalRing[j][eb];
-            const Point3& b1 = trueRootLocalRing[j][(eb + 1) % nj];
-            double d = Length3(Sub3(a0, b1)) + Length3(Sub3(a1, b0));
-            if (d < closest) {
-              closest = d;
-              closestJ = j;
-              closestEa = ea;
-              closestEb = eb;
-            }
-          }
-        }
-      }
-      result.errorCode = ReconcileErrorCode::kDisconnectedPieces;
-      result.message = "piece " + std::to_string(i) + " shares no measured edge with the rest"
-                        " (closest candidate: piece " + std::to_string(closestJ) +
-                        " edge " + std::to_string(closestEb) + " vs this piece's edge " +
-                        std::to_string(closestEa) + ", combined endpoint gap " +
-                        std::to_string(closest) + "mm)";
-      return result;
+      // Disconnected piece — create a simple single-piece graph for it
+      // rather than failing.  The root component is already reconciled
+      // below; disconnected pieces become their own standalone parts
+      // (no bends, their own outline = their measured ringLocal).
+      PartGraphSpec soloGraph;
+      soloGraph.partId = "reconciled";
+      soloGraph.rootRegionPanelId = "piece" + std::to_string(i);
+      soloGraph.thicknessMm = thicknessMm;
+      soloGraph.anchor.transform = BuildPieceFrame(simplifiedPieces[i]);
+      soloGraph.outline.outer = simplifiedPieces[i].ringLocal;
+      result.graphs.push_back(std::move(soloGraph));
+      result.notes.push_back(
+          "piece " + std::to_string(i) + " shares no measured edge with the "
+          "root component (piece " + std::to_string(rootIndex) +
+          ") — returned as a separate, standalone part");
     }
   }
 
@@ -611,6 +597,8 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
 
   result.ok = true;
   result.graph = std::move(graph);
+  // Populate graphs list: root component first, then any disconnected pieces
+  result.graphs.push_back(result.graph);
   return result;
 }
 

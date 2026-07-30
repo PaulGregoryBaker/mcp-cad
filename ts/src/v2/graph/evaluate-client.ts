@@ -554,38 +554,50 @@ export function importPart(
     );
   }
 
-  const graph = reconciled.graph;
-  const rootPart = store.createPart({
-    name: filePath,
-    outline: graph.outline.outer,
-    thicknessMm,
-    anchor: graph.anchor?.transform,
-  });
+  // reconciled.graphs holds one PartGraphSpec per connected component.
+  // The first is the main (largest) component; additional entries are
+  // disconnected pieces returned as standalone parts.
+  const allPartIds: string[] = [];
+  let totalBendCount = 0;
 
-  const tempIdToRealId = new Map<string, string>();
-  tempIdToRealId.set(graph.rootRegionPanelId, rootPart.rootRegionPanelId);
-
-  for (const bend of graph.bends) {
-    const parentRealId = tempIdToRealId.get(bend.parentRegionPanelId);
-    if (parentRealId === undefined) {
-      throwError(
-        ErrorCodes.INTERNAL_ERROR,
-        `reconcilePieces returned bend ${bend.id} referencing an unknown parent ${bend.parentRegionPanelId}`,
-        false,
-      );
-    }
-    const created = store.createBendNode({
-      partId: rootPart.partId,
-      parentRegionPanelId: parentRealId,
-      hingeA: bend.hingeA,
-      hingeB: bend.hingeB,
-      angleDeg: bend.angleDeg,
-      radiusMm: bend.radiusMm,
-      kFactor: bend.kFactor,
-      bottomIsConcave: bend.bottomIsConcave,
+  for (const graph of reconciled.graphs) {
+    const part = store.createPart({
+      name: graph === reconciled.graphs[0] ? filePath : `${filePath}#component`,
+      outline: graph.outline.outer,
+      thicknessMm,
+      anchor: graph.anchor?.transform,
     });
-    tempIdToRealId.set(bend.childRegionPanelId, created.childRegionPanel.regionPanelId);
+
+    const tempIdToRealId = new Map<string, string>();
+    tempIdToRealId.set(graph.rootRegionPanelId, part.rootRegionPanelId);
+
+    for (const bend of graph.bends) {
+      const parentRealId = tempIdToRealId.get(bend.parentRegionPanelId);
+      if (parentRealId === undefined) {
+        throwError(
+          ErrorCodes.INTERNAL_ERROR,
+          `reconcilePieces returned bend ${bend.id} referencing an unknown parent ${bend.parentRegionPanelId}`,
+          false,
+        );
+      }
+      const created = store.createBendNode({
+        partId: part.partId,
+        parentRegionPanelId: parentRealId,
+        hingeA: bend.hingeA,
+        hingeB: bend.hingeB,
+        angleDeg: bend.angleDeg,
+        radiusMm: bend.radiusMm,
+        kFactor: bend.kFactor,
+        bottomIsConcave: bend.bottomIsConcave,
+      });
+      tempIdToRealId.set(bend.childRegionPanelId, created.childRegionPanel.regionPanelId);
+    }
+
+    allPartIds.push(part.partId);
+    totalBendCount += graph.bends.length;
   }
+
+  const rootPartId = allPartIds[0] ?? '';
 
   // Each protrusion becomes its own simple (zero-bend) v2 Part — same
   // getPanelFrame-measure + reconcilePieces(n=1) + createPart pattern the
@@ -624,10 +636,10 @@ export function importPart(
   }
 
   return {
-    partId: rootPart.partId,
+    partId: rootPartId,
     panelCount: split.panel_ids.length,
     protrusionCount: split.protrusion_ids.length,
-    bendCount: graph.bends.length,
+    bendCount: totalBendCount,
     notes: reconciled.notes,
     protrusionPartIds,
   };

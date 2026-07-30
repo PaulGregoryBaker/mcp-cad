@@ -755,15 +755,14 @@ export interface NapiPanelPieceSpec {
 
 // reconcilePieces' result: rootRegionPanelId and every BendSpec's parent/
 // childRegionPanelId in `graph` use temporary "piece{inputIndex}"
-// correlation ids — the caller (import_part's TS orchestration) walks
-// `graph.bends` in the returned (parent-before-child) order, remapping each
-// temp id onto the real UUID GraphStore.createPart/createBendNode mints.
+// correlation ids. `graphs` holds one PartGraphSpec per connected component
+// (always populated; `graph` is the first/largest for backward compatibility).
 export interface ReconcilePiecesResult {
   ok: boolean;
-  errorCode: string; // "" | "GE_TOO_FEW_PIECES" | "GE_DISCONNECTED_PIECES" |
-  // "GE_NON_DEVELOPABLE_FOLD" | "GE_RECONCILE_SELF_INTERSECTION"
+  errorCode: string;
   message: string;
   graph: NapiPartGraphSpec;
+  graphs: NapiPartGraphSpec[];
   // Non-fatal findings — e.g. an extra (non-tree) adjacency edge between
   // two already-placed pieces, a real physical seam (14 §2) not auto-
   // detected/driven this slice — reported, not silently dropped.

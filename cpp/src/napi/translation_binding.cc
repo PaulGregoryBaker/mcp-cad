@@ -544,6 +544,11 @@ Napi::Object WriteReconcilePiecesResult(Napi::Env env, const ReconcilePiecesResu
   obj.Set("errorCode", Napi::String::New(env, ReconcileErrorCodeToString(result.errorCode)));
   obj.Set("message", Napi::String::New(env, result.message));
   obj.Set("graph", WritePartGraphSpec(env, result.graph));
+  Napi::Array graphsArr = Napi::Array::New(env, result.graphs.size());
+  for (size_t i = 0; i < result.graphs.size(); ++i) {
+    graphsArr.Set(static_cast<uint32_t>(i), WritePartGraphSpec(env, result.graphs[i]));
+  }
+  obj.Set("graphs", graphsArr);
   obj.Set("notes", WriteStringArray(env, result.notes));
   Napi::Array matchesArr = Napi::Array::New(env, result.pieceEdgeMatches.size());
   for (size_t i = 0; i < result.pieceEdgeMatches.size(); ++i) {

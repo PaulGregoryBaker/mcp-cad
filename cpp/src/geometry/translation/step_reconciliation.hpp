@@ -101,7 +101,16 @@ struct ReconcilePiecesResult {
   // the real UUID GraphStore.createPart/createBendNode mints for it. This
   // graph is never evaluated by its own ids directly downstream of this
   // call — only its outline/anchor/thicknessMm/bends field VALUES are used.
+  //
+  // When the input pieces form a single connected component, this is the
+  // reconciled graph.  When there are multiple disconnected components,
+  // `graphs` below holds one graph per component and this field is the
+  // first (largest) one for backward compatibility.
   PartGraphSpec graph;
+  // One graph per connected component — always populated (even for single-
+  // component input, where it contains exactly one entry).  The TS caller
+  // should iterate this rather than relying on the single `graph` field.
+  std::vector<PartGraphSpec> graphs;
   // Non-fatal findings — e.g. a piece touching more than one already-placed
   // neighbour (an extra, non-tree adjacency: a real physical seam, 14 §2,
   // not auto-detected/driven this slice) is reported here, not silently
