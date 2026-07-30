@@ -23,6 +23,7 @@ import {
   splitBodyByPlane,
 } from '../graph/evaluate-client';
 import { V2DoltStore, type V2DoltStoreOptions } from '../persistence/dolt-store';
+import { v2JobQueue } from '../jobs/queue';
 import { throwError, ErrorCodes } from '../../mcp/errors';
 import {
   requireString,
@@ -40,6 +41,7 @@ import {
   optNullableNumber,
   optNullableBoolean,
 } from './helpers';
+import type { NestingResult } from '../jobs/queue';
 
 export const graphToolDefinitions = [
   {
@@ -457,6 +459,52 @@ export const graphToolDefinitions = [
       required: ['part_id', 'commit_hash'],
     },
   },
+  {
+    name: 'simulate_nesting',
+    description:
+      'Nest parts\' flat outlines on stock sheets (rebuild/15 §4.5, Phase 5 Slice 11). Async job — returns a job_id immediately; poll with get_job for the result.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        part_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Part IDs to nest',
+        },
+        sheet_width_mm: { type: 'number', description: 'Sheet width in mm (default: 2440)' },
+        sheet_height_mm: { type: 'number', description: 'Sheet height in mm (default: 1220)' },
+      },
+      required: ['part_ids'],
+    },
+  },
+  {
+    name: 'export_production_pack',
+    description:
+      'Export a production pack: drawings + DXF + BOM + assembly instructions (rebuild/15 §4.5). Async job. NOTE: drawings resource is not yet built — this tool is a stub returning an error until the drawing pipeline exists.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        part_ids: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        format: { type: 'string', enum: ['dxf', 'step', 'pdf'] },
+      },
+      required: ['part_ids'],
+    },
+  },
+  {
+    name: 'get_job',
+    description:
+      'Poll any async job (import_part, simulate_nesting, export_production_pack) by job_id. Returns {status, progress, result?, error?}.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        job_id: { type: 'string' },
+      },
+      required: ['job_id'],
+    },
+  },
 ];
 
 export function dispatchGraphTool(
@@ -503,6 +551,12 @@ export function dispatchGraphTool(
       return handleBranch(store, args);
     case 'merge_branch':
       return handleMergeBranch(store, args);
+    case 'simulate_nesting':
+      return handleSimulateNesting(store, args);
+    case 'export_production_pack':
+      return handleExportProductionPack(store, args);
+    case 'get_job':
+      return handleGetJob(args);
     default:
       throwError(ErrorCodes.INTERNAL_ERROR, `Unknown v2 tool: ${name}`, false);
   }
@@ -1106,4 +1160,131 @@ async function handleMergeBranch(
   const branch = requireString(args, 'source_branch');
   await doltStore.doltMerge(branch);
   return {};
+}
+
+// ── Produce / async jobs (Slice 11) ──────────────────────────────────────────
+
+async function handleSimulateNesting(
+  store: GraphStore,
+  args: Record<string, unknown>,
+): Promise<{ job_id: string }> {
+  const partIds = requireStringArray(args, 'part_ids');
+  const sheetW = optNumber(args, 'sheet_width_mm') ?? 2440;
+  const sheetH = optNumber(args, 'sheet_height_mm') ?? 1220;
+
+  for (const pid of partIds) {
+    if (!store.getPart(pid)) {
+      throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${pid}`, false);
+    }
+  }
+
+  const jobId = v2JobQueue.enqueue(async () => {
+    // Collect flat outline bounding boxes for each part
+    const rectangles: Array<{ partId: string; width: number; height: number }> = [];
+    for (const pid of partIds) {
+      const part = store.getPart(pid)!;
+      // Compute bounding box of the flat outline
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const p of part.outline) {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+      }
+      rectangles.push({ partId: pid, width: maxX - minX, height: maxY - minY });
+    }
+
+    // Simple shelf-next-fit decreasing algorithm
+    rectangles.sort((a, b) => b.height - a.height || b.width - a.width);
+
+    const result: NestingResult = {
+      placements: [],
+      utilisationPct: 0,
+      sheetsRequired: 1,
+    };
+
+    let sheetIndex = 0;
+    let xCursor = 0;
+    let yCursor = 0;
+    let rowHeight = 0;
+    let totalArea = 0;
+
+    for (const rect of rectangles) {
+      totalArea += rect.width * rect.height;
+
+      // If this piece doesn't fit in the current row, start a new row
+      if (xCursor + rect.width > sheetW) {
+        xCursor = 0;
+        yCursor += rowHeight;
+        rowHeight = 0;
+      }
+
+      // If this piece doesn't fit on the current sheet, start a new sheet
+      if (yCursor + rect.height > sheetH) {
+        sheetIndex++;
+        xCursor = 0;
+        yCursor = 0;
+        rowHeight = 0;
+        result.sheetsRequired = sheetIndex + 1;
+      }
+
+      result.placements.push({
+        partId: rect.partId,
+        sheetIndex,
+        x: xCursor,
+        y: yCursor,
+        rotationDeg: 0,
+      });
+
+      xCursor += rect.width;
+      if (rect.height > rowHeight) rowHeight = rect.height;
+    }
+
+    const sheetArea = sheetW * sheetH;
+    result.utilisationPct = totalArea / (sheetArea * result.sheetsRequired) * 100;
+
+    return result;
+  });
+
+  return { job_id: jobId };
+}
+
+async function handleExportProductionPack(
+  store: GraphStore,
+  args: Record<string, unknown>,
+): Promise<{ job_id: string }> {
+  const partIds = requireStringArray(args, 'part_ids');
+
+  for (const pid of partIds) {
+    if (!store.getPart(pid)) {
+      throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${pid}`, false);
+    }
+  }
+
+  const jobId = v2JobQueue.enqueue(async () => {
+    // Stub: drawings resource is not built yet (Slice 11 MVP)
+    throw new Error(
+      'export_production_pack requires the drawings resource, which is not yet built. ' +
+      'Revisit when the drawing pipeline (rebuild/07-engineering-drawings.md) is implemented.',
+    );
+  });
+
+  return { job_id: jobId };
+}
+
+async function handleGetJob(
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown> | null> {
+  const jobId = requireString(args, 'job_id');
+  const job = v2JobQueue.getJob(jobId);
+  if (!job) {
+    throwError(ErrorCodes.INTERNAL_ERROR, `job not found: ${jobId}`, false);
+  }
+  return {
+    job_id: job.jobId,
+    status: job.status,
+    progress: job.progress,
+    result: job.result ?? undefined,
+    error: job.error ?? undefined,
+  };
 }
