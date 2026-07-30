@@ -608,7 +608,12 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
     bend.hingeA = hingeALocal;
     bend.hingeB = hingeBLocal;
     bend.angleDeg = angleDeg;
-    bend.radiusMm = 0.0;
+    // Radius matches the pivot: z=0 (concave, fold touches inner surface)
+    // → radiusMm=0; z=thicknessMm (convex, fold offset from outer surface)
+    // → radiusMm=thicknessMm.  This is the geometric fold radius derived
+    // from the measured piece positions, not a manufacturing constraint —
+    // merge_bodies_with_bend applies its own >=thickness validation.
+    bend.radiusMm = winner.bottomIsConcave ? 0.0 : thicknessMm;
     bend.kFactor = 0.0;
     bend.bottomIsConcave = winner.bottomIsConcave;
     graph.bends.push_back(bend);

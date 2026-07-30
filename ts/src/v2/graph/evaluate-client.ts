@@ -610,15 +610,19 @@ export function importPart(
   const protrusionPartIds: string[] = [];
   for (const shellId of split.protrusion_ids) {
     const frame = geometryBinding.getPanelFrame(shellId);
+    // Protrusions share the same material thickness as the main panels.
+    // getPanelFrame reports the extent along the chosen face's normal,
+    // which for a protrusion is its height (e.g. 24mm), not the material
+    // thickness (~1mm).  Use the reconciled thicknessMm from above.
     const piece: NapiPanelPieceSpec = {
       origin: { x: frame.originX, y: frame.originY, z: frame.originZ },
       uAxis: { x: frame.uX, y: frame.uY, z: frame.uZ },
       vAxis: { x: frame.vX, y: frame.vY, z: frame.vZ },
       normal: { x: frame.normalX, y: frame.normalY, z: frame.normalZ },
       ringLocal: frame.ring,
-      thicknessMm: frame.thicknessMm,
+      thicknessMm,
     };
-    const reconciledProtrusion = geometryBinding.reconcilePieces([piece], frame.thicknessMm);
+    const reconciledProtrusion = geometryBinding.reconcilePieces([piece], thicknessMm);
     if (!reconciledProtrusion.ok) {
       throwError(
         (reconciledProtrusion.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
@@ -629,7 +633,7 @@ export function importPart(
     const protrusionPart = store.createPart({
       name: `${filePath}#protrusion`,
       outline: reconciledProtrusion.graph.outline.outer,
-      thicknessMm: frame.thicknessMm,
+      thicknessMm,
       anchor: reconciledProtrusion.graph.anchor?.transform,
     });
     protrusionPartIds.push(protrusionPart.partId);
