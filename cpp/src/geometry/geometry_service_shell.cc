@@ -737,33 +737,114 @@ public:
       }
     }
 
-    // Select by smallest shell-extent (material-thickness direction), with
-    // outwardness-against-parentCentroid breaking ties on extent.
-    // Then take a BRepAlgoAPI_Section at the mid-plane — one OCCT call
-    // that handles concave outlines correctly, no face fusion needed.
+    // Select by smallest shell-extent (material-thickness direction). Two
+    // candidates can tie EXACTLY on extent (a genuine outer face and a
+    // same-thickness mitered-corner shoulder both span the same thickness
+    // dimension) — extent alone cannot break that tie, and there is no
+    // geometrically-sound default to fall back to: guessing (e.g. "first
+    // candidate found") is exactly what caused this class of bug (see this
+    // function's own header comment and
+    // docs/BUG_REPORT_import_part_edge_match_winding_mismatch.md) — picking
+    // the wrong one silently flips this panel's ring winding relative to
+    // its siblings. So an extent tie is only resolved via parentCentroid
+    // (outwardness — the candidate whose own normal points away from the
+    // solid's bulk); if that disambiguation isn't available or is itself
+    // ambiguous, this is a hard, typed failure, not a guess.
     constexpr double kExtentTieToleranceMm = 1e-3;
-    const PlanarCandidate* best = &refCandidates.front();
-    {
-      double bestExtent = 1e30;
+    constexpr double kOutwardTieToleranceMm = 1e-6;
+    double minExtent = 1e30;
+    for (const auto& c : refCandidates) {
+      double nMin = 1e30, nMax = -1e30;
+      gp_Vec nVec(c.normal.XYZ());
+      for (const gp_Pnt& v : allVertices) {
+        double proj = gp_Vec(v.XYZ()).Dot(nVec);
+        nMin = std::min(nMin, proj); nMax = std::max(nMax, proj);
+      }
+      double extent = nMax - nMin;
+      if (extent > 0.01 && extent < minExtent) minExtent = extent;
+    }
+    if (minExtent >= 1e30) {
+      out.ok = false;
+      out.errorCode = "GE_PANEL_FRAME_FAILED";
+      out.message   = "getPanelFrame: no candidate face has a positive shell extent "
+                       "(shellId=" + shellId + ").";
+      return out;
+    }
+    std::vector<const PlanarCandidate*> tied;
+    for (const auto& c : refCandidates) {
+      gp_Vec nVec(c.normal.XYZ());
+      double nMin = 1e30, nMax = -1e30;
+      for (const gp_Pnt& v : allVertices) {
+        double proj = gp_Vec(v.XYZ()).Dot(nVec);
+        nMin = std::min(nMin, proj); nMax = std::max(nMax, proj);
+      }
+      double extent = nMax - nMin;
+      if (extent > 0.01 && extent <= minExtent + kExtentTieToleranceMm) tied.push_back(&c);
+    }
+
+    // A shell can carry two (or more) TopoDS_Face entities that are the SAME
+    // physical surface split into separate topological patches by an
+    // internal seam edge (e.g. a bridge/flange cut boundary left over from
+    // a boolean op) — confirmed on testcube.step's panels, where one true
+    // 22335mm² outer face is split into an 11092.5mm² and an 11242.5mm²
+    // patch with DIFFERENT in-plane locations but the identical plane
+    // (same normal, y=75 exactly for both). These are not a real ambiguity
+    // between two candidates — outward only depends on perpendicular
+    // distance to a shared plane, which is why they always tie exactly —
+    // so "same location point" is the wrong dedupe test; "same plane"
+    // (matching normal + zero perpendicular distance between locations) is
+    // what actually identifies them as one physical face. Collapse those
+    // before judging whether outward is genuinely tied between two
+    // DIFFERENT physical faces.
+    constexpr double kSamePlaneToleranceMm = 1e-3;
+    auto sameFace = [kSamePlaneToleranceMm](const PlanarCandidate& a, const PlanarCandidate& b) {
+      if (gp_Vec(a.normal.XYZ()).Dot(gp_Vec(b.normal.XYZ())) <= 1.0 - 1e-9) return false;
+      double perpDist = std::fabs(gp_Vec(b.loc, a.loc).Dot(gp_Vec(b.normal.XYZ())));
+      return perpDist <= kSamePlaneToleranceMm;
+    };
+    std::vector<const PlanarCandidate*> distinctTied;
+    for (const PlanarCandidate* c : tied) {
+      bool isDuplicate = false;
+      for (const PlanarCandidate* d : distinctTied) {
+        if (sameFace(*c, *d)) { isDuplicate = true; break; }
+      }
+      if (!isDuplicate) distinctTied.push_back(c);
+    }
+
+    const PlanarCandidate* best = nullptr;
+    if (distinctTied.size() == 1) {
+      best = distinctTied.front();
+    } else if (!haveParentCentroid) {
+      out.ok = false;
+      out.errorCode = "GE_PANEL_FRAME_FAILED";
+      out.message   = "getPanelFrame: " + std::to_string(distinctTied.size()) +
+                       " distinct candidate faces tie on extent (shellId=" + shellId +
+                       ") and the original solid's centroid is unavailable to "
+                       "disambiguate which is the true outer face — refusing to "
+                       "guess.";
+      return out;
+    } else {
       double bestOutward = -std::numeric_limits<double>::infinity();
-      for (const auto& c : refCandidates) {
-        double nMin = 1e30, nMax = -1e30;
-        gp_Vec nVec(c.normal.XYZ());
-        for (const gp_Pnt& v : allVertices) {
-          double proj = gp_Vec(v.XYZ()).Dot(nVec);
-          nMin = std::min(nMin, proj); nMax = std::max(nMax, proj);
-        }
-        double extent = nMax - nMin;
-        if (extent <= 0.01) continue;
-        double outward = haveParentCentroid ? gp_Vec(parentCentroid, c.loc).Dot(nVec) : 0.0;
-        bool strictlyBetter = extent < bestExtent - kExtentTieToleranceMm;
-        bool tiedButMoreOutward =
-            std::fabs(extent - bestExtent) <= kExtentTieToleranceMm && outward > bestOutward;
-        if (strictlyBetter || tiedButMoreOutward) {
-          bestExtent = extent;
+      double secondBestOutward = -std::numeric_limits<double>::infinity();
+      for (const PlanarCandidate* c : distinctTied) {
+        gp_Vec nVec(c->normal.XYZ());
+        double outward = gp_Vec(parentCentroid, c->loc).Dot(nVec);
+        if (outward > bestOutward) {
+          secondBestOutward = bestOutward;
           bestOutward = outward;
-          best = &c;
+          best = c;
+        } else if (outward > secondBestOutward) {
+          secondBestOutward = outward;
         }
+      }
+      if (bestOutward - secondBestOutward <= kOutwardTieToleranceMm) {
+        out.ok = false;
+        out.errorCode = "GE_PANEL_FRAME_FAILED";
+        out.message   = "getPanelFrame: " + std::to_string(distinctTied.size()) +
+                         " distinct candidate faces tie on extent (shellId=" + shellId +
+                         ") and are also tied on outwardness against the "
+                         "original solid's centroid — refusing to guess.";
+        return out;
       }
     }
 
