@@ -1,8 +1,34 @@
 # Bug Report: `reconcilePieces` treats genuinely-adjacent panels as disconnected
 # — shared edge matches in the SAME winding order, not reversed
 
-**Status:** Open — root cause narrowed to `getPanelFrame` face selection, not yet fixed
-**Date:** 2026-07-30
+> **✅ FIXED 2026-07-31.** Confirmed via the diagnostic in "Suggested Next Step"
+> below: for `unequal_leg_bracket_90deg.stp`'s piece 0, two extremal candidate
+> faces tied exactly on extent (2mm = thickness) — a 150mm² mitered-corner
+> shoulder face and the TRUE 3150mm² main panel face — and OCCT's raw face
+> traversal order happened to visit the shoulder first, so `getPanelFrame` picked
+> it (wrong sign of normal). Piece 1's equivalent tie happened to resolve
+> correctly by the same luck-of-traversal-order logic, so the two sibling panels
+> ended up measured from effectively opposite faces. Fixed by wiring in the
+> tie-break the file's own header comment already described but never actually
+> implemented: when extents tie, prefer the candidate whose face points away
+> from the ORIGINAL (pre-split) solid's own centroid (via `parentSolidId`) — the
+> same "outer face" test `buildFaceGroups()`/`isOuter`
+> (`geometry_service_sheet_metal.cc`) already uses, now also applied inside
+> `getPanelFrame`. Verified: `unequal_leg_bracket_90deg.stp` now reconciles to
+> one part/one bend; `hollow_cube.stp` now matches `simple_box.stp` (one
+> fully-connected 6-panel part); `testcube.step`/`cube_with_flanges.stp` still
+> correctly return multiple components (genuine flange joints), just fewer of
+> them (9→6 and 5→4 respectively — some of what looked like legitimate
+> flange-joined pieces were this same tie-break bug). Full C++ ctest (172 tests,
+> same 3 pre-existing unrelated failures as baseline) and the relevant TS
+> integration suites show no regressions. One follow-on found while verifying:
+> `unequal_leg_bracket_merge_orientation.integration.test.ts` now gets past
+> reconciliation (previously masked by this bug) but fails on a ~1mm merged-bbox
+> discrepancy in `merge_bodies_with_bend` itself — a separate, previously-hidden
+> issue, not yet investigated.
+
+**Status:** Fixed
+**Date:** 2026-07-30 (opened), 2026-07-31 (fixed)
 **Component:** `cpp/src/geometry/translation/step_reconciliation.cc` (`ReconcilePieces`
 edge-matching, `:220-245`), likely caused upstream by
 `cpp/src/geometry/geometry_service_shell.cc` (`getPanelFrame`, `:615-`)

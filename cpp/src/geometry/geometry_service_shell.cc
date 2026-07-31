@@ -711,12 +711,41 @@ public:
     }
     const std::vector<PlanarCandidate>& refCandidates = extremal.empty() ? candidates : extremal;
 
-    // Select by smallest shell-extent (material-thickness direction).
+    // Cross-panel-consistent tie-break reference point: the ORIGINAL
+    // (pre-split) solid's own centroid, via parentSolidId — the SAME point
+    // for every sibling panel of this part, unlike each panel's own local
+    // extent data (confirmed empirically: a small mitered-corner shoulder
+    // face and the true main panel face can tie EXACTLY on extent — both
+    // span the same thickness dimension — so extent alone cannot tell them
+    // apart, and which one traversal visits first is not consistent across
+    // sibling shells built by independent boolean ops). Reused below to
+    // prefer, among extent-tied candidates, whichever one's own normal
+    // points away from the solid's bulk — the standard "outer face" test
+    // buildFaceGroups()/isOuter (geometry_service_sheet_metal.cc) already
+    // uses for the same reason.
+    bool haveParentCentroid = false;
+    gp_Pnt parentCentroid;
+    {
+      auto sIt = s_.solids.find(parentSolidId);
+      if (sIt != s_.solids.end()) {
+        GProp_GProps vp;
+        BRepGProp::VolumeProperties(sIt->second.shape, vp);
+        if (vp.Mass() > 1e-9) {
+          parentCentroid = vp.CentreOfMass();
+          haveParentCentroid = true;
+        }
+      }
+    }
+
+    // Select by smallest shell-extent (material-thickness direction), with
+    // outwardness-against-parentCentroid breaking ties on extent.
     // Then take a BRepAlgoAPI_Section at the mid-plane — one OCCT call
     // that handles concave outlines correctly, no face fusion needed.
+    constexpr double kExtentTieToleranceMm = 1e-3;
     const PlanarCandidate* best = &refCandidates.front();
     {
       double bestExtent = 1e30;
+      double bestOutward = -std::numeric_limits<double>::infinity();
       for (const auto& c : refCandidates) {
         double nMin = 1e30, nMax = -1e30;
         gp_Vec nVec(c.normal.XYZ());
@@ -725,7 +754,16 @@ public:
           nMin = std::min(nMin, proj); nMax = std::max(nMax, proj);
         }
         double extent = nMax - nMin;
-        if (extent > 0.01 && extent < bestExtent) { bestExtent = extent; best = &c; }
+        if (extent <= 0.01) continue;
+        double outward = haveParentCentroid ? gp_Vec(parentCentroid, c.loc).Dot(nVec) : 0.0;
+        bool strictlyBetter = extent < bestExtent - kExtentTieToleranceMm;
+        bool tiedButMoreOutward =
+            std::fabs(extent - bestExtent) <= kExtentTieToleranceMm && outward > bestOutward;
+        if (strictlyBetter || tiedButMoreOutward) {
+          bestExtent = extent;
+          bestOutward = outward;
+          best = &c;
+        }
       }
     }
 

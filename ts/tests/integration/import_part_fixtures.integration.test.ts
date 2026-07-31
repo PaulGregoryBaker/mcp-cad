@@ -41,11 +41,18 @@
  *     point, reproduces the exact same 3D position). These use a
  *     self-consistency oracle instead (round-trip lands SOMEWHERE that
  *     forward-maps back to the same 3D point), not a same-panel oracle.
- *   - angle_bracket_45deg.stp: originally refused with GE_DISCONNECTED_PIECES
- *     identically across every angle_threshold_deg tried (35/20/10/1); a
- *     later getPanelFrame face-selection fix (commit c00e758) resolved the
- *     underlying edge-match failure, so this fixture now reconciles fully
- *     (one part, no disconnected components).
+ *   - angle_bracket_45deg.stp, unequal_leg_bracket_90deg.stp, hollow_cube.stp:
+ *     all three used to fail edge-matching for the same root cause --
+ *     getPanelFrame's extremal-face tie-break had no cross-panel-consistent
+ *     way to choose between a genuine outer panel face and a same-extent
+ *     mitered-corner shoulder face tied with it, so two physically-adjacent
+ *     panels could end up measured from OPPOSITE faces, flipping one
+ *     panel's ring winding relative to the other (reversed-vs-same-order
+ *     edge correspondence). Fixed by breaking that tie against the
+ *     ORIGINAL (pre-split) solid's own centroid -- the same "outer face"
+ *     test buildFaceGroups()/isOuter already uses, now also applied inside
+ *     getPanelFrame. Full investigation + root cause:
+ *     docs/BUG_REPORT_import_part_edge_match_winding_mismatch.md.
  *   - testcube.step, cube_with_flanges.stp: used to hard-refuse with
  *     GE_DISCONNECTED_PIECES. testcube.step matches v1's own description of
  *     it as two hollow cubes fused via bridge flanges
@@ -55,12 +62,11 @@
  *     (commits 4f89251/09fb9fb) -- it now imports the main component as
  *     `part_id` and returns each flange-joined piece's own component as a
  *     standalone part in `component_part_ids`, rather than failing outright.
- *     (hollow_cube.stp below is the OPPOSITE case: a closed 6-panel loop
- *     that SHOULD reconcile into one part like simple_box.stp does, but
- *     currently splits into disconnected components too -- a real
- *     getPanelFrame/edge-matching bug, not a legitimate multi-component
- *     fixture like this pair. Tracked separately, see
- *     docs/BUG_REPORT_import_part_edge_match_winding_mismatch.md.)
+ *     (The getPanelFrame fix above also reduced how many of their pieces
+ *     end up in component_part_ids -- some of what looked like legitimate
+ *     flange-joined pieces were actually the same tie-break bug -- but both
+ *     fixtures still have genuinely flange-joined material left over, so
+ *     component_part_ids is asserted non-empty, not a specific count.)
  *   - sheet_1panel.stp / sheet_3panel.stp: GE_IMPORT_NO_PANELS_FOUND
  *     regardless of angle_threshold_deg -- splitBodyByBends finds no
  *     planar faces to classify at all, consistent with these being
@@ -173,13 +179,6 @@ d('import_part integration suite (real STEP fixtures)', () => {
     probeRoundTripSelfConsistent(store, result.part_id, 0.001);
   });
 
-  // KNOWN FAILING (real bug, same root cause as hollow_cube.stp above): the
-  // two panels' shared edge matches in the SAME winding order instead of
-  // reversed (~1.4mm apart, consistent with getPanelFrame picking the
-  // wrong face on one panel), so reconcilePieces treats them as
-  // disconnected instead of finding the one expected bend. See
-  // docs/BUG_REPORT_import_part_edge_match_winding_mismatch.md. Left
-  // failing deliberately rather than relaxed to match the wrong output.
   it('unequal_leg_bracket_90deg.stp: 2-panel asymmetric fold reconciles and round-trips exactly', () => {
     const store = new GraphStore();
     const result = importFixture(store, 'unequal_leg_bracket_90deg.stp');
@@ -232,16 +231,6 @@ d('import_part integration suite (real STEP fixtures)', () => {
     probeRoundTripSelfConsistent(store, result.part_id, 0.001);
   });
 
-  // KNOWN FAILING (real bug, not a stale assertion): hollow_cube.stp is
-  // topologically identical to simple_box.stp above (a closed 6-panel
-  // loop, every face genuinely adjacent to two others) but currently
-  // splits into a 4-panel main component + 2 disconnected singles instead
-  // of one fully-connected 6-panel part. Root-caused to a reversed-vs-
-  // same-order edge-winding mismatch (~1.4mm offset between the two
-  // panels' supposedly-shared edge, consistent with getPanelFrame picking
-  // the wrong face on one panel) -- see
-  // docs/BUG_REPORT_import_part_edge_match_winding_mismatch.md. Left
-  // failing deliberately rather than relaxed to match the wrong output.
   it('hollow_cube.stp: closed 6-panel loop reconciles via a spanning tree; self-consistent round-trip', () => {
     const store = new GraphStore();
     const result = importFixture(store, 'hollow_cube.stp');
