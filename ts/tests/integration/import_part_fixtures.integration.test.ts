@@ -41,17 +41,31 @@
  *     point, reproduces the exact same 3D position). These use a
  *     self-consistency oracle instead (round-trip lands SOMEWHERE that
  *     forward-maps back to the same 3D point), not a same-panel oracle.
- *   - angle_bracket_45deg.stp, unequal_leg_bracket_90deg.stp, hollow_cube.stp:
- *     all three used to fail edge-matching for the same root cause --
- *     getPanelFrame's extremal-face tie-break had no cross-panel-consistent
- *     way to choose between a genuine outer panel face and a same-extent
- *     mitered-corner shoulder face tied with it, so two physically-adjacent
- *     panels could end up measured from OPPOSITE faces, flipping one
- *     panel's ring winding relative to the other (reversed-vs-same-order
- *     edge correspondence). Fixed by breaking that tie against the
- *     ORIGINAL (pre-split) solid's own centroid -- the same "outer face"
- *     test buildFaceGroups()/isOuter already uses, now also applied inside
- *     getPanelFrame. Full investigation + root cause:
+ *   - angle_bracket_45deg.stp, hollow_cube.stp: used to fail edge-matching
+ *     because getPanelFrame's extremal-face tie-break had no cross-panel-
+ *     consistent way to choose between a genuine outer panel face and a
+ *     same-extent mitered-corner shoulder face tied with it, so two
+ *     physically-adjacent panels could end up measured from OPPOSITE
+ *     faces, flipping one panel's ring winding relative to the other
+ *     (reversed-vs-same-order edge correspondence). Fixed by breaking that
+ *     tie against the ORIGINAL (pre-split) solid's own centroid -- the
+ *     same "outer face" test buildFaceGroups()/isOuter already uses, now
+ *     also applied inside getPanelFrame.
+ *   - unequal_leg_bracket_90deg.stp, tab_bracket_90deg.stp: a SECOND, later-
+ *     found bug in the same area -- reconcilePieces derived each bend's
+ *     angleDeg from how far a single arbitrarily-chosen ring vertex (the
+ *     one diagonally opposite the hinge) moved, which converts the same
+ *     couple-mm sharp-corner surface noise this file already documents
+ *     into a proportionally large ANGULAR error on short panels (angle ~=
+ *     noise / distance-from-hinge). unequal_leg_bracket_90deg.stp's exact
+ *     90 degree design angle was being measured as -91.878 degrees this
+ *     way; tab_bracket_90deg.stp's was thrown off badly enough to fail
+ *     self-consistency entirely, misreporting as GE_NON_DEVELOPABLE_FOLD
+ *     even though neither fixture has any curved surface at all (checked
+ *     directly against each one's raw STEP topology). Fixed by deriving
+ *     angleDeg from the two panels' own already-measured face normals
+ *     instead -- a whole-face fit, far less sensitive to one corner
+ *     vertex's own noise. Full investigation + root cause for both bugs:
  *     docs/BUG_REPORT_import_part_edge_match_winding_mismatch.md.
  *   - testcube.step, cube_with_flanges.stp: used to hard-refuse with
  *     GE_DISCONNECTED_PIECES. testcube.step matches v1's own description of
@@ -241,12 +255,25 @@ d('import_part integration suite (real STEP fixtures)', () => {
     probeRoundTripSelfConsistent(store, result.part_id, 0.001);
   });
 
-  it('tab_bracket_90deg.stp: correctly refused as a non-developable (filleted) fold', () => {
+  // Despite the name/old assertion, this fixture is NOT actually filleted --
+  // its raw STEP topology (checked directly, no reconciliation code
+  // involved) has zero curved surfaces (no CYLINDRICAL/TOROIDAL/B_SPLINE/
+  // CONICAL_SURFACE entities at all) and its two panels' true main faces
+  // have normals (0,0,1) and (1,0,0), exactly 90 degrees apart. It used to
+  // hit GE_NON_DEVELOPABLE_FOLD for the same reason unequal_leg_bracket_90deg.stp
+  // did (see that test above and docs/BUG_REPORT_import_part_edge_match_winding_mismatch.md):
+  // the OLD single-vertex angle derivation was fragile to real, documented
+  // sharp-corner surface noise, and for this fixture the resulting bad
+  // angle failed self-consistency for BOTH pivot candidates, which reads
+  // as "not reproducible by a rigid rotation" even though the true
+  // geometry (flat panels, exact 90 degree fold) reproduces perfectly.
+  it('tab_bracket_90deg.stp: sharp 90deg fold reconciles (not actually filleted)', () => {
     const store = new GraphStore();
-    expectTypedError(
-      () => importFixture(store, 'tab_bracket_90deg.stp'),
-      'GE_NON_DEVELOPABLE_FOLD',
-    );
+    const result = importFixture(store, 'tab_bracket_90deg.stp');
+    expect(result.panel_count).toBe(2);
+    expect(result.bend_count).toBe(1);
+    expect(result.component_part_ids).toEqual([]);
+    probeRoundTripSelfConsistent(store, result.part_id, 2.0);
   });
 
   it('angle_bracket_45deg.stp: reconciles fully at both the default and a tighter angle_threshold_deg', () => {

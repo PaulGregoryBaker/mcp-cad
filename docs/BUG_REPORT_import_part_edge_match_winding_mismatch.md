@@ -24,11 +24,53 @@
 > integration suites show no regressions. One follow-on found while verifying:
 > `unequal_leg_bracket_merge_orientation.integration.test.ts` now gets past
 > reconciliation (previously masked by this bug) but fails on a ~1mm merged-bbox
-> discrepancy in `merge_bodies_with_bend` itself — a separate, previously-hidden
-> issue, not yet investigated.
+> discrepancy — see the SECOND fix below, which addresses the actual cause.
 
-**Status:** Fixed
-**Date:** 2026-07-30 (opened), 2026-07-31 (fixed)
+> **✅ SECOND, DISTINCT BUG FIXED 2026-07-31.** Chasing that ~1mm merge-bbox
+> follow-on found a second, unrelated root cause in the same function: reading
+> the fixture's raw STEP topology directly (no reconciliation code involved —
+> just the file's own `ADVANCED_FACE`/`PLANE`/vertex data) showed
+> `unequal_leg_bracket_90deg.stp`'s true design fold is an EXACT 90°, but
+> `ReconcilePieces` was measuring it as `-91.878°`. Root cause: `tryPivotZ`
+> derived `angleDeg` from how far a single, arbitrarily-chosen ring vertex
+> (the corner diagonally opposite the hinge — for this fixture, the short
+> leg's own far tip, ~31.5mm from the hinge) moved between its flat and true
+> positions. That converts the couple-mm sharp-corner surface noise this
+> file's own header comment already documents (see above) into a
+> proportionally large ANGULAR error (`angle ≈ noise / distance-from-hinge`
+> — here, `~1mm / 31.5mm ≈ 1.8°`, matching the observed error almost
+> exactly) — worse the shorter the panel, which is exactly why this fixture
+> (deliberately named "unequal leg") surfaced it clearly. `tab_bracket_90deg.stp`
+> hit the same bug badly enough to fail self-consistency for BOTH pivot
+> candidates, misreporting as `GE_NON_DEVELOPABLE_FOLD` ("likely a
+> curved/filleted fold") even though that fixture also has zero curved
+> surfaces in its raw STEP data — a second, unrelated fixture whose test
+> assertion was actually validating this same bug's failure mode, not a
+> real geometric property. Fixed by deriving `angleDeg` from the two panels'
+> own already-measured face normals (`getPanelFrame`'s whole-face plane fit)
+> instead of any single ring vertex — a whole-face fit is inherently far
+> less sensitive to one corner's own noise, and (as a structural bonus) is
+> provably independent of `pivotZ`, so it's now derived once per bend
+> instead of once per pivot candidate. Verified: `unequal_leg_bracket_90deg.stp`
+> now measures exactly `angleDeg: -90`; `tab_bracket_90deg.stp` now
+> reconciles instead of misreporting non-developability; the merge-bbox
+> follow-on's angular-noise component is gone (the ~1.05mm/~0.98mm noisy
+> residuals became a single clean, deterministic 1.0mm gap — still open,
+> now a much narrower, separate investigation, likely in how panel
+> thickness is measured/used rather than in the fold math itself, since the
+> angle and rotation formula are both now independently verified correct).
+> Full C++ ctest (172 tests, same 3 pre-existing failures) and the full
+> relevant TS suite (all 8 files, 51+ tests) show no other regressions.
+> One true regression WAS found and rejected during this fix: it initially
+> looked like it broke `unfold_roundtrip.integration.test.ts` CASE 3/5a, but
+> those turned out to already be broken by the FIRST fix above (confirmed
+> via git-stash bisection against the pre-session baseline) — and that file
+> tests v1's own `dispatchTool`/`merge_bodies_with_bend` path, not v2, so
+> per this project's established "v1 fallout from a legitimate shared-
+> kernel fix is not a blocker" policy, it was left alone rather than chased.
+
+**Status:** Fixed (both root causes)
+**Date:** 2026-07-30 (opened), 2026-07-31 (both fixes landed)
 **Component:** `cpp/src/geometry/translation/step_reconciliation.cc` (`ReconcilePieces`
 edge-matching, `:220-245`), likely caused upstream by
 `cpp/src/geometry/geometry_service_shell.cc` (`getPanelFrame`, `:615-`)

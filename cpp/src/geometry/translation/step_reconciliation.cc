@@ -23,7 +23,6 @@ namespace {
 // exactly this "how close is close enough to call two edges the same seam"
 // question, reused here rather than inventing a separate number.
 constexpr double kPieceEdgeMatchToleranceMm = 2.0;
-constexpr double kAngleInvariantToleranceMm = 2.0;
 constexpr double kSelfConsistencyToleranceMm = 2.0;
 // Ring vertices closer together than this are collapsed before
 // reconciliation (see SimplifyRing) — the same sharp-corner discrepancy
@@ -495,20 +494,68 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
     Point2 hingeALocal = pEdgeP1;
     Point2 hingeBLocal = pEdgeP0;
 
-    // The hinge axis and the sample point must be compared in a SHARED
-    // frame — piece p's own accumulated fold, i.e. "true 3D position if
-    // only bends up to and including p had been applied" — never the flat
-    // pattern frame directly (see accumulatedPose's own doc comment above).
+    // The hinge axis must be compared in a SHARED frame — piece p's own
+    // accumulated fold, i.e. "true 3D position if only bends up to and
+    // including p had been applied" — never the flat pattern frame directly
+    // (see accumulatedPose's own doc comment above).
     const Transform3& parentPose = accumulatedPose[p];
-    size_t sampleIdx = (static_cast<size_t>(cEdgeIdx) + 2) % nc;
-    const Point3& trueSample = trueRootLocalRing[i][sampleIdx];
+
+    // The hinge axis DIRECTION (as opposed to its pivot-height POSITION,
+    // searched below) doesn't depend on pivotZ at all: hingeA3/hingeB3 both
+    // get the SAME z offset, which cancels in their difference. Computed
+    // once, reused for both the angle derivation and every pivotZ candidate.
+    Point3 hingeA3Flat{hingeALocal.x, hingeALocal.y, 0.0};
+    Point3 hingeB3Flat{hingeBLocal.x, hingeBLocal.y, 0.0};
+    Point3 axisDir = Normalize3(parentPose.ApplyVector(Sub3(hingeB3Flat, hingeA3Flat)));
+    if (Length3(axisDir) < 1e-9) {
+      result.errorCode = ReconcileErrorCode::kNonDevelopableFold;
+      result.message = "bend at piece " + std::to_string(i) + " has a zero-length hinge";
+      return result;
+    }
+
+    // Derive angleDeg from the two panels' own already-measured face
+    // normals (getPanelFrame's whole-face plane fit), not from how far a
+    // single ring vertex moved. A lone vertex — especially the one
+    // furthest from the hinge, which is exactly what a short leg's own far
+    // tip is — converts the couple-mm sharp-corner surface noise this
+    // file's own header comment already documents into a proportionally
+    // large ANGULAR error (angle ≈ noise / distance-from-hinge): confirmed
+    // on unequal_leg_bracket_90deg.stp, where a real STEP file with an
+    // exact, axis-aligned 90° design angle (verified directly against the
+    // file's own raw face topology) was being measured as -91.878° this
+    // way, purely from ~1mm of that documented corner noise landing on the
+    // one sampled vertex, 31.5mm from the hinge. A face normal, by
+    // contrast, is already a whole-face fit (P3: reuse getPanelFrame's own
+    // robust measurement rather than re-deriving orientation from one
+    // corner's position) — far less sensitive to any single vertex's own
+    // noise, and (a bonus) angle-independent of pivotZ, so it only needs
+    // deriving once per bend, not once per pivot candidate below.
+    Point3 parentNormalRootLocal = parentPose.ApplyVector({0.0, 0.0, 1.0});
+    Point3 childNormalRootLocal = rootFrameInv.ApplyVector(simplifiedPieces[i].normal);
+    auto perpVecFromAxis = [&](const Point3& v) -> Point3 {
+      double along = Dot3(v, axisDir);
+      return {v.x - along * axisDir.x, v.y - along * axisDir.y, v.z - along * axisDir.z};
+    };
+    Point3 perpParentN = perpVecFromAxis(parentNormalRootLocal);
+    Point3 perpChildN = perpVecFromAxis(childNormalRootLocal);
+    double magParentN = Length3(perpParentN);
+    double magChildN = Length3(perpChildN);
+    if (magParentN < 1e-9 || magChildN < 1e-9) {
+      result.errorCode = ReconcileErrorCode::kNonDevelopableFold;
+      result.message = "fold at piece " + std::to_string(i) +
+                        " has a panel normal parallel to its own hinge axis — angle undefined";
+      return result;
+    }
+    double cosAngle = Dot3(perpParentN, perpChildN) / (magParentN * magChildN);
+    Point3 crossN = Cross3(perpParentN, perpChildN);
+    double sinAngle = Dot3(crossN, axisDir) / (magParentN * magChildN);
+    double angleDeg = std::atan2(sinAngle, cosAngle) * 180.0 / kPi;
 
     // manufacturing_graph_evaluator.cc's own bend physics: the rotation axis
     // sits at the flat hinge's own z=0 when this bend's bottom reference is
     // the CONCAVE side of the fold (touches the pivot exactly at
     // radiusMm=0), or at z=+thicknessMm when bottom is the CONVEX side
-    // (never touches, always offset — BottomRadiusMm/pivotZ). These are
-    // measured here, from the piece's TRUE 3D position, and persisted
+    // (never touches, always offset — BottomRadiusMm/pivotZ). Persisted
     // explicitly via bend.bottomIsConcave rather than left for Evaluate()
     // to re-derive from angleDeg's sign: a part's single, part-wide bottom
     // reference is not guaranteed concave at every bend whose natural
@@ -521,9 +568,8 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
     // every vertex, needs a touching (concave-style) pivot at z=0 even
     // though its natural angle sign comes out negative. The OLD sign-only
     // rule (mountain iff angleDeg>=0) could not represent that combination
-    // at all; this measures which pivot actually fits and records it
-    // directly, leaving angleDeg free to carry whatever sign the rotation
-    // naturally has.
+    // at all; this measures which pivot actually fits (using the ALREADY-
+    // derived angleDeg above, unchanged by pivotZ) and records it directly.
     //
     // hingeA/hingeB order (pEdgeP1, pEdgeP0 — reversed from the literal
     // parent-edge order, see above) is FIXED, never varied here: it also
@@ -532,42 +578,13 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
     // independent of — and must not be perturbed by — this pivot search.
     struct FoldCandidate {
       bool ok = false;
-      double angleDeg = 0.0;
       Point3 axisOrigin;
-      Point3 axisDir;
       bool bottomIsConcave = true;
     };
     auto tryPivotZ = [&](double pivotZ, bool bottomIsConcave) -> FoldCandidate {
       FoldCandidate cand;
       Point3 hingeA3{hingeALocal.x, hingeALocal.y, pivotZ};
-      Point3 hingeB3{hingeBLocal.x, hingeBLocal.y, pivotZ};
       Point3 axisOrigin = parentPose.Apply(hingeA3);
-      Point3 hingeB3True = parentPose.Apply(hingeB3);
-      Point3 axisDir = Normalize3(Sub3(hingeB3True, axisOrigin));
-
-      // The point being rotated is always at z=0 in its own local frame
-      // (matching Evaluate()'s own bottomFace(p)=Pose(p)*(v.x,v.y,0) and
-      // childShift's own x/y-only translation) — only the AXIS position
-      // varies with pivotZ, never the flat point itself.
-      Point3 flatSample3{cFlat[sampleIdx].x, cFlat[sampleIdx].y, 0.0};
-      Point3 predictedBeforeOwnFold = parentPose.Apply(flatSample3);
-
-      auto perpFromAxis = [&](const Point3& pt) -> Point3 {
-        Point3 rel = Sub3(pt, axisOrigin);
-        double along = Dot3(rel, axisDir);
-        return {rel.x - along * axisDir.x, rel.y - along * axisDir.y, rel.z - along * axisDir.z};
-      };
-      Point3 perpPredicted = perpFromAxis(predictedBeforeOwnFold);
-      Point3 perpTrue = perpFromAxis(trueSample);
-      double radPredicted = Length3(perpPredicted);
-      double radTrue = Length3(perpTrue);
-      if (std::fabs(radPredicted - radTrue) > kAngleInvariantToleranceMm || radPredicted < 1e-9) {
-        return cand;
-      }
-      double cosAngle = Dot3(perpPredicted, perpTrue) / (radPredicted * radTrue);
-      Point3 cross = Cross3(perpPredicted, perpTrue);
-      double sinAngle = Dot3(cross, axisDir) / (radPredicted * radTrue);
-      double angleDeg = std::atan2(sinAngle, cosAngle) * 180.0 / kPi;
 
       Transform3 fold = Transform3::RotationAboutAxis(axisOrigin, axisDir, angleDeg);
       Transform3 candidatePose = fold.Compose(parentPose);
@@ -579,9 +596,7 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
         }
       }
       cand.ok = true;
-      cand.angleDeg = angleDeg;
       cand.axisOrigin = axisOrigin;
-      cand.axisDir = axisDir;
       cand.bottomIsConcave = bottomIsConcave;
       return cand;
     };
@@ -597,8 +612,7 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
       return result;
     }
 
-    double angleDeg = winner.angleDeg;
-    Transform3 fold = Transform3::RotationAboutAxis(winner.axisOrigin, winner.axisDir, angleDeg);
+    Transform3 fold = Transform3::RotationAboutAxis(winner.axisOrigin, axisDir, angleDeg);
     accumulatedPose[i] = fold.Compose(parentPose);
 
     BendSpec bend;
