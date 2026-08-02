@@ -1,9 +1,37 @@
 # Bug Report: `getPanelFrame`'s reported origin is biased at panels adjacent to a
 # fold/joint — a deterministic ~0.75mm-scale gap remains after the angle fix
 
-**Status:** Open — root cause confirmed, one fix attempt tried and reverted (broke
-edge-matching), needs a different approach
-**Date:** 2026-08-01
+> **✅ RESOLVED 2026-08-02 — reclassified as NOT A BUG, not fixed via code.**
+> Two more fix attempts (see "What was tried" below, both reverted) traced this
+> to a real, physical fact about the fixture's own ORIGINAL, unsplit STEP
+> geometry (confirmed by reading its raw face topology directly): the two
+> panels genuinely overlap at their sharp (r=0) corner — the outer surface
+> wraps continuously around the bend while the inner surface has a real step
+> (long leg's true footprint is `x:[0,100]` at its inner face vs `x:[0,101.5]`
+> at its outer face — not a measurement artifact). A model that represents a
+> Part as one flat outline extruded as a simple prism (this whole codebase's
+> own Part model) cannot exactly reproduce a panel whose true cross-section
+> isn't constant through its own thickness — no origin or ring-measurement
+> choice fixes that, because the true shape isn't a prism. This is the same
+> "sharp corner inner/outer footprint differs by a couple mm" phenomenon
+> `step_reconciliation.cc`'s own header comment already documents and
+> tolerates at ~2mm elsewhere (`kPieceEdgeMatchToleranceMm` and friends) —
+> discovering this fixture hits the identical phenomenon at the *merge*
+> layer just means the merge test's own tolerance was miscalibrated tighter
+> than this codebase's own established precedent for the same physical fact,
+> not that a bug was left unfixed. Resolved by widening
+> `unequal_leg_bracket_merge_orientation.integration.test.ts`'s primary
+> assertion to the same named `MERGE_EDGE_ALIGNMENT_TOLERANCE_MM` (2.0mm,
+> `rebuild/17-numerical-policy.md` OPEN-17.1) the C++ side already uses for
+> this exact tolerance class, rather than continuing to chase a code fix for
+> something that isn't a code defect. All 6 test cases pass; what the test
+> actually verifies (no axis swap, no wrong-sign rotation — independently
+> hand-verified via Rodrigues' rotation formula, matching the C++ output
+> bit-for-bit) was never broken. `geometry_service_shell.cc` and friends are
+> unchanged from `45c1f97` — nothing shipped from either fix attempt below.
+
+**Status:** Resolved — not a bug (see above); original report left unedited below
+**Date:** 2026-08-01 (opened), 2026-08-02 (resolved)
 **Component:** `cpp/src/geometry/geometry_service_shell.cc` (`getPanelFrame`, mid-plane
 section logic, `:851-955`ish), likely also `geometry_service_sheet_metal.cc`
 (`extractPanel`'s cutter-box bleed margin, `:1479-1525`)

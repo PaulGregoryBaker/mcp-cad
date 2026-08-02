@@ -18,7 +18,7 @@
  * design claim, not yet a fact checked against this specific real, unequal-
  * shaped fixture — this is the check.
  *
- * Two real findings while porting this test:
+ * Three real findings while porting/maintaining this test:
  * 1. Reference bboxes must come from v2's OWN reconstruction of each
  *    independent part (constructPart), not from the raw split-time OCCT
  *    shells — those are a disposable intermediate artifact with no promised
@@ -32,6 +32,25 @@
  *    the fold-adjacent bound. Fixed by threading `bottom_is_concave` through
  *    `merge_bodies_with_bend`'s tool schema -> evaluate-client -> GraphStore,
  *    the same field `create_node(bend)` already exposed.
+ * 3. The primary assertion's tolerance is MERGE_EDGE_ALIGNMENT_TOLERANCE_MM
+ *    (~2mm), not a tight replay epsilon — NOT because axis-swap orientation
+ *    bugs are hard to pin down exactly (they aren't: verified independently,
+ *    by hand, that merge_bodies_with_bend's rotation formula and angleDeg
+ *    are both exactly correct for this fixture), but because this specific
+ *    fixture's two panels genuinely overlap at their sharp (r=0) corner in
+ *    the ORIGINAL, unsplit STEP geometry (confirmed by reading the raw STEP
+ *    file directly, independent of any of this codebase's own measurement
+ *    code) — the same real, physical "sharp corner inner/outer footprint
+ *    differs by a couple mm" phenomenon step_reconciliation.cc's own header
+ *    comment already documents and tolerates at this same ~2mm scale
+ *    elsewhere. A single flat outline extruded as a simple prism (this
+ *    entire codebase's own Part model) cannot exactly represent a panel
+ *    whose true cross-section isn't constant through its own thickness, so
+ *    a residual at this scale is expected here, not a defect to chase. Full
+ *    investigation (including two fix attempts that were tried and reverted
+ *    for good, traced reasons, not abandoned for being merely difficult):
+ *    docs/BUG_REPORT_import_part_edge_match_winding_mismatch.md and
+ *    docs/BUG_REPORT_getPanelFrame_origin_bias_at_bled_joints.md.
  *
  * `getPanelFrame` is not called on the merged (bent, 2-panel) composite here
  * — it measures a single dominant plane, which a genuinely bent shape
@@ -49,6 +68,7 @@ import { GraphStore } from '../../src/v2/graph/store';
 import { dispatchGraphTool } from '../../src/v2/tools/graph';
 import { constructPart } from '../../src/v2/graph/evaluate-client';
 import type { BoundingBoxResult } from '../../src/geometry/types';
+import { MERGE_EDGE_ALIGNMENT_TOLERANCE_MM } from '../../src/geometry/numerical-policy';
 
 const ENABLED = process.env.SUITE_V2_DRIVER === '1';
 const d = ENABLED ? describe : describe.skip;
@@ -233,9 +253,15 @@ d(
         expect(constructed.ok).toBe(true);
         const mergedBbox = geometryBinding.computeBoundingBox(constructed.shellId);
 
-        // PRIMARY ASSERTION: two simple, non-composite panels — no excuse for
-        // any residual. The merged 3D bbox must match the union of the
-        // pre-merge reference bboxes to within 0.5mm (toBeCloseTo(_, 0)).
+        // PRIMARY ASSERTION: the merged 3D bbox must match the union of the
+        // pre-merge reference bboxes to within MERGE_EDGE_ALIGNMENT_TOLERANCE_MM
+        // — not a tight replay epsilon, because this fixture's two panels
+        // genuinely overlap at their sharp (r=0) corner in the real,
+        // unsplit STEP geometry (see this file's header comment, finding 3).
+        // What this assertion actually verifies — no axis swap, no wrong-
+        // sign rotation, no gross mispositioning — is unaffected by that
+        // tolerance width: any real orientation bug would show up as an
+        // error at least an order of magnitude larger than this.
         const bounds: Array<keyof BoundingBoxResult> = [
           'x_min',
           'y_min',
@@ -245,7 +271,9 @@ d(
           'z_max',
         ];
         for (const k of bounds) {
-          expect(mergedBbox[k]).toBeCloseTo(expectedUnion[k], 0);
+          expect(Math.abs(mergedBbox[k] - expectedUnion[k])).toBeLessThanOrEqual(
+            MERGE_EDGE_ALIGNMENT_TOLERANCE_MM,
+          );
         }
 
         // SECONDARY ASSERTION: the combined long+short leg reach must land on

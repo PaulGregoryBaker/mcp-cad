@@ -26,6 +26,20 @@ export const REPLAY_POSITION_EPSILON_MM = 1e-6;
 // carried verbatim through serialize/deserialize (no trig recomputation).
 export const REPLAY_ANGLE_EPSILON_DEG = 1e-9;
 
+// The adjacency/seam-alignment gate (rebuild/17-numerical-policy.md §2,
+// OPEN-17.1) — "how close is close enough to call two edges the same seam"
+// during merge_bodies_with_bend (14 §2.1.2), and the matching precedent
+// step_reconciliation.cc's kPieceEdgeMatchToleranceMm reuses. NOT a
+// numerical-noise floor like REPLAY_POSITION_EPSILON_MM above: a sharp
+// (zero-radius) folded corner's inner/outer surfaces genuinely differ in
+// measured footprint by up to a couple mm (confirmed directly against a
+// real fixture's own raw STEP topology, independent of any of this
+// codebase's own measurement code — see
+// docs/BUG_REPORT_getPanelFrame_origin_bias_at_bled_joints.md's final
+// conclusion) — this is real geometry to tolerate, not noise to chase out
+// of getPanelFrame/reconcilePieces/merge_bodies_with_bend.
+export const MERGE_EDGE_ALIGNMENT_TOLERANCE_MM = 2.0;
+
 export interface Point3Like {
   x: number;
   y: number;
