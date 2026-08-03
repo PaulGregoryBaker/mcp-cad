@@ -42,6 +42,7 @@ import {
   optNullableBoolean,
 } from './helpers';
 import type { NestingResult } from '../jobs/queue';
+import type { NapiManufacturingProfile } from '../../geometry/types';
 
 export const graphToolDefinitions = [
   {
@@ -169,6 +170,11 @@ export const graphToolDefinitions = [
         max_thickness_mm: { type: 'number' },
         default_thickness_mm: { type: 'number' },
         max_recursion_depth: { type: 'number' },
+        profile: {
+          type: 'object',
+          description:
+            "The org's manufacturing profile — {profile_id?, name?, rules?: {default_bend_radius_mm, min_bend_radius_factor, ...}}, same shape the findings/manufacturability resource's ManufacturingProfile uses. reconcilePieces cannot measure a real bend radius from a flat-panel decomposition (only two flat faces meeting at a fold are ever seen), so every reconciled bend's radius_mm is assumed to equal rules.default_bend_radius_mm from this profile. Defaults to the built-in sheet-metal default profile (default_bend_radius_mm: 0, i.e. a sharp fold) when omitted.",
+        },
       },
       required: ['file'],
     },
@@ -678,6 +684,42 @@ function handleFuseBodies(store: GraphStore, args: Record<string, unknown>): { p
   }
 }
 
+/** import_part's optional `profile` arg, snake_case on the wire like every
+ * other v2 tool param — converts to the camelCase NapiManufacturingProfile
+ * shape evaluate-client.ts/the NAPI binding expect. Unknown/omitted fields
+ * are simply absent from the result; the C++ side's own ReadProfile only
+ * ever reads the fields it knows and defaults the rest. */
+function optManufacturingProfile(
+  args: Record<string, unknown>,
+  key: string,
+): NapiManufacturingProfile | undefined {
+  const val = args[key];
+  if (typeof val !== 'object' || val === null) return undefined;
+  const obj = val as Record<string, unknown>;
+  const profile: NapiManufacturingProfile = {};
+  if (typeof obj['profile_id'] === 'string') profile.profileId = obj['profile_id'];
+  if (typeof obj['name'] === 'string') profile.name = obj['name'];
+  const rulesVal = obj['rules'];
+  if (typeof rulesVal === 'object' && rulesVal !== null) {
+    const rules = rulesVal as Record<string, unknown>;
+    const out: NonNullable<NapiManufacturingProfile['rules']> = {};
+    const copyD = (snakeKey: string, camelKey: keyof NonNullable<NapiManufacturingProfile['rules']>) => {
+      const v = rules[snakeKey];
+      if (typeof v === 'number' && Number.isFinite(v)) out[camelKey] = v;
+    };
+    copyD('min_bend_radius_factor', 'minBendRadiusFactor');
+    copyD('max_bend_angle_deg', 'maxBendAngleDeg');
+    copyD('default_bend_radius_mm', 'defaultBendRadiusMm');
+    copyD('min_hole_diameter_factor', 'minHoleDiameterFactor');
+    copyD('min_hole_to_bend_clearance_mm', 'minHoleToBendClearanceMm');
+    copyD('min_hole_to_edge_clearance_mm', 'minHoleToEdgeClearanceMm');
+    copyD('min_hole_to_hole_distance_mm', 'minHoleToHoleDistanceMm');
+    copyD('min_flange_width_factor', 'minFlangeWidthFactor');
+    profile.rules = out;
+  }
+  return profile;
+}
+
 function handleImportPart(
   store: GraphStore,
   args: Record<string, unknown>,
@@ -695,6 +737,7 @@ function handleImportPart(
   const maxThicknessMm = optNumber(args, 'max_thickness_mm');
   const defaultThicknessMm = optNumber(args, 'default_thickness_mm');
   const maxRecursionDepth = optNumber(args, 'max_recursion_depth');
+  const profile = optManufacturingProfile(args, 'profile');
 
   try {
     const result = importPart(store, file, {
@@ -702,6 +745,7 @@ function handleImportPart(
       maxThicknessMm,
       defaultThicknessMm,
       maxRecursionDepth,
+      profile,
     });
     return {
       part_id: result.partId,

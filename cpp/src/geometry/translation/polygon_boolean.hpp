@@ -88,11 +88,15 @@ PolygonBooleanResult PolygonDifference(const std::vector<Point2>& ringA,
 // geometric computation in TypeScript, not even pure math") they belong
 // here, not in GraphStore.fuseBodies. Internally: transforms B's outline by
 // anchorA.Inverse().Compose(anchorB), verifies every resulting point's z is
-// ~0 (coplanar with A's own z=0 flat frame) within kCoplanarToleranceMm, then
-// calls PolygonUnion with the projected (x,y) ring.
+// ~0 (coplanar with A's own z=0 flat frame) within
+// max(kCoplanarToleranceMm, thicknessMm), then calls PolygonUnion with the
+// projected (x,y) ring. thicknessMm is the thinner of the two parts' own
+// material thickness (the caller's choice) — real STEP-import misalignment
+// well under a panel's own thickness is not a defect worth rejecting.
 PolygonBooleanResult FuseCoplanarParts(const std::vector<Point2>& outlineA,
                                         const Transform3& anchorA,
                                         const std::vector<Point2>& outlineB,
-                                        const Transform3& anchorB);
+                                        const Transform3& anchorB,
+                                        double thicknessMm);
 
 }  // namespace mcp_cad::translation

@@ -200,6 +200,38 @@ TEST_CASE("ReconcilePieces: 3-piece U-channel reproduces true 3D positions at de
   }
 }
 
+TEST_CASE("ReconcilePieces: defaultBendRadiusMm is stamped onto every bend without "
+          "perturbing which pivot side reconciliation finds",
+          "[translation][step_reconciliation]") {
+  auto pieces = MakeLBracket();
+
+  // Default (0.0, matching the historical sharp-fold assumption) round-trips
+  // to the exact positions the un-parameterized overload always produced.
+  auto baseline = ReconcilePieces(pieces, 1.0);
+  REQUIRE(baseline.ok);
+  REQUIRE(baseline.graph.bends.size() == 1);
+  CHECK(baseline.graph.bends[0].radiusMm == Approx(0.0));
+  bool bottomIsConcave = baseline.graph.bends[0].bottomIsConcave.value_or(true);
+
+  // A nonzero org-profile default must NOT change reconciliation's own
+  // success/failure or which pivot side it finds — only the stamped
+  // radiusMm on the output — since the pivot search always reconciles the
+  // TRUE (always sharp/flush) measured geometry, never the assumed radius
+  // (see step_reconciliation.cc's own comment on this design).
+  auto withRadius = ReconcilePieces(pieces, 1.0, /*defaultBendRadiusMm=*/1.5);
+  REQUIRE(withRadius.ok);
+  REQUIRE(withRadius.graph.bends.size() == 1);
+  CHECK(withRadius.graph.bends[0].radiusMm == Approx(1.5));
+  CHECK(withRadius.graph.bends[0].bottomIsConcave.value_or(true) == bottomIsConcave);
+  CHECK(withRadius.graph.bends[0].angleDeg == Approx(baseline.graph.bends[0].angleDeg));
+  CHECK(withRadius.graph.outline.outer.size() == baseline.graph.outline.outer.size());
+
+  // graphs[0] (the caller-facing entry) must carry the same stamped value.
+  REQUIRE(withRadius.graphs.size() >= 1);
+  REQUIRE(withRadius.graphs[0].bends.size() == 1);
+  CHECK(withRadius.graphs[0].bends[0].radiusMm == Approx(1.5));
+}
+
 TEST_CASE("ReconcilePieces: two pieces with no shared edge is a typed error",
           "[translation][step_reconciliation]") {
   auto pieces = MakeLBracket();

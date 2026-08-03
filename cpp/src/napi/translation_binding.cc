@@ -725,11 +725,11 @@ Napi::Value PolygonDifferenceBinding(const Napi::CallbackInfo& info) {
 
 Napi::Value FuseCoplanarPartsBinding(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  if (info.Length() < 4 || !info[0].IsArray() || !info[1].IsObject() || !info[2].IsArray() ||
-      !info[3].IsObject()) {
+  if (info.Length() < 5 || !info[0].IsArray() || !info[1].IsObject() || !info[2].IsArray() ||
+      !info[3].IsObject() || !info[4].IsNumber()) {
     Napi::TypeError::New(
         env, "fuseCoplanarParts(outlineA: Point2[], anchorA: Transform3, outlineB: "
-             "Point2[], anchorB: Transform3)")
+             "Point2[], anchorB: Transform3, thicknessMm: number)")
         .ThrowAsJavaScriptException();
     return env.Undefined();
   }
@@ -738,8 +738,9 @@ Napi::Value FuseCoplanarPartsBinding(const Napi::CallbackInfo& info) {
     Transform3 anchorA = ReadTransform3(info[1].As<Napi::Object>());
     std::vector<Point2> outlineB = ReadPoint2Array(info[2].As<Napi::Array>());
     Transform3 anchorB = ReadTransform3(info[3].As<Napi::Object>());
+    double thicknessMm = info[4].As<Napi::Number>().DoubleValue();
     PolygonBooleanResult result =
-        translation::FuseCoplanarParts(outlineA, anchorA, outlineB, anchorB);
+        translation::FuseCoplanarParts(outlineA, anchorA, outlineB, anchorB, thicknessMm);
     return WritePolygonBooleanResult(env, result);
   } catch (const std::exception& e) {
     Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
@@ -806,18 +807,33 @@ Napi::Value PreparePolygonCutBinding(const Napi::CallbackInfo& info) {
   }
 }
 
+// Defined below (evaluateFindings section) — same anonymous namespace, so
+// forward-declaring here to reuse it rather than writing a second profile
+// parser (ReconcilePiecesBinding's optional 3rd arg uses the identical
+// {profileId, name, rules: {...}} shape evaluateFindings already accepts).
+namespace {
+validation::ManufacturingProfile ReadProfile(const Napi::Object& obj);
+}  // namespace
+
 Napi::Value ReconcilePiecesBinding(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   if (info.Length() < 2 || !info[0].IsArray() || !info[1].IsNumber()) {
-    Napi::TypeError::New(env, "reconcilePieces(pieces: PanelPieceSpec[], thicknessMm: number)")
+    Napi::TypeError::New(
+        env, "reconcilePieces(pieces: PanelPieceSpec[], thicknessMm: number, "
+             "profile?: ManufacturingProfile)")
         .ThrowAsJavaScriptException();
     return env.Undefined();
   }
   try {
     std::vector<PanelPieceSpec> pieces = ReadPanelPieceSpecArray(info[0].As<Napi::Array>());
     double thicknessMm = info[1].As<Napi::Number>().DoubleValue();
+    double defaultBendRadiusMm = 0.0;
+    if (info.Length() >= 3 && info[2].IsObject()) {
+      defaultBendRadiusMm = ReadProfile(info[2].As<Napi::Object>()).defaultBendRadiusMm;
+    }
 
-    ReconcilePiecesResult result = translation::ReconcilePieces(pieces, thicknessMm);
+    ReconcilePiecesResult result =
+        translation::ReconcilePieces(pieces, thicknessMm, defaultBendRadiusMm);
     return WriteReconcilePiecesResult(env, result);
   } catch (const std::exception& e) {
     Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
@@ -846,6 +862,7 @@ validation::ManufacturingProfile ReadProfile(const Napi::Object& obj) {
     };
     readD("minBendRadiusFactor", profile.minBendRadiusFactor);
     readD("maxBendAngleDeg", profile.maxBendAngleDeg);
+    readD("defaultBendRadiusMm", profile.defaultBendRadiusMm);
     readD("minHoleDiameterFactor", profile.minHoleDiameterFactor);
     readD("minHoleToBendClearanceMm", profile.minHoleToBendClearanceMm);
     readD("minHoleToEdgeClearanceMm", profile.minHoleToEdgeClearanceMm);

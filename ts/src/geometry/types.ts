@@ -832,6 +832,7 @@ export interface NapiManufacturingProfile {
   rules?: {
     minBendRadiusFactor?: number;
     maxBendAngleDeg?: number;
+    defaultBendRadiusMm?: number;
     minHoleDiameterFactor?: number;
     minHoleToBendClearanceMm?: number;
     minHoleToEdgeClearanceMm?: number;

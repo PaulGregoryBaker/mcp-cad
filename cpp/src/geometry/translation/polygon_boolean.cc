@@ -222,12 +222,17 @@ PolygonBooleanResult PolygonDifference(const std::vector<Point2>& ringA,
 PolygonBooleanResult FuseCoplanarParts(const std::vector<Point2>& outlineA,
                                         const Transform3& anchorA,
                                         const std::vector<Point2>& outlineB,
-                                        const Transform3& anchorB) {
+                                        const Transform3& anchorB,
+                                        double thicknessMm) {
   // Same tolerance family as this module's own kBooleanFuzzMm-adjacent
   // precedents (rebuild/17-numerical-policy.md §2.1) — how far out of true
   // coplanarity two independently-anchored parts may sit and still be
-  // treated as "the same plane" for fusing.
+  // treated as "the same plane" for fusing. Widened to the parts' own
+  // material thickness when that's larger than the base floor: real
+  // STEP-import misalignment well under a panel's own thickness is expected
+  // noise, not a defect (docs/BUG_REPORT_fuse_bodies_coplanar_tolerance_too_strict.md).
   constexpr double kCoplanarToleranceMm = 0.05;
+  const double coplanarToleranceMm = std::max(kCoplanarToleranceMm, thicknessMm);
 
   // B's outline lives in B's own flat frame (z=0 there); embed each point at
   // z=0, map into WORLD via anchorB, then into A's LOCAL frame via
@@ -240,12 +245,12 @@ PolygonBooleanResult FuseCoplanarParts(const std::vector<Point2>& outlineA,
   ringBInA.reserve(outlineB.size());
   for (const auto& p : outlineB) {
     Point3 inA = bToA.Apply({p.x, p.y, 0.0});
-    if (std::fabs(inA.z) > kCoplanarToleranceMm) {
+    if (std::fabs(inA.z) > coplanarToleranceMm) {
       PolygonBooleanResult result;
       result.errorCode = PolygonBooleanErrorCode::kNotCoplanar;
       result.message = "part B's outline, transformed into part A's frame, is " +
                         std::to_string(inA.z) + "mm out of A's own z=0 plane (tolerance " +
-                        std::to_string(kCoplanarToleranceMm) + "mm) — not coplanar";
+                        std::to_string(coplanarToleranceMm) + "mm) — not coplanar";
       return result;
     }
     ringBInA.push_back({inA.x, inA.y});

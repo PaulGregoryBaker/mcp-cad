@@ -347,7 +347,11 @@ export interface GeometryAddon {
   ): ReconcileOutlinesResult;
 
   // ── Phase 5 Slice 5: ingest STEP -> graph piece reconciliation ────────────
-  reconcilePieces?(pieces: NapiPanelPieceSpec[], thicknessMm: number): ReconcilePiecesResult;
+  reconcilePieces?(
+    pieces: NapiPanelPieceSpec[],
+    thicknessMm: number,
+    profile?: NapiManufacturingProfile,
+  ): ReconcilePiecesResult;
 
   // ── Phase 5 Slice 6: fuse_bodies / remove_protrusions polygon boolean ─────
   polygonUnion?(ringA: NapiPoint2[], ringB: NapiPoint2[]): PolygonBooleanResult;
@@ -357,6 +361,7 @@ export interface GeometryAddon {
     anchorA: NapiTransform3,
     outlineB: NapiPoint2[],
     anchorB: NapiTransform3,
+    thicknessMm: number,
   ): PolygonBooleanResult;
 
   // ── Phase 5 Slice 9a: cut_panel(kind=circle|polygon) ──────────────────────
@@ -1372,12 +1377,16 @@ export class GeometryBinding {
     }
   }
 
-  reconcilePieces(pieces: NapiPanelPieceSpec[], thicknessMm: number): ReconcilePiecesResult {
+  reconcilePieces(
+    pieces: NapiPanelPieceSpec[],
+    thicknessMm: number,
+    profile?: NapiManufacturingProfile,
+  ): ReconcilePiecesResult {
     if (!this.addon.reconcilePieces) {
       throw new Error('Geometry addon does not expose reconcilePieces');
     }
     try {
-      return this.addon.reconcilePieces(pieces, thicknessMm);
+      return this.addon.reconcilePieces(pieces, thicknessMm, profile);
     } catch (err) {
       throw toStructuredError(err);
     }
@@ -1410,12 +1419,13 @@ export class GeometryBinding {
     anchorA: NapiTransform3,
     outlineB: NapiPoint2[],
     anchorB: NapiTransform3,
+    thicknessMm: number,
   ): PolygonBooleanResult {
     if (!this.addon.fuseCoplanarParts) {
       throw new Error('Geometry addon does not expose fuseCoplanarParts');
     }
     try {
-      return this.addon.fuseCoplanarParts(outlineA, anchorA, outlineB, anchorB);
+      return this.addon.fuseCoplanarParts(outlineA, anchorA, outlineB, anchorB, thicknessMm);
     } catch (err) {
       throw toStructuredError(err);
     }

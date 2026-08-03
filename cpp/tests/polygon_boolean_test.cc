@@ -135,7 +135,7 @@ TEST_CASE("FuseCoplanarParts: B's own-frame outline, translated into A's world-c
   Transform3 anchorB = Transform3::Translation(10.0, 0.0, 0.0);
   auto outlineB = Rect(0, 0, 10, 5);
 
-  auto result = FuseCoplanarParts(outlineA, anchorA, outlineB, anchorB);
+  auto result = FuseCoplanarParts(outlineA, anchorA, outlineB, anchorB, 0.0);
   REQUIRE(result.ok);
   CHECK(PolygonArea(result.outer) == Approx(100.0));
 }
@@ -150,7 +150,29 @@ TEST_CASE("FuseCoplanarParts: a part anchored on a different plane is a typed co
   Transform3 anchorB = Transform3::RotationAboutAxis({10.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, 90.0);
   auto outlineB = Rect(0, 0, 10, 5);
 
-  auto result = FuseCoplanarParts(outlineA, anchorA, outlineB, anchorB);
+  auto result = FuseCoplanarParts(outlineA, anchorA, outlineB, anchorB, 0.0);
   REQUIRE_FALSE(result.ok);
   CHECK(result.errorCode == PolygonBooleanErrorCode::kNotCoplanar);
+}
+
+TEST_CASE("FuseCoplanarParts: a z-offset within the parts' own thickness is accepted, "
+          "the same offset with zero thickness is rejected",
+          "[translation][polygon_boolean]") {
+  // A sits at the world origin, identity anchor, 10x5 rectangle.
+  Transform3 anchorA = Transform3::Identity();
+  auto outlineA = Rect(0, 0, 10, 5);
+
+  // B sits 0.5mm out of A's plane — well under real STEP-import
+  // misalignment for 0.9mm-thick material, per
+  // docs/BUG_REPORT_fuse_bodies_coplanar_tolerance_too_strict.md's own repro.
+  Transform3 anchorB = Transform3::Translation(10.0, 0.0, 0.5);
+  auto outlineB = Rect(0, 0, 10, 5);
+
+  auto thickResult = FuseCoplanarParts(outlineA, anchorA, outlineB, anchorB, 0.9);
+  REQUIRE(thickResult.ok);
+  CHECK(PolygonArea(thickResult.outer) == Approx(100.0));
+
+  auto thinResult = FuseCoplanarParts(outlineA, anchorA, outlineB, anchorB, 0.0);
+  REQUIRE_FALSE(thinResult.ok);
+  CHECK(thinResult.errorCode == PolygonBooleanErrorCode::kNotCoplanar);
 }

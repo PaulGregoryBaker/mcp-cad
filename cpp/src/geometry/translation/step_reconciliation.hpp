@@ -120,7 +120,16 @@ struct ReconcilePiecesResult {
   std::vector<PieceEdgeMatch> pieceEdgeMatches;
 };
 
+// defaultBendRadiusMm: the org's assumed inside bend radius (absolute mm,
+// ManufacturingProfile::defaultBendRadiusMm — rebuild's profile-driven
+// pattern, same as evaluateFindings' own ManufacturingProfile parameter).
+// No radius is directly measurable from a flat-panel decomposition (this
+// module only ever sees two flat faces meeting at a fold, never a curved
+// transition), so every reconciled bend is assumed to share this one
+// caller-supplied radius. Default 0.0 preserves this module's original
+// sharp-fold assumption exactly.
 ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
-                                       double thicknessMm);
+                                       double thicknessMm,
+                                       double defaultBendRadiusMm = 0.0);
 
 }  // namespace mcp_cad::translation

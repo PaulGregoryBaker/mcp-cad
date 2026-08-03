@@ -170,7 +170,8 @@ bool HasSelfIntersection(const std::vector<Point2>& ring) {
 }  // namespace
 
 ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
-                                       double thicknessMm) {
+                                       double thicknessMm,
+                                       double defaultBendRadiusMm) {
   ReconcilePiecesResult result;
   const size_t n = pieces.size();
   if (n < 1) {
@@ -601,6 +602,19 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
       return cand;
     };
 
+    // The pivot search is ALWAYS at radiusMm=0 — the true fact reconciled
+    // here is a sharp, zero-gap fold (this module's own documented scope,
+    // see header comment); a flat-panel decomposition never measures a
+    // real bend radius (only two flat faces meeting at a fold are ever
+    // seen), so there is nothing else to search over. defaultBendRadiusMm
+    // (the org's ManufacturingProfile assumption) is deliberately NOT used
+    // here: coupling the search to it would make reconciliation of
+    // genuinely-flush measured geometry spuriously fail for any nonzero
+    // default (self-consistency below can only ever hold at the TRUE
+    // pivot). It is stamped onto bend.radiusMm separately, after Step 7's
+    // replay validation confirms this reconciliation's own construction is
+    // sound — see that stamping pass's own comment for why decoupling the
+    // two is correct, not a masked inconsistency.
     FoldCandidate winner = tryPivotZ(0.0, /*bottomIsConcave=*/true);
     if (!winner.ok) winner = tryPivotZ(thicknessMm, /*bottomIsConcave=*/false);
     if (!winner.ok) {
@@ -622,12 +636,15 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
     bend.hingeA = hingeALocal;
     bend.hingeB = hingeBLocal;
     bend.angleDeg = angleDeg;
-    // Radius matches the pivot: z=0 (concave, fold touches inner surface)
-    // → radiusMm=0; z=thicknessMm (convex, fold offset from outer surface)
-    // → radiusMm=thicknessMm.  This is the geometric fold radius derived
-    // from the measured piece positions, not a manufacturing constraint —
-    // merge_bodies_with_bend applies its own >=thickness validation.
-    bend.radiusMm = winner.bottomIsConcave ? 0.0 : thicknessMm;
+    // 0.0 on BOTH branches — matches the r=0 pivot search above exactly
+    // (concave: pivotZ=-0=0; convex: pivotZ=0+thicknessMm=thicknessMm),
+    // unlike the old convex-branch value of thicknessMm, which did not
+    // round-trip through Evaluate()'s own BottomRadiusMm formula (would
+    // recompute rBottom=thicknessMm+thicknessMm, not thicknessMm). Replaced
+    // with the profile's assumed defaultBendRadiusMm in a final pass below,
+    // once Step 7 has confirmed this (r=0-consistent) reconciliation itself
+    // is sound.
+    bend.radiusMm = 0.0;
     bend.kFactor = 0.0;
     bend.bottomIsConcave = winner.bottomIsConcave;
     graph.bends.push_back(bend);
@@ -728,6 +745,25 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
         return result;
       }
     }
+  }
+
+  // Stamp the org's assumed bend radius onto every bend NOW, only after the
+  // replay above has confirmed this reconciliation's own construction
+  // (edge matching, splice, pivot side) is sound at the TRUE r=0 pivot —
+  // never before, and never fed back into the search or replay themselves
+  // (see the pivot-search comment above for why coupling the two would
+  // make reconciliation of genuinely-flush measured geometry spuriously
+  // fail for any nonzero default). No radius is directly measurable from a
+  // flat-panel decomposition, so this is a deliberate, bounded
+  // approximation — like the sharp-corner discrepancies this module
+  // already tolerates elsewhere (kPieceEdgeMatchToleranceMm/
+  // kSelfConsistencyToleranceMm) — not a masked defect: a caller that
+  // later re-Evaluate()s this graph gets a solid built from the ASSUMED
+  // radius, consistent with every other v2 Part's own semantics (a bend's
+  // radiusMm is always a manufacturing fact/assumption applied on top of a
+  // flat pattern, never re-derived from 3D each time).
+  for (auto& bend : graph.bends) {
+    bend.radiusMm = defaultBendRadiusMm;
   }
 
   result.ok = true;

@@ -310,6 +310,7 @@ export function fuseBodies(store: GraphStore, input: FuseBodiesInput): { part: P
     partA.anchor,
     partB.outline,
     partB.anchor,
+    Math.min(partA.thicknessMm, partB.thicknessMm),
   );
   if (!fused.ok) {
     throwError(
@@ -441,6 +442,13 @@ export interface ImportPartOptions {
   maxThicknessMm?: number;
   defaultThicknessMm?: number;
   maxRecursionDepth?: number;
+  /** The org's manufacturing profile — same shape/default as evaluateFindings'
+   * own optional profile parameter (DEFAULT_MANUFACTURING_PROFILE below).
+   * reconcilePieces cannot measure a real bend radius from a flat-panel
+   * decomposition (only two flat faces meeting at a fold are ever seen), so
+   * every reconciled bend is assumed to share this profile's own
+   * rules.defaultBendRadiusMm. */
+  profile?: NapiManufacturingProfile;
 }
 
 export interface ImportPartResult {
@@ -489,6 +497,7 @@ export function importPart(
   filePath: string,
   options: ImportPartOptions = {},
 ): ImportPartResult {
+  const profile = options.profile ?? DEFAULT_MANUFACTURING_PROFILE;
   const solidId = geometryBinding.loadStep(filePath);
   geometryBinding.healGeometryEx(solidId, true, true);
 
@@ -555,7 +564,7 @@ export function importPart(
   // under-measured), so the true material thickness is never larger than
   // the smallest honestly-measured panel.
   const thicknessMm = Math.min(...pieces.map((p) => p.thicknessMm));
-  const reconciled = geometryBinding.reconcilePieces(pieces, thicknessMm);
+  const reconciled = geometryBinding.reconcilePieces(pieces, thicknessMm, profile);
   if (!reconciled.ok) {
     throwError(
       (reconciled.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
@@ -632,7 +641,7 @@ export function importPart(
       ringLocal: frame.ring,
       thicknessMm,
     };
-    const reconciledProtrusion = geometryBinding.reconcilePieces([piece], thicknessMm);
+    const reconciledProtrusion = geometryBinding.reconcilePieces([piece], thicknessMm, profile);
     if (!reconciledProtrusion.ok) {
       throwError(
         (reconciledProtrusion.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
@@ -759,6 +768,7 @@ export const DEFAULT_MANUFACTURING_PROFILE: NapiManufacturingProfile = {
   rules: {
     minBendRadiusFactor: 1.0,
     maxBendAngleDeg: 180.0,
+    defaultBendRadiusMm: 0.0,
     minHoleDiameterFactor: 1.0,
     minHoleToBendClearanceMm: 2.0,
     minHoleToEdgeClearanceMm: 1.5,

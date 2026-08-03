@@ -23,6 +23,14 @@ struct ManufacturingProfile {
   double minBendRadiusFactor = 1.0;       // min radius ≥ factor × thickness
   double maxBendAngleDeg = 180.0;         // angle must be in [0, max]
 
+  // Absolute mm, not a thickness factor — real tooling has a roughly fixed
+  // inside bend radius that doesn't scale with every part's own thickness.
+  // Used by translation::ReconcilePieces as the assumed radius for bends
+  // measured during STEP import (no radius is directly measurable from a
+  // flat-panel decomposition — see step_reconciliation.cc). Default 0.0
+  // preserves the pre-profile behavior for concave-pivot bends exactly.
+  double defaultBendRadiusMm = 0.0;
+
   // ── Hole rules ──────────────────────────────────────────────────────────
   double minHoleDiameterFactor = 1.0;     // min diameter ≥ factor × thickness
   double minHoleToBendClearanceMm = 2.0;  // absolute mm — hole edge to hinge
