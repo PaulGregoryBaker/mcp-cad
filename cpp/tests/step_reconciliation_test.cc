@@ -200,6 +200,48 @@ TEST_CASE("ReconcilePieces: 3-piece U-channel reproduces true 3D positions at de
   }
 }
 
+TEST_CASE("ReconcilePieces: a leftover component of 2+ pieces sharing a real edge is "
+          "grouped into ONE graph with a bend, not emitted as separate singleton pieces",
+          "[translation][step_reconciliation]") {
+  // Main component: an ordinary 2-piece L-bracket (piece0, piece1).
+  auto pieces = MakeLBracket();
+
+  // Leftover component: a SECOND, independent L-bracket (piece2, piece3),
+  // built the same way but translated far away in world space — shares no
+  // edge with the main component, but piece2/piece3 DO share a real edge
+  // with EACH OTHER, exactly like testcube.step's own pieces 6+8
+  // (docs/BUG_REPORT_disconnected_components_not_grouped.md).
+  auto leftoverPair = MakeLBracket();
+  const Point3 offset{1000.0, 0.0, 0.0};
+  for (auto& piece : leftoverPair) {
+    piece.origin = {piece.origin.x + offset.x, piece.origin.y + offset.y,
+                     piece.origin.z + offset.z};
+  }
+  pieces.push_back(leftoverPair[0]);  // piece2
+  pieces.push_back(leftoverPair[1]);  // piece3
+
+  auto result = ReconcilePieces(pieces, 1.0);
+  INFO("errorCode=" << static_cast<int>(result.errorCode) << " message=" << result.message);
+  REQUIRE(result.ok);
+
+  // Main graph unaffected by the leftover pieces' presence.
+  CHECK(result.graph.bends.size() == 1);
+  CHECK(result.graph.rootRegionPanelId == "piece0");
+
+  // Exactly ONE leftover entry (the grouped pair), not two singletons —
+  // the actual bug this fix addresses.
+  REQUIRE(result.graphs.size() == 2);
+  const PartGraphSpec& leftoverGraph = result.graphs[1];
+  CHECK(leftoverGraph.bends.size() == 1);
+  CHECK((leftoverGraph.rootRegionPanelId == "piece2" || leftoverGraph.rootRegionPanelId == "piece3"));
+
+  // The grouped leftover component round-trips through Evaluate() exactly
+  // like the main component does — it went through the SAME reconciliation.
+  EvaluateResult leftoverLayout = Evaluate(leftoverGraph);
+  REQUIRE(leftoverLayout.ok);
+  CHECK(leftoverLayout.panels.size() == 2);
+}
+
 TEST_CASE("ReconcilePieces: defaultBendRadiusMm is stamped onto every bend without "
           "perturbing which pivot side reconciliation finds",
           "[translation][step_reconciliation]") {
@@ -232,15 +274,24 @@ TEST_CASE("ReconcilePieces: defaultBendRadiusMm is stamped onto every bend witho
   CHECK(withRadius.graphs[0].bends[0].radiusMm == Approx(1.5));
 }
 
-TEST_CASE("ReconcilePieces: two pieces with no shared edge is a typed error",
+TEST_CASE("ReconcilePieces: two pieces with no shared edge become two standalone "
+          "solo-graph parts, not a hard error",
           "[translation][step_reconciliation]") {
+  // Since commit 4f89251 ("ReconcilePieces handles disconnected components
+  // gracefully"), a piece sharing no measured edge with anything else is no
+  // longer a hard failure — it's surfaced as its own standalone one-piece
+  // part (kDisconnectedPieces is retired/unused; see step_reconciliation.hpp).
   auto pieces = MakeLBracket();
   // Move piece1 far away so no edge matches.
   pieces[1].origin = {1000, 1000, 1000};
 
   auto result = ReconcilePieces(pieces, 1.0);
-  REQUIRE_FALSE(result.ok);
-  CHECK(result.errorCode == ReconcileErrorCode::kDisconnectedPieces);
+  INFO("errorCode=" << static_cast<int>(result.errorCode) << " message=" << result.message);
+  REQUIRE(result.ok);
+  CHECK(result.graph.bends.empty());
+  REQUIRE(result.graphs.size() == 2);
+  CHECK(result.graphs[0].bends.empty());
+  CHECK(result.graphs[1].bends.empty());
 }
 
 TEST_CASE("ReconcilePieces: a malformed (non-orthonormal) piece frame is a typed error",

@@ -1,7 +1,19 @@
 # Bug Report: disconnected import pieces are emitted as N independent singleton parts instead of grouping mutually-connected leftovers together
 
-**Status:** Ready for triage — root cause pinpointed to an exact, already-computed-but-discarded
-value
+**Status:** Fixed (2026-08-05, working tree — not yet committed). `ReconcilePieces`'s
+per-component reconciliation (BFS + bend derivation + recursive boundary trace + Evaluate()
+replay validation) was factored out into a reusable `reconcileComponent` lambda, applied once
+for the main graph and once per leftover connected component of 2+ pieces (previously only the
+main graph got this treatment; leftover components were emitted as one singleton part per
+piece regardless of size). Components of size 1 still fall back to a solo graph, and a
+leftover component that fails its own reconciliation (e.g. a coarse edge-match that isn't
+actually a valid rigid fold) falls back to solo graphs for just that component rather than
+failing the whole import. New regression test: "a leftover component of 2+ pieces sharing a
+real edge is grouped into ONE graph with a bend, not emitted as separate singleton pieces"
+(`cpp/tests/step_reconciliation_test.cc`). Verified: C++ `ctest` 175 cases, same 2
+pre-existing unrelated failures as baseline (0 regressions); TS `v2` integration suite 172
+passed / 3 pre-existing unrelated failures / 1 skipped, including all cauldron/testcube
+fixtures.
 **Date:** 2026-07-31
 **Component:** `cpp/src/geometry/translation/step_reconciliation.cc`, `ReconcilePieces` — the
 disconnected-piece emission loop. **This is a C++-layer fix** — the grouping data already

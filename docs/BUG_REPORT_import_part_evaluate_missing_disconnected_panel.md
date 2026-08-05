@@ -1,6 +1,11 @@
 # Bug Report: `ReconcilePieces`'s post-build validation loop wasn't updated for disconnected-component support
 
-**Status:** Ready for triage — root cause confirmed, fix identified, not yet applied
+**Status:** Fixed — commit `09fb9fb` ("reconcilePieces — disconnected components +
+largest-component root selection"), same day as this report. Verified still present and
+correct as of 2026-08-05 (`step_reconciliation.cc`'s Evaluate()-replay validation loop guards
+on `bfsOrder`, a component-local piece list, so unvisited/disconnected pieces are never
+checked against the main graph's layout). Status line was never updated when the fix landed —
+corrected retroactively.
 **Date:** 2026-07-30
 **Component:** `cpp/src/geometry/translation/step_reconciliation.cc`, `ReconcilePieces`
 (the `Evaluate()`-replay validation loop, step 7)
