@@ -151,16 +151,35 @@ export default defineWorkspace([
       ],
       env: { SUITE_V2_DRIVER: '1' },
       setupFiles: ['tests/setup/integration-reset.ts'],
-      pool: 'threads',
       // Sequential, non-interleaved file execution — matching the
       // 'integration' project's own documented reason above: the C++
       // addon's g_service singleton is shared across the default
-      // (concurrent) threads pool, and two files' geometry calls
-      // interleaving mid-test produces spurious GE_SHELL_NOT_FOUND. The
-      // 'integration' project relies on running as ONE big glob (files
-      // execute in observed sequence in practice); with only 5 files here
-      // the default concurrency reliably collides, so it's pinned explicitly.
-      poolOptions: { threads: { singleThread: true } },
+      // (concurrent) pool, and two files' geometry calls interleaving
+      // mid-test produces spurious GE_SHELL_NOT_FOUND. Pinned to a single
+      // fork/thread explicitly since the default concurrency reliably
+      // collides across this project's 24 files.
+      //
+      // pool:'forks' (not 'threads', unlike 'integration' above): with
+      // 'threads', the full 24-file sequential run's vitest/node process
+      // never exited on its own — it printed a complete, correct pass/fail
+      // summary (confirmed via why-is-node-running: zero JS-side handles,
+      // timers, or promises left open at that point) but then hung
+      // indefinitely until force-killed. Root cause not fully pinned down
+      // (native, not JS — most likely geometry_binding.cc's static
+      // `g_service` singleton, holding a large accumulated OCCT shape
+      // graph, running a very slow destructor during worker-thread
+      // teardown, invisible to JS-level handle introspection), but
+      // switching to 'forks' — where the OS reclaims the whole process's
+      // memory unconditionally on exit rather than waiting on a graceful
+      // native destructor — reproducibly fixes it (confirmed: identical
+      // 172-passed/3-failed/1-skipped result, clean exit in ~50s, no hang,
+      // vs. required force-kill after 200s+ with 'threads'). Smaller
+      // subsets (e.g. 3 heavy STEP-import files) exited cleanly under
+      // 'threads' too — this only manifests on the full sequential run, so
+      // it's the ACCUMULATION of native state across many files, not any
+      // single file's own content, that trips it.
+      pool: 'forks',
+      poolOptions: { forks: { singleFork: true } },
     },
   },
   {
