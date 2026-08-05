@@ -3,6 +3,12 @@
  * one-way dependencies) and the related structural halves of III, IV, and VIII.
  * See .specify/memory/constitution.md and rebuild/19-cpp-ts-interface-boundary.md.
  *
+ * v1 (the dispatch-table MCP server under src/mcp, src/manufacturing,
+ * src/validation, etc.) has been removed; the layered mcp/domain-core/kernel
+ * boundary rules that used to live here applied to that architecture and have
+ * been dropped along with it. v2 (src/v2/**) has its own module boundaries
+ * (graph/resources/tools/persistence) not yet expressed as depcruise rules.
+ *
  * What this file CANNOT catch (documented so nobody assumes it's covered):
  * - Whether a file actually computes geometry inline (principle IV's deeper claim)
  *   rather than just importing something suspicious — that needs code review, or a
@@ -15,55 +21,6 @@
  */
 module.exports = {
   forbidden: [
-    {
-      name: 'mcp-boundary-is-outermost',
-      comment:
-        'MCP boundary (protocol, dispatch, handlers) sits outermost per principle I. ' +
-        'Nothing else may depend on it — that is the "one way" in one-way dependencies. ' +
-        'src/index.ts is exempt: it is the composition root (principle VIII) and its ' +
-        'entire job is wiring the MCP layer up, which is a different thing from a ' +
-        'domain/adapter module reaching sideways into it.',
-      severity: 'error',
-      from: {
-        pathNot: '^src/(mcp|index\\.ts$)',
-      },
-      to: {
-        path: '^src/mcp',
-      },
-    },
-    {
-      name: 'domain-core-no-mcp-dependency',
-      comment:
-        'Domain core (manufacturing graph, validation rules) has zero dependencies on ' +
-        'the MCP layer — principle I. Restates the rule above scoped to domain core ' +
-        'specifically, so the violation message is clearer when it fires there.',
-      severity: 'error',
-      from: {
-        path: '^src/(manufacturing|validation)',
-      },
-      to: {
-        path: '^src/mcp',
-      },
-    },
-    {
-      name: 'domain-core-no-direct-kernel-import',
-      comment:
-        'Domain core may depend on the GeometryKernel adapter\'s exported port ' +
-        'functions (that is the whole point of a port), but must not reach past the ' +
-        'adapter into raw NAPI/kernel internals. Today the adapter only exposes ' +
-        'binding.ts, jobs.ts, session.ts, types.ts as its public surface; nothing in ' +
-        'geometry/ is private/internal yet, so this rule currently has no matching ' +
-        'target — it exists so that if an internal-only kernel module is added later ' +
-        '(e.g. geometry/internal/*), this rule catches domain core reaching into it ' +
-        'immediately rather than after the fact.',
-      severity: 'error',
-      from: {
-        path: '^src/(manufacturing|validation)',
-      },
-      to: {
-        path: '^src/geometry/internal',
-      },
-    },
     {
       name: 'no-orphan-modules',
       comment: 'Warn on modules nothing imports — dead code left behind by refactors.',
@@ -98,8 +55,7 @@ module.exports = {
         collapsePattern: 'node_modules/[^/]+',
       },
       archi: {
-        collapsePattern:
-          '^(node_modules|src/mcp/handlers|src/manufacturing/graph|src/manufacturing/dxf|src/validation/rules)/[^/]+',
+        collapsePattern: '^(node_modules|src/v2/(graph|resources|tools|persistence))/[^/]+',
       },
     },
   },

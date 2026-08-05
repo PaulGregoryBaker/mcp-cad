@@ -366,6 +366,7 @@ the test coverage."
   inventory, reviewed separately.
 - **R3. Big-bang rebuild stall:** v2 grows in the dark while v1 rots. Mitigation:
   vertical slices each shippable behind the same MCP contract; acceptance suite as the
-  finish line, v1 kept runnable as reference.
+  finish line. (Resolved: v1 was kept runnable as reference through the harvest, then
+  deleted from the repo once the acceptance suite superseded it as evidence.)
 - **R4. Enforcement theater:** lint rules that exist but are advisory. Mitigation: gates
   are CI-blocking from the first commit (Phase 4 before Phase 5).

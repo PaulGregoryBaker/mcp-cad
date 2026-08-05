@@ -45,5 +45,7 @@ problems, not patch-shaped problems.
   explicit new product decision. No aspirational requirements without an owner.
 - `[PROPOSAL]` marks something Claude proposed that Paul has not yet ratified.
 - `[OPEN]` marks an unresolved question (mirrored in 05-open-questions.md).
-- v1 stays runnable throughout; it is the executable reference for expected behavior and
-  the source of harvested acceptance tests.
+- v1 stayed runnable through the design and early build phases, serving as the executable
+  reference for expected behavior and the source of harvested acceptance tests. That job is
+  done — the harvest lives in [09-core-correctness-suite.md](09-core-correctness-suite.md)
+  and [suite/](suite/) — and v1 has since been deleted from the repo.
