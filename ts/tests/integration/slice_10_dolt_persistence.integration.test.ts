@@ -114,6 +114,9 @@ describe.skipIf(SKIP)('[v2] Slice 10: Dolt persistence', () => {
       commit_hash: commit.commit_hash,
     }) as { part_id: string };
 
+    // restore resets the SAME part_id in place — it does not create a new part
+    expect(restored.part_id).toBe(part.part_id);
+
     // The restored part should have no bends
     const snap = store.snapshotPart(restored.part_id);
     expect(snap.bends).toHaveLength(0);
@@ -167,9 +170,58 @@ describe.skipIf(SKIP)('[v2] Slice 10: Dolt persistence', () => {
       commit_hash: c1.commit_hash,
     }) as { part_id: string };
 
+    expect(restored.part_id).toBe(part.part_id);
     const restoredSnap = store.snapshotPart(restored.part_id);
     expect(restoredSnap.bends).toHaveLength(0);
     expect(restoredSnap.part.holes).toHaveLength(0);
+  });
+
+  it('checkpoint-before-branch: commit, mutate, restore discards the mutations and leaves the branch usable', async () => {
+    const part = createRect(store);
+
+    // Checkpoint right before "opening a branch" of edits — must succeed
+    // even though nothing has changed yet (--allow-empty).
+    const checkpoint = await dispatchGraphTool(store, 'commit', {
+      part_id: part.part_id,
+      message: 'checkpoint before edits',
+    }) as { commit_hash: string };
+
+    // Stage several edits, as a client's "feature branch" would.
+    dispatchGraphTool(store, 'create_node', {
+      kind: 'bend',
+      part_id: part.part_id,
+      parent_region_panel_id: part.root_region_panel_id,
+      hinge_a: { x: 50, y: 0 },
+      hinge_b: { x: 50, y: 50 },
+      angle_deg: 90,
+      radius_mm: 1.0,
+    });
+    dispatchGraphTool(store, 'update_node', {
+      kind: 'part',
+      id: part.part_id,
+      patch: { name: 'renamed-during-branch' },
+    });
+    expect(store.snapshotPart(part.part_id).bends).toHaveLength(1);
+
+    // Discard the whole branch: restore back to the checkpoint.
+    const discarded = await dispatchGraphTool(store, 'restore', {
+      part_id: part.part_id,
+      commit_hash: checkpoint.commit_hash,
+    }) as { part_id: string };
+
+    expect(discarded.part_id).toBe(part.part_id);
+    const snap = store.snapshotPart(discarded.part_id);
+    expect(snap.bends).toHaveLength(0);
+    expect(snap.part.name).toBe('persist-test');
+
+    // The Dolt session must not be left on a detached historical ref —
+    // a normal commit afterward has to succeed.
+    const after = await dispatchGraphTool(store, 'commit', {
+      part_id: part.part_id,
+      message: 'continue after discard',
+    }) as { commit_hash: string };
+    expect(after.commit_hash).toBeTruthy();
+    expect(after.commit_hash).not.toBe(checkpoint.commit_hash);
   });
 
   it('commits are listed via Dolt log', async () => {

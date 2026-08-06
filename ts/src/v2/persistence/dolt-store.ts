@@ -16,7 +16,15 @@ import type { PartGraphSnapshot } from '../graph/store';
 
 interface V2PartRow extends RowDataPacket {
   part_id: string;
-  graph_json: string;  // JSON-serialized PartGraphSnapshot
+  // mysql2 auto-deserializes a JSON-typed column into a plain object, but
+  // the row type still declares it (and JSON.parse still works) when the
+  // driver instead hands back the raw string, so this must accept both.
+  graph_json: string | Record<string, unknown>;
+}
+
+/** Handles both shapes mysql2 can hand back for a JSON column (see above). */
+function parseGraphJson(raw: V2PartRow['graph_json']): PartGraphSnapshot {
+  return (typeof raw === 'string' ? JSON.parse(raw) : raw) as PartGraphSnapshot;
 }
 
 interface DoltLogRow extends RowDataPacket {
@@ -96,7 +104,24 @@ export class V2DoltStore {
       [partId],
     );
     if (rows.length === 0) return null;
-    return JSON.parse(rows[0].graph_json) as PartGraphSnapshot;
+    return parseGraphJson(rows[0].graph_json);
+  }
+
+  /**
+   * Read a part as it existed at a prior commit, without checking out that
+   * commit (Dolt's `AS OF` time-travel query — same pattern v1's
+   * semantic/dolt_adapter.ts used). Non-destructive: the session's current
+   * branch/checkout is untouched, so a subsequent doltCommit() still lands
+   * on the working branch, not a detached historical ref.
+   */
+  async loadPartAtCommit(partId: string, commitHash: string): Promise<PartGraphSnapshot | null> {
+    const pool = this.requirePool();
+    const [rows] = await pool.query<V2PartRow[]>(
+      'SELECT graph_json FROM v2_part AS OF ? WHERE part_id = ? LIMIT 1',
+      [commitHash, partId],
+    );
+    if (rows.length === 0) return null;
+    return parseGraphJson(rows[0].graph_json);
   }
 
   async listPartIds(): Promise<string[]> {
@@ -111,7 +136,11 @@ export class V2DoltStore {
 
   async doltCommit(message: string): Promise<string> {
     const pool = this.requirePool();
-    await pool.query("CALL DOLT_COMMIT('-A', '-m', ?)", [message]);
+    // --allow-empty: callers checkpoint before opening an edit "branch"
+    // (commit now, restore back to this hash to discard later) — that
+    // checkpoint commit must succeed even when nothing has changed since
+    // the last one.
+    await pool.query("CALL DOLT_COMMIT('-A', '--allow-empty', '-m', ?)", [message]);
     // Read back the commit hash
     const [rows] = await pool.query<DoltLogRow[]>(
       'SELECT commit_hash FROM dolt_log ORDER BY date DESC LIMIT 1',

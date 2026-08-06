@@ -455,7 +455,7 @@ export const graphToolDefinitions = [
   {
     name: 'restore',
     description:
-      'Reset the working state to a prior Dolt commit (rebuild/15 §4.6, B5b). Checks out the commit, loads the part from Dolt, and replaces the in-memory GraphStore state.',
+      'Reset this part\'s live working state in place to a prior Dolt commit (rebuild/15 §4.6, B5b) — same part_id, not a new one. This is also the rollback/discard operation (B5d): call commit() as a checkpoint before a sequence of edits, then restore(part_id, that_commit_hash) to discard them.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1152,35 +1152,17 @@ async function handleRestore(
   const partId = requireString(args, 'part_id');
   const commitHash = requireString(args, 'commit_hash');
 
-  await doltStore.doltCheckout(commitHash);
-  const snapshot = await doltStore.loadPart(partId);
+  const snapshot = await doltStore.loadPartAtCommit(partId, commitHash);
   if (!snapshot) {
-    throwError(ErrorCodes.INTERNAL_ERROR, `part ${partId} not found in commit ${commitHash}`, true);
+    throwError(
+      ErrorCodes.GRAPH_PART_NOT_FOUND,
+      `part ${partId} not found in commit ${commitHash}`,
+      true,
+    );
   }
 
-  const newPart = store.createPart({
-    name: snapshot.part.name,
-    outline: snapshot.part.outline,
-    thicknessMm: snapshot.part.thicknessMm,
-    materialId: snapshot.part.materialId,
-    kFactor: snapshot.part.kFactor,
-    anchor: snapshot.part.anchor,
-  });
-
-  for (const bend of snapshot.bends) {
-    store.createBendNode({
-      partId: newPart.partId,
-      parentRegionPanelId: bend.parentRegionPanelId,
-      hingeA: bend.hingeA,
-      hingeB: bend.hingeB,
-      angleDeg: bend.angleDeg,
-      radiusMm: bend.radiusMm,
-      kFactor: bend.kFactorOverride ?? undefined,
-      bottomIsConcave: bend.bottomIsConcave ?? undefined,
-    });
-  }
-
-  return { part_id: newPart.partId };
+  const restored = store.restorePart(snapshot);
+  return { part_id: restored.partId };
 }
 
 async function handleBranch(

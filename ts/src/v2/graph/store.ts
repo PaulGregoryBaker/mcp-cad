@@ -607,6 +607,27 @@ export class GraphStore {
     return part;
   }
 
+  /**
+   * Reset one part's live working state in place to a prior snapshot (same
+   * partId — no new part is created). This is the rollback/discard
+   * operation (B5d, rebuild/02-requirements.md): removes every region panel
+   * and bend currently belonging to this part and replaces them with the
+   * snapshot's rows under their original stored IDs.
+   */
+  restorePart(snapshot: PartGraphSnapshot): PartRow {
+    const partId = snapshot.part.partId;
+    for (const [id, panel] of this.regionPanels) {
+      if (panel.partId === partId) this.regionPanels.delete(id);
+    }
+    for (const [id, bend] of this.bends) {
+      if (bend.partId === partId) this.bends.delete(id);
+    }
+    this.parts.set(partId, snapshot.part);
+    for (const panel of snapshot.regionPanels) this.regionPanels.set(panel.regionPanelId, panel);
+    for (const bend of snapshot.bends) this.bends.set(bend.bendId, bend);
+    return snapshot.part;
+  }
+
   serialize(): { parts: PartRow[]; regionPanels: RegionPanelRow[]; bends: BendRow[] } {
     return {
       parts: [...this.parts.values()],
