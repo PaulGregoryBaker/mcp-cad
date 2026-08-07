@@ -20,7 +20,6 @@ import type {
   MapToWorldResult,
   MapToFlatResult,
   NapiPanelPieceSpec,
-  EvaluateFindingsResult,
   NapiManufacturingProfile,
 } from '../../geometry/types';
 import type { GraphStore, PartGraphSnapshot } from './store';
@@ -771,11 +770,23 @@ export const DEFAULT_MANUFACTURING_PROFILE: NapiManufacturingProfile = {
   },
 };
 
+/** One finding, the real MCP contract shape (15 §1) — `recommendedFix.params`
+ * is a genuine parsed object here, unlike the addon's own raw `NapiFinding`
+ * (geometry/types.ts), which hands it back as a JSON string. Every v2
+ * resource (`full`, `findings`) returns this shape, never the raw one. */
+export interface Finding {
+  code: string;
+  severity: 'error' | 'warning' | 'info';
+  message: string;
+  anchors: Array<{ kind: string; id: string }>;
+  recommendedFix: { tool: string; params: Record<string, unknown> } | null;
+}
+
 export function evaluateFindings(
   store: GraphStore,
   partId: string,
   profile?: NapiManufacturingProfile,
-): EvaluateFindingsResult {
+): { findings: Finding[] } {
   const snapshot = store.snapshotPart(partId);
   const graph = toNapiPartGraphSpec(snapshot);
 
@@ -789,11 +800,28 @@ export function evaluateFindings(
     // evaluatePartGraph threw — layout stays null, geometry-dependent rules skip
   }
 
-  return geometryBinding.evaluateFindings(
+  const result = geometryBinding.evaluateFindings(
     graph,
     profile ?? DEFAULT_MANUFACTURING_PROFILE,
     layout,
   );
+
+  // The NAPI layer sends recommendedFix.params as a raw JSON string
+  // (translation_binding.cc: "paramsJson is a JSON string — parse on the TS
+  // side") — nothing did, so it was reaching the MCP client double-encoded
+  // (JSON.stringify of an already-JSON string, server.ts's resource-read
+  // handler), i.e. a string field instead of the object NapiFinding's own
+  // type declares. Parsed here, once, right where the raw addon result
+  // first becomes a TS value — every caller of evaluateFindings gets the
+  // corrected shape for free.
+  return {
+    findings: result.findings.map((f) => ({
+      ...f,
+      recommendedFix: f.recommendedFix
+        ? { tool: f.recommendedFix.tool, params: JSON.parse(f.recommendedFix.params) as Record<string, unknown> }
+        : null,
+    })),
+  };
 }
 
 // ── close_gap (Phase 5 Slice 9b) ────────────────────────────────────────────

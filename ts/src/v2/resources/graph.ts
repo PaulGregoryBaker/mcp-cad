@@ -37,6 +37,39 @@ import {
   buildV2BlobUrl,
   type BlobCacheEntry,
 } from '../blob-cache';
+import type { z } from 'zod';
+import { RefSchema } from '../schemas/shared';
+import {
+  RESOURCE_SCHEMAS,
+  type ResourceKind,
+  type PartsListResponse,
+  type Map2d3dResponse,
+  type Map3d2dResponse,
+  type FlatPatternResponse,
+  type FullResponse,
+  type FindingsResponse,
+  type BoundaryEnvelopeResponse,
+  type MeshEnvelopeResponse,
+} from '../schemas/resources';
+
+/** Validates a resource's return value against its own declared schema
+ * (schemas/resources.ts) before it ever reaches a client — "sending
+ * evaluates against the schema." A mismatch here is this server's own bug
+ * (the code produced a shape its own schema says is wrong), never the
+ * caller's, so it fails loud as INTERNAL_ERROR rather than silently
+ * shipping something malformed (the exact class of bug that prompted this:
+ * recommendedFix.params reaching the client double-JSON-encoded). */
+function validateResource(kind: ResourceKind, data: unknown): unknown {
+  const result = RESOURCE_SCHEMAS[kind].safeParse(data);
+  if (!result.success) {
+    throwError(
+      ErrorCodes.INTERNAL_ERROR,
+      `graph://.../${kind} produced a response that doesn't match its own schema: ${result.error.message}`,
+      false,
+    );
+  }
+  return result.data;
+}
 
 const PARTS_LIST_PATTERN = /^graph:\/\/parts$/;
 const MAP_2D_3D_PATTERN = /^graph:\/\/part\/([^/]+)\/map-2d-3d$/;
@@ -139,7 +172,7 @@ function parseNumberList(raw: string, count: number, label: string): number[] {
   return values;
 }
 
-function readMap2d3d(store: GraphStore, partId: string, queryString: string | undefined): unknown {
+function readMap2d3d(store: GraphStore, partId: string, queryString: string | undefined): Map2d3dResponse {
   const params = new URLSearchParams(queryString ?? '');
   const pointParam = params.get('point');
 
@@ -184,7 +217,7 @@ function readMap2d3d(store: GraphStore, partId: string, queryString: string | un
   };
 }
 
-function readMap3d2d(store: GraphStore, partId: string, queryString: string | undefined): unknown {
+function readMap3d2d(store: GraphStore, partId: string, queryString: string | undefined): Map3d2dResponse {
   const params = new URLSearchParams(queryString ?? '');
   const pointParam = params.get('point');
   if (pointParam === null) {
@@ -230,7 +263,7 @@ interface FlatPatternBend {
   radiusMeasured: boolean;
 }
 
-function readFlatPattern(store: GraphStore, partId: string): unknown {
+function readFlatPattern(store: GraphStore, partId: string): FlatPatternResponse {
   const part = store.getPart(partId);
   if (!part) {
     throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${partId}`, false);
@@ -322,7 +355,7 @@ interface PartsListEntry {
   rootRegionPanelId: string;
 }
 
-function readPartsList(store: GraphStore): unknown {
+function readPartsList(store: GraphStore): PartsListResponse {
   const { parts } = store.serialize();
   // mergedIntoPartId is always null today (no cross-part merge/fuse tool
   // aliases a part away permanently from this list's own point of view —
@@ -338,7 +371,7 @@ function readPartsList(store: GraphStore): unknown {
   return { parts: entries };
 }
 
-function readFull(store: GraphStore, partId: string): unknown {
+function readFull(store: GraphStore, partId: string): FullResponse {
   const part = store.getPart(partId);
   if (!part) {
     throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${partId}`, false);
@@ -357,7 +390,7 @@ function readFull(store: GraphStore, partId: string): unknown {
 /** Dedicated findings resource — same computation as full's embedded
  * findings (15 §3.2's "one computation, two projections" rule), fetched
  * directly without the rest of the graph structure. */
-function readFindings(store: GraphStore, partId: string): unknown {
+function readFindings(store: GraphStore, partId: string): FindingsResponse {
   if (!store.getPart(partId)) {
     throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${partId}`, false);
   }
@@ -458,7 +491,7 @@ export function ensureMeshBlobFresh(
   return { entry, changed };
 }
 
-function toRef(entry: BlobCacheEntry, url: string): unknown {
+function toRef(entry: BlobCacheEntry, url: string): z.infer<typeof RefSchema> {
   return {
     url,
     contentType: entry.contentType,
@@ -467,7 +500,7 @@ function toRef(entry: BlobCacheEntry, url: string): unknown {
   };
 }
 
-function readBoundary(store: GraphStore, partId: string): unknown {
+function readBoundary(store: GraphStore, partId: string): BoundaryEnvelopeResponse {
   const part = store.getPart(partId);
   if (!part) {
     throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${partId}`, false);
@@ -477,7 +510,7 @@ function readBoundary(store: GraphStore, partId: string): unknown {
   return { partId, ref: toRef(entry, buildV2BlobUrl(key)) };
 }
 
-function readMesh(store: GraphStore, partId: string): unknown {
+function readMesh(store: GraphStore, partId: string): MeshEnvelopeResponse {
   const part = store.getPart(partId);
   if (!part) {
     throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${partId}`, false);
@@ -491,42 +524,48 @@ export function readGraphResource(store: GraphStore, rawUri: string): unknown {
   const [uri, queryString] = rawUri.split('?', 2);
 
   if (PARTS_LIST_PATTERN.exec(uri ?? '')) {
-    return readPartsList(store);
+    return validateResource('parts', readPartsList(store));
   }
 
   const map2d3dMatch = MAP_2D_3D_PATTERN.exec(uri ?? '');
   if (map2d3dMatch) {
-    return readMap2d3d(store, decodeURIComponent(map2d3dMatch[1]), queryString);
+    return validateResource(
+      'map-2d-3d',
+      readMap2d3d(store, decodeURIComponent(map2d3dMatch[1]), queryString),
+    );
   }
 
   const map3d2dMatch = MAP_3D_2D_PATTERN.exec(uri ?? '');
   if (map3d2dMatch) {
-    return readMap3d2d(store, decodeURIComponent(map3d2dMatch[1]), queryString);
+    return validateResource(
+      'map-3d-2d',
+      readMap3d2d(store, decodeURIComponent(map3d2dMatch[1]), queryString),
+    );
   }
 
   const flatPatternMatch = FLAT_PATTERN_PATTERN.exec(uri ?? '');
   if (flatPatternMatch) {
-    return readFlatPattern(store, decodeURIComponent(flatPatternMatch[1]));
+    return validateResource('flat-pattern', readFlatPattern(store, decodeURIComponent(flatPatternMatch[1])));
   }
 
   const fullMatch = FULL_PATTERN.exec(uri ?? '');
   if (fullMatch) {
-    return readFull(store, decodeURIComponent(fullMatch[1]));
+    return validateResource('full', readFull(store, decodeURIComponent(fullMatch[1])));
   }
 
   const boundaryMatch = BOUNDARY_PATTERN.exec(uri ?? '');
   if (boundaryMatch) {
-    return readBoundary(store, decodeURIComponent(boundaryMatch[1]));
+    return validateResource('boundary', readBoundary(store, decodeURIComponent(boundaryMatch[1])));
   }
 
   const meshMatch = MESH_PATTERN.exec(uri ?? '');
   if (meshMatch) {
-    return readMesh(store, decodeURIComponent(meshMatch[1]));
+    return validateResource('mesh', readMesh(store, decodeURIComponent(meshMatch[1])));
   }
 
   const findingsMatch = FINDINGS_PATTERN.exec(uri ?? '');
   if (findingsMatch) {
-    return readFindings(store, decodeURIComponent(findingsMatch[1]));
+    return validateResource('findings', readFindings(store, decodeURIComponent(findingsMatch[1])));
   }
 
   throwError(ErrorCodes.INTERNAL_ERROR, `Unrecognized v2 graph resource URI: ${rawUri}`, false);

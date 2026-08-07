@@ -42,6 +42,7 @@ import {
   optNullableBoolean,
 } from './helpers';
 import type { NestingResult } from '../jobs/queue';
+import { toolSchemaFor } from '../schemas/tools';
 
 export const graphToolDefinitions = [
   {
@@ -389,6 +390,7 @@ export const graphToolDefinitions = [
         bend_ids: {
           type: 'array',
           items: { type: 'string' },
+          minItems: 1,
           description: 'Bend IDs whose intersections should receive reliefs',
         },
         relief_type: { type: 'string', enum: ['dogbone', 'circular'] },
@@ -460,6 +462,31 @@ export const graphToolDefinitions = [
     },
   },
   {
+    name: 'branch',
+    description:
+      'Create a named Dolt branch pointer (rebuild/15 §4.6, B5). Does not touch the in-memory GraphStore or any part\'s working state — a pure Dolt version-control operation.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Branch name' },
+        from_commit: { type: 'string', description: 'Commit hash to branch from; defaults to the current HEAD' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'merge_branch',
+    description:
+      'Merge a Dolt branch into the current branch (rebuild/15 §4.6, B5). A pure Dolt version-control operation, same scope note as branch above.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        source_branch: { type: 'string', description: 'Branch name to merge from' },
+      },
+      required: ['source_branch'],
+    },
+  },
+  {
     name: 'simulate_nesting',
     description:
       'Nest parts\' flat outlines on stock sheets (rebuild/15 §4.5, Phase 5 Slice 11). Async job — returns a job_id immediately; poll with get_job for the result.',
@@ -469,6 +496,7 @@ export const graphToolDefinitions = [
         part_ids: {
           type: 'array',
           items: { type: 'string' },
+          minItems: 1,
           description: 'Part IDs to nest',
         },
         sheet_width_mm: { type: 'number', description: 'Sheet width in mm (default: 2440)' },
@@ -487,6 +515,7 @@ export const graphToolDefinitions = [
         part_ids: {
           type: 'array',
           items: { type: 'string' },
+          minItems: 1,
         },
         format: { type: 'string', enum: ['dxf', 'step', 'pdf'] },
       },
@@ -507,11 +536,37 @@ export const graphToolDefinitions = [
   },
 ];
 
+/** Validates `args` against the tool's own schema (schemas/tools.ts) before
+ * any handler runs — "receiving evaluates against the schema." A tool with
+ * no registered schema is a registry gap (a mistake in this codebase, not
+ * the caller's), so it's a hard error, not a silent pass-through. On a real
+ * validation failure, INVALID_TOOL_ARGS is recoverable: the caller can fix
+ * the request and retry. */
+function validateToolArgs(name: string, args: Record<string, unknown>): void {
+  const schema = toolSchemaFor(name);
+  if (!schema) {
+    // Same wording as the switch's own default case below, which this
+    // makes unreachable for any name lacking a registered schema — every
+    // real tool has one (see schemas/tools.ts's own registry), so this
+    // path is "unknown tool name," not "known tool, missing schema."
+    throwError(ErrorCodes.INTERNAL_ERROR, `Unknown v2 tool: ${name}`, false);
+  }
+  const result = schema.safeParse(args);
+  if (!result.success) {
+    throwError(
+      ErrorCodes.INVALID_TOOL_ARGS,
+      `${name}: ${result.error.message}`,
+      true,
+    );
+  }
+}
+
 export function dispatchGraphTool(
   store: GraphStore,
   name: string,
   args: Record<string, unknown>,
 ): unknown {
+  validateToolArgs(name, args);
   switch (name) {
     case 'create_part':
       return handleCreatePart(store, args);

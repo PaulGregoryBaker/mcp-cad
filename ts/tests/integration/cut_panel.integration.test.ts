@@ -230,12 +230,16 @@ d('[v2] cut_panel (Phase 5 Slice 9a) — rejection cases', () => {
     expect(err.structured.code).toBe('GE_CUT_HOLE_NOT_CONTAINED');
   });
 
-  it('rejects a non-positive circle radius with GE_DEGENERATE_OUTLINE', () => {
+  // A non-positive radius is now caught at the tool's own Zod schema (radius_mm
+  // is declared exclusiveMinimum:0 in cut_panel's inputSchema, and the schema
+  // now actually enforces that) — before the call ever reaches the C++ layer
+  // that used to produce GE_DEGENERATE_OUTLINE for the same bad input.
+  it('rejects a non-positive circle radius with INVALID_TOOL_ARGS', () => {
     const store = new GraphStore();
     const part = createRectPart(store, 'cut-bad-radius');
 
     const err = catchToolError(() => cutCircle(store, part.part_id, { x: 20, y: 30 }, 0));
-    expect(err.structured.code).toBe('GE_DEGENERATE_OUTLINE');
+    expect(err.structured.code).toBe('INVALID_TOOL_ARGS');
   });
 
   it('rejects a polygon hole not contained by any region panel with GE_CUT_HOLE_NOT_CONTAINED', () => {
@@ -253,7 +257,10 @@ d('[v2] cut_panel (Phase 5 Slice 9a) — rejection cases', () => {
     expect(err.structured.code).toBe('GE_CUT_HOLE_NOT_CONTAINED');
   });
 
-  it('rejects a degenerate (<3-vertex) polygon ring with GE_DEGENERATE_OUTLINE', () => {
+  // Same story as the non-positive-radius case above: polygon_ring is
+  // declared minItems:3 in cut_panel's inputSchema, now actually enforced
+  // by the tool's own Zod schema before the C++ layer ever sees it.
+  it('rejects a degenerate (<3-vertex) polygon ring with INVALID_TOOL_ARGS', () => {
     const store = new GraphStore();
     const part = createRectPart(store, 'cut-degenerate-polygon');
 
@@ -263,7 +270,7 @@ d('[v2] cut_panel (Phase 5 Slice 9a) — rejection cases', () => {
         { x: 20, y: 20 },
       ]),
     );
-    expect(err.structured.code).toBe('GE_DEGENERATE_OUTLINE');
+    expect(err.structured.code).toBe('INVALID_TOOL_ARGS');
   });
 
   it('rejects a nonexistent part_id with GRAPH_PART_NOT_FOUND', () => {

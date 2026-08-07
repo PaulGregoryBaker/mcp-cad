@@ -814,13 +814,19 @@ export interface CutPanelResult {
 
 // ─── Manufacturability Rules Engine (rebuild/06-plan.md, Phase 5 findings) ───
 
-/** One finding — the exact shape the MCP contract specifies (15 §1). */
+/** One finding, as the addon literally hands it back — NOT the MCP contract
+ * shape yet. `recommendedFix.params` is a raw JSON string here
+ * (translation_binding.cc's WriteFinding: "paramsJson is a JSON string —
+ * parse on the TS side") — v2/graph/evaluate-client.ts's `evaluateFindings`
+ * is that TS side; it parses this into the real `Finding` type (15 §1's
+ * actual shape, `params: Record<string, unknown>`) before anything else
+ * sees it. Nothing outside evaluate-client.ts should use this raw type. */
 export interface NapiFinding {
   code: string;
   severity: 'error' | 'warning' | 'info';
   message: string;
   anchors: Array<{ kind: string; id: string }>;
-  recommendedFix: { tool: string; params: Record<string, unknown> } | null;
+  recommendedFix: { tool: string; params: string } | null;
 }
 
 /** evaluateFindings NAPI return — always succeeds (never errors). */

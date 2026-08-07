@@ -229,6 +229,14 @@ export const ErrorCodes = {
   // panel classification, or the file path itself doesn't exist/isn't STEP).
   GE_IMPORT_NO_PANELS_FOUND: 'GE_IMPORT_NO_PANELS_FOUND',
 
+  // v2 MCP-boundary schema validation (rebuild's "sending/receiving evaluate
+  // against the schema" pass). INVALID_TOOL_ARGS: a tool call's args failed
+  // its Zod schema (ts/src/v2/schemas/tools.ts) — the caller's mistake,
+  // recoverable. There is no equivalent "resource shape is wrong" code:
+  // that's this server's own bug, not the caller's, so it surfaces as
+  // INTERNAL_ERROR instead (see readGraphResource).
+  INVALID_TOOL_ARGS: 'INVALID_TOOL_ARGS',
+
   // Internal errors
   INTERNAL_ERROR: 'INTERNAL_ERROR',
 } as const;
