@@ -56,6 +56,9 @@ jobs:
       - name: Lint C++ include boundaries (constitution principle I)
         run: node cpp/tools/check-include-boundaries.mjs
 
+      - name: Lint C++/TS NAPI field sync
+        run: node cpp/tools/check-napi-field-sync.mjs
+
       - name: Build C++ (geometry_engine)
         run: |
           cd cpp
