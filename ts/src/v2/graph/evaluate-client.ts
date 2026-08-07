@@ -55,6 +55,7 @@ export function toNapiPartGraphSpec(snapshot: PartGraphSnapshot): NapiPartGraphS
       radiusMm: b.radiusMm,
       kFactor: b.kFactorOverride ?? part.kFactor,
       bottomIsConcave: b.bottomIsConcave ?? undefined,
+      radiusMeasured: b.radiusMeasured,
     })),
     thicknessMm: part.thicknessMm,
     anchor: { transform: part.anchor },
@@ -442,13 +443,6 @@ export interface ImportPartOptions {
   maxThicknessMm?: number;
   defaultThicknessMm?: number;
   maxRecursionDepth?: number;
-  /** The org's manufacturing profile — same shape/default as evaluateFindings'
-   * own optional profile parameter (DEFAULT_MANUFACTURING_PROFILE below).
-   * reconcilePieces cannot measure a real bend radius from a flat-panel
-   * decomposition (only two flat faces meeting at a fold are ever seen), so
-   * every reconciled bend is assumed to share this profile's own
-   * rules.defaultBendRadiusMm. */
-  profile?: NapiManufacturingProfile;
 }
 
 export interface ImportPartResult {
@@ -497,7 +491,6 @@ export function importPart(
   filePath: string,
   options: ImportPartOptions = {},
 ): ImportPartResult {
-  const profile = options.profile ?? DEFAULT_MANUFACTURING_PROFILE;
   const solidId = geometryBinding.loadStep(filePath);
   geometryBinding.healGeometryEx(solidId, true, true);
 
@@ -564,7 +557,7 @@ export function importPart(
   // under-measured), so the true material thickness is never larger than
   // the smallest honestly-measured panel.
   const thicknessMm = Math.min(...pieces.map((p) => p.thicknessMm));
-  const reconciled = geometryBinding.reconcilePieces(pieces, thicknessMm, profile);
+  const reconciled = geometryBinding.reconcilePieces(pieces, thicknessMm);
   if (!reconciled.ok) {
     throwError(
       (reconciled.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
@@ -608,6 +601,7 @@ export function importPart(
         radiusMm: bend.radiusMm,
         kFactor: bend.kFactor,
         bottomIsConcave: bend.bottomIsConcave,
+        radiusMeasured: bend.radiusMeasured,
       });
       tempIdToRealId.set(bend.childRegionPanelId, created.childRegionPanel.regionPanelId);
     }
@@ -641,7 +635,7 @@ export function importPart(
       ringLocal: frame.ring,
       thicknessMm,
     };
-    const reconciledProtrusion = geometryBinding.reconcilePieces([piece], thicknessMm, profile);
+    const reconciledProtrusion = geometryBinding.reconcilePieces([piece], thicknessMm);
     if (!reconciledProtrusion.ok) {
       throwError(
         (reconciledProtrusion.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
@@ -1167,6 +1161,7 @@ export function splitBodyByPlane(
         radiusMm: bend.radiusMm,
         kFactor: bend.kFactorOverride ?? undefined,
         bottomIsConcave: bend.bottomIsConcave ?? undefined,
+        radiusMeasured: bend.radiusMeasured,
       });
       oldToNew.set(bend.childRegionPanelId, created.childRegionPanel.regionPanelId);
     }

@@ -225,6 +225,9 @@ interface FlatPatternBend {
   hingeB: { x: number; y: number };
   angleDeg: number;
   radiusMm: number;
+  /** See BendRow.radiusMeasured's own doc comment — false means radiusMm is
+   * import_part's unmeasured placeholder, not a real value. */
+  radiusMeasured: boolean;
 }
 
 function readFlatPattern(store: GraphStore, partId: string): unknown {
@@ -253,6 +256,7 @@ function readFlatPattern(store: GraphStore, partId: string): unknown {
     hingeB: b.hingeB,
     angleDeg: b.angleDeg,
     radiusMm: b.radiusMm,
+    radiusMeasured: b.radiusMeasured,
   }));
 
   const { entry } = ensureFlatPatternDxfBlobFresh(store, partId);
@@ -299,6 +303,7 @@ export function ensureFlatPatternDxfBlobFresh(
     hingeB: b.hingeB,
     angleDeg: b.angleDeg,
     radiusMm: b.radiusMm,
+    radiusMeasured: b.radiusMeasured,
   }));
   const key = buildBlobCacheKey(partId, 'flat-pattern', 'default');
   const currentHash = computePartContentHash(store, partId);

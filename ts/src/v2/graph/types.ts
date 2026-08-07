@@ -119,4 +119,13 @@ export interface BendRow {
    * (manufacturing_graph_evaluator.hpp) for why these are independent
    * facts. null: falls back to the angleDeg-sign rule. */
   bottomIsConcave: boolean | null;
+  /** true (default): radiusMm is a real, authored/confirmed value (create_node,
+   * merge_bodies_with_bend, add_flange, or an update_node patch that sets
+   * radius_mm directly). false: import_part's reconciliation produced this
+   * bend and radiusMm=0.0 is a placeholder, not a measurement — a flat-panel
+   * decomposition can never see a real fillet. Never affects geometry
+   * construction; only how validation/rules/bend_radius.cc's MIN_BEND_RADIUS
+   * check interprets radiusMm (see BendSpec::radiusMeasured's own doc
+   * comment, manufacturing_graph_evaluator.hpp). */
+  radiusMeasured: boolean;
 }

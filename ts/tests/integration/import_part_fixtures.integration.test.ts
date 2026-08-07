@@ -103,6 +103,7 @@ import { dispatchGraphTool } from '../../src/v2/tools/graph';
 import { evaluatePart, mapPointToWorld, mapPointToFlat } from '../../src/v2/graph/evaluate-client';
 import { toStructuredError } from '../../src/mcp/errors';
 import { geometryBinding } from '../../src/geometry/binding';
+import { readGraphResource } from '../../src/v2/resources/graph';
 
 const ENABLED = process.env.SUITE_V2_DRIVER === '1';
 const d = ENABLED ? describe : describe.skip;
@@ -191,6 +192,26 @@ d('import_part integration suite (real STEP fixtures)', () => {
     expect(result.protrusion_part_ids).toEqual([]);
     expect(result.notes).toEqual([]);
     probeRoundTripSelfConsistent(store, result.part_id, 0.001);
+
+    // docs/BUG_REPORT_import_bend_radius_always_zero_or_thickness.md: a
+    // reconciled bend's radiusMm=0.0 is a placeholder, never a measurement
+    // — radiusMeasured must be false, and findings must carry the advisory
+    // BEND_RADIUS_NOT_MEASURED (with a recommendedFix), never assert
+    // MIN_BEND_RADIUS against an unmeasured value.
+    const snap = store.snapshotPart(result.part_id);
+    expect(snap.bends).toHaveLength(1);
+    expect(snap.bends[0].radiusMm).toBe(0);
+    expect(snap.bends[0].radiusMeasured).toBe(false);
+
+    const full = readGraphResource(store, `graph://part/${result.part_id}/full`) as {
+      findings: Array<{ code: string; recommendedFix: { tool: string } | null }>;
+    };
+    const bendRadiusFindings = full.findings.filter(
+      (f) => f.code === 'MIN_BEND_RADIUS' || f.code === 'BEND_RADIUS_NOT_MEASURED',
+    );
+    expect(bendRadiusFindings).toHaveLength(1);
+    expect(bendRadiusFindings[0].code).toBe('BEND_RADIUS_NOT_MEASURED');
+    expect(bendRadiusFindings[0].recommendedFix?.tool).toBe('update_node');
   });
 
   it('unequal_leg_bracket_90deg.stp: 2-panel asymmetric fold reconciles and round-trips exactly', () => {

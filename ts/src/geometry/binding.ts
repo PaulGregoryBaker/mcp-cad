@@ -347,10 +347,12 @@ export interface GeometryAddon {
   ): ReconcileOutlinesResult;
 
   // ── Phase 5 Slice 5: ingest STEP -> graph piece reconciliation ────────────
+  // No profile argument (removed 2026-08-06): every reconciled bend gets
+  // radiusMm=0.0/radiusMeasured=false, always — see step_reconciliation.hpp's
+  // own header comment and docs/BUG_REPORT_import_bend_radius_always_zero_or_thickness.md.
   reconcilePieces?(
     pieces: NapiPanelPieceSpec[],
     thicknessMm: number,
-    profile?: NapiManufacturingProfile,
   ): ReconcilePiecesResult;
 
   // ── Phase 5 Slice 6: fuse_bodies / remove_protrusions polygon boolean ─────
@@ -1377,16 +1379,12 @@ export class GeometryBinding {
     }
   }
 
-  reconcilePieces(
-    pieces: NapiPanelPieceSpec[],
-    thicknessMm: number,
-    profile?: NapiManufacturingProfile,
-  ): ReconcilePiecesResult {
+  reconcilePieces(pieces: NapiPanelPieceSpec[], thicknessMm: number): ReconcilePiecesResult {
     if (!this.addon.reconcilePieces) {
       throw new Error('Geometry addon does not expose reconcilePieces');
     }
     try {
-      return this.addon.reconcilePieces(pieces, thicknessMm, profile);
+      return this.addon.reconcilePieces(pieces, thicknessMm);
     } catch (err) {
       throw toStructuredError(err);
     }

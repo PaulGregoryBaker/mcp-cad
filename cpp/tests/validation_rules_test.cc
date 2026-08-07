@@ -137,6 +137,42 @@ TEST_CASE("BendRadius: at or above minimum produces no finding", "[validation][b
   CHECK(findings.empty());
 }
 
+// docs/BUG_REPORT_import_bend_radius_always_zero_or_thickness.md — a bend
+// reconciliation produced (radiusMeasured=false) must never assert
+// MIN_BEND_RADIUS against its placeholder radiusMm=0.0; it gets the
+// advisory BEND_RADIUS_NOT_MEASURED finding instead, with a recommendedFix
+// pointing at update_node.
+TEST_CASE("BendRadius: unmeasured (reconciliation-derived) bend produces "
+          "BEND_RADIUS_NOT_MEASURED, not MIN_BEND_RADIUS",
+          "[validation][bend_radius]") {
+  auto g = MakePart(2.0);
+  auto added = AddBend(g, "root", {50, 0}, {50, 50}, 90.0, /*radiusMm=*/0.0);
+  g.bends[0].radiusMeasured = false;
+
+  auto findings = rules::CheckBendRadius(g, DefaultProfile());
+  REQUIRE_FALSE(findings.empty());
+  CHECK(findings[0].code == "BEND_RADIUS_NOT_MEASURED");
+  CHECK(findings[0].severity == FindingSeverity::kWarning);
+  CHECK(findings[0].anchors[0].id == added.bendId);
+  REQUIRE(findings[0].recommendedFix.has_value());
+  CHECK(findings[0].recommendedFix->tool == "update_node");
+  CHECK(findings[0].recommendedFix->paramsJson.find(added.bendId) != std::string::npos);
+  CHECK(findings[0].recommendedFix->paramsJson.find("radius_mm") != std::string::npos);
+  CHECK_FALSE(HasCode(findings, "MIN_BEND_RADIUS"));
+}
+
+TEST_CASE("BendRadius: an explicit radiusMm=0 (radiusMeasured=true, the "
+          "default) still produces MIN_BEND_RADIUS as before - a real, "
+          "authored sharp fold is a real design choice",
+          "[validation][bend_radius]") {
+  auto g = MakePart(2.0);
+  AddBend(g, "root", {50, 0}, {50, 50}, 90.0, /*radiusMm=*/0.0);
+  auto findings = rules::CheckBendRadius(g, DefaultProfile());
+  REQUIRE_FALSE(findings.empty());
+  CHECK(findings[0].code == "MIN_BEND_RADIUS");
+  CHECK(findings[0].severity == FindingSeverity::kError);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Scenario 2 — Bend angle negative
 // ═══════════════════════════════════════════════════════════════════════════

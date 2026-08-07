@@ -37,6 +37,9 @@ export interface CreateBendNodeInput {
   /** See BendRow.bottomIsConcave's own doc comment. Omitted: falls back to
    * the angleDeg-sign rule (matches every caller before this field existed). */
   bottomIsConcave?: boolean;
+  /** See BendRow.radiusMeasured's own doc comment. Omitted: defaults true
+   * (every caller here is an explicit, authored bend). */
+  radiusMeasured?: boolean;
 }
 
 /**
@@ -62,6 +65,8 @@ export interface MergePartsWithBendInput {
   /** See BendRow.bottomIsConcave's own doc comment. Omitted: falls back to
    * the angleDeg-sign rule (matches every caller before this field existed). */
   bottomIsConcave?: boolean;
+  /** See BendRow.radiusMeasured's own doc comment. Omitted: defaults true. */
+  radiusMeasured?: boolean;
 }
 
 /**
@@ -104,6 +109,11 @@ export interface UpdateBendInput {
   radiusMm?: number;
   kFactorOverride?: number | null;
   bottomIsConcave?: boolean | null;
+  /** See BendRow.radiusMeasured's own doc comment. Omitted: left as-is,
+   * UNLESS radiusMm is provided in this same patch, in which case it's set
+   * true automatically — an explicit radius edit is by definition no longer
+   * reconciliation's unmeasured placeholder. */
+  radiusMeasured?: boolean;
 }
 
 /** update_node(kind=region_panel) (15 §4.3) — label/k-factor-override edits. */
@@ -241,6 +251,7 @@ export class GraphStore {
       radiusMm: input.radiusMm ?? 0.0,
       kFactorOverride: input.kFactor ?? null,
       bottomIsConcave: input.bottomIsConcave ?? null,
+      radiusMeasured: input.radiusMeasured ?? true,
     };
     const child: RegionPanelRow = {
       regionPanelId: childRegionPanelId,
@@ -315,6 +326,7 @@ export class GraphStore {
       radiusMm: input.radiusMm,
       kFactor: input.kFactor,
       bottomIsConcave: input.bottomIsConcave,
+      radiusMeasured: input.radiusMeasured,
     });
   }
 
@@ -419,9 +431,15 @@ export class GraphStore {
       throw new GraphStoreError(`no bend with id ${input.bendId}`, ErrorCodes.GRAPH_BEND_NOT_FOUND);
     }
     if (input.angleDeg !== undefined) bend.angleDeg = input.angleDeg;
-    if (input.radiusMm !== undefined) bend.radiusMm = input.radiusMm;
+    if (input.radiusMm !== undefined) {
+      bend.radiusMm = input.radiusMm;
+      // An explicit radius edit is by definition no longer reconciliation's
+      // unmeasured placeholder — see BendRow.radiusMeasured's own doc comment.
+      bend.radiusMeasured = true;
+    }
     if (input.kFactorOverride !== undefined) bend.kFactorOverride = input.kFactorOverride;
     if (input.bottomIsConcave !== undefined) bend.bottomIsConcave = input.bottomIsConcave;
+    if (input.radiusMeasured !== undefined) bend.radiusMeasured = input.radiusMeasured;
     return bend;
   }
 

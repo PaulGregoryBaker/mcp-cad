@@ -120,16 +120,21 @@ struct ReconcilePiecesResult {
   std::vector<PieceEdgeMatch> pieceEdgeMatches;
 };
 
-// defaultBendRadiusMm: the org's assumed inside bend radius (absolute mm,
-// ManufacturingProfile::defaultBendRadiusMm — rebuild's profile-driven
-// pattern, same as evaluateFindings' own ManufacturingProfile parameter).
 // No radius is directly measurable from a flat-panel decomposition (this
 // module only ever sees two flat faces meeting at a fold, never a curved
-// transition), so every reconciled bend is assumed to share this one
-// caller-supplied radius. Default 0.0 preserves this module's original
-// sharp-fold assumption exactly.
+// transition) — every reconciled bend gets radiusMm=0.0 (the only value
+// this module's own self-consistency replay validates) and
+// radiusMeasured=false, always. (Earlier revision of this function took a
+// defaultBendRadiusMm parameter and stamped it onto radiusMm after
+// validation — removed 2026-08-06: BottomRadiusMm/BendAllowanceMm
+// [manufacturing_graph_evaluator.cc] use radiusMm for real pivot/geometry
+// placement, so stamping an unvalidated assumed value in after the replay
+// silently moved every downstream reconstruction away from the true,
+// as-scanned geometry. See docs/BUG_REPORT_import_bend_radius_always_zero_or_thickness.md.
+// An assumed manufacturing radius now belongs only to
+// validation/rules/bend_radius.cc's BEND_RADIUS_NOT_MEASURED finding,
+// which never feeds back into geometry.)
 ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
-                                       double thicknessMm,
-                                       double defaultBendRadiusMm = 0.0);
+                                       double thicknessMm);
 
 }  // namespace mcp_cad::translation

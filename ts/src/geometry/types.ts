@@ -641,6 +641,11 @@ export interface NapiBendSpec {
   // field doc comment has the full rationale). Unset: falls back to the
   // old isMountain=(angleDeg>=0) rule.
   bottomIsConcave?: boolean;
+  // true (default) if unset: radiusMm is a real, authored/confirmed value.
+  // false: step_reconciliation.cc produced this bend and radiusMm is a
+  // placeholder (0.0), not a measurement — see BendSpec::radiusMeasured's
+  // own doc comment (manufacturing_graph_evaluator.hpp).
+  radiusMeasured?: boolean;
 }
 
 export interface NapiCircleHole {

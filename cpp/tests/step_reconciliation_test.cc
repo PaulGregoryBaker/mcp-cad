@@ -242,36 +242,30 @@ TEST_CASE("ReconcilePieces: a leftover component of 2+ pieces sharing a real edg
   CHECK(leftoverLayout.panels.size() == 2);
 }
 
-TEST_CASE("ReconcilePieces: defaultBendRadiusMm is stamped onto every bend without "
-          "perturbing which pivot side reconciliation finds",
+TEST_CASE("ReconcilePieces: every reconciled bend is radiusMm=0.0, "
+          "radiusMeasured=false, always - no caller-supplied radius is stamped in",
           "[translation][step_reconciliation]") {
   auto pieces = MakeLBracket();
 
-  // Default (0.0, matching the historical sharp-fold assumption) round-trips
-  // to the exact positions the un-parameterized overload always produced.
-  auto baseline = ReconcilePieces(pieces, 1.0);
-  REQUIRE(baseline.ok);
-  REQUIRE(baseline.graph.bends.size() == 1);
-  CHECK(baseline.graph.bends[0].radiusMm == Approx(0.0));
-  bool bottomIsConcave = baseline.graph.bends[0].bottomIsConcave.value_or(true);
+  // No radius argument exists on ReconcilePieces anymore (removed
+  // 2026-08-06 — see docs/BUG_REPORT_import_bend_radius_always_zero_or_thickness.md:
+  // stamping an assumed radius onto radiusMm after reconciliation's own
+  // r=0-only replay validation silently moved every downstream
+  // reconstruction away from the true, as-scanned geometry). radiusMm=0.0
+  // is the only value this module's own self-consistency replay ever
+  // validates, and radiusMeasured=false honestly records that it's not a
+  // measurement.
+  auto result = ReconcilePieces(pieces, 1.0);
+  REQUIRE(result.ok);
+  REQUIRE(result.graph.bends.size() == 1);
+  CHECK(result.graph.bends[0].radiusMm == Approx(0.0));
+  CHECK(result.graph.bends[0].radiusMeasured == false);
 
-  // A nonzero org-profile default must NOT change reconciliation's own
-  // success/failure or which pivot side it finds — only the stamped
-  // radiusMm on the output — since the pivot search always reconciles the
-  // TRUE (always sharp/flush) measured geometry, never the assumed radius
-  // (see step_reconciliation.cc's own comment on this design).
-  auto withRadius = ReconcilePieces(pieces, 1.0, /*defaultBendRadiusMm=*/1.5);
-  REQUIRE(withRadius.ok);
-  REQUIRE(withRadius.graph.bends.size() == 1);
-  CHECK(withRadius.graph.bends[0].radiusMm == Approx(1.5));
-  CHECK(withRadius.graph.bends[0].bottomIsConcave.value_or(true) == bottomIsConcave);
-  CHECK(withRadius.graph.bends[0].angleDeg == Approx(baseline.graph.bends[0].angleDeg));
-  CHECK(withRadius.graph.outline.outer.size() == baseline.graph.outline.outer.size());
-
-  // graphs[0] (the caller-facing entry) must carry the same stamped value.
-  REQUIRE(withRadius.graphs.size() >= 1);
-  REQUIRE(withRadius.graphs[0].bends.size() == 1);
-  CHECK(withRadius.graphs[0].bends[0].radiusMm == Approx(1.5));
+  // graphs[0] (the caller-facing entry) must carry the same values.
+  REQUIRE(result.graphs.size() >= 1);
+  REQUIRE(result.graphs[0].bends.size() == 1);
+  CHECK(result.graphs[0].bends[0].radiusMm == Approx(0.0));
+  CHECK(result.graphs[0].bends[0].radiusMeasured == false);
 }
 
 TEST_CASE("ReconcilePieces: two pieces with no shared edge become two standalone "

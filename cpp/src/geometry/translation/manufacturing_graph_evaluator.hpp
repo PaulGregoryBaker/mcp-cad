@@ -136,6 +136,20 @@ struct BendSpec {
   // for full backward compatibility with every graph authored before this
   // field existed (Slices 1-4, part_merge.hpp).
   std::optional<bool> bottomIsConcave;
+  // true (default): radiusMm is a real, authored/confirmed value — a
+  // caller explicitly chose it (create_node, merge_bodies_with_bend,
+  // add_flange, or an update_node patch that sets radius_mm directly).
+  // false: radiusMm is not a measurement — step_reconciliation.cc sets
+  // this for every bend it produces, because a flat-panel decomposition
+  // can only ever see two flat faces meeting at a fold, never a real
+  // fillet (see step_reconciliation.cc's own header comment). Geometry
+  // construction (BottomRadiusMm/BendAllowanceMm below) uses radiusMm
+  // exactly the same either way — this field never affects geometry,
+  // only how validation/rules/bend_radius.cc interprets the number: a
+  // measured/authored radiusMm=0 is a real design choice (MIN_BEND_RADIUS
+  // applies normally); an unmeasured radiusMm=0 is reconciliation's own
+  // placeholder (see BEND_RADIUS_NOT_MEASURED instead).
+  bool radiusMeasured = true;
 };
 
 // part.anchor_* (13 §3.1) — the root 2D->3D placement transform R.

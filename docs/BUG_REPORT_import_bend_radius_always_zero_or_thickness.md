@@ -1,5 +1,83 @@
 # Bug Report: reconciled bend radius is always exactly 0mm or exactly thickness — never a measured value — causing systematic `MIN_BEND_RADIUS` false positives on imports
 
+> **✅ RESOLVED 2026-08-07 (for real this time — see the caveat at the very
+> bottom).** The 2026-08-03 fix below (stamping `profile.rules.
+> default_bend_radius_mm` onto every reconciled bend's `radiusMm`) is
+> **reverted**. It was found to have a serious, previously-unverified side
+> effect: `BottomRadiusMm`/`BendAllowanceMm`
+> (`manufacturing_graph_evaluator.cc`) use `radiusMm` to place the 3D pivot
+> axis and size the bend-zone's revolved bridge solid — not just report it.
+> Reconciliation's own self-consistency replay validates a reconciled graph
+> *only* at r=0; stamping a different radius in afterward, unvalidated,
+> meant every later read (mesh, boundary, DXF, hole positions, further
+> bends/fuses) reconstructed geometry that no longer matched the real,
+> as-scanned part.
+>
+> **Measured, empirically** (`l_bracket_corner_90deg.stp`, same flat 2D
+> shape, only `bend.radiusMm` changed 0 → 1.5 via `update_node` — no
+> re-import): a corner whose position is validated-true at r=0
+> (`x=201.5, z=-101.0`) moved to `x=203.0, z=-101.32` once the assumed
+> radius was applied — 1.53mm of silent distortion from one modest bend on
+> one fold, growing with angle/radius and compounding across multiple
+> bends. The 2026-08-03 fix traded a false-positive *validation message*
+> for a real, silent *geometry corruption* — worse, not better.
+>
+> **The actual fix** moves to the validation layer instead, where the
+> original report's own "option 2" pointed: `BendSpec`/`BendRow` gained a
+> new field, `radiusMeasured` (default `true`). `step_reconciliation.cc`
+> sets it `false` for every bend it produces (a flat-panel decomposition
+> genuinely can never measure a real fillet) and leaves `radiusMm` at
+> `0.0` permanently — the only value its own replay validates. Geometry
+> construction is unaffected by `radiusMeasured` at all; only
+> `validation/rules/bend_radius.cc`'s `MIN_BEND_RADIUS` check reads it: for
+> `radiusMeasured == false` bends it skips `MIN_BEND_RADIUS` (nothing real
+> to assert) and instead emits an advisory `BEND_RADIUS_NOT_MEASURED`
+> finding (severity `warning`) with a `recommendedFix` pointing at
+> `update_node` — preserving the DFM nudge without corrupting geometry.
+> `import_part`'s `profile` parameter is removed entirely (it no longer had
+> any effect once it stopped touching geometry). See the fix commit for the
+> full cross-language change (C++ struct/reconciliation/validation/NAPI +
+> TS types/store/evaluate-client/tools/resources + tests).
+>
+> **Caveat**: this closes the loop on the false positive without
+> corrupting geometry, but it does NOT give the client a way to record a
+> *real* confirmed bend radius from import — that still requires an
+> explicit `update_node(kind=bend, patch:{radius_mm})` call per bend after
+> import, same as before. If Form.AI.tion wants imported parts to show a
+> confirmed (not just assumed) radius automatically, that's a client-side
+> follow-up, not something this fix does on its own.
+>
+> Earlier history kept below for context.
+>
+> **🔴 REOPENED 2026-08-05.** Confirmed still reproducing in the live app
+> (Form.AI.tion, `006-manufacturing-graph-ui` branch): importing `testcube.step`
+> shows `R=0.0 mm` on every bend in the Manufacturing Graph panel, exactly the
+> original symptom.
+>
+> Root cause: the 2026-08-03 fix below only changed what `import_part`
+> *accepts* — a caller must now opt in with an explicit `profile.rules.
+> default_bend_radius_mm` for a nonzero radius to be stamped. It did not
+> change what `import_part` *does by default*, and no caller was updated to
+> actually supply one. `DEFAULT_MANUFACTURING_PROFILE.rules.
+> defaultBendRadiusMm` is still `0.0` (`ts/src/v2/graph/evaluate-client.ts:771`).
+> Form.AI.tion's `import_part` client (`lib/mcp/tools/import_part.dart`,
+> `ImportPartRequest`) has no `profile` field at all — `loadAssembly()`
+> (`lib/core/providers/mcp_session_provider.dart`) calls
+> `importPart.call(ImportPartRequest(file: filePath))` with no profile, every
+> time. So for the one real caller of this tool, behavior is provably
+> unchanged from before the fix: this was closed as "resolved" on the
+> strength of an opt-in escape hatch that nothing opts into.
+>
+> This isn't a request to re-litigate the geometry-model decision the
+> original report deliberately left open (measure a real fillet vs. assume a
+> manufacturable default vs. flag "modeled sharp" some other way) — just
+> flagging that whichever direction is chosen, closing the loop requires
+> either changing the *default* (not just what's accepted) or wiring a real
+> profile through from the client. Right now it's neither, so every import
+> still reports `radiusMm=0.0` and still trips `MIN_BEND_RADIUS`.
+>
+> Original resolution notes kept below for context.
+>
 > **✅ RESOLVED 2026-08-03.** Scoped per Paul's own steer during triage: the
 > assumed radius comes from the org's `ManufacturingProfile`
 > (`defaultBendRadiusMm`, absolute mm — the same mechanism
