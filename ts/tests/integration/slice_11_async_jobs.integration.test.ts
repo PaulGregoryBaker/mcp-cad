@@ -35,28 +35,32 @@ d('[v2] Slice 11: async jobs', () => {
       thickness_mm: 1.0,
     }) as CreatePartResult;
 
-    const nestJob = dispatchGraphTool(store, 'simulate_nesting', {
+    const nestJob = (await dispatchGraphTool(store, 'simulate_nesting', {
       part_ids: [part2.part_id],
       sheet_width_mm: 1000,
       sheet_height_mm: 500,
-    }) as { job_id: string };
+    })) as { job_id: string };
 
     expect(nestJob.job_id).toBeTruthy();
 
     // Poll the job — it may or may not have completed yet
-    const status = dispatchGraphTool(store, 'get_job', {
+    const status = (await dispatchGraphTool(store, 'get_job', {
       job_id: nestJob.job_id,
-    }) as { job_id: string; status: string; progress: number };
+    })) as { job_id: string; status: string; progress: number };
 
     expect(status.job_id).toBe(nestJob.job_id);
     expect(['queued', 'running', 'succeeded', 'failed']).toContain(status.status);
   });
 
-  it('get_job on unknown job throws', () => {
+  // get_job is an async handler (docs/BUG_REPORT_get_job_empty_job_id_crashes_server.md
+  // — dispatchGraphTool returns a Promise for it, never throwing
+  // synchronously even on a bad job_id) — the rejection must be awaited,
+  // not probed with a synchronous expect(() => ...).toThrow().
+  it('get_job on unknown job throws', async () => {
     const store = new GraphStore();
-    expect(() =>
+    await expect(
       dispatchGraphTool(store, 'get_job', { job_id: 'nonexistent' }),
-    ).toThrow();
+    ).rejects.toThrow();
   });
 
   it('export_production_pack returns a job that fails (stub)', async () => {
@@ -69,18 +73,18 @@ d('[v2] Slice 11: async jobs', () => {
       thickness_mm: 1.0,
     }) as CreatePartResult;
 
-    const job = dispatchGraphTool(store, 'export_production_pack', {
+    const job = (await dispatchGraphTool(store, 'export_production_pack', {
       part_ids: [part.part_id],
-    }) as { job_id: string };
+    })) as { job_id: string };
 
     expect(job.job_id).toBeTruthy();
 
     // Wait a moment for the job to fail
     await new Promise((r) => setTimeout(r, 100));
 
-    const status = dispatchGraphTool(store, 'get_job', {
+    const status = (await dispatchGraphTool(store, 'get_job', {
       job_id: job.job_id,
-    }) as { job_id: string; status: string };
+    })) as { job_id: string; status: string };
 
     expect(status.status).toBe('failed');
   });

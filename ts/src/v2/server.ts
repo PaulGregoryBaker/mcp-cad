@@ -122,7 +122,19 @@ export function createV2Server(store: GraphStore = new GraphStore()): Server {
 
   server.setRequestHandler(
     CallToolRequestSchema,
-    (request: { params: { name: string; arguments?: Record<string, unknown> } }) => {
+    // MUST be async and MUST await dispatchGraphTool's result: several tool
+    // handlers (commit, restore, branch, merge_branch, simulate_nesting,
+    // export_production_pack, get_job — every "async function handleX" in
+    // tools/graph.ts) are async, so dispatchGraphTool returns a Promise for
+    // those, not a plain value. This handler used to be synchronous and
+    // JSON.stringify'd that Promise directly (which always serializes to
+    // "{}", silently discarding the real result on every success), and any
+    // error thrown from inside one of those handlers became an unhandled
+    // promise rejection instead of being caught below — fatal on modern Node
+    // by default, taking down the single shared server process (and its
+    // entire in-memory GraphStore) for one bad call
+    // (docs/BUG_REPORT_get_job_empty_job_id_crashes_server.md).
+    async (request: { params: { name: string; arguments?: Record<string, unknown> } }) => {
       try {
         const toolArgs = request.params.arguments;
         if (!toolArgs || typeof toolArgs !== 'object' || Array.isArray(toolArgs)) {
@@ -130,7 +142,7 @@ export function createV2Server(store: GraphStore = new GraphStore()): Server {
             'Tool call requires an explicit arguments object. Pass {} when no arguments are needed.',
           );
         }
-        const result = dispatchGraphTool(store, request.params.name, toolArgs);
+        const result = await dispatchGraphTool(store, request.params.name, toolArgs);
         setImmediate(checkSubscriptionsForDrift);
         return {
           content: [{ type: 'text', text: JSON.stringify(result) }],
@@ -187,7 +199,28 @@ export function createV2Server(store: GraphStore = new GraphStore()): Server {
 
 // ─── Main ───────────────────────────────────────────────────────────────────
 
+/**
+ * Defense in depth, not the primary fix (that's CallToolRequestSchema's
+ * handler above properly awaiting dispatchGraphTool now) —
+ * docs/BUG_REPORT_get_job_empty_job_id_crashes_server.md's own suggestion.
+ * This is a single shared stdio process for the whole session; an
+ * in-memory-only GraphStore (Dolt persistence still deferred) means any
+ * uncaught crash silently discards every part imported since the process
+ * started. An unexpected rejection/exception should be visible in stderr —
+ * same as today — but should not be able to take the whole session down by
+ * itself if it can possibly be avoided.
+ */
+function installCrashGuards(): void {
+  process.on('unhandledRejection', (reason) => {
+    console.error('v2 MCP server: unhandled promise rejection (process staying alive):', reason);
+  });
+  process.on('uncaughtException', (err) => {
+    console.error('v2 MCP server: uncaught exception (process staying alive):', err);
+  });
+}
+
 async function main(): Promise<void> {
+  installCrashGuards();
   startV2BlobServer(resolveV2BlobPort());
   const server = createV2Server();
   const transport = new StdioServerTransport();
