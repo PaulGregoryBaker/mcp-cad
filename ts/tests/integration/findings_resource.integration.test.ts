@@ -140,21 +140,21 @@ d('[v2] graph://part/{id}/findings (manufacturability rules)', () => {
   });
 
   // ════════════════════════════════════════════════════════════════════════════
-  // Scenario 2 — Bend angle negative
+  // Scenario 2 — Bend angle sign is orientation (mountain/valley), not
+  // magnitude — a valley bend (negative angleDeg) within range is valid.
   // ════════════════════════════════════════════════════════════════════════════
-  // C++ equivalent: TEST_CASE("BendAngle: negative angle produces MAX_BEND_ANGLE")
+  // C++ equivalent: TEST_CASE("BendAngle: negative angle within range (valley bend) passes")
 
-  it('Scenario 2: negative bend angle → MAX_BEND_ANGLE', () => {
+  it('Scenario 2: negative bend angle within range (valley) → no MAX_BEND_ANGLE finding', () => {
     const store = new GraphStore();
     const part = createRect(store, 'neg-angle', 100, 50, 2.0);
     addBend(store, part.part_id, part.root_region_panel_id, 50, 0, 50, 50, -30, 2.0);
     const result = readFindings(store, part.part_id);
-    expect(hasCode(result.findings, 'MAX_BEND_ANGLE')).toBe(true);
-    expect(result.findings.find((f) => f.code === 'MAX_BEND_ANGLE')!.severity).toBe('error');
+    expect(hasCode(result.findings, 'MAX_BEND_ANGLE')).toBe(false);
   });
 
   // ════════════════════════════════════════════════════════════════════════════
-  // Scenario 3 — Bend angle above 180
+  // Scenario 3 — Bend angle magnitude above 180, either sign
   // ════════════════════════════════════════════════════════════════════════════
   // C++ equivalent: TEST_CASE("BendAngle: above max produces MAX_BEND_ANGLE")
 
@@ -162,6 +162,16 @@ d('[v2] graph://part/{id}/findings (manufacturability rules)', () => {
     const store = new GraphStore();
     const part = createRect(store, 'over-angle', 100, 50, 2.0);
     addBend(store, part.part_id, part.root_region_panel_id, 50, 0, 50, 50, 200, 2.0);
+    const result = readFindings(store, part.part_id);
+    expect(hasCode(result.findings, 'MAX_BEND_ANGLE')).toBe(true);
+  });
+
+  // C++ equivalent: TEST_CASE("BendAngle: negative angle beyond max magnitude produces MAX_BEND_ANGLE")
+
+  it('Scenario 3b: bend angle below -180 → MAX_BEND_ANGLE', () => {
+    const store = new GraphStore();
+    const part = createRect(store, 'over-angle-neg', 100, 50, 2.0);
+    addBend(store, part.part_id, part.root_region_panel_id, 50, 0, 50, 50, -200, 2.0);
     const result = readFindings(store, part.part_id);
     expect(hasCode(result.findings, 'MAX_BEND_ANGLE')).toBe(true);
   });

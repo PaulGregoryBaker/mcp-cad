@@ -179,17 +179,16 @@ TEST_CASE("BendRadius: an explicit radiusMm=0 (radiusMeasured=true, the "
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Scenario 2 — Bend angle negative
+// Scenario 2 — Bend angle sign is orientation (mountain/valley), not
+// magnitude — a valley bend (negative angleDeg) within range is valid.
 // ═══════════════════════════════════════════════════════════════════════════
-// TS equivalent: createNode(bend, angleDeg=-30) → MAX_BEND_ANGLE
+// TS equivalent: createNode(bend, angleDeg=-30) → no findings
 
-TEST_CASE("BendAngle: negative angle produces MAX_BEND_ANGLE", "[validation][bend_angle]") {
+TEST_CASE("BendAngle: negative angle within range (valley bend) passes", "[validation][bend_angle]") {
   auto g = MakePart(2.0);
   AddBend(g, "root", {50, 0}, {50, 50}, /*angleDeg=*/-30.0);
   auto findings = rules::CheckBendAngle(g, DefaultProfile());
-  REQUIRE_FALSE(findings.empty());
-  CHECK(findings[0].code == "MAX_BEND_ANGLE");
-  CHECK(findings[0].severity == FindingSeverity::kError);
+  CHECK(findings.empty());
 }
 
 TEST_CASE("BendAngle: angle 0-180 passes", "[validation][bend_angle]") {
@@ -200,13 +199,21 @@ TEST_CASE("BendAngle: angle 0-180 passes", "[validation][bend_angle]") {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Scenario 3 — Bend angle above max
+// Scenario 3 — Bend angle magnitude above max, either sign
 // ═══════════════════════════════════════════════════════════════════════════
 // TS equivalent: createNode(bend, angleDeg=200) → MAX_BEND_ANGLE
 
 TEST_CASE("BendAngle: above max produces MAX_BEND_ANGLE", "[validation][bend_angle]") {
   auto g = MakePart(2.0);
   AddBend(g, "root", {50, 0}, {50, 50}, /*angleDeg=*/200.0);
+  auto findings = rules::CheckBendAngle(g, DefaultProfile());
+  REQUIRE_FALSE(findings.empty());
+  CHECK(findings[0].code == "MAX_BEND_ANGLE");
+}
+
+TEST_CASE("BendAngle: negative angle beyond max magnitude produces MAX_BEND_ANGLE", "[validation][bend_angle]") {
+  auto g = MakePart(2.0);
+  AddBend(g, "root", {50, 0}, {50, 50}, /*angleDeg=*/-200.0);
   auto findings = rules::CheckBendAngle(g, DefaultProfile());
   REQUIRE_FALSE(findings.empty());
   CHECK(findings[0].code == "MAX_BEND_ANGLE");

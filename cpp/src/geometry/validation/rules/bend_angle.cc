@@ -1,4 +1,5 @@
 #include "bend_angle.hpp"
+#include <cmath>
 #include <sstream>
 
 namespace mcp_cad::validation::rules {
@@ -9,8 +10,11 @@ std::vector<Finding> CheckBendAngle(
   std::vector<Finding> findings;
 
   for (const auto& bend : graph.bends) {
-    double angle = bend.angleDeg;
-    if (angle < 0.0 || angle > profile.maxBendAngleDeg) {
+    // angleDeg is signed (positive = mountain, negative = valley, see
+    // step_reconciliation.cc) — the sign is orientation, not magnitude, so
+    // this rule validates |angle| against the profile's physical range.
+    double angle = std::abs(bend.angleDeg);
+    if (angle > profile.maxBendAngleDeg) {
       std::ostringstream msg;
       msg << "Bend " << bend.id << " angle " << angle
           << "° is outside [0, " << profile.maxBendAngleDeg << "]";
