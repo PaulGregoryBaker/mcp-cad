@@ -170,7 +170,8 @@ bool HasSelfIntersection(const std::vector<Point2>& ring) {
 }  // namespace
 
 ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
-                                       double thicknessMm) {
+                                       double thicknessMm,
+                                       double defaultBendRadiusMm) {
   ReconcilePiecesResult result;
   const size_t n = pieces.size();
   if (n < 1) {
@@ -632,22 +633,20 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
         return cand;
       };
 
-      // The pivot search is ALWAYS at radiusMm=0 — the true fact
-      // reconciled here is a sharp, zero-gap fold (this module's own
-      // documented scope, see header comment); a flat-panel decomposition
-      // never measures a real bend radius (only two flat faces meeting at
-      // a fold are ever seen), so there is nothing else to search over.
-      // The resulting bend keeps radiusMm=0.0 permanently (not just during
-      // this search) and radiusMeasured=false — see the BendSpec
-      // construction just below. An org's assumed manufacturing radius,
-      // if any, belongs only to validation/rules/bend_radius.cc's
-      // BEND_RADIUS_NOT_MEASURED finding, never fed back into this
-      // reconciliation or into geometry construction (that was tried
-      // 2026-08-03 and reverted 2026-08-06 — see
-      // docs/BUG_REPORT_import_bend_radius_always_zero_or_thickness.md —
-      // BottomRadiusMm/BendAllowanceMm use radiusMm for real pivot
-      // placement, so an unvalidated stamped value silently moved every
-      // downstream reconstruction away from the true, as-scanned part).
+      // The pivot search is ALWAYS at radiusMm=0 — a flat-panel
+      // decomposition never measures a real bend radius (only two flat
+      // faces meeting at a fold are ever seen), and this search is
+      // determining TOPOLOGY (hinge, angle, which side is concave) against
+      // the piece's own TRUE measured positions, which is only exactly
+      // reproducible by a rigid rotation at the true (sharp) pivot — none
+      // of that depends on the eventual radius. defaultBendRadiusMm is
+      // deliberately NOT used here for that reason: coupling the search to
+      // it would make reconciliation of genuinely-flush measured geometry
+      // spuriously fail for any nonzero default. It IS stamped onto
+      // bend.radiusMm below, after this search/replay succeeds — see this
+      // function's own header comment for why that's safe (Evaluate() is a
+      // pure function of current state; AC-E.3 self-consistency holds at
+      // whatever radius a bend carries, not only at r=0).
       FoldCandidate winner = tryPivotZ(0.0, /*bottomIsConcave=*/true);
       if (!winner.ok) winner = tryPivotZ(thicknessMm, /*bottomIsConcave=*/false);
       if (!winner.ok) {
@@ -671,8 +670,9 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
       bend.angleDeg = angleDeg;
       // 0.0 on BOTH branches — matches the r=0 pivot search above exactly
       // (concave: pivotZ=-0=0; convex: pivotZ=0+thicknessMm=thicknessMm).
-      // Permanent, not a placeholder: no later pass overwrites this (see
-      // this function's own header comment).
+      // Replaced with the profile's assumed defaultBendRadiusMm in a final
+      // pass below, once the replay validation has confirmed this
+      // (r=0-consistent) reconciliation's own topology is sound.
       bend.radiusMm = 0.0;
       bend.kFactor = 0.0;
       bend.bottomIsConcave = winner.bottomIsConcave;
@@ -770,6 +770,19 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
           return out;
         }
       }
+    }
+
+    // Stamp the org's assumed bend radius onto every bend NOW, only after
+    // the replay above has confirmed this component's own topology (edge
+    // matching, splice, pivot side) is sound at the TRUE r=0 pivot — never
+    // before, and never fed back into the search or replay themselves (see
+    // the pivot-search comment above). Safe, not merely convenient: this
+    // function's own header comment explains why (Evaluate() re-derives
+    // the flat zone width and 3D bridge together, fresh, from whatever
+    // radius a bend carries — AC-E.3 self-consistency holds at any radius,
+    // not only the one this replay happened to validate against).
+    for (auto& bend : graph.bends) {
+      bend.radiusMm = defaultBendRadiusMm;
     }
 
     out.ok = true;

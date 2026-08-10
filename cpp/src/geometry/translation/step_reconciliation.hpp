@@ -122,19 +122,36 @@ struct ReconcilePiecesResult {
 
 // No radius is directly measurable from a flat-panel decomposition (this
 // module only ever sees two flat faces meeting at a fold, never a curved
-// transition) — every reconciled bend gets radiusMm=0.0 (the only value
-// this module's own self-consistency replay validates) and
-// radiusMeasured=false, always. (Earlier revision of this function took a
-// defaultBendRadiusMm parameter and stamped it onto radiusMm after
-// validation — removed 2026-08-06: BottomRadiusMm/BendAllowanceMm
-// [manufacturing_graph_evaluator.cc] use radiusMm for real pivot/geometry
-// placement, so stamping an unvalidated assumed value in after the replay
-// silently moved every downstream reconstruction away from the true,
-// as-scanned geometry. See docs/BUG_REPORT_import_bend_radius_always_zero_or_thickness.md.
-// An assumed manufacturing radius now belongs only to
-// validation/rules/bend_radius.cc's BEND_RADIUS_NOT_MEASURED finding,
-// which never feeds back into geometry.)
+// transition) — the pivot search and self-consistency replay below always
+// run at r=0, the only radius this module can directly verify against the
+// piece's own TRUE measured positions (that determines topology: hinge,
+// angle, which side is concave — none of which depend on the eventual
+// radius). defaultBendRadiusMm is stamped onto every reconciled bend's
+// radiusMm AFTER that replay passes, never before and never fed back into
+// the search itself (coupling the two would make reconciliation of
+// genuinely-flush measured geometry spuriously fail for any nonzero
+// default).
+//
+// This is safe — not merely convenient — because Evaluate()
+// (manufacturing_graph_evaluator.cc) is a PURE function of a graph's
+// CURRENT stored state (outline + every bend's own radiusMm/angle/K):
+// given the same inputs it always derives the same self-consistent flat
+// zone width (BendAllowanceMm) and 3D bridge (BottomRadiusMm) together,
+// regardless of how or when radiusMm was set. AC-E.3
+// (rebuild/11-acceptance-criteria.md) requires exactly this: the flat
+// outline and 3D frame may differ only by the bend-allowance expansion for
+// a bend's ACTUAL (angle, radius, K) — not that a bend's radius must stay
+// whatever reconciliation happened to measure. A 2026-08-06 session found
+// this stamping "unsafe" by comparing a FIXED flat point's 3D position
+// across two DIFFERENT radii — that comparison is expected to differ (a
+// different radius folds material differently, by definition); it is not
+// evidence of inconsistency AT a given radius. Re-verified 2026-08-09 via
+// the actual invariant (forward/reverse round-trip at a fixed radius): 0mm
+// error at every radius tested. See
+// docs/BUG_REPORT_import_bend_radius_always_zero_or_thickness.md's full
+// history for both the original finding and this correction.
 ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
-                                       double thicknessMm);
+                                       double thicknessMm,
+                                       double defaultBendRadiusMm = 0.0);
 
 }  // namespace mcp_cad::translation

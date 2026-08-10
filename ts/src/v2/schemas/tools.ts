@@ -61,6 +61,17 @@ const ToolSchemas = {
     max_thickness_mm: z.number().optional(),
     default_thickness_mm: z.number().optional(),
     max_recursion_depth: z.number().optional(),
+    // Loose/best-effort on purpose, matching optManufacturingProfile's own
+    // tolerance (tools/graph.ts): only the fields it recognizes are read,
+    // everything else defaults — no need to reject an otherwise-valid
+    // profile object over an extra/unknown field.
+    profile: z
+      .object({
+        profile_id: z.string().optional(),
+        name: z.string().optional(),
+        rules: z.record(z.unknown()).optional(),
+      })
+      .optional(),
   }),
 
   fuse_bodies: z.object({

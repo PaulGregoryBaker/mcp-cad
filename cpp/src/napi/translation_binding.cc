@@ -810,25 +810,33 @@ Napi::Value PreparePolygonCutBinding(const Napi::CallbackInfo& info) {
   }
 }
 
-// No profile/defaultBendRadiusMm argument (removed 2026-08-06): reconciled
-// bends always get radiusMm=0.0 (the only value this module's own replay
-// validates) and radiusMeasured=false — see step_reconciliation.hpp's own
-// header comment. An assumed manufacturing radius belongs only to
-// evaluateFindings' ManufacturingProfile, at read time, never to
-// reconciliation.
+// Defined below (evaluateFindings section) — same anonymous namespace, so
+// forward-declaring here to reuse it rather than writing a second profile
+// parser (ReconcilePiecesBinding's optional 3rd arg uses the identical
+// {profileId, name, rules: {...}} shape evaluateFindings already accepts).
+namespace {
+validation::ManufacturingProfile ReadProfile(const Napi::Object& obj);
+}  // namespace
+
 Napi::Value ReconcilePiecesBinding(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   if (info.Length() < 2 || !info[0].IsArray() || !info[1].IsNumber()) {
     Napi::TypeError::New(
-        env, "reconcilePieces(pieces: PanelPieceSpec[], thicknessMm: number)")
+        env, "reconcilePieces(pieces: PanelPieceSpec[], thicknessMm: number, "
+             "profile?: ManufacturingProfile)")
         .ThrowAsJavaScriptException();
     return env.Undefined();
   }
   try {
     std::vector<PanelPieceSpec> pieces = ReadPanelPieceSpecArray(info[0].As<Napi::Array>());
     double thicknessMm = info[1].As<Napi::Number>().DoubleValue();
+    double defaultBendRadiusMm = 0.0;
+    if (info.Length() >= 3 && info[2].IsObject()) {
+      defaultBendRadiusMm = ReadProfile(info[2].As<Napi::Object>()).defaultBendRadiusMm;
+    }
 
-    ReconcilePiecesResult result = translation::ReconcilePieces(pieces, thicknessMm);
+    ReconcilePiecesResult result =
+        translation::ReconcilePieces(pieces, thicknessMm, defaultBendRadiusMm);
     return WriteReconcilePiecesResult(env, result);
   } catch (const std::exception& e) {
     Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();

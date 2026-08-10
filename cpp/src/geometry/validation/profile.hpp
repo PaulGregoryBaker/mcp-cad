@@ -25,15 +25,14 @@ struct ManufacturingProfile {
 
   // Absolute mm, not a thickness factor — real tooling has a roughly fixed
   // inside bend radius that doesn't scale with every part's own thickness.
-  // NOT used for geometry construction and NOT stamped onto any bend's
-  // radiusMm (that was tried 2026-08-03 and reverted 2026-08-06 — see
-  // docs/BUG_REPORT_import_bend_radius_always_zero_or_thickness.md; a
-  // flat-panel decomposition can't measure a real radius, and silently
-  // assuming one moved reconstructed geometry away from the true part).
-  // Used only as the suggested value in validation/rules/bend_radius.cc's
-  // BEND_RADIUS_NOT_MEASURED finding, for bends reconciliation produced
-  // (BendSpec::radiusMeasured == false) — a caller confirms it via
-  // update_node, which is what actually changes geometry.
+  // Used by translation::ReconcilePieces as the assumed radius stamped
+  // onto every bend import_part reconciles (no radius is directly
+  // measurable from a flat-panel decomposition — see
+  // step_reconciliation.hpp's own header comment for why stamping it in is
+  // safe: Evaluate() re-derives the flat/3D representation fresh from
+  // whatever radius a bend carries, so this is a real, effective
+  // manufacturing decision, not inert metadata). Default 0.0 preserves the
+  // sharp-fold assumption when a caller doesn't configure one.
   double defaultBendRadiusMm = 0.0;
 
   // ── Hole rules ──────────────────────────────────────────────────────────

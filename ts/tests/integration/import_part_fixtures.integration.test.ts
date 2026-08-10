@@ -193,25 +193,48 @@ d('import_part integration suite (real STEP fixtures)', () => {
     expect(result.notes).toEqual([]);
     probeRoundTripSelfConsistent(store, result.part_id, 0.001);
 
-    // docs/BUG_REPORT_import_bend_radius_always_zero_or_thickness.md: a
-    // reconciled bend's radiusMm=0.0 is a placeholder, never a measurement
-    // — radiusMeasured must be false, and findings must carry the advisory
-    // BEND_RADIUS_NOT_MEASURED (with a recommendedFix), never assert
-    // MIN_BEND_RADIUS against an unmeasured value.
+    // docs/BUG_REPORT_import_bend_radius_always_zero_or_thickness.md's
+    // 2026-08-09 correction: with no profile passed, a reconciled bend still
+    // gets radiusMm=0.0/radiusMeasured=false (a real default, not a
+    // measurement) — but radiusMeasured is provenance metadata only and no
+    // longer gates validation, so a genuinely under-spec radius (0mm, on
+    // real material thickness) produces a normal MIN_BEND_RADIUS finding,
+    // same as it would for an authored bend.
     const snap = store.snapshotPart(result.part_id);
     expect(snap.bends).toHaveLength(1);
     expect(snap.bends[0].radiusMm).toBe(0);
     expect(snap.bends[0].radiusMeasured).toBe(false);
 
     const full = readGraphResource(store, `graph://part/${result.part_id}/full`) as {
-      findings: Array<{ code: string; recommendedFix: { tool: string } | null }>;
+      findings: Array<{ code: string }>;
     };
-    const bendRadiusFindings = full.findings.filter(
-      (f) => f.code === 'MIN_BEND_RADIUS' || f.code === 'BEND_RADIUS_NOT_MEASURED',
-    );
+    const bendRadiusFindings = full.findings.filter((f) => f.code === 'MIN_BEND_RADIUS');
     expect(bendRadiusFindings).toHaveLength(1);
-    expect(bendRadiusFindings[0].code).toBe('BEND_RADIUS_NOT_MEASURED');
-    expect(bendRadiusFindings[0].recommendedFix?.tool).toBe('update_node');
+    expect(full.findings.some((f) => f.code === 'BEND_RADIUS_NOT_MEASURED')).toBe(false);
+  });
+
+  it('l_bracket_corner_90deg.stp: a configured profile default clears MIN_BEND_RADIUS, and the geometry stays self-consistent', () => {
+    const store = new GraphStore();
+    const result = dispatchGraphTool(store, 'import_part', {
+      file: path.join(FIXTURES_DIR, 'l_bracket_corner_90deg.stp'),
+      profile: { rules: { default_bend_radius_mm: 1.5 } },
+    }) as ImportToolResult;
+    expect(result.bend_count).toBe(1);
+
+    const snap = store.snapshotPart(result.part_id);
+    expect(snap.bends[0].radiusMm).toBe(1.5);
+    expect(snap.bends[0].radiusMeasured).toBe(false);
+
+    const full = readGraphResource(store, `graph://part/${result.part_id}/full`) as {
+      findings: Array<{ code: string }>;
+    };
+    expect(full.findings.some((f) => f.code === 'MIN_BEND_RADIUS')).toBe(false);
+    expect(full.findings.some((f) => f.code === 'BEND_RADIUS_NOT_MEASURED')).toBe(false);
+
+    // AC-E.3: the flat layout and 3D reconstruction must still agree with
+    // each other at this (defaulted, nonzero) radius — forward/reverse
+    // round-trip on the bent panel's own corner.
+    probeRoundTripSelfConsistent(store, result.part_id, 0.001);
   });
 
   it('unequal_leg_bracket_90deg.stp: 2-panel asymmetric fold reconciles and round-trips exactly', () => {

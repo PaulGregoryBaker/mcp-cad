@@ -442,6 +442,10 @@ export interface ImportPartOptions {
   maxThicknessMm?: number;
   defaultThicknessMm?: number;
   maxRecursionDepth?: number;
+  /** The org's manufacturing profile — only rules.defaultBendRadiusMm is
+   * used here, stamped onto every reconciled bend (see
+   * step_reconciliation.hpp's own header comment for why that's safe). */
+  profile?: NapiManufacturingProfile;
 }
 
 export interface ImportPartResult {
@@ -556,7 +560,7 @@ export function importPart(
   // under-measured), so the true material thickness is never larger than
   // the smallest honestly-measured panel.
   const thicknessMm = Math.min(...pieces.map((p) => p.thicknessMm));
-  const reconciled = geometryBinding.reconcilePieces(pieces, thicknessMm);
+  const reconciled = geometryBinding.reconcilePieces(pieces, thicknessMm, options.profile);
   if (!reconciled.ok) {
     throwError(
       (reconciled.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
@@ -634,7 +638,7 @@ export function importPart(
       ringLocal: frame.ring,
       thicknessMm,
     };
-    const reconciledProtrusion = geometryBinding.reconcilePieces([piece], thicknessMm);
+    const reconciledProtrusion = geometryBinding.reconcilePieces([piece], thicknessMm, options.profile);
     if (!reconciledProtrusion.ok) {
       throwError(
         (reconciledProtrusion.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,

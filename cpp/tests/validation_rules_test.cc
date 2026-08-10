@@ -137,13 +137,16 @@ TEST_CASE("BendRadius: at or above minimum produces no finding", "[validation][b
   CHECK(findings.empty());
 }
 
-// docs/BUG_REPORT_import_bend_radius_always_zero_or_thickness.md — a bend
-// reconciliation produced (radiusMeasured=false) must never assert
-// MIN_BEND_RADIUS against its placeholder radiusMm=0.0; it gets the
-// advisory BEND_RADIUS_NOT_MEASURED finding instead, with a recommendedFix
-// pointing at update_node.
-TEST_CASE("BendRadius: unmeasured (reconciliation-derived) bend produces "
-          "BEND_RADIUS_NOT_MEASURED, not MIN_BEND_RADIUS",
+// docs/BUG_REPORT_import_bend_radius_always_zero_or_thickness.md's
+// 2026-08-09 correction: radiusMeasured is provenance metadata only
+// (system-defaulted vs. human/AI-confirmed) — it must NOT change whether
+// MIN_BEND_RADIUS fires. A reconciliation-derived (radiusMeasured=false)
+// bend is checked exactly like an authored one: under-spec still produces
+// a real finding (it's a real decision now, even if defaulted, not an
+// unmeasured placeholder), and a manufacturable defaulted value produces
+// none.
+TEST_CASE("BendRadius: reconciliation-derived (radiusMeasured=false) bend is "
+          "checked the same as an authored one - provenance doesn't gate validation",
           "[validation][bend_radius]") {
   auto g = MakePart(2.0);
   auto added = AddBend(g, "root", {50, 0}, {50, 50}, 90.0, /*radiusMm=*/0.0);
@@ -151,14 +154,16 @@ TEST_CASE("BendRadius: unmeasured (reconciliation-derived) bend produces "
 
   auto findings = rules::CheckBendRadius(g, DefaultProfile());
   REQUIRE_FALSE(findings.empty());
-  CHECK(findings[0].code == "BEND_RADIUS_NOT_MEASURED");
-  CHECK(findings[0].severity == FindingSeverity::kWarning);
+  CHECK(findings[0].code == "MIN_BEND_RADIUS");
+  CHECK(findings[0].severity == FindingSeverity::kError);
   CHECK(findings[0].anchors[0].id == added.bendId);
-  REQUIRE(findings[0].recommendedFix.has_value());
-  CHECK(findings[0].recommendedFix->tool == "update_node");
-  CHECK(findings[0].recommendedFix->paramsJson.find(added.bendId) != std::string::npos);
-  CHECK(findings[0].recommendedFix->paramsJson.find("radius_mm") != std::string::npos);
-  CHECK_FALSE(HasCode(findings, "MIN_BEND_RADIUS"));
+
+  // Bump it to a manufacturable defaulted value (still radiusMeasured=false)
+  // — the finding should clear, same as it would for an authored bend.
+  g.bends[0].radiusMm = 2.0;  // exactly at DefaultProfile()'s threshold
+  auto clean = rules::CheckBendRadius(g, DefaultProfile());
+  CHECK_FALSE(HasCode(clean, "MIN_BEND_RADIUS"));
+  CHECK_FALSE(HasCode(clean, "BEND_RADIUS_NOT_MEASURED"));
 }
 
 TEST_CASE("BendRadius: an explicit radiusMm=0 (radiusMeasured=true, the "

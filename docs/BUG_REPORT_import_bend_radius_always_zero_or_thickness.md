@@ -1,7 +1,63 @@
 # Bug Report: reconciled bend radius is always exactly 0mm or exactly thickness — never a measured value — causing systematic `MIN_BEND_RADIUS` false positives on imports
 
+> **✅ RESOLVED 2026-08-09 (correcting 2026-08-07 — that fix's own root
+> cause was a misdiagnosis).** Paul pushed back after seeing the
+> `BEND_RADIUS_NOT_MEASURED` warning live: a bend's radius is a
+> manufacturing *decision*, not a measurement that can be "unknown" — the
+> imported shape is a guide, not gospel that must be preserved exactly.
+> When bends are the chosen manufacturing method, the system should default
+> a real decision and have the geometry precisely represent it, with
+> controls to change it — not stay mathematically sharp under an advisory
+> disclaimer. That's also what this project's own prior design intent
+> already required and the 2026-08-07 fix quietly stopped honoring:
+> `rebuild/13-translation-module-design.md` models bend radius as one
+> ordinary parameter of `w = θ(r + K·t)` (sharp is the documented *limit
+> case* `w→0`, not a separate mode), and `rebuild/11-acceptance-criteria.md`
+> AC-E.3 already requires the flat outline and 3D frame differ *only* by
+> the bend-allowance expansion for a bend's actual `(angle, radius, K)` —
+> i.e. whatever radius a bend carries, the whole representation must be
+> self-consistent from it, not frozen at whatever reconciliation happened
+> to measure.
+>
+> **The 2026-08-07 "1.53mm of silent distortion" finding was measured
+> against the wrong invariant.** It compared one *fixed* flat 2D point's
+> mapped 3D position at r=0 vs. r=1.5 — but changing a bend's radius is
+> *supposed* to move where a flat point ends up in 3D; that's what bending
+> is. The invariant that actually matters (AC-E.3) is whether the flat
+> layout and the 3D reconstruction agree with *each other* at a given
+> radius. Re-checked properly, live, on the same fixture
+> (`l_bracket_corner_90deg.stp`): forward/reverse round-trip error is
+> **0mm at every radius tested (0, 1, 1.5, 3mm)**. `Evaluate()`
+> (`manufacturing_graph_evaluator.cc`) already derives the flat zone width
+> and the 3D bridge from whatever radius is on a bend, together, correctly,
+> every time — it was never broken. Since `Evaluate()` is a pure function
+> of current graph state with no memory of history, this holds identically
+> whether the radius was set at import time or later via `update_node` —
+> the 2026-08-03 stamping mechanism reverted on 2026-08-07 was never
+> actually unsafe.
+>
+> **Fix**: restores substantially the 2026-08-03 mechanism (an org
+> `ManufacturingProfile.defaultBendRadiusMm`, threaded through
+> `import_part` → `reconcilePieces`, stamped onto every reconciled bend
+> *after* the r=0 self-consistency replay validates the reconciliation's
+> own topology — hinge, angle, which side is concave — none of which
+> depends on the eventual radius). `radiusMeasured` stays on `BendRow`, but
+> now purely as provenance metadata (system-default vs. human/AI-confirmed)
+> — `validation/rules/bend_radius.cc`'s `MIN_BEND_RADIUS` check no longer
+> reads it at all; a bend's actual `radiusMm` is checked uniformly
+> regardless of provenance. `BEND_RADIUS_NOT_MEASURED` is removed, not
+> repurposed — a sensible profile default now produces no finding at all,
+> and a genuinely unmanufacturable radius (defaulted or explicit) produces
+> a real `MIN_BEND_RADIUS`, because at that point it's checking an actual
+> decision against real constraints.
+>
+> This project's bug reports are a trusted record specifically because
+> they stay honest when an earlier entry turns out to be wrong — including
+> this one's own prior resolution. Earlier history (2026-08-03 through
+> 2026-08-07) kept below for context.
+>
 > **✅ RESOLVED 2026-08-07 (for real this time — see the caveat at the very
-> bottom).** The 2026-08-03 fix below (stamping `profile.rules.
+> bottom) — SUPERSEDED, SEE ABOVE.** The 2026-08-03 fix below (stamping `profile.rules.
 > default_bend_radius_mm` onto every reconciled bend's `radiusMm`) is
 > **reverted**. It was found to have a serious, previously-unverified side
 > effect: `BottomRadiusMm`/`BendAllowanceMm`
