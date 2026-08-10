@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cmath>
+#include <unordered_set>
 
 using namespace mcp_cad::translation;
 using Catch::Approx;
@@ -812,4 +813,89 @@ TEST_CASE("Transform3: 360 degree rotation about any axis is the identity",
   CHECK(result.x == Approx(p.x).margin(1e-6));
   CHECK(result.y == Approx(p.y).margin(1e-6));
   CHECK(result.z == Approx(p.z).margin(1e-6));
+}
+
+// ─── bottomFaceTrue/topFaceTrue: PARENT-side bend-adjacent edges only ────────
+//
+// docs/BUG_REPORT_boundary_resource_disagrees_with_mesh_after_collar_fix.md:
+// graph://part/{id}/boundary served bottomFace/topFace directly, which are
+// correctly BA/2-short of the true tangent line at a bend (that's the
+// flat-pattern-facing clip, shared with the panel's own solid extrusion) —
+// but ConstructPartSolid's mesh construction (this session's earlier fix)
+// now correctly extends to the true tangent line via a per-bend collar. This
+// is the regression test for the fix: bottomFaceTrue/topFaceTrue give
+// boundary a way to report that same true extent without re-deriving it.
+TEST_CASE("GraphEvaluator: bottomFaceTrue/topFaceTrue correct only the PARENT "
+          "side of a bend, and only when BA>0",
+          "[translation][true-face]") {
+  double radiusMm = 1.5, kFactor = 0.4, thicknessMm = 2.0;
+  auto graph = MakeStrip(2, 100.0, 50.0, thicknessMm, 90.0, radiusMm, kFactor);
+  EvaluateResult result = Evaluate(graph);
+  REQUIRE(result.ok);
+  REQUIRE(result.panels.size() == 2);
+  REQUIRE(result.bridges.size() == 1);
+
+  const RegionPanelLayout* seg0 = nullptr;  // parent of the one bend
+  const RegionPanelLayout* seg1 = nullptr;  // child of the one bend
+  for (auto& p : result.panels) {
+    if (p.regionPanelId == "seg0") seg0 = &p;
+    if (p.regionPanelId == "seg1") seg1 = &p;
+  }
+  REQUIRE(seg0 != nullptr);
+  REQUIRE(seg1 != nullptr);
+
+  const std::string& bendId = result.bridges[0].bendId;
+  const Point2& offset = result.bridges[0].parentTangentOffsetLocal;
+  REQUIRE(Dist({offset.x, offset.y, 0}, {0, 0, 0}) > 1e-6);  // BA>0 here — a real offset
+
+  // seg0 (parent): the bend-adjacent edge's two corners are shifted by
+  // exactly `offset` (transformed by seg0's own, here-identity, pose) at
+  // both bottom and top; every other corner is untouched. A corner can be an
+  // ENDPOINT of the tagged edge (i1) without itself starting a tagged edge —
+  // find both corrected indices first, rather than scanning edgeBendId[i]
+  // alone, which would miss i1.
+  std::unordered_set<size_t> correctedIndices;
+  for (size_t i = 0; i < seg0->edgeBendId.size(); ++i) {
+    if (seg0->edgeBendId[i] == bendId) {
+      correctedIndices.insert(i);
+      correctedIndices.insert((i + 1) % seg0->regionOuter.size());
+    }
+  }
+  CHECK(correctedIndices.size() == 2);
+  for (size_t idx : correctedIndices) {
+    Point3 expectedBottom = seg0->pose.Apply(
+        {seg0->regionOuter[idx].x + offset.x, seg0->regionOuter[idx].y + offset.y, 0.0});
+    Point3 expectedTop = seg0->pose.Apply(
+        {seg0->regionOuter[idx].x + offset.x, seg0->regionOuter[idx].y + offset.y, thicknessMm});
+    CHECK(Dist(seg0->bottomFaceTrue[idx], expectedBottom) < 1e-9);
+    CHECK(Dist(seg0->topFaceTrue[idx], expectedTop) < 1e-9);
+    CHECK(Dist(seg0->bottomFaceTrue[idx], seg0->bottomFace[idx]) > 1e-6);
+    CHECK(Dist(seg0->topFaceTrue[idx], seg0->topFace[idx]) > 1e-6);
+  }
+  for (size_t i = 0; i < seg0->regionOuter.size(); ++i) {
+    if (correctedIndices.count(i)) continue;
+    CHECK(Dist(seg0->bottomFaceTrue[i], seg0->bottomFace[i]) < 1e-12);
+    CHECK(Dist(seg0->topFaceTrue[i], seg0->topFace[i]) < 1e-12);
+  }
+
+  // seg1 (child, and a leaf — parent to nothing): unchanged everywhere, since
+  // the child side already lands on the true tangent line via childShift.
+  for (size_t i = 0; i < seg1->bottomFace.size(); ++i) {
+    CHECK(Dist(seg1->bottomFaceTrue[i], seg1->bottomFace[i]) < 1e-12);
+    CHECK(Dist(seg1->topFaceTrue[i], seg1->topFace[i]) < 1e-12);
+  }
+}
+
+TEST_CASE("GraphEvaluator: bottomFaceTrue/topFaceTrue are a no-op at radiusMm=0",
+          "[translation][true-face]") {
+  auto graph = MakeStrip(2, 100.0, 50.0, 2.0, 90.0, /*radiusMm=*/0.0, /*kFactor=*/0.0);
+  EvaluateResult result = Evaluate(graph);
+  REQUIRE(result.ok);
+
+  for (const auto& panel : result.panels) {
+    for (size_t i = 0; i < panel.bottomFace.size(); ++i) {
+      CHECK(Dist(panel.bottomFaceTrue[i], panel.bottomFace[i]) < 1e-12);
+      CHECK(Dist(panel.topFaceTrue[i], panel.topFace[i]) < 1e-12);
+    }
+  }
 }

@@ -606,6 +606,143 @@ TEST_CASE("ConstructPartSolid: Latin-cross cube net builds one manifold cube",
   CHECK(volume > 10000.0);
 }
 
+// ─── Branching (multi-child parent) + real bend radius ──────────────────────
+//
+// docs/BUG_REPORT_nonzero_default_bend_radius_breaks_mesh_construction.md: a
+// root panel that is parent to MORE THAN ONE bend (e.g. a tray's base folding
+// up into 4 walls — testcube.step's own real topology) failed construction
+// with "N disconnected solid(s)" as soon as any of those bends had a real
+// (nonzero) radius. Every prior nonzero-radius test in this file (the N=4/5/6
+// tube tests above) is a LINEAR CHAIN — each panel parent to at most one
+// bend — which never exercised this: the childShift correction that lands
+// each bend's far end exactly on its child lives on the CHILD's own pose, but
+// a panel can be parent to several bends at once, so a single pose-level
+// correction can't cover all of them — only a per-bridge correction (the
+// collar solid in part_solid_construction.cc) can. This is the test that
+// would have caught the bug before it shipped.
+namespace {
+
+// A rectangular base panel with up to 4 walls, one per edge, each attached by
+// its own bend with a real (possibly nonzero) radius/K-factor. Hinges overhang
+// their edge slightly (matching MakeStrip's own convention) so this also
+// guards against assuming a hinge's raw endpoints line up 1:1 with the panel
+// edge they bound — the actual bug this test's fix required (the bridge's
+// parent-side tangent line must be derived from the panel's own clipped edge
+// shifted by the bend-allowance offset, never from the hinge's own raw,
+// deliberately-longer endpoints).
+PartGraphSpec MakeTray(double widthMm, double heightMm, double thicknessMm, double angleDeg,
+                       double radiusMm, double kFactor, int wallCount = 4) {
+  PartGraphSpec graph;
+  graph.partId = "test-tray";
+  graph.rootRegionPanelId = "base";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = Transform3::Identity();
+
+  // The whole part is ONE shared flat blank (13 §0's F-frame) — every panel is
+  // a region of THIS SAME outline, never its own separate shape. A tray's
+  // base-plus-4-walls blank is a plus/cross shape: the base rectangle plus one
+  // wall-depth-tall flap on each edge (flat corners, no miter/relief — this
+  // fixture only needs a valid clip region per wall, not a manufacturable
+  // closed box), CCW per RingSpec::outer's own convention.
+  double d = widthMm < heightMm ? widthMm / 4.0 : heightMm / 4.0;  // wall depth
+  double w = widthMm, h = heightMm;
+  graph.outline.outer = {
+      {0, -d},     {w, -d},     {w, 0},      {w + d, 0},  {w + d, h},
+      {w, h},      {w, h + d},  {0, h + d},  {0, h},      {-d, h},
+      {-d, 0},     {0, 0},
+  };
+
+  double overhang = 10.0;
+  struct WallSpec {
+    std::string id;
+    Point2 hingeA;
+    Point2 hingeB;
+  };
+  // hingeA->hingeB chosen (per BoundingBends' fixed "child = left side"
+  // convention) so each wall's child territory is OUTWARD from the base.
+  std::vector<WallSpec> walls = {
+      {"south", {widthMm + overhang, 0.0}, {-overhang, 0.0}},
+      {"east", {widthMm, heightMm + overhang}, {widthMm, -overhang}},
+      {"north", {-overhang, heightMm}, {widthMm + overhang, heightMm}},
+      {"west", {0.0, -overhang}, {0.0, heightMm + overhang}},
+  };
+
+  for (int i = 0; i < wallCount; ++i) {
+    BendSpec bend;
+    bend.id = "bend-" + walls[i].id;
+    bend.parentRegionPanelId = "base";
+    bend.childRegionPanelId = "wall-" + walls[i].id;
+    bend.hingeA = walls[i].hingeA;
+    bend.hingeB = walls[i].hingeB;
+    bend.angleDeg = angleDeg;
+    bend.radiusMm = radiusMm;
+    bend.kFactor = kFactor;
+    graph.bends.push_back(bend);
+  }
+  return graph;
+}
+
+}  // namespace
+
+TEST_CASE("ConstructPartSolid: a tray base branching into 4 walls with a REAL bend "
+          "radius is one manifold solid per fold direction",
+          "[translation][construction][net]") {
+  double radiusMm = 1.5, kFactor = 0.4, thicknessMm = 2.0;
+  auto graphMountain = MakeTray(100.0, 80.0, thicknessMm, 90.0, radiusMm, kFactor);
+  auto graphValley = MakeTray(100.0, 80.0, thicknessMm, -90.0, radiusMm, kFactor);
+
+  EvaluateResult layoutMountain = Evaluate(graphMountain);
+  EvaluateResult layoutValley = Evaluate(graphValley);
+  REQUIRE(layoutMountain.ok);
+  REQUIRE(layoutValley.ok);
+  REQUIRE(layoutMountain.panels.size() == 5);  // base + 4 walls
+
+  GeometryState stateMountain, stateValley;
+  ConstructPartSolidResult resultMountain =
+      ConstructPartSolid(stateMountain, layoutMountain, thicknessMm);
+  ConstructPartSolidResult resultValley = ConstructPartSolid(stateValley, layoutValley, thicknessMm);
+  REQUIRE(resultMountain.ok);
+  REQUIRE(resultValley.ok);
+
+  auto itMountain = stateMountain.solids.find(resultMountain.shellId);
+  auto itValley = stateValley.solids.find(resultValley.shellId);
+  REQUIRE(itMountain != stateMountain.solids.end());
+  REQUIRE(itValley != stateValley.solids.end());
+
+  BRepCheck_Analyzer analyzerMountain(itMountain->second.shape);
+  BRepCheck_Analyzer analyzerValley(itValley->second.shape);
+  CHECK(analyzerMountain.IsValid());
+  CHECK(analyzerValley.IsValid());
+  CHECK(CountSolids(itMountain->second.shape) == 1);
+  CHECK(CountSolids(itValley->second.shape) == 1);
+
+  // Same symmetry oracle as this file's other mountain/valley pairs: a real
+  // physical tray's volume can't depend on which direction is labelled
+  // "mountain" vs "valley".
+  double volumeMountain = SolidVolume(itMountain->second.shape);
+  double volumeValley = SolidVolume(itValley->second.shape);
+  CHECK(volumeValley == Approx(volumeMountain).epsilon(1e-6));
+}
+
+TEST_CASE("ConstructPartSolid: a tray base branching into 4 walls at radiusMm=0 "
+          "still builds one manifold solid (regression guard)",
+          "[translation][construction][net]") {
+  double thicknessMm = 2.0;
+  auto graph = MakeTray(100.0, 80.0, thicknessMm, 90.0, 0.0, 0.0);
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, thicknessMm);
+  REQUIRE(result.ok);
+
+  auto it = state.solids.find(result.shellId);
+  REQUIRE(it != state.solids.end());
+  BRepCheck_Analyzer analyzer(it->second.shape);
+  CHECK(analyzer.IsValid());
+  CHECK(CountSolids(it->second.shape) == 1);
+}
+
 TEST_CASE("ConstructPartSolid: rejects a failed layout", "[translation][construction][errors]") {
   EvaluateResult layout;
   layout.ok = false;

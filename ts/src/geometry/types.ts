@@ -670,6 +670,13 @@ export interface NapiRegionPanelLayout {
   regionOuter: NapiPoint2[];
   bottomFace: NapiPoint3[];
   topFace: NapiPoint3[];
+  // Same as bottomFace/topFace except at a PARENT-side bend-adjacent edge,
+  // where this is the true tangent-line position rather than the BA/2-clipped
+  // boundary — see RegionPanelLayout's own doc comment (manufacturing_graph_
+  // evaluator.hpp). Used by graph://part/{id}/boundary, not by anything that
+  // needs the flat-pattern-facing clip.
+  bottomFaceTrue: NapiPoint3[];
+  topFaceTrue: NapiPoint3[];
   pose: NapiTransform3;
   // edgeBendId[i] names the bend whose zone the edge (regionOuter[i],
   // regionOuter[i+1]) borders, or "" for a true outer boundary.
@@ -687,6 +694,7 @@ export interface NapiBridgeLayout {
   pivotOriginWorld: NapiPoint3;
   pivotAxisWorld: NapiPoint3;
   angleDeg: number;
+  parentTangentOffsetLocal: NapiPoint2;
 }
 
 export interface EvaluatePartGraphResult {

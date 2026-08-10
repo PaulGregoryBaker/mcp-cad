@@ -177,6 +177,24 @@ struct RegionPanelLayout {
   // paragraph: side-wall quad i is bottomFace[i],bottomFace[i+1],topFace[i+1],topFace[i]).
   std::vector<Point3> bottomFace;
   std::vector<Point3> topFace;
+  // Same as bottomFace/topFace, index-correlated, EXCEPT at a vertex bounding
+  // an edge where THIS panel is the PARENT of a bend (edgeBendId names a
+  // bend whose parentRegionPanelId is this panel's own id) — there, this is
+  // the TRUE tangent-line position (where the parent's flat material
+  // actually stops and the curved bend begins) rather than the BA/2-clipped
+  // boundary bottomFace/topFace use. Identical to bottomFace/topFace at
+  // every true outer edge, at BA=0 (sharp fold — nothing to correct), and at
+  // a CHILD-side bend-adjacent edge (already exactly the tangent line via
+  // childShift, see Evaluate()'s own comment on that — nothing to correct
+  // there either). For a consumer that needs the part's real 3D extent
+  // (e.g. graph://part/{id}/boundary) rather than the flat-pattern-facing
+  // clip bottomFace/topFace (and the panel's own solid extrusion, and
+  // ConstructPartSolid's collar) use — see docs/BUG_REPORT_boundary_
+  // resource_disagrees_with_mesh_after_collar_fix.md for why the two
+  // diverge and why a second array, not overwriting bottomFace/topFace
+  // themselves, is the correct fix.
+  std::vector<Point3> bottomFaceTrue;
+  std::vector<Point3> topFaceTrue;
   Transform3 pose;  // the cached chain product for this panel (13 §4.1)
   // edgeBendId[i] names the bend whose zone the edge (regionOuter[i],
   // regionOuter[i+1]) borders, or "" if the edge is a true outer boundary. Computed
@@ -210,6 +228,19 @@ struct BridgeLayout {
   Point3 pivotOriginWorld;
   Point3 pivotAxisWorld;  // unit direction
   double angleDeg = 0.0;  // same signed value as the source BendSpec
+  // The 2D flat-frame vector (nLeft * BA/2, the same quantity BoundingBends
+  // subtracts to produce the PARENT's own clipped region boundary) that maps
+  // a point on the parent's clipped zone edge back to the corresponding
+  // point on the true tangent line (the raw hinge) — same along-hinge
+  // position, just undoing the perpendicular BA/2 clip offset. A
+  // construction consumer adds this to each of the parent panel's own
+  // zone-boundary edge points (never to the raw BendSpec::hingeA/hingeB
+  // endpoints directly, which are deliberately authored longer than the
+  // panel they bound and so have no consistent per-vertex correspondence)
+  // to find where the parent's flat material actually stops and the curved
+  // bend begins. Zero when BA=0 (sharp fold): the clipped boundary already
+  // IS the tangent line.
+  Point2 parentTangentOffsetLocal;
 };
 
 enum class EvaluateErrorCode {

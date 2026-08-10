@@ -1,6 +1,7 @@
 #include "manufacturing_graph_evaluator.hpp"
 #include "ring_containment.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <optional>
 #include <unordered_map>
@@ -499,6 +500,7 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
       bridge.pivotOriginWorld = hingeAWorld;
       bridge.pivotAxisWorld = axis;
       bridge.angleDeg = bend->angleDeg;
+      bridge.parentTangentOffsetLocal = {nLeft.x * halfBa, nLeft.y * halfBa};
       result.bridges.push_back(std::move(bridge));
     }
   }
@@ -529,7 +531,39 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
       layout.bottomFace.push_back(pose.Apply({v.x, v.y, 0.0}));
       layout.topFace.push_back(pose.Apply({v.x, v.y, graph.thicknessMm}));
     }
+    // Default: identical to bottomFace/topFace, corrected below at any edge
+    // where this panel is the PARENT of a bend (RegionPanelLayout's own doc
+    // comment on bottomFaceTrue/topFaceTrue explains why only that side
+    // needs it).
+    layout.bottomFaceTrue = layout.bottomFace;
+    layout.topFaceTrue = layout.topFace;
     result.panels.push_back(std::move(layout));
+  }
+
+  // Correct bottomFaceTrue/topFaceTrue at each PARENT-side bend-adjacent
+  // edge to the true tangent line — reusing parentTangentOffsetLocal (same
+  // offset ConstructPartSolid's collar already applies) rather than
+  // re-deriving it a second time. Not load-bearing for construction itself
+  // (ConstructPartSolid never reads these) — purely for a consumer that
+  // needs the part's real 3D extent, e.g. graph://part/{id}/boundary.
+  std::unordered_map<std::string, size_t> panelIndexById;
+  for (size_t i = 0; i < result.panels.size(); ++i) {
+    panelIndexById[result.panels[i].regionPanelId] = i;
+  }
+  for (const auto& bridge : result.bridges) {
+    auto parentIt = panelIndexById.find(bridge.parentRegionPanelId);
+    if (parentIt == panelIndexById.end()) continue;
+    RegionPanelLayout& parent = result.panels[parentIt->second];
+    auto edgeIt = std::find(parent.edgeBendId.begin(), parent.edgeBendId.end(), bridge.bendId);
+    if (edgeIt == parent.edgeBendId.end()) continue;
+    size_t i0 = static_cast<size_t>(edgeIt - parent.edgeBendId.begin());
+    size_t i1 = (i0 + 1) % parent.regionOuter.size();
+    const Point2& offset = bridge.parentTangentOffsetLocal;
+    for (size_t idx : {i0, i1}) {
+      Point2 tangent{parent.regionOuter[idx].x + offset.x, parent.regionOuter[idx].y + offset.y};
+      parent.bottomFaceTrue[idx] = parent.pose.Apply({tangent.x, tangent.y, 0.0});
+      parent.topFaceTrue[idx] = parent.pose.Apply({tangent.x, tangent.y, graph.thicknessMm});
+    }
   }
 
   result.ok = true;

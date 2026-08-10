@@ -350,6 +350,8 @@ Napi::Object WriteRegionPanelLayout(Napi::Env env, const RegionPanelLayout& pane
   obj.Set("regionOuter", WritePoint2Array(env, panel.regionOuter));
   obj.Set("bottomFace", WritePoint3Array(env, panel.bottomFace));
   obj.Set("topFace", WritePoint3Array(env, panel.topFace));
+  obj.Set("bottomFaceTrue", WritePoint3Array(env, panel.bottomFaceTrue));
+  obj.Set("topFaceTrue", WritePoint3Array(env, panel.topFaceTrue));
   obj.Set("pose", WriteTransform3(env, panel.pose));
   obj.Set("edgeBendId", WriteStringArray(env, panel.edgeBendId));
   obj.Set("regionPolygonHoles", WritePolygonHoleArray(env, panel.regionPolygonHoles));
@@ -365,6 +367,7 @@ Napi::Object WriteBridgeLayout(Napi::Env env, const BridgeLayout& bridge) {
   obj.Set("pivotOriginWorld", WritePoint3(env, bridge.pivotOriginWorld));
   obj.Set("pivotAxisWorld", WritePoint3(env, bridge.pivotAxisWorld));
   obj.Set("angleDeg", Napi::Number::New(env, bridge.angleDeg));
+  obj.Set("parentTangentOffsetLocal", WritePoint2(env, bridge.parentTangentOffsetLocal));
   return obj;
 }
 
@@ -417,6 +420,14 @@ EvaluateResult ReadEvaluateResult(const Napi::Object& obj) {
     for (uint32_t j = 0; j < topFaceArr.Length(); ++j) {
       panel.topFace.push_back(ReadPoint3(topFaceArr.Get(j).As<Napi::Object>()));
     }
+    Napi::Array bottomFaceTrueArr = panelObj.Get("bottomFaceTrue").As<Napi::Array>();
+    for (uint32_t j = 0; j < bottomFaceTrueArr.Length(); ++j) {
+      panel.bottomFaceTrue.push_back(ReadPoint3(bottomFaceTrueArr.Get(j).As<Napi::Object>()));
+    }
+    Napi::Array topFaceTrueArr = panelObj.Get("topFaceTrue").As<Napi::Array>();
+    for (uint32_t j = 0; j < topFaceTrueArr.Length(); ++j) {
+      panel.topFaceTrue.push_back(ReadPoint3(topFaceTrueArr.Get(j).As<Napi::Object>()));
+    }
     panel.pose = ReadTransform3(panelObj.Get("pose").As<Napi::Object>());
     Napi::Array edgeBendIdArr = panelObj.Get("edgeBendId").As<Napi::Array>();
     for (uint32_t j = 0; j < edgeBendIdArr.Length(); ++j) {
@@ -462,6 +473,8 @@ EvaluateResult ReadEvaluateResult(const Napi::Object& obj) {
     bridge.pivotOriginWorld = ReadPoint3(bridgeObj.Get("pivotOriginWorld").As<Napi::Object>());
     bridge.pivotAxisWorld = ReadPoint3(bridgeObj.Get("pivotAxisWorld").As<Napi::Object>());
     bridge.angleDeg = bridgeObj.Get("angleDeg").As<Napi::Number>().DoubleValue();
+    bridge.parentTangentOffsetLocal =
+        ReadPoint2(bridgeObj.Get("parentTangentOffsetLocal").As<Napi::Object>());
     result.bridges.push_back(std::move(bridge));
   }
 

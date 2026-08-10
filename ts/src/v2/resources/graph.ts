@@ -440,10 +440,15 @@ export function ensureBoundaryBlobFresh(
   const snapshot = store.snapshotPart(partId);
   const bendsById = new Map(snapshot.bends.map((b) => [b.bendId, b]));
 
+  // bottomFaceTrue/topFaceTrue, not bottomFace/topFace: this resource is
+  // documented as the part's exact 3D boundary (matching graph://part/{id}/
+  // mesh), not the flat-pattern-facing clip — see manufacturing_graph_
+  // evaluator.hpp's own doc comment on RegionPanelLayout::bottomFaceTrue and
+  // docs/BUG_REPORT_boundary_resource_disagrees_with_mesh_after_collar_fix.md.
   const regionPanels: BoundaryRegionPanel[] = evaluated.panels.map((p) => ({
     regionPanelId: p.regionPanelId,
-    bottomFace: p.bottomFace,
-    topFace: p.topFace,
+    bottomFace: p.bottomFaceTrue,
+    topFace: p.topFaceTrue,
     regionPolygonHoles: p.regionPolygonHoles,
     regionCircleHoles: p.regionCircleHoles,
   }));

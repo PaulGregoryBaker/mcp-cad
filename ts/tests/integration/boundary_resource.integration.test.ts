@@ -29,6 +29,11 @@ interface CreatePartResult {
   root_region_panel_id: string;
 }
 
+interface CreateBendResult {
+  bend_id: string;
+  child_region_panel_id: string;
+}
+
 interface Ref {
   url: string;
   contentType: string;
@@ -140,6 +145,63 @@ d('[v2] graph://part/{id}/boundary (Ref-served exact geometry)', () => {
 
     const bodyAfter = await fetch(after.ref.url).then((r) => r.text());
     expect(bodyAfter).not.toBe(bodyBefore); // but the content behind that URL changed
+  });
+
+  // docs/BUG_REPORT_boundary_resource_disagrees_with_mesh_after_collar_fix.md:
+  // a nonzero bend radius left boundary reporting the parent panel's
+  // bend-adjacent corners BA/2 short of the true hinge, while the actual
+  // mesh solid (this session's earlier fix) correctly reaches it. Real
+  // end-to-end coverage through the addon, not a direct C++ unit test —
+  // this exact bug class (a NAPI-crossing field silently not round-tripping)
+  // was found only by testing this way earlier in the same session.
+  it('a nonzero bend radius: the parent panel\'s bend-adjacent corners land exactly on the raw hinge, not BA/2 short', async () => {
+    const store = new GraphStore();
+    const part = dispatchGraphTool(store, 'create_part', {
+      name: 'boundary-true-face',
+      outline: [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+        { x: 100, y: 20 },
+        { x: 0, y: 20 },
+      ],
+      thickness_mm: 2.0,
+    }) as CreatePartResult;
+
+    dispatchGraphTool(store, 'create_node', {
+      kind: 'bend',
+      part_id: part.part_id,
+      parent_region_panel_id: part.root_region_panel_id,
+      hinge_a: { x: 50, y: 0 },
+      hinge_b: { x: 50, y: 20 },
+      angle_deg: 90,
+      radius_mm: 1.5,
+      k_factor: 0.4,
+    }) as CreateBendResult;
+
+    const result = readBoundary(store, part.part_id);
+    const body = await fetch(result.ref.url).then((r) => r.text());
+    const parsed = JSON.parse(body) as {
+      regionPanels: Array<{
+        regionPanelId: string;
+        bottomFace: Array<{ x: number; y: number; z: number }>;
+        topFace: Array<{ x: number; y: number; z: number }>;
+      }>;
+    };
+
+    const rootPanel = parsed.regionPanels.find(
+      (p) => p.regionPanelId === part.root_region_panel_id,
+    );
+    expect(rootPanel).toBeDefined();
+
+    // The un-fixed value would be x=50-BA/2≈48.19 (BA/2 = (pi/2)*(1.5+0.4*2)/2
+    // ≈ 1.81); the fixed value lands exactly on the raw hinge, x=50.
+    const nearHinge = [...rootPanel!.bottomFace, ...rootPanel!.topFace].filter(
+      (p) => p.x > 40 && p.x < 55,
+    );
+    expect(nearHinge.length).toBeGreaterThan(0);
+    for (const p of nearHinge) {
+      expect(p.x).toBeCloseTo(50, 6);
+    }
   });
 
   it('rejects a nonexistent part_id with GRAPH_PART_NOT_FOUND', () => {
