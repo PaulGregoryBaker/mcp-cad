@@ -58,6 +58,11 @@ const REGISTRY = [
   { cppStruct: 'ReconcileOutlinesResult', cppHeader: H('translation', 'part_merge.hpp'), tsInterface: 'ReconcileOutlinesResult', writeFn: 'WriteReconcileOutlinesResult', readFn: null },
   { cppStruct: 'ReconcilePiecesResult', cppHeader: H('translation', 'step_reconciliation.hpp'), tsInterface: 'ReconcilePiecesResult', writeFn: 'WriteReconcilePiecesResult', readFn: null },
   { cppStruct: 'PolygonBooleanResult', cppHeader: H('translation', 'polygon_boolean.hpp'), tsInterface: 'PolygonBooleanResult', writeFn: 'WritePolygonBooleanResult', readFn: null },
+  // FlatOutlineResult is a distinct C++ struct (flat_outline.hpp) but is
+  // deliberately serialized to the SAME shape as PolygonBooleanResult
+  // (ok/errorCode/message/outer) — reused on the TS side rather than
+  // declaring a second, identical interface.
+  { cppStruct: 'FlatOutlineResult', cppHeader: H('translation', 'flat_outline.hpp'), tsInterface: 'PolygonBooleanResult', writeFn: 'WriteFlatOutlineResult', readFn: null },
   { cppStruct: 'CutPanelResult', cppHeader: H('translation', 'cut_panel.hpp'), tsInterface: 'CutPanelResult', writeFn: 'WriteCutPanelResult', readFn: null },
   { cppStruct: 'Finding', cppHeader: H('validation', 'findings.hpp'), tsInterface: 'NapiFinding', writeFn: 'WriteFinding', readFn: null },
   // ManufacturingProfile is NOT registered: the C++ struct is flat

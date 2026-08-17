@@ -20,6 +20,7 @@
 #include "../geometry/translation/part_merge.hpp"
 #include "../geometry/translation/step_reconciliation.hpp"
 #include "../geometry/translation/polygon_boolean.hpp"
+#include "../geometry/translation/flat_outline.hpp"
 #include "../geometry/translation/cut_panel.hpp"
 #include "../geometry/translation/close_gap.hpp"
 #include "../geometry/translation/add_flange.hpp"
@@ -56,6 +57,8 @@ using translation::PolygonBooleanResult;
 using translation::CircleHoleSpec;
 using translation::CutPanelErrorCode;
 using translation::CutPanelResult;
+using translation::FlatOutlineErrorCode;
+using translation::FlatOutlineResult;
 
 // svc() (the single-session-per-process GeometryService instance) is already
 // declared+defined, `static`, in geometry_binding.cc — addon.cc #includes that
@@ -135,6 +138,18 @@ const char* CutPanelErrorCodeToString(CutPanelErrorCode code) {
     // reuse discipline as PolygonBooleanErrorCodeToString above.
     case CutPanelErrorCode::kDegenerateInput: return "GE_DEGENERATE_OUTLINE";
     case CutPanelErrorCode::kHoleNotContained: return "GE_CUT_HOLE_NOT_CONTAINED";
+  }
+  return "GE_UNKNOWN_ERROR";
+}
+
+const char* FlatOutlineErrorCodeToString(FlatOutlineErrorCode code) {
+  switch (code) {
+    case FlatOutlineErrorCode::kNone: return "";
+    // Same reuse discipline as PolygonBooleanErrorCodeToString above —
+    // both degeneracy and union-failure here are exactly the same
+    // underlying facts PolygonUnion itself already names.
+    case FlatOutlineErrorCode::kDegenerateInput: return "GE_DEGENERATE_OUTLINE";
+    case FlatOutlineErrorCode::kUnionFailed: return "GE_POLYGON_BOOLEAN_FAILED";
   }
   return "GE_UNKNOWN_ERROR";
 }
@@ -348,14 +363,15 @@ Napi::Object WriteRegionPanelLayout(Napi::Env env, const RegionPanelLayout& pane
   Napi::Object obj = Napi::Object::New(env);
   obj.Set("regionPanelId", Napi::String::New(env, panel.regionPanelId));
   obj.Set("regionOuter", WritePoint2Array(env, panel.regionOuter));
+  obj.Set("rawOuter", WritePoint2Array(env, panel.rawOuter));
   obj.Set("bottomFace", WritePoint3Array(env, panel.bottomFace));
   obj.Set("topFace", WritePoint3Array(env, panel.topFace));
-  obj.Set("bottomFaceTrue", WritePoint3Array(env, panel.bottomFaceTrue));
-  obj.Set("topFaceTrue", WritePoint3Array(env, panel.topFaceTrue));
   obj.Set("pose", WriteTransform3(env, panel.pose));
   obj.Set("edgeBendId", WriteStringArray(env, panel.edgeBendId));
   obj.Set("regionPolygonHoles", WritePolygonHoleArray(env, panel.regionPolygonHoles));
   obj.Set("regionCircleHoles", WriteCircleHoleArray(env, panel.regionCircleHoles));
+  obj.Set("rawPolygonHoles", WritePolygonHoleArray(env, panel.rawPolygonHoles));
+  obj.Set("rawCircleHoles", WriteCircleHoleArray(env, panel.rawCircleHoles));
   return obj;
 }
 
@@ -367,7 +383,8 @@ Napi::Object WriteBridgeLayout(Napi::Env env, const BridgeLayout& bridge) {
   obj.Set("pivotOriginWorld", WritePoint3(env, bridge.pivotOriginWorld));
   obj.Set("pivotAxisWorld", WritePoint3(env, bridge.pivotAxisWorld));
   obj.Set("angleDeg", Napi::Number::New(env, bridge.angleDeg));
-  obj.Set("parentTangentOffsetLocal", WritePoint2(env, bridge.parentTangentOffsetLocal));
+  obj.Set("hingeA", WritePoint2(env, bridge.hingeA));
+  obj.Set("hingeB", WritePoint2(env, bridge.hingeB));
   return obj;
 }
 
@@ -412,6 +429,17 @@ EvaluateResult ReadEvaluateResult(const Napi::Object& obj) {
     for (uint32_t j = 0; j < regionOuterArr.Length(); ++j) {
       panel.regionOuter.push_back(ReadPoint2(regionOuterArr.Get(j).As<Napi::Object>()));
     }
+    // rawOuter round-trips the same way as regionOuter — see this struct
+    // field's own doc comment (manufacturing_graph_evaluator.hpp): pose,
+    // bottomFace/topFace, and solid-wall construction all consume this, not
+    // regionOuter. Default empty if absent (pre-this-fix callers/fixtures).
+    Napi::Value rawOuterV = panelObj.Get("rawOuter");
+    if (rawOuterV.IsArray()) {
+      Napi::Array rawOuterArr = rawOuterV.As<Napi::Array>();
+      for (uint32_t j = 0; j < rawOuterArr.Length(); ++j) {
+        panel.rawOuter.push_back(ReadPoint2(rawOuterArr.Get(j).As<Napi::Object>()));
+      }
+    }
     Napi::Array bottomFaceArr = panelObj.Get("bottomFace").As<Napi::Array>();
     for (uint32_t j = 0; j < bottomFaceArr.Length(); ++j) {
       panel.bottomFace.push_back(ReadPoint3(bottomFaceArr.Get(j).As<Napi::Object>()));
@@ -419,14 +447,6 @@ EvaluateResult ReadEvaluateResult(const Napi::Object& obj) {
     Napi::Array topFaceArr = panelObj.Get("topFace").As<Napi::Array>();
     for (uint32_t j = 0; j < topFaceArr.Length(); ++j) {
       panel.topFace.push_back(ReadPoint3(topFaceArr.Get(j).As<Napi::Object>()));
-    }
-    Napi::Array bottomFaceTrueArr = panelObj.Get("bottomFaceTrue").As<Napi::Array>();
-    for (uint32_t j = 0; j < bottomFaceTrueArr.Length(); ++j) {
-      panel.bottomFaceTrue.push_back(ReadPoint3(bottomFaceTrueArr.Get(j).As<Napi::Object>()));
-    }
-    Napi::Array topFaceTrueArr = panelObj.Get("topFaceTrue").As<Napi::Array>();
-    for (uint32_t j = 0; j < topFaceTrueArr.Length(); ++j) {
-      panel.topFaceTrue.push_back(ReadPoint3(topFaceTrueArr.Get(j).As<Napi::Object>()));
     }
     panel.pose = ReadTransform3(panelObj.Get("pose").As<Napi::Object>());
     Napi::Array edgeBendIdArr = panelObj.Get("edgeBendId").As<Napi::Array>();
@@ -458,6 +478,24 @@ EvaluateResult ReadEvaluateResult(const Napi::Object& obj) {
         panel.regionCircleHoles.push_back(circle);
       }
     }
+    Napi::Value rawPolygonHolesV = panelObj.Get("rawPolygonHoles");
+    if (rawPolygonHolesV.IsArray()) {
+      Napi::Array holesArr = rawPolygonHolesV.As<Napi::Array>();
+      for (uint32_t j = 0; j < holesArr.Length(); ++j) {
+        panel.rawPolygonHoles.push_back(ReadPoint2Array(holesArr.Get(j).As<Napi::Array>()));
+      }
+    }
+    Napi::Value rawCircleHolesV = panelObj.Get("rawCircleHoles");
+    if (rawCircleHolesV.IsArray()) {
+      Napi::Array circleArr = rawCircleHolesV.As<Napi::Array>();
+      for (uint32_t j = 0; j < circleArr.Length(); ++j) {
+        Napi::Object circleObj = circleArr.Get(j).As<Napi::Object>();
+        CircleHoleSpec circle;
+        circle.center = ReadPoint2(circleObj.Get("center").As<Napi::Object>());
+        circle.radiusMm = circleObj.Get("radiusMm").As<Napi::Number>().DoubleValue();
+        panel.rawCircleHoles.push_back(circle);
+      }
+    }
     result.panels.push_back(std::move(panel));
   }
 
@@ -473,8 +511,14 @@ EvaluateResult ReadEvaluateResult(const Napi::Object& obj) {
     bridge.pivotOriginWorld = ReadPoint3(bridgeObj.Get("pivotOriginWorld").As<Napi::Object>());
     bridge.pivotAxisWorld = ReadPoint3(bridgeObj.Get("pivotAxisWorld").As<Napi::Object>());
     bridge.angleDeg = bridgeObj.Get("angleDeg").As<Napi::Number>().DoubleValue();
-    bridge.parentTangentOffsetLocal =
-        ReadPoint2(bridgeObj.Get("parentTangentOffsetLocal").As<Napi::Object>());
+    Napi::Value hingeAV = bridgeObj.Get("hingeA");
+    if (hingeAV.IsObject()) {
+      bridge.hingeA = ReadPoint2(hingeAV.As<Napi::Object>());
+    }
+    Napi::Value hingeBV = bridgeObj.Get("hingeB");
+    if (hingeBV.IsObject()) {
+      bridge.hingeB = ReadPoint2(hingeBV.As<Napi::Object>());
+    }
     result.bridges.push_back(std::move(bridge));
   }
 
@@ -715,6 +759,38 @@ Napi::Value PolygonUnionBinding(const Napi::CallbackInfo& info) {
     std::vector<Point2> ringB = ReadPoint2Array(info[1].As<Napi::Array>());
     PolygonBooleanResult result = translation::PolygonUnion(ringA, ringB);
     return WritePolygonBooleanResult(env, result);
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
+Napi::Object WriteFlatOutlineResult(Napi::Env env, const FlatOutlineResult& result) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("ok", Napi::Boolean::New(env, result.ok));
+  obj.Set("errorCode", Napi::String::New(env, FlatOutlineErrorCodeToString(result.errorCode)));
+  obj.Set("message", Napi::String::New(env, result.message));
+  obj.Set("outer", WritePoint2Array(env, result.outer));
+  return obj;
+}
+
+// buildFlatOutline(graph: PartGraphSpec, layout: EvaluateResult) — the
+// part's single combined flat-pattern outline (docs/BUG_REPORT_outline_
+// never_grows_for_bend_allowance.md), computed from an already-evaluated
+// layout exactly like mapPointToWorld/constructPartSolid already take
+// `layout: EvaluateResult` back in.
+Napi::Value BuildFlatOutlineBinding(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 2 || !info[0].IsObject() || !info[1].IsObject()) {
+    Napi::TypeError::New(env, "buildFlatOutline(graph: PartGraphSpec, layout: EvaluateResult)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    PartGraphSpec graph = ReadPartGraphSpec(info[0].As<Napi::Object>());
+    EvaluateResult layout = ReadEvaluateResult(info[1].As<Napi::Object>());
+    FlatOutlineResult result = translation::BuildFlatOutline(graph, layout);
+    return WriteFlatOutlineResult(env, result);
   } catch (const std::exception& e) {
     Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
     return env.Undefined();
@@ -1126,6 +1202,7 @@ void RegisterTranslationMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("reconcileOutlines", Napi::Function::New(env, ReconcileOutlinesBinding));
   exports.Set("reconcilePieces", Napi::Function::New(env, ReconcilePiecesBinding));
   exports.Set("polygonUnion", Napi::Function::New(env, PolygonUnionBinding));
+  exports.Set("buildFlatOutline", Napi::Function::New(env, BuildFlatOutlineBinding));
   exports.Set("polygonDifference", Napi::Function::New(env, PolygonDifferenceBinding));
   exports.Set("fuseCoplanarParts", Napi::Function::New(env, FuseCoplanarPartsBinding));
   exports.Set("prepareCircleCut", Napi::Function::New(env, PrepareCircleCutBinding));

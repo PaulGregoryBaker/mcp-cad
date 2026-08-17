@@ -88,3 +88,16 @@ Verified:
 - Live re-run against `testcube.step` (`default_bend_radius_mm=2.0`):
   `boundary`'s reported bbox now extends to the true (bend-radius-adjusted)
   part extent, and `mesh` construction still succeeds.
+
+## Superseded (2026-08-10)
+
+The collar mechanism and `bottomFaceTrue`/`topFaceTrue` this fix added no
+longer exist. `docs/BUG_REPORT_outline_never_grows_for_bend_allowance.md`'s
+fix found that widening the flat outline itself (rather than patching the
+3D construction output after the fact) makes the parent's own clipped edge
+land exactly on the pivot axis with no separate correction needed —
+`boundary` and `mesh` now both read the same `bottomFace`/`topFace`
+directly from `Evaluate()`, converged back to one representation. The
+underlying symptom this report describes (boundary/mesh disagreement) is
+still correctly fixed, just by a different, simpler mechanism than the one
+`bottomFaceTrue`/`topFaceTrue` implemented.

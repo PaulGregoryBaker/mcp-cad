@@ -15,6 +15,7 @@ EvaluateResult MakeLayout(double w = 100.0, double h = 50.0) {
   RegionPanelLayout panel;
   panel.regionPanelId = "root";
   panel.regionOuter = {{0, 0}, {w, 0}, {w, h}, {0, h}};
+  panel.rawOuter = panel.regionOuter;  // root panel: never shifted (shift == 0)
   panel.pose = Transform3::Identity();
   layout.panels.push_back(panel);
 

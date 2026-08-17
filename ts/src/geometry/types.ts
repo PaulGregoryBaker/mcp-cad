@@ -668,15 +668,13 @@ export interface NapiPartGraphSpec {
 export interface NapiRegionPanelLayout {
   regionPanelId: string;
   regionOuter: NapiPoint2[];
+  // The same clipped ring as regionOuter, before the 2D bend-allowance
+  // shift — what bottomFace/topFace/pose and solid-wall construction
+  // consume; regionOuter is the flat-pattern/DXF-only, shifted view. See
+  // manufacturing_graph_evaluator.hpp's own doc comment.
+  rawOuter: NapiPoint2[];
   bottomFace: NapiPoint3[];
   topFace: NapiPoint3[];
-  // Same as bottomFace/topFace except at a PARENT-side bend-adjacent edge,
-  // where this is the true tangent-line position rather than the BA/2-clipped
-  // boundary — see RegionPanelLayout's own doc comment (manufacturing_graph_
-  // evaluator.hpp). Used by graph://part/{id}/boundary, not by anything that
-  // needs the flat-pattern-facing clip.
-  bottomFaceTrue: NapiPoint3[];
-  topFaceTrue: NapiPoint3[];
   pose: NapiTransform3;
   // edgeBendId[i] names the bend whose zone the edge (regionOuter[i],
   // regionOuter[i+1]) borders, or "" for a true outer boundary.
@@ -685,6 +683,10 @@ export interface NapiRegionPanelLayout {
   // containment assignment — see manufacturing_graph_evaluator.hpp).
   regionPolygonHoles: NapiPoint2[][];
   regionCircleHoles: NapiCircleHole[];
+  // Raw (pre-shift) counterparts of the two fields above — same relationship
+  // as rawOuter to regionOuter.
+  rawPolygonHoles: NapiPoint2[][];
+  rawCircleHoles: NapiCircleHole[];
 }
 
 export interface NapiBridgeLayout {
@@ -694,7 +696,13 @@ export interface NapiBridgeLayout {
   pivotOriginWorld: NapiPoint3;
   pivotAxisWorld: NapiPoint3;
   angleDeg: number;
-  parentTangentOffsetLocal: NapiPoint2;
+  // The bend's true 2D position — the CENTER of its own allowance zone,
+  // computed once in Evaluate(). This is the ONE fact any consumer that
+  // wants "where is this bend" should read; never a BendSpec's own raw
+  // hingeA/hingeB (see BridgeLayout's own doc comment,
+  // manufacturing_graph_evaluator.hpp).
+  hingeA: NapiPoint2;
+  hingeB: NapiPoint2;
 }
 
 export interface EvaluatePartGraphResult {

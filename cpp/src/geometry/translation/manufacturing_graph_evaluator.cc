@@ -1,7 +1,6 @@
 #include "manufacturing_graph_evaluator.hpp"
 #include "ring_containment.hpp"
 
-#include <algorithm>
 #include <cmath>
 #include <optional>
 #include <unordered_map>
@@ -25,12 +24,6 @@ double DegToRad(double deg) { return deg * kPi / 180.0; }
 
 // ─── Unified bend-allowance / bottom-radius model (see header comment) ──────
 // ONE formula each; radiusMm=0 is a normal input, never a separate code path.
-
-// Flat-pattern width the bend zone consumes (neutral-fibre arc length).
-double BendAllowanceMm(const BendSpec& bend, double thicknessMm) {
-  double angleRad = std::fabs(DegToRad(bend.angleDeg));
-  return angleRad * (bend.radiusMm + bend.kFactor * thicknessMm);
-}
 
 // Whether this bend's bottom (z=0) reference is the concave side — i.e.
 // whether the pivot touches it at radiusMm=0. bend.bottomIsConcave, when
@@ -67,6 +60,22 @@ Point3 Normalize3(const Point3& v) {
 }
 
 }  // namespace
+
+// ─── Bend geometry (BA + setback, see BendGeometryMm's own doc comment) ─────
+
+BendGeometryMm ComputeBendGeometry(double angleDeg, double radiusMm, double kFactor,
+                                    double thicknessMm) {
+  double angleRad = std::fabs(DegToRad(angleDeg));
+  double reff = radiusMm + kFactor * thicknessMm;
+  BendGeometryMm out;
+  out.allowanceMm = angleRad * reff;
+  out.setbackMm = reff * std::tan(angleRad / 2.0);
+  return out;
+}
+
+BendGeometryMm ComputeBendGeometry(const BendSpec& bend, double thicknessMm) {
+  return ComputeBendGeometry(bend.angleDeg, bend.radiusMm, bend.kFactor, thicknessMm);
+}
 
 // ─── Transform3 ──────────────────────────────────────────────────────────────
 
@@ -229,9 +238,13 @@ std::vector<Point2> ClipHalfPlane(const std::vector<Point2>& polygon, const Poin
 // One touching-bend constraint for boundingBends(p) (14 §2.1's formula, verified by
 // hand in that doc against linear chains, branching roots, and merge compatibility —
 // NOT a tree walk, just p's own immediately-touching bends). `lineA`/`lineB` is the
-// bend-ZONE boundary line for this side (hinge centreline offset by BA/2 toward this
-// region's own territory), not the raw centreline — a real-width zone, not a
-// zero-width cut.
+// bend's own raw hinge centreline — region clipping happens at zero offset from it
+// (both parent and child side clip at the SAME line, keeping opposite sides); the
+// real-width bend-allowance zone this leaves neither side "owning" is inserted, and
+// each panel's territory beyond it translated outward to make room, by the pose
+// walk's own cumulative-shift pass in Evaluate() — never by widening the clip itself
+// (see that pass's own comment for why: a parent may touch several bends at once, so
+// no single per-panel clip offset could be correct for all of them simultaneously).
 struct HalfPlaneConstraint {
   Point2 lineA;
   Point2 lineB;
@@ -251,30 +264,8 @@ std::vector<HalfPlaneConstraint> BoundingBends(const PartGraphSpec& graph,
     if (bend.childRegionPanelId != regionPanelId && bend.parentRegionPanelId != regionPanelId) {
       continue;
     }
-    // Left-hand normal of hingeA->hingeB — points toward the child side (14's fixed
-    // convention above), used to push the zero-width centreline out to the real-width
-    // zone boundary on whichever side this region panel sits.
-    Point2 dir = Sub2(bend.hingeB, bend.hingeA);
-    double dirLen = Length2(dir);
-    Point2 nLeft{0.0, 0.0};
-    if (dirLen >= kGeometricEpsilon) {
-      nLeft = {-dir.y / dirLen, dir.x / dirLen};
-    }
-    double halfBa = BendAllowanceMm(bend, graph.thicknessMm) / 2.0;
-
-    if (bend.childRegionPanelId == regionPanelId) {
-      // Shrink the child's region: push the boundary INTO the child's own
-      // territory (along +nLeft) by half the zone width.
-      Point2 a{bend.hingeA.x + nLeft.x * halfBa, bend.hingeA.y + nLeft.y * halfBa};
-      Point2 b{bend.hingeB.x + nLeft.x * halfBa, bend.hingeB.y + nLeft.y * halfBa};
-      out.push_back({a, b, kChildSideIsLeft, bend.id});
-    } else {
-      // p is the parent of this bend: push the boundary INTO the parent's own
-      // territory (along -nLeft) by half the zone width, keep the OTHER side.
-      Point2 a{bend.hingeA.x - nLeft.x * halfBa, bend.hingeA.y - nLeft.y * halfBa};
-      Point2 b{bend.hingeB.x - nLeft.x * halfBa, bend.hingeB.y - nLeft.y * halfBa};
-      out.push_back({a, b, !kChildSideIsLeft, bend.id});
-    }
+    bool isChild = bend.childRegionPanelId == regionPanelId;
+    out.push_back({bend.hingeA, bend.hingeB, isChild == kChildSideIsLeft, bend.id});
   }
   return out;
 }
@@ -419,8 +410,23 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
   // raw flat-frame hinge transformed through the ALREADY-COMPUTED parent pose (this
   // is what "B_i = intrinsic fold conjugated by preceding chain" (13 §4) computes to
   // concretely — no explicit inverse/conjugation needed, just forward composition).
+  //
+  // Also computed here, alongside the pose: `cumulativeShift[p]`, a running 2D
+  // offset (in the shared flat frame F) that makes each region panel's own
+  // territory land where it truly belongs once every bend it descends from
+  // actually consumes real, inserted bend-allowance material — rather than the
+  // zero-offset clip below (BoundingBends) carving that material OUT of a
+  // panel's own measured length. `cumulativeShift[root] = 0`; each bend adds
+  // its own full bend allowance, along the hinge's own outward (child-side)
+  // normal, to every panel in its child's subtree — never HALF of it split
+  // across parent and child, because the PARENT'S OWN territory is never
+  // touched by widening (only what lies beyond, in the child's subtree, moves)
+  // — see the zero-offset clip's own comment for why a per-panel offset at the
+  // clip itself can't work once a panel touches more than one bend.
   std::unordered_map<std::string, Transform3> poseByRegionPanel;
   poseByRegionPanel[graph.rootRegionPanelId] = graph.anchor.transform;
+  std::unordered_map<std::string, Point2> cumulativeShift;
+  cumulativeShift[graph.rootRegionPanelId] = {0.0, 0.0};
 
   std::unordered_map<std::string, std::vector<const BendSpec*>> childrenOf;
   for (const auto& bend : graph.bends) {
@@ -432,16 +438,36 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
   while (qi < queue.size()) {
     std::string current = queue[qi++];
     const Transform3& parentPose = poseByRegionPanel.at(current);
+    const Point2& parentShift = cumulativeShift.at(current);
     for (const auto* bend : childrenOf[current]) {
       // Left-hand normal of hingeA->hingeB — same convention/formula BoundingBends
-      // uses (14's fixed "child = left side" rule) — points toward the child side,
-      // needed below for the child-coordinate zone-width shift.
+      // uses (14's fixed "child = left side" rule) — points toward the child side.
       Point2 hingeDir = Sub2(bend->hingeB, bend->hingeA);
       double hingeDirLen = Length2(hingeDir);
       Point2 nLeft{0.0, 0.0};
       if (hingeDirLen >= kGeometricEpsilon) {
         nLeft = {-hingeDir.y / hingeDirLen, hingeDir.x / hingeDirLen};
       }
+      BendGeometryMm bendGeom = ComputeBendGeometry(*bend, graph.thicknessMm);
+      double ba = bendGeom.allowanceMm;
+
+      // The axis's in-plane position is the raw hinge, shifted by whatever the
+      // PARENT's own territory has already accumulated (never anything of this
+      // bend's own BA — the parent's own material is untouched by its own
+      // outgoing bend, only the child's subtree moves, per the comment above).
+      // This shifted pair is ONLY for the 2D bridge.hingeA/hingeB report
+      // below (the F-frame, flat-pattern-consistent "where is this bend"
+      // fact) — NOT for the 3D axis. parentPose now consumes each panel's
+      // RAW (un-widened) coordinates directly (see childPose below), so the
+      // axis must be positioned from the RAW hinge coordinate, never a
+      // 2D-flat-pattern-shifted one — adding parentShift there was a stale
+      // leftover from the old (pre-fix) model where parentPose consumed the
+      // shifted frame instead, and silently corrupted every bend past the
+      // first one in a chain (parentShift is always zero for a root's own
+      // first bend, which is exactly why no single-bend test caught this —
+      // only a multi-bend chain's own closure could, and did).
+      Point2 hingeAShifted{bend->hingeA.x + parentShift.x, bend->hingeA.y + parentShift.y};
+      Point2 hingeBShifted{bend->hingeB.x + parentShift.x, bend->hingeB.y + parentShift.y};
 
       // Pivot axis for the actual fold rotation is the hinge centreline offset off
       // the bottom (z=0) surface by the bottom-surface radius r_b. Derived from
@@ -463,6 +489,23 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
       double rBottom = BottomRadiusMm(*bend, graph.thicknessMm);
       double pivotZ = concave ? -rBottom : rBottom;
 
+      // Axis in-plane position: the RAW hinge, unmodified — no offset.
+      // Tangency requires only that the axis's perpendicular distance to
+      // the flat plane equal rBottom (the pivotZ derivation above); it does
+      // NOT depend on in-plane position, as long as the wall built from
+      // that raw coordinate sits at the SAME in-plane position as the
+      // axis — which it does here (bottomFace/topFace below are built from
+      // rawOuter directly). This makes both the parent's AND child's raw
+      // wall exactly tangent to the bridge's cylinder on both surfaces, at
+      // any radius, matching the original (radiusMm=0) part's own topology
+      // exactly, with no collar needed at either connection. (A previous
+      // version of this code offset the axis in-plane, using pivotZ's own
+      // magnitude, to try to land the far corner in the right place — that
+      // offset differs by rBottom between a mountain and valley fold of the
+      // SAME nominal radius, purely because rBottom's own formula does
+      // (radiusMm vs radiusMm+thicknessMm) — producing asymmetric collar
+      // geometry and a real, measured mountain/valley volume mismatch. See
+      // childShiftWorld below for where that correction now lives instead.)
       Point3 hingeA3{bend->hingeA.x, bend->hingeA.y, pivotZ};
       Point3 hingeB3{bend->hingeB.x, bend->hingeB.y, pivotZ};
       Point3 hingeAWorld = parentPose.Apply(hingeA3);
@@ -475,24 +518,46 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
       }
       Transform3 worldFold = Transform3::RotationAboutAxis(hingeAWorld, axis, bend->angleDeg);
 
-      // The child's own F-frame coordinates are raw flat-pattern values, e.g. a
-      // corner at x=200 — but that raw value is NOT "distance from the zone's own
-      // far tangent point", which is what a rigid rotation about the (raw-hinge,
-      // pivotZ) axis actually models geometrically once the zone has real width
-      // (BA>0). A point-by-point trig derivation (rotating the true bottom/top
-      // surface arcs through the zone, matching tangents at both ends) shows the
-      // two only agree once the child's coordinate is first shifted by half the
-      // zone's own width (BA/2) toward the child, in the flat F-frame, BEFORE the
-      // pivot rotation — not by moving the pivot itself (no fixed pivot position
-      // reproduces the correct result without this shift; verified algebraically).
-      // At BA=0 (sharp fold) this shift vanishes and nothing changes.
-      double halfBa = BendAllowanceMm(*bend, graph.thicknessMm) / 2.0;
-      Transform3 childShift =
-          Transform3::Translation(-halfBa * nLeft.x, -halfBa * nLeft.y, 0.0);
-      Transform3 childPose = worldFold.Compose(parentPose.Compose(childShift));
+      // The child's pose is this tangent-preserving fold alone — no further
+      // correction. A circle tangent to a line at a known point has no
+      // freedom in where its centre sits: it must lie on the perpendicular
+      // to that line through that point. The axis above is defined to sit
+      // exactly on that perpendicular (raw hinge, offset by rBottom in Z),
+      // so the raw hinge point already IS the tangent point, for the parent
+      // AND — since rotation preserves distance to the axis — for the
+      // child too, at any radius, either fold direction. Nothing further to
+      // solve for.
+      //
+      // A previous version of this code added a rigid-translation
+      // correction (childShiftWorld, sized off this bend's own flat-
+      // pattern allowance `ba`) after this fold, trying to also land the
+      // child's far corner on a `ba`-grown, zero-height-axis reference. That
+      // reference is a flat-pattern (2D, unrolled) fact — `ba` is exactly
+      // and only the allowance this bend's own `cumulativeShift` pass
+      // already grows regionOuter by, for DXF/nesting purposes (see this
+      // file's own header comment and docs/BUG_REPORT_outline_never_grows_
+      // for_bend_allowance.md, which independently verified the
+      // cumulativeShift-only architecture end-to-end against testcube.step
+      // before childShiftWorld was later, mistakenly, added on top of it).
+      // Applying it again here as a 3D translation double-counts that
+      // growth: it pushes the child's near edge `ba` millimetres off the
+      // true cylinder, breaking tangency (confirmed numerically — the near
+      // edge's distance from the true axis becomes rBottom + ba instead of
+      // rBottom, for every case except the degenerate ba=0 one), and is
+      // exactly what forced ConstructPartSolid's connector piece to exist
+      // to close the resulting gap, with a mountain/valley volume mismatch
+      // as a direct consequence. Removed; not replaced.
+      Transform3 childPose = worldFold.Compose(parentPose);
       poseByRegionPanel[bend->childRegionPanelId] = childPose;
+      cumulativeShift[bend->childRegionPanelId] = {parentShift.x + ba * nLeft.x,
+                                                     parentShift.y + ba * nLeft.y};
       queue.push_back(bend->childRegionPanelId);
 
+      // The bend's true 2D position: the CENTER of its allowance zone, not
+      // its start. hingeAShifted/hingeBShifted already sit at the zone's
+      // start (the parent's own edge); the center is exactly half the
+      // zone's own width (ba*nLeft) further along, toward the child. This
+      // is a purely 2D, flat-pattern-facing fact, unrelated to the 3D pose.
       BridgeLayout bridge;
       bridge.bendId = bend->id;
       bridge.parentRegionPanelId = bend->parentRegionPanelId;
@@ -500,12 +565,20 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
       bridge.pivotOriginWorld = hingeAWorld;
       bridge.pivotAxisWorld = axis;
       bridge.angleDeg = bend->angleDeg;
-      bridge.parentTangentOffsetLocal = {nLeft.x * halfBa, nLeft.y * halfBa};
+      bridge.hingeA = {hingeAShifted.x + 0.5 * ba * nLeft.x, hingeAShifted.y + 0.5 * ba * nLeft.y};
+      bridge.hingeB = {hingeBShifted.x + 0.5 * ba * nLeft.x, hingeBShifted.y + 0.5 * ba * nLeft.y};
       result.bridges.push_back(std::move(bridge));
     }
   }
 
-  // regionOf + bottomFace/topFace per visited region panel.
+  // regionOf + bottomFace/topFace per visited region panel. RegionOf clips the
+  // raw, zero-allowance outline (BoundingBends' zero-offset lines) — every
+  // panel's own straight territory, un-shrunk; each panel's own cumulativeShift
+  // (computed above) then translates it to where it truly belongs once the
+  // bend-allowance material its own ancestors consume is actually accounted
+  // for — the ONE derivation this whole file's header comment requires,
+  // applied uniformly to regionOuter (and any holes) here rather than smeared
+  // across a widened outline polygon and clip-line offsets both.
   for (const auto& regionPanelId : queue) {
     auto regionResult = RegionOf(graph, regionPanelId);
     if (!regionResult.has_value()) {
@@ -513,57 +586,52 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
       result.message = "region clip failed (degenerate) for region panel " + regionPanelId;
       return result;
     }
-    const auto& regionOuter = regionResult->outer;
+    const Point2& shift = cumulativeShift.at(regionPanelId);
+    // Raw copies BEFORE the shift below mutates them — the same clip
+    // topology as regionOuter/regionPolygonHoles/regionCircleHoles, just
+    // without the 2D flat-pattern shift. bottomFace/topFace and solid-wall
+    // construction use these (see header comment); regionOuter (shifted,
+    // below) stays the flat-pattern/DXF-only view.
+    std::vector<Point2> rawOuter = regionResult->outer;
+    std::vector<std::vector<Point2>> rawPolygonHoles = regionResult->polygonHoles;
+    std::vector<CircleHoleSpec> rawCircleHoles = regionResult->circleHoles;
+
+    std::vector<Point2> regionOuter = std::move(regionResult->outer);
+    for (auto& v : regionOuter) {
+      v.x += shift.x;
+      v.y += shift.y;
+    }
+    for (auto& ring : regionResult->polygonHoles) {
+      for (auto& v : ring) {
+        v.x += shift.x;
+        v.y += shift.y;
+      }
+    }
+    for (auto& hole : regionResult->circleHoles) {
+      hole.center.x += shift.x;
+      hole.center.y += shift.y;
+    }
     const Transform3& pose = poseByRegionPanel.at(regionPanelId);
 
     RegionPanelLayout layout;
     layout.regionPanelId = regionPanelId;
     layout.regionOuter = regionOuter;
+    layout.rawOuter = rawOuter;
     layout.pose = pose;
     layout.edgeBendId = regionResult->edgeBendId;
     layout.regionPolygonHoles = regionResult->polygonHoles;
     layout.regionCircleHoles = regionResult->circleHoles;
-    layout.bottomFace.reserve(regionOuter.size());
-    layout.topFace.reserve(regionOuter.size());
-    for (const auto& v : regionOuter) {
+    layout.rawPolygonHoles = rawPolygonHoles;
+    layout.rawCircleHoles = rawCircleHoles;
+    layout.bottomFace.reserve(rawOuter.size());
+    layout.topFace.reserve(rawOuter.size());
+    for (const auto& v : rawOuter) {
       // Offset BEFORE pose (z=0 vs z=thickness), equivalent to offsetting along the
       // transformed normal after pose since Pose is rigid (13 §3.3).
       layout.bottomFace.push_back(pose.Apply({v.x, v.y, 0.0}));
       layout.topFace.push_back(pose.Apply({v.x, v.y, graph.thicknessMm}));
     }
-    // Default: identical to bottomFace/topFace, corrected below at any edge
-    // where this panel is the PARENT of a bend (RegionPanelLayout's own doc
-    // comment on bottomFaceTrue/topFaceTrue explains why only that side
-    // needs it).
-    layout.bottomFaceTrue = layout.bottomFace;
-    layout.topFaceTrue = layout.topFace;
     result.panels.push_back(std::move(layout));
-  }
-
-  // Correct bottomFaceTrue/topFaceTrue at each PARENT-side bend-adjacent
-  // edge to the true tangent line — reusing parentTangentOffsetLocal (same
-  // offset ConstructPartSolid's collar already applies) rather than
-  // re-deriving it a second time. Not load-bearing for construction itself
-  // (ConstructPartSolid never reads these) — purely for a consumer that
-  // needs the part's real 3D extent, e.g. graph://part/{id}/boundary.
-  std::unordered_map<std::string, size_t> panelIndexById;
-  for (size_t i = 0; i < result.panels.size(); ++i) {
-    panelIndexById[result.panels[i].regionPanelId] = i;
-  }
-  for (const auto& bridge : result.bridges) {
-    auto parentIt = panelIndexById.find(bridge.parentRegionPanelId);
-    if (parentIt == panelIndexById.end()) continue;
-    RegionPanelLayout& parent = result.panels[parentIt->second];
-    auto edgeIt = std::find(parent.edgeBendId.begin(), parent.edgeBendId.end(), bridge.bendId);
-    if (edgeIt == parent.edgeBendId.end()) continue;
-    size_t i0 = static_cast<size_t>(edgeIt - parent.edgeBendId.begin());
-    size_t i1 = (i0 + 1) % parent.regionOuter.size();
-    const Point2& offset = bridge.parentTangentOffsetLocal;
-    for (size_t idx : {i0, i1}) {
-      Point2 tangent{parent.regionOuter[idx].x + offset.x, parent.regionOuter[idx].y + offset.y};
-      parent.bottomFaceTrue[idx] = parent.pose.Apply({tangent.x, tangent.y, 0.0});
-      parent.topFaceTrue[idx] = parent.pose.Apply({tangent.x, tangent.y, graph.thicknessMm});
-    }
   }
 
   result.ok = true;

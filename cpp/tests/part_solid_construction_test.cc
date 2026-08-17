@@ -6,20 +6,26 @@
 #include "geometry/geometry_service_impl.hpp"
 
 #include <BRepAlgoAPI_Common.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepPrimAPI_MakeRevol.hxx>
+#include <Bnd_Box.hxx>
 #include <GProp_GProps.hxx>
 #include <TopExp_Explorer.hxx>
+#include <gp_Ax1.hxx>
+#include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 
 #include <cmath>
 #include <map>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -33,42 +39,38 @@ namespace {
 
 constexpr double kTestPi = 3.14159265358979323846;
 
-// Same BA formula manufacturing_graph_evaluator.cc uses internally — duplicated
-// here (and again, separately, in manufacturing_graph_evaluator_test.cc) rather
-// than exposed from the .cc, purely to size the flat outline below. Both test
-// files need this independently; see MakeStrip's own comment for why.
-double TestBendAllowanceMm(double angleDeg, double radiusMm, double kFactor,
-                            double thicknessMm) {
-  double angleRad = std::fabs(angleDeg * kTestPi / 180.0);
-  return angleRad * (radiusMm + kFactor * thicknessMm);
-}
-
 // Builds an N-segment strip with N-1 bends of `angleDeg` each, real (possibly
 // nonzero) bend radius/K-factor. `hingeTiltDeg`/`hingeYOffsetMm` rotate/shift the
 // hinge line away from being perfectly perpendicular to and centred on the
 // strip's own length axis, so tests can assert no hidden bias toward axis-aligned
 // hinges (mirrors manufacturing_graph_evaluator_test.cc's own MakeStrip exactly —
 // see that file's comment for the full derivation of the spacing formula below).
-// Every hinge sits at the FULL nominal `segmentLenMm` spacing; `closesLoop` (opt
-// in, off by default) additionally pulls the outline's own far edge back by a
-// single thicknessMm — NOT one per panel — so a strip meant to close into a loop
-// (e.g. an N=4 tube) has its closing corner meet rather than overlap. An open
-// strip has no such corner and needs no setback at all.
+//
+// Authored FLUSH — hinge k (1-indexed) sits at exactly `k*segmentLenMm`, a
+// zero-bend-allowance baseline; Evaluate() itself now grows the effective
+// spacing by each bend's own real allowance (docs/BUG_REPORT_outline_never_
+// grows_for_bend_allowance.md), so this must NOT also bake a `ba`-sized gap
+// into the authored spacing — doing both would double-count it. `closesLoop`
+// no longer affects the authored outline (kept only as a call-site
+// documentation flag) — it used to pull the far edge back by one
+// thicknessMm to compensate for the OLD model's own panel/panel overlap at
+// the closing corner; with panels no longer artificially shrunk, that
+// overlap (and the compensation for it) is gone too.
 PartGraphSpec MakeStrip(int segments, double segmentLenMm, double widthMm,
                         double thicknessMm, double angleDeg, double radiusMm = 0.0,
                         double kFactor = 0.0, double hingeTiltDeg = 0.0,
                         double hingeYOffsetMm = 0.0,
                         Transform3 anchor = Transform3::Identity(),
                         bool closesLoop = false) {
+  (void)closesLoop;  // call-site documentation only, see comment above
   PartGraphSpec graph;
   graph.partId = "test-part";
   graph.rootRegionPanelId = "seg0";
   graph.thicknessMm = thicknessMm;
   graph.anchor.transform = anchor;
 
-  double ba = TestBendAllowanceMm(angleDeg, radiusMm, kFactor, thicknessMm);
   int bendCount = segments - 1;
-  double totalLen = segments * segmentLenMm + bendCount * ba - (closesLoop ? thicknessMm : 0.0);
+  double totalLen = segments * segmentLenMm;
 
   // Outline AND every hinge share a single tilted (F, W) basis — F/W are
   // orthonormal, so this is a rigid rotation of the whole strip by
@@ -86,7 +88,7 @@ PartGraphSpec MakeStrip(int segments, double segmentLenMm, double widthMm,
   double halfSpan = widthMm / 2.0 + std::fabs(hingeYOffsetMm) + widthMm;
 
   for (int i = 0; i < bendCount; ++i) {
-    double hx = (i + 1) * segmentLenMm + (i + 0.5) * ba;
+    double hx = (i + 1) * segmentLenMm;
     Point2 mid = Along(hx, widthMm / 2.0 + hingeYOffsetMm);
     BendSpec bend;
     bend.id = "bend" + std::to_string(i);
@@ -121,6 +123,10 @@ double SolidVolume(const TopoDS_Shape& shape) {
   GProp_GProps props;
   BRepGProp::VolumeProperties(shape, props);
   return props.Mass();
+}
+
+double Dist2D(const Point2& a, const Point2& b) {
+  return std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
 }
 
 int CountSolids(const TopoDS_Shape& shape) {
@@ -191,6 +197,56 @@ TEST_CASE("ConstructPartSolid: a panel with a circular hole and a polygon hole h
   double polygonAreaMm2 = 10.0 * 10.0;
   double expectedVolume = (100.0 * 60.0 - circleAreaMm2 - polygonAreaMm2) * 2.0;
   CHECK(SolidVolume(it->second.shape) == Approx(expectedVolume).epsilon(0.001));
+}
+
+TEST_CASE("ConstructPartSolid: a nonzero-radius bend with a hole on the child "
+          "panel reduces volume by exactly the hole's own volume (new coverage "
+          "for rawPolygonHoles/rawCircleHoles in a bent, shifted context — "
+          "nothing else in this file exercises a hole together with BA>0)",
+          "[translation][construction][holes]") {
+  double widthMm = 40.0, thicknessMm = 2.0, radiusMm = 1.5, kFactor = 0.4;
+
+  // Differencing (with-hole minus without-hole) rather than an absolute
+  // volume oracle: the bridge's own volume (an annular-sector revolve) is
+  // identical in both constructions and cancels out, so this doesn't need
+  // its own closed-form re-derivation — just the hole's own, ordinary
+  // cylinder volume.
+  auto buildVolume = [&](bool withHole) -> double {
+    auto graph = MakeStrip(2, 60.0, widthMm, thicknessMm, 90.0, radiusMm, kFactor);
+    if (withHole) {
+      // Center of seg1's own raw (pre-widening) territory, x in [60,120] —
+      // graph.outline holes are authored in the shared, unwidened graph
+      // frame, the same frame RegionOf's own (pre-shift) containment check
+      // uses (manufacturing_graph_evaluator.cc's RegionOf).
+      graph.outline.circleHoles.push_back({/*center=*/{90.0, 20.0}, /*radiusMm=*/5.0});
+    }
+    EvaluateResult layout = Evaluate(graph);
+    REQUIRE(layout.ok);
+    if (withHole) {
+      const RegionPanelLayout* seg1 = nullptr;
+      for (auto& p : layout.panels) {
+        if (p.regionPanelId == "seg1") seg1 = &p;
+      }
+      REQUIRE(seg1 != nullptr);
+      REQUIRE(seg1->regionCircleHoles.size() == 1);
+      REQUIRE(seg1->rawCircleHoles.size() == 1);
+    }
+    GeometryState state;
+    ConstructPartSolidResult result = ConstructPartSolid(state, layout, thicknessMm);
+    REQUIRE(result.ok);
+    auto it = state.solids.find(result.shellId);
+    REQUIRE(it != state.solids.end());
+    BRepCheck_Analyzer analyzer(it->second.shape);
+    CHECK(analyzer.IsValid());
+    return SolidVolume(it->second.shape);
+  };
+
+  double volumeWithoutHole = buildVolume(false);
+  double volumeWithHole = buildVolume(true);
+
+  constexpr double kPi = 3.14159265358979323846;
+  double holeVolume = kPi * 5.0 * 5.0 * thicknessMm;
+  CHECK((volumeWithoutHole - volumeWithHole) == Approx(holeVolume).epsilon(0.001));
 }
 
 // A genuinely sharp (zero-radius) fold does not keep BOTH surfaces continuous across
@@ -824,7 +880,7 @@ TEST_CASE("ConstructPartSolid: N=2 asymmetric sharp mountain fold — measured p
   std::unordered_map<std::string, TopoDS_Shape> panelSolidById;
   for (const auto& panel : layout.panels) {
     BRepBuilderAPI_MakePolygon polyMaker;
-    for (const auto& v : panel.regionOuter) polyMaker.Add(gp_Pnt(v.x, v.y, 0.0));
+    for (const auto& v : panel.rawOuter) polyMaker.Add(gp_Pnt(v.x, v.y, 0.0));
     polyMaker.Close();
     BRepBuilderAPI_MakeFace faceMaker(polyMaker.Wire());
     BRepPrimAPI_MakePrism prism(faceMaker.Face(), gp_Vec(0.0, 0.0, thicknessMm), true);
@@ -846,4 +902,74 @@ TEST_CASE("ConstructPartSolid: N=2 asymmetric sharp mountain fold — measured p
   INFO("naiveSum=" << naiveSum << " fusedVolume=" << fusedVolume << " shortfall=" << shortfall
                     << " directly-measured panelA/panelB overlap=" << overlapVolume);
   CHECK(overlapVolume == Approx(shortfall).epsilon(0.01));
+}
+
+// Mountain and valley folds of the same nominal bend are related by a
+// reflection (same radius/thickness/angle magnitude, opposite pivot side),
+// so their constructed volumes must be identical — a real physical
+// requirement, not an approximation. A separate connector piece used to be
+// built to close a translation-sized gap between the bridge and the child
+// panel, and its own cross-section wasn't the same shape between the two
+// directions, which is what broke this. With the child pose now a pure
+// rotation about the true axis (no separate correction — see
+// manufacturing_graph_evaluator.cc's own comment), the bridge's end face
+// IS the child's real edge, so there's no connector and nothing left to
+// differ between the two constructions.
+TEST_CASE("ConstructPartSolid: mountain and valley volumes of the same "
+          "nominal bend match exactly, across radii",
+          "[translation][construction]") {
+  for (double radiusMm : {0.0, 1.0, 1.5, 2.0, 3.0}) {
+    double kFactor = radiusMm > 0 ? 0.4 : 0.0;
+    double thicknessMm = 2.0;
+    PartGraphSpec graphM, graphV;
+    for (auto* g : {&graphM, &graphV}) {
+      g->partId = "mvvol";
+      g->rootRegionPanelId = "seg0";
+      g->thicknessMm = thicknessMm;
+      g->outline.outer = {{0, 0}, {200, 0}, {200, 50}, {0, 50}};
+    }
+    BendSpec bendM;
+    bendM.id = "bend0";
+    bendM.parentRegionPanelId = "seg0";
+    bendM.childRegionPanelId = "seg1";
+    bendM.hingeA = {100, 50};
+    bendM.hingeB = {100, 0};
+    bendM.angleDeg = 90.0;
+    bendM.radiusMm = radiusMm;
+    bendM.kFactor = kFactor;
+    graphM.bends.push_back(bendM);
+    BendSpec bendV = bendM;
+    bendV.angleDeg = -90.0;
+    graphV.bends.push_back(bendV);
+
+    EvaluateResult layoutM = Evaluate(graphM);
+    EvaluateResult layoutV = Evaluate(graphV);
+    REQUIRE(layoutM.ok);
+    REQUIRE(layoutV.ok);
+
+    GeometryState stateM, stateV;
+    ConstructPartSolidResult resultM = ConstructPartSolid(stateM, layoutM, thicknessMm);
+    ConstructPartSolidResult resultV = ConstructPartSolid(stateV, layoutV, thicknessMm);
+    INFO("radiusMm=" << radiusMm << " resultM.errorCode=" << resultM.errorCode
+                      << " resultM.message=" << resultM.message
+                      << " resultV.errorCode=" << resultV.errorCode
+                      << " resultV.message=" << resultV.message);
+    REQUIRE(resultM.ok);
+    REQUIRE(resultV.ok);
+
+    auto itM = stateM.solids.find(resultM.shellId);
+    auto itV = stateV.solids.find(resultV.shellId);
+    REQUIRE(itM != stateM.solids.end());
+    REQUIRE(itV != stateV.solids.end());
+
+    BRepCheck_Analyzer analyzerM(itM->second.shape);
+    BRepCheck_Analyzer analyzerV(itV->second.shape);
+    double volM = SolidVolume(itM->second.shape);
+    double volV = SolidVolume(itV->second.shape);
+    INFO("radiusMm=" << radiusMm << " kFactor=" << kFactor << " volM=" << volM << " volV=" << volV
+                      << " diff=" << (volV - volM) << " validM=" << analyzerM.IsValid()
+                      << " validV=" << analyzerV.IsValid() << " solidsM=" << CountSolids(itM->second.shape)
+                      << " solidsV=" << CountSolids(itV->second.shape));
+    CHECK(volM == Approx(volV).epsilon(1e-6));
+  }
 }

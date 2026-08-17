@@ -68,6 +68,24 @@ bool PointInPolygon2(const Point2& p, const std::vector<Point2>& poly,
   return inside;
 }
 
+// The constant 2D translation between a panel's regionOuter (F, the shared
+// flat frame this module's own header documents as its external contract —
+// the SAME widened frame flat_outline.cc's combined outline lives in) and
+// its rawOuter (what panel.pose actually consumes, per manufacturing_graph_
+// evaluator.cc's own corrected pose walk). regionOuter[i] == rawOuter[i] +
+// shift for every i on a given panel (a single per-panel translation, never
+// per-vertex) — so any one index suffices. A point expressed in F must have
+// this SUBTRACTED before being handed to panel.pose; a point read back OUT
+// of panel.pose (its inverse) must have this ADDED before being reported as
+// an F-frame result — this module's entire job is bridging that boundary
+// (13 §4/§5's own "2D point in F" contract), so every pose.Apply/Inverse
+// call site below goes through this, never panel.pose directly on an F
+// value or straight off panel.pose.Inverse() without re-adding it.
+Point2 PanelShift(const RegionPanelLayout& panel) {
+  if (panel.rawOuter.empty() || panel.regionOuter.empty()) return {0.0, 0.0};
+  return Sub2(panel.regionOuter[0], panel.rawOuter[0]);
+}
+
 const RegionPanelLayout* FindPanel(const EvaluateResult& layout, const std::string& id) {
   for (const auto& p : layout.panels) {
     if (p.regionPanelId == id) return &p;
@@ -171,7 +189,8 @@ Point3 ApplyBridgeFold(const PartGraphSpec& graph, const BendSpec& bend, const Z
                         const RegionPanelLayout& parentPanel, const BridgeLayout& bridge) {
   Point2 aFlat{local.hingeOrigin.x + local.s * local.dHat.x,
                local.hingeOrigin.y + local.s * local.dHat.y};
-  Point3 aWorld = parentPanel.pose.Apply({aFlat.x, aFlat.y, 0.0});
+  Point2 shift = PanelShift(parentPanel);
+  Point3 aWorld = parentPanel.pose.Apply({aFlat.x - shift.x, aFlat.y - shift.y, 0.0});
 
   // Rotate "a" about the SAME axis (pivotOriginWorld/pivotAxisWorld) the
   // evaluator itself used to fold the child (manufacturing_graph_evaluator.cc's
@@ -219,9 +238,10 @@ MapToWorldResult MapPointToWorld(const PartGraphSpec& graph, const EvaluateResul
   // synthetic graphs) is completely unaffected by anything below.
   for (const auto& panel : layout.panels) {
     if (PointInPolygon2(point2d, panel.regionOuter)) {
+      Point2 shift = PanelShift(panel);
       result.ok = true;
       result.regionPanelId = panel.regionPanelId;
-      result.point3d = panel.pose.Apply({point2d.x, point2d.y, zMm});
+      result.point3d = panel.pose.Apply({point2d.x - shift.x, point2d.y - shift.y, zMm});
       return result;
     }
   }
@@ -267,7 +287,8 @@ MapToWorldResult MapPointToWorld(const PartGraphSpec& graph, const EvaluateResul
       bestResidual = best;
       bestRegionPanelId = panel.regionPanelId;
       bestBendId.clear();
-      bestPoint3d = panel.pose.Apply({point2d.x, point2d.y, zMm});
+      Point2 shift = PanelShift(panel);
+      bestPoint3d = panel.pose.Apply({point2d.x - shift.x, point2d.y - shift.y, zMm});
     }
   }
   for (const auto& bend : graph.bends) {
@@ -321,7 +342,11 @@ MapToFlatResult MapPointToFlat(const PartGraphSpec& graph, const EvaluateResult&
     Transform3 inv = panel.pose.Inverse();
     Point3 local = inv.Apply(point3d);
     double residual = std::fabs(local.z);
-    Point2 flat{local.x, local.y};
+    // pose maps rawOuter <-> world; local.xy is therefore in the raw frame —
+    // add the shift back to report the F-frame (regionOuter-consistent)
+    // point this module's own contract requires (see PanelShift's comment).
+    Point2 shift = PanelShift(panel);
+    Point2 flat{local.x + shift.x, local.y + shift.y};
     if (residual <= kSurfaceResidualToleranceMm &&
         PointInPolygon2(flat, panel.regionOuter, kSurfaceResidualToleranceMm)) {
       if (!found || residual < bestResidual) {
@@ -362,7 +387,9 @@ MapToFlatResult MapPointToFlat(const PartGraphSpec& graph, const EvaluateResult&
     // already-tested RotationAboutAxis geometry the forward map uses, never
     // a hand-derived sin/cos frame (see MapPointToWorld's own comment for
     // why that was abandoned).
-    Point3 aRefWorld = parentPanel->pose.Apply({zone.parentA.x, zone.parentA.y, 0.0});
+    Point2 parentShift = PanelShift(*parentPanel);
+    Point3 aRefWorld = parentPanel->pose.Apply(
+        {zone.parentA.x - parentShift.x, zone.parentA.y - parentShift.y, 0.0});
     Point3 dHatWorld = parentPanel->pose.ApplyVector({dHat.x, dHat.y, 0.0});
     Point3 relToARef = Sub3(point3d, aRefWorld);
     double s = relToARef.x * dHatWorld.x + relToARef.y * dHatWorld.y + relToARef.z * dHatWorld.z;

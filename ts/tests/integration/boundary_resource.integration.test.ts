@@ -147,17 +147,23 @@ d('[v2] graph://part/{id}/boundary (Ref-served exact geometry)', () => {
     expect(bodyAfter).not.toBe(bodyBefore); // but the content behind that URL changed
   });
 
-  // docs/BUG_REPORT_boundary_resource_disagrees_with_mesh_after_collar_fix.md:
-  // a nonzero bend radius left boundary reporting the parent panel's
-  // bend-adjacent corners BA/2 short of the true hinge, while the actual
-  // mesh solid (this session's earlier fix) correctly reaches it. Real
-  // end-to-end coverage through the addon, not a direct C++ unit test —
-  // this exact bug class (a NAPI-crossing field silently not round-tripping)
-  // was found only by testing this way earlier in the same session.
-  it('a nonzero bend radius: the parent panel\'s bend-adjacent corners land exactly on the raw hinge, not BA/2 short', async () => {
+  // docs/BUG_REPORT_outline_never_grows_for_bend_allowance.md: a nonzero
+  // bend radius/K-factor never grew the flat outline to account for the
+  // real material a bend consumes. The fix (Evaluate()'s cumulative-shift
+  // pass) is a FLAT-PATTERN-frame correction — it does not, and should not,
+  // change the 3D tangent geometry: the parent's own bottom/top-face edge
+  // must still land exactly on the raw hinge mark in world space (that's
+  // what makes the bend surface tangent-continuous with the parent, the
+  // thing this session's earlier "collar" patch worked around at the
+  // construction-output stage instead of fixing at the source). Real
+  // end-to-end coverage through the addon, not a direct C++ unit test — a
+  // past regression in this exact area (a NAPI-crossing field silently not
+  // round-tripping) was found only by testing this way, not by a direct
+  // C++ call.
+  it('a nonzero bend radius: the parent panel\'s edge stays on the raw hinge in 3D (tangent-continuous, no collar)', async () => {
     const store = new GraphStore();
     const part = dispatchGraphTool(store, 'create_part', {
-      name: 'boundary-true-face',
+      name: 'boundary-allowance',
       outline: [
         { x: 0, y: 0 },
         { x: 100, y: 0 },
@@ -188,20 +194,18 @@ d('[v2] graph://part/{id}/boundary (Ref-served exact geometry)', () => {
       }>;
     };
 
-    const rootPanel = parsed.regionPanels.find(
+    const parentPanel = parsed.regionPanels.find(
       (p) => p.regionPanelId === part.root_region_panel_id,
     );
-    expect(rootPanel).toBeDefined();
+    expect(parentPanel).toBeDefined();
 
-    // The un-fixed value would be x=50-BA/2≈48.19 (BA/2 = (pi/2)*(1.5+0.4*2)/2
-    // ≈ 1.81); the fixed value lands exactly on the raw hinge, x=50.
-    const nearHinge = [...rootPanel!.bottomFace, ...rootPanel!.topFace].filter(
-      (p) => p.x > 40 && p.x < 55,
+    // The un-fixed (collar-era) value would be x=50-BA/2≈48.19 (BA/2 =
+    // (pi/2)*(1.5+0.4*2)/2 ≈ 1.81); the fixed value lands exactly on the
+    // raw hinge, x=50, with no collar needed.
+    const parentNearHingeX = Math.min(
+      ...[...parentPanel!.bottomFace, ...parentPanel!.topFace].map((p) => Math.abs(p.x - 50)),
     );
-    expect(nearHinge.length).toBeGreaterThan(0);
-    for (const p of nearHinge) {
-      expect(p.x).toBeCloseTo(50, 6);
-    }
+    expect(parentNearHingeX).toBeCloseTo(0, 6);
   });
 
   it('rejects a nonexistent part_id with GRAPH_PART_NOT_FOUND', () => {

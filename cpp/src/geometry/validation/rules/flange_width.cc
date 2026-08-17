@@ -64,12 +64,28 @@ std::vector<Finding> CheckFlangeWidth(
     if (it == childBend.end()) continue;
     const auto& hinge = *it->second;
 
-    // Max perpendicular distance from hinge line to region vertices.
-    double maxDist = 0.0;
+    // The flange's own width is its span along the hinge-perpendicular
+    // direction (max signed distance minus min signed distance) — not the
+    // max distance from the bend's own (stored, un-widened) hinge line,
+    // which no longer sits at the panel's own boundary once a real bend
+    // allowance has shifted the panel outward from it (Evaluate()'s own
+    // cumulative-shift pass, docs/BUG_REPORT_outline_never_grows_for_bend_
+    // allowance.md) — the span is translation-invariant, so it measures the
+    // flange's true size regardless of where the panel currently sits
+    // relative to that line.
+    double minSigned = 0.0, maxSigned = 0.0;
+    bool first = true;
     for (const auto& v : panel.regionOuter) {
-      double d = std::abs(SignedDistanceToLine(v, hinge.hingeA, hinge.hingeB));
-      if (d > maxDist) maxDist = d;
+      double d = SignedDistanceToLine(v, hinge.hingeA, hinge.hingeB);
+      if (first) {
+        minSigned = maxSigned = d;
+        first = false;
+      } else {
+        minSigned = std::min(minSigned, d);
+        maxSigned = std::max(maxSigned, d);
+      }
     }
+    double maxDist = maxSigned - minSigned;
 
     if (maxDist < minWidth) {
       std::ostringstream msg;

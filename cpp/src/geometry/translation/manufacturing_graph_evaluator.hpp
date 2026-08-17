@@ -30,10 +30,29 @@
  * (positive = mountain, matching this module's existing RH-rule convention).
  *
  * regionOf(p) IS implemented as the general half-plane-clip algorithm (not a
- * rectangle special case), with each bend now clipping a REAL-WIDTH zone (two
- * offset lines, BA/2 either side of the hinge centreline) rather than a single
- * zero-width line — since Slice 2 (branching) needs the identical primitive either
- * way, there is no simpler "sharp-only" code path to fall back to.
+ * rectangle special case) — clipping at each bend's own raw hinge line, zero
+ * offset (a panel's own touching bends never shrink its measured territory: a
+ * panel can be parent to several bends at once, so no single per-panel clip
+ * offset could be correct for all of them simultaneously). The bend-allowance
+ * material this leaves neither side "owning" is real, and is accounted for by
+ * translating each panel's clipped territory by a running 2D shift accumulated
+ * down the tree (Evaluate()'s own pose walk: each bend adds its own full
+ * allowance, along the hinge's outward normal, to everything in its child's
+ * subtree) — never by widening the clip lines themselves. `docs/BUG_REPORT_
+ * outline_never_grows_for_bend_allowance.md` has the full derivation of why a
+ * clip-line offset can't work once a panel touches more than one bend.
+ * That cumulative-shift pass is a purely 2D, flat-pattern-domain fact (it
+ * grows regionOuter for DXF/cutting purposes) — it deliberately does NOT
+ * feed the 3D pose. bottomFace/topFace/solid-wall construction instead use
+ * a panel's RAW (pre-shift) clipped points directly: a coordinate-geometry
+ * proof (see ComputeBendGeometry's own comment, and the pose walk below)
+ * confirms a wall built from the raw hinge coordinate is automatically,
+ * exactly tangent to the bend's cylinder on both the parent's and the
+ * child's own side, given the axis position the pose walk already computes
+ * — no shift-then-cancel step and no separate "collar"/setback trim are
+ * needed anywhere in 3D. Two representations of the same clipped topology,
+ * on purpose: regionOuter is the "unrolled, as-cut" view; rawOuter (below)
+ * is the "as-designed, mold-line-referenced" view the actual fold rotates.
  */
 
 #include <optional>
@@ -152,6 +171,30 @@ struct BendSpec {
   bool radiusMeasured = true;
 };
 
+// A bend's two derived geometric facts, both functions of the same effective
+// radius `reff = radiusMm + kFactor*thicknessMm` and the same `angleRad` —
+// computed together, here, once, so every consumer (the 2D flat-pattern
+// shift, any future dimensioning/annotation reader, and this file's own
+// tests) reads the same numbers rather than re-deriving pieces of either.
+struct BendGeometryMm {
+  // Bend allowance: the neutral-fibre arc length the curve consumes —
+  // BA = angleRad * reff. Drives ONLY the 2D flat-pattern (regionOuter)
+  // growth (Evaluate()'s cumulativeShift pass) — never the 3D pose.
+  double allowanceMm = 0.0;
+  // Setback: how far the true 3D tangent point sits from the theoretical
+  // sharp ("mold line") corner, along each leg — SB = reff * tan(angleRad/2)
+  // (verified against the standard sheet-metal-engineering formula). A
+  // real, useful, independently-testable quantity — but NOT consumed by
+  // the pose walk or solid construction below: given the axis position
+  // those already compute (ancestor-shift only), a wall built from a
+  // panel's own raw hinge coordinate is automatically exactly tangent to
+  // the bend's cylinder, on both sides, with no separate SB-trim needed.
+  double setbackMm = 0.0;
+};
+BendGeometryMm ComputeBendGeometry(double angleDeg, double radiusMm, double kFactor,
+                                    double thicknessMm);
+BendGeometryMm ComputeBendGeometry(const BendSpec& bend, double thicknessMm);
+
 // part.anchor_* (13 §3.1) — the root 2D->3D placement transform R.
 struct RootAnchorSpec {
   Transform3 transform;  // defaults to identity
@@ -173,28 +216,18 @@ struct PartGraphSpec {
 struct RegionPanelLayout {
   std::string regionPanelId;
   std::vector<Point2> regionOuter;  // regionOf(p) — outer ring only, Slice 1
+  // The SAME clipped ring as regionOuter, BEFORE the 2D cumulativeShift pass
+  // is applied — index-correlated with regionOuter (same clip topology and
+  // order, just with/without the shift). This is what bottomFace/topFace
+  // below are built from, and what ConstructPartSolid must build panel
+  // walls/holes from too (see this file's header comment) — regionOuter
+  // stays the flat-pattern/DXF-only view.
+  std::vector<Point2> rawOuter;
   // Index-correlated with regionOuter and with each other (13 §3.3's closing
   // paragraph: side-wall quad i is bottomFace[i],bottomFace[i+1],topFace[i+1],topFace[i]).
+  // Built from rawOuter (not regionOuter) — see header comment.
   std::vector<Point3> bottomFace;
   std::vector<Point3> topFace;
-  // Same as bottomFace/topFace, index-correlated, EXCEPT at a vertex bounding
-  // an edge where THIS panel is the PARENT of a bend (edgeBendId names a
-  // bend whose parentRegionPanelId is this panel's own id) — there, this is
-  // the TRUE tangent-line position (where the parent's flat material
-  // actually stops and the curved bend begins) rather than the BA/2-clipped
-  // boundary bottomFace/topFace use. Identical to bottomFace/topFace at
-  // every true outer edge, at BA=0 (sharp fold — nothing to correct), and at
-  // a CHILD-side bend-adjacent edge (already exactly the tangent line via
-  // childShift, see Evaluate()'s own comment on that — nothing to correct
-  // there either). For a consumer that needs the part's real 3D extent
-  // (e.g. graph://part/{id}/boundary) rather than the flat-pattern-facing
-  // clip bottomFace/topFace (and the panel's own solid extrusion, and
-  // ConstructPartSolid's collar) use — see docs/BUG_REPORT_boundary_
-  // resource_disagrees_with_mesh_after_collar_fix.md for why the two
-  // diverge and why a second array, not overwriting bottomFace/topFace
-  // themselves, is the correct fix.
-  std::vector<Point3> bottomFaceTrue;
-  std::vector<Point3> topFaceTrue;
   Transform3 pose;  // the cached chain product for this panel (13 §4.1)
   // edgeBendId[i] names the bend whose zone the edge (regionOuter[i],
   // regionOuter[i+1]) borders, or "" if the edge is a true outer boundary. Computed
@@ -211,6 +244,12 @@ struct RegionPanelLayout {
   // matching edgeBendId's own "computed once, here" discipline above).
   std::vector<std::vector<Point2>> regionPolygonHoles;
   std::vector<CircleHoleSpec> regionCircleHoles;
+  // Raw (pre-cumulativeShift) counterparts of the two fields above — same
+  // relationship as rawOuter to regionOuter, same reason (solid-construction
+  // holes must be cut from the raw, tangent-consistent wall, not the
+  // flat-pattern-shifted one).
+  std::vector<std::vector<Point2>> rawPolygonHoles;
+  std::vector<CircleHoleSpec> rawCircleHoles;
 };
 
 // One bend's realized bridge geometry (13 §4.3's Z_i, the cylindrical chart) —
@@ -228,19 +267,26 @@ struct BridgeLayout {
   Point3 pivotOriginWorld;
   Point3 pivotAxisWorld;  // unit direction
   double angleDeg = 0.0;  // same signed value as the source BendSpec
-  // The 2D flat-frame vector (nLeft * BA/2, the same quantity BoundingBends
-  // subtracts to produce the PARENT's own clipped region boundary) that maps
-  // a point on the parent's clipped zone edge back to the corresponding
-  // point on the true tangent line (the raw hinge) — same along-hinge
-  // position, just undoing the perpendicular BA/2 clip offset. A
-  // construction consumer adds this to each of the parent panel's own
-  // zone-boundary edge points (never to the raw BendSpec::hingeA/hingeB
-  // endpoints directly, which are deliberately authored longer than the
-  // panel they bound and so have no consistent per-vertex correspondence)
-  // to find where the parent's flat material actually stops and the curved
-  // bend begins. Zero when BA=0 (sharp fold): the clipped boundary already
-  // IS the tangent line.
-  Point2 parentTangentOffsetLocal;
+  // The bend's own true 2D position in the flat frame — the CENTER of its
+  // real bend-allowance zone, not the raw (start-of-zone) hingeA/hingeB a
+  // BendSpec stores (that raw value is a clip-line input to RegionOf, and
+  // was never meant to be read back out as "where the bend is" — doing so
+  // is exactly the bug docs/BUG_REPORT_outline_never_grows_for_bend_
+  // allowance.md describes). Computed once, here, in the pose walk (the
+  // exact same hingeAShifted/hingeBShifted/ba/nLeft already computed there
+  // for the 3D fold axis) — this is the ONE fact every consumer that wants
+  // "this bend's position" (flat-pattern, boundary, full) should read;
+  // none of them should ever read a BendSpec's own hingeA/hingeB directly.
+  Point2 hingeA;
+  Point2 hingeB;
+  // The axis sits exactly on the raw hinge (no in-plane offset — see the
+  // pose walk's own comment): the parent's and child's own raw walls are
+  // therefore both exactly tangent to the bridge's cylinder, on both
+  // surfaces, with no collar or connector needed at either connection.
+  // The child's pose is this fold and nothing else — ConstructPartSolid
+  // sweeps the bridge about pivotOriginWorld/pivotAxisWorld through
+  // angleDeg and fuses it directly between the parent and child panel
+  // solids.
 };
 
 enum class EvaluateErrorCode {

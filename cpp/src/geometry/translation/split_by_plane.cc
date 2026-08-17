@@ -13,6 +13,18 @@ double SignedDistance(double a, double b, double c, const Point2& p) {
   return a * p.x + b * p.y - c;
 }
 
+// The constant 2D translation between a panel's regionOuter (F, this
+// module's own documented "2D line in F" contract) and its rawOuter (what
+// panel.pose actually consumes, per manufacturing_graph_evaluator.cc's
+// corrected pose walk) — same role as point_mapping.cc's own PanelShift,
+// duplicated here rather than shared across a module boundary these two
+// translation units don't otherwise have.
+Point2 PanelShift(const RegionPanelLayout& panel) {
+  if (panel.rawOuter.empty() || panel.regionOuter.empty()) return {0.0, 0.0};
+  return {panel.regionOuter[0].x - panel.rawOuter[0].x,
+          panel.regionOuter[0].y - panel.rawOuter[0].y};
+}
+
 // Clip a polygon against the half-plane a*x + b*y >= c.
 // Returns the portion of the polygon on or above the line.
 std::vector<Point2> ClipPositive(
@@ -73,6 +85,14 @@ SplitByPlaneResult ComputeSplitByPlane(
     double b = nx * R.r[1] + ny * R.r[4] + nz * R.r[7];
     double ndott = nx * R.t[0] + ny * R.t[1] + nz * R.t[2];
     double c = d - ndott;
+    // R/t (via `pose`) map rawOuter <-> world, but regionOuter (F, the
+    // frame this module's own contract clips in and returns fragments in)
+    // is a per-panel constant translation of rawOuter — fold that shift
+    // into `c` so the line a*x+b*y=c, evaluated on regionOuter points
+    // directly, still correctly reflects the 3D plane (see PanelShift's
+    // own comment for the derivation this constant applies).
+    Point2 shift = PanelShift(panel);
+    c += a * shift.x + b * shift.y;
 
     // Positive side: a*x + b*y >= c
     auto posPoly = ClipPositive(panel.regionOuter, a, b, c);

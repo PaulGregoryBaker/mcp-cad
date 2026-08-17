@@ -359,6 +359,11 @@ export interface GeometryAddon {
 
   // ── Phase 5 Slice 6: fuse_bodies / remove_protrusions polygon boolean ─────
   polygonUnion?(ringA: NapiPoint2[], ringB: NapiPoint2[]): PolygonBooleanResult;
+  // The part's single combined flat-pattern outline (docs/BUG_REPORT_
+  // outline_never_grows_for_bend_allowance.md) — computed entirely in C++
+  // from an already-evaluated layout, same "layout: EvaluateResult passed
+  // back in" convention as constructPartSolid/mapPointToWorld.
+  buildFlatOutline?(graph: NapiPartGraphSpec, layout: EvaluatePartGraphResult): PolygonBooleanResult;
   polygonDifference?(ringA: NapiPoint2[], ringB: NapiPoint2[]): PolygonBooleanResult;
   fuseCoplanarParts?(
     outlineA: NapiPoint2[],
@@ -1402,6 +1407,17 @@ export class GeometryBinding {
     }
     try {
       return this.addon.polygonUnion(ringA, ringB);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  buildFlatOutline(graph: NapiPartGraphSpec, layout: EvaluatePartGraphResult): PolygonBooleanResult {
+    if (!this.addon.buildFlatOutline) {
+      throw new Error('Geometry addon does not expose buildFlatOutline');
+    }
+    try {
+      return this.addon.buildFlatOutline(graph, layout);
     } catch (err) {
       throw toStructuredError(err);
     }

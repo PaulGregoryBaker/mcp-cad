@@ -148,14 +148,18 @@ TEST_CASE("MapPointToWorld: point on a folded panel uses that panel's own chain"
     if (p.regionPanelId == "seg1") seg1 = &p;
   REQUIRE(seg1 != nullptr);
 
-  // A point at seg1's own far corner (local, in F) should equal seg1's own
-  // pose applied directly — MapPointToWorld must not accidentally use seg0's
-  // chain for a point that belongs to seg1.
+  // A point at seg1's own far corner, queried in F (regionOuter, this
+  // module's own documented external frame) should equal seg1's own pose
+  // applied to the SAME vertex's raw (pose-consuming) coordinate — MapPoint
+  // ToWorld must not accidentally use seg0's chain for a point that belongs
+  // to seg1, and must correctly convert the F-frame query into what pose
+  // actually expects (rawOuter), not apply pose to the F-frame value directly.
   Point2 farCornerLocal = seg1->regionOuter[1];  // an arbitrary real vertex
+  Point2 farCornerRaw = seg1->rawOuter[1];        // the SAME vertex, raw frame
   MapToWorldResult result = MapPointToWorld(graph, layout, farCornerLocal);
   REQUIRE(result.ok);
   CHECK(result.regionPanelId == "seg1");
-  Point3 expected = seg1->pose.Apply({farCornerLocal.x, farCornerLocal.y, 0.0});
+  Point3 expected = seg1->pose.Apply({farCornerRaw.x, farCornerRaw.y, 0.0});
   CHECK(Dist3(result.point3d, expected) < 1e-9);
 }
 
@@ -176,31 +180,37 @@ TEST_CASE("MapPointToWorld: bridge zone boundaries match the adjacent panels exa
   REQUIRE(seg0 != nullptr);
   REQUIRE(seg1 != nullptr);
 
-  // Find each panel's own tagged edge for bend0.
-  auto taggedEdge = [](const RegionPanelLayout* panel, const std::string& bendId) {
+  // Find each panel's own tagged edge for bend0 — both its F-frame
+  // (regionOuter) point, for querying MapPointToWorld, and the SAME
+  // vertex's raw (pose-consuming) point, for the independent expected value.
+  auto taggedEdge = [](const RegionPanelLayout* panel, const std::string& bendId, Point2* raw) {
     size_t n = panel->regionOuter.size();
     for (size_t i = 0; i < n; ++i) {
-      if (panel->edgeBendId[i] == bendId) return panel->regionOuter[i];
+      if (panel->edgeBendId[i] == bendId) {
+        *raw = panel->rawOuter[i];
+        return panel->regionOuter[i];
+      }
     }
     FAIL("no tagged edge found for " << bendId);
     return Point2{};
   };
-  Point2 parentEdgePoint = taggedEdge(seg0, "bend0");
-  Point2 childEdgePoint = taggedEdge(seg1, "bend0");
+  Point2 parentEdgeRaw, childEdgeRaw;
+  Point2 parentEdgePoint = taggedEdge(seg0, "bend0", &parentEdgeRaw);
+  Point2 childEdgePoint = taggedEdge(seg1, "bend0", &childEdgeRaw);
 
   // At u=0 (the parent-side zone boundary), the bridge map must equal the
   // parent's own bottom-face point exactly (13 §4.3: "At u=0 this equals the
   // parent's bottom plane").
   MapToWorldResult atParentEdge = MapPointToWorld(graph, layout, parentEdgePoint);
   REQUIRE(atParentEdge.ok);
-  Point3 expectedAtParent = seg0->pose.Apply({parentEdgePoint.x, parentEdgePoint.y, 0.0});
+  Point3 expectedAtParent = seg0->pose.Apply({parentEdgeRaw.x, parentEdgeRaw.y, 0.0});
   CHECK(Dist3(atParentEdge.point3d, expectedAtParent) < 1e-6);
 
   // At u=BA (the child-side zone boundary), the bridge map must equal the
   // child's own bottom-face attachment point ("tangent continuity").
   MapToWorldResult atChildEdge = MapPointToWorld(graph, layout, childEdgePoint);
   REQUIRE(atChildEdge.ok);
-  Point3 expectedAtChild = seg1->pose.Apply({childEdgePoint.x, childEdgePoint.y, 0.0});
+  Point3 expectedAtChild = seg1->pose.Apply({childEdgeRaw.x, childEdgeRaw.y, 0.0});
   CHECK(Dist3(atChildEdge.point3d, expectedAtChild) < 1e-6);
 }
 

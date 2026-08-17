@@ -159,31 +159,40 @@ d('[v2] flat-pattern resource (Phase 5 Slice 7)', () => {
     });
 
     const flat = readFlatPattern(store, part.part_id);
-    // The whole net stays the part's own outline, unchanged by the bend —
-    // v2's structural improvement over v1 (nothing to "unfold").
-    expect(flat.outline).toEqual([
-      { x: 0, y: 0 },
-      { x: 10, y: 0 },
-      { x: 10, y: 5 },
-      { x: 0, y: 5 },
-    ]);
+    // docs/BUG_REPORT_outline_never_grows_for_bend_allowance.md: the net
+    // now GROWS by the bend's own real allowance (BA = angleRad*(radiusMm +
+    // kFactor*thicknessMm), kFactor defaults to 0 here) — the whole point of
+    // the fix, and the literal cut boundary a manufacturer uses. It is no
+    // longer the part's raw authored outline unchanged.
+    const ba = (Math.PI / 2) * (1.0 + 0.0 * 1.0);
+    expect(flat.outline).toHaveLength(4);
+    const outlineXs = flat.outline.map((p) => p.x).sort((a, b) => a - b);
+    expect(outlineXs[0]).toBeCloseTo(-ba, 9);
+    expect(outlineXs[outlineXs.length - 1]).toBeCloseTo(10, 9);
     expect(flat.regionPanels.length).toBe(2);
     expect(flat.bendLines.length).toBe(1);
-    expect(flat.bendLines[0]?.hingeA).toEqual({ x: 5, y: 0 });
-    expect(flat.bendLines[0]?.hingeB).toEqual({ x: 5, y: 5 });
+    // Bug #2: the reported bend line is the ZONE'S CENTER, not its raw
+    // (start-of-zone) mark — this bend is directly off the root (zero
+    // ancestor shift), so the center is exactly the raw mark minus half
+    // the bend's own allowance (nLeft points toward -x here).
+    expect(flat.bendLines[0]?.hingeA.x).toBeCloseTo(5 - ba / 2, 9);
+    expect(flat.bendLines[0]?.hingeA.y).toBeCloseTo(0, 9);
+    expect(flat.bendLines[0]?.hingeB.x).toBeCloseTo(5 - ba / 2, 9);
+    expect(flat.bendLines[0]?.hingeB.y).toBeCloseTo(5, 9);
     expect(flat.bendLines[0]?.angleDeg).toBe(90);
     const dxf = await fetchDxf(flat);
     expect(dxf).toContain('LWPOLYLINE');
     expect(dxf).toContain('BEND');
 
-    // Region panels are clipped PAST the bend's own radius/width zone (14
-    // §2.1's boundingBends), so their combined area is strictly less than
-    // the whole outline's — a real self-consistency bound, not a hardcoded
-    // expected number.
+    // Each region panel's own area is unaffected by translation, so their
+    // combined area is still exactly the two 5x5 rectangles (50mm^2) — but
+    // the outline's own area is now bigger by exactly the bend's own flat
+    // allowance strip (ba * hinge length), not the old (pre-fix) "clipped
+    // past the zone" shrinkage this comment used to describe.
     const outlineArea = shoelaceArea(flat.outline);
     const regionArea = flat.regionPanels.reduce((sum, p) => sum + shoelaceArea(p.outer), 0);
-    expect(regionArea).toBeLessThan(outlineArea);
-    expect(regionArea).toBeGreaterThan(0);
+    expect(regionArea).toBeCloseTo(50, 9);
+    expect(outlineArea - regionArea).toBeCloseTo(ba * 5, 9);
   });
 
   it('rejects a nonexistent part_id with GRAPH_PART_NOT_FOUND', () => {

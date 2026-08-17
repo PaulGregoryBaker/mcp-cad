@@ -121,3 +121,15 @@ Verified:
   `testcube.step` at `default_bend_radius_mm` 0, 0.5, 1.0, 2.0 all now
   succeed for every one of the 4 resulting parts (previously: only 0
   succeeded, matching the bug report's table exactly).
+
+## Correction (2026-08-10)
+
+This report's own summary claimed `graph://part/{id}/flat-pattern`'s
+"DXF/outline are correct at every radius tested" — that was wrong; it
+just wasn't checked against the outline's own SIZE, only that it built
+without error. `docs/BUG_REPORT_outline_never_grows_for_bend_allowance.md`
+found and fixed the real issue: the flat outline never grew to account
+for bend allowance at all, at any radius. The collar mechanism this
+report's fix added has also since been removed — the later fix makes it
+unnecessary (see the note in `BUG_REPORT_boundary_resource_disagrees_
+with_mesh_after_collar_fix.md`).

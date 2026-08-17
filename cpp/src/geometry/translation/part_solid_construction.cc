@@ -39,17 +39,6 @@ namespace {
 constexpr double kBooleanFuzzMm = 1e-5;
 constexpr double kPi = 3.14159265358979323846;
 
-// Below this, the parent panel's own (BA/2-clipped) boundary and the true
-// tangent line at the raw hinge are considered coincident — no collar is
-// needed (see the bridge-loop comment below). A geometric-robustness floor
-// (floating-point noise), not a manufacturing tolerance: real bend
-// allowance at any authored radiusMm>0 is orders of magnitude above this.
-constexpr double kCollarGapEpsilonMm = 1e-6;
-
-double Dist2(const Point2& a, const Point2& b) {
-  return std::hypot(a.x - b.x, a.y - b.y);
-}
-
 gp_Trsf ToGpTrsf(const Transform3& t) {
   gp_Trsf trsf;
   trsf.SetValues(t.r[0], t.r[1], t.r[2], t.t[0], t.r[3], t.r[4], t.r[5], t.t[1], t.r[6], t.r[7],
@@ -107,7 +96,7 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
     std::unordered_map<std::string, TopoDS_Shape> panelSolidById;
     for (const auto& panel : layout.panels) {
       BRepBuilderAPI_MakePolygon polyMaker;
-      for (const auto& v : panel.regionOuter) {
+      for (const auto& v : panel.rawOuter) {
         polyMaker.Add(gp_Pnt(v.x, v.y, 0.0));
       }
       polyMaker.Close();
@@ -131,7 +120,7 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
       // solution, never a solid that silently disagrees with its own flat
       // pattern). Hole wires are stored/generated with the opposite winding
       // from the outer wire, OCCT's own convention for a face's inner loops.
-      for (const auto& holeRing : panel.regionPolygonHoles) {
+      for (const auto& holeRing : panel.rawPolygonHoles) {
         BRepBuilderAPI_MakePolygon holePolyMaker;
         for (const auto& v : holeRing) {
           holePolyMaker.Add(gp_Pnt(v.x, v.y, 0.0));
@@ -144,7 +133,7 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
         }
         faceMaker.Add(holePolyMaker.Wire());
       }
-      for (const auto& circleHole : panel.regionCircleHoles) {
+      for (const auto& circleHole : panel.rawCircleHoles) {
         // -Z axis direction winds the circle CW as seen from +Z, opposite the
         // outer wire's CCW — a true circular wire, never tessellated.
         gp_Circ circ(gp_Ax2(gp_Pnt(circleHole.center.x, circleHole.center.y, 0.0),
@@ -179,29 +168,19 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
       panelSolidById[panel.regionPanelId] = placed.Shape();
     }
 
-    // Each bend contributes a real bridge solid: the zone's own material, built
-    // by revolving a zone-boundary quad about the bend's own pivot axis through
-    // the full bend angle. That quad is anchored at the TRUE tangent line — the
-    // raw hinge (bridge.hingeA/hingeB), transformed by the parent panel's own
-    // pose — not at the parent's own (BA/2-clipped) region boundary. The child
-    // panel's pose was derived from this exact same pivot (manufacturing_graph_
-    // evaluator.cc's Evaluate(), via its childShift cancellation), so the
-    // revolve's end-cap coincides exactly with the child's own zone-boundary
-    // quad at any radius, not just radiusMm=0.
+    // Each bend contributes a real bridge solid: the zone's own material,
+    // built by revolving the parent's own zone-boundary quad (bottomFace/
+    // topFace at the edge tagged with this bend's id) about the bend's own
+    // pivot axis through the full bend angle. The axis sits exactly on the
+    // raw hinge (manufacturing_graph_evaluator.cc's own pose-walk comment),
+    // so this quad is automatically, exactly tangent to the bridge's
+    // cylinder — no separate tangent-line offset, no parent-side collar.
     //
-    // The parent's own panel solid, though, is built from its BA/2-clipped
-    // regionOuter (unchanged, above) — which stops SHORT of the true tangent
-    // line by that same half-width whenever BA>0 (radiusMm>0 or kFactor>0).
-    // Unlike the child side, a panel can be parent to more than one bend, so
-    // there's no single per-panel pose shift that could close this gap for all
-    // of them at once — each bridge instead gets its own small flat COLLAR
-    // solid, spanning from the parent's clipped edge to the true tangent line,
-    // closing that gap locally. At BA=0 (sharp fold) the gap is exactly zero and
-    // no collar is built (docs/BUG_REPORT_nonzero_default_bend_radius_breaks_
-    // mesh_construction.md — a nonzero radius previously left this gap open,
-    // producing disconnected solids for any panel with more than one child).
+    // The bridge's own END face (the same quad, rotated by the full bend
+    // angle about the same axis) IS the child panel's real edge — the
+    // child's pose is that identical rotation and nothing else, so no
+    // connector piece is needed to close any gap; there isn't one.
     std::unordered_map<std::string, TopoDS_Shape> bridgeSolidByBendId;
-    std::unordered_map<std::string, TopoDS_Shape> collarSolidByBendId;
     for (const auto& bridge : layout.bridges) {
       auto parentIt = panelById.find(bridge.parentRegionPanelId);
       if (parentIt == panelById.end()) {
@@ -227,31 +206,18 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
       }
 
       size_t i0 = static_cast<size_t>(edgeIdx);
-      size_t i1 = (i0 + 1) % parent.regionOuter.size();
-      const Point2& e0 = parent.regionOuter[i0];
-      const Point2& e1 = parent.regionOuter[i1];
+      size_t i1 = (i0 + 1) % parent.rawOuter.size();
 
-      // The true tangent line, at the SAME along-hinge position as e0/e1 —
-      // found by undoing the parent-side BA/2 perpendicular offset
-      // BoundingBends applied when clipping the parent's own region (never
-      // by using BendSpec::hingeA/hingeB's own endpoints directly, which are
-      // deliberately authored longer than the panel they bound and have no
-      // per-vertex correspondence to e0/e1).
-      Point2 tangentAtE0{e0.x + bridge.parentTangentOffsetLocal.x,
-                          e0.y + bridge.parentTangentOffsetLocal.y};
-      Point2 tangentAtE1{e1.x + bridge.parentTangentOffsetLocal.x,
-                          e1.y + bridge.parentTangentOffsetLocal.y};
-
-      Point3 tb0 = parent.pose.Apply({tangentAtE0.x, tangentAtE0.y, 0.0});
-      Point3 tb1 = parent.pose.Apply({tangentAtE1.x, tangentAtE1.y, 0.0});
-      Point3 tt1 = parent.pose.Apply({tangentAtE1.x, tangentAtE1.y, thicknessMm});
-      Point3 tt0 = parent.pose.Apply({tangentAtE0.x, tangentAtE0.y, thicknessMm});
+      Point3 b0 = parent.bottomFace[i0];
+      Point3 b1 = parent.bottomFace[i1];
+      Point3 t1 = parent.topFace[i1];
+      Point3 t0 = parent.topFace[i0];
 
       BRepBuilderAPI_MakePolygon quadMaker;
-      quadMaker.Add(gp_Pnt(tb0.x, tb0.y, tb0.z));
-      quadMaker.Add(gp_Pnt(tb1.x, tb1.y, tb1.z));
-      quadMaker.Add(gp_Pnt(tt1.x, tt1.y, tt1.z));
-      quadMaker.Add(gp_Pnt(tt0.x, tt0.y, tt0.z));
+      quadMaker.Add(gp_Pnt(b0.x, b0.y, b0.z));
+      quadMaker.Add(gp_Pnt(b1.x, b1.y, b1.z));
+      quadMaker.Add(gp_Pnt(t1.x, t1.y, t1.z));
+      quadMaker.Add(gp_Pnt(t0.x, t0.y, t0.z));
       quadMaker.Close();
       if (!quadMaker.IsDone()) {
         result.errorCode = "GE_BRIDGE_BUILD_FAILED";
@@ -287,57 +253,21 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
         return result;
       }
       bridgeSolidByBendId[bridge.bendId] = revol.Shape();
-
-      if (Dist2(e0, tangentAtE0) > kCollarGapEpsilonMm) {
-        BRepBuilderAPI_MakePolygon collarPolyMaker;
-        collarPolyMaker.Add(gp_Pnt(e0.x, e0.y, 0.0));
-        collarPolyMaker.Add(gp_Pnt(e1.x, e1.y, 0.0));
-        collarPolyMaker.Add(gp_Pnt(tangentAtE1.x, tangentAtE1.y, 0.0));
-        collarPolyMaker.Add(gp_Pnt(tangentAtE0.x, tangentAtE0.y, 0.0));
-        collarPolyMaker.Close();
-        if (!collarPolyMaker.IsDone()) {
-          result.errorCode = "GE_BRIDGE_BUILD_FAILED";
-          result.message = "failed to build the parent-side collar wire for bend " + bridge.bendId;
-          return result;
-        }
-
-        BRepBuilderAPI_MakeFace collarFace(collarPolyMaker.Wire());
-        if (!collarFace.IsDone()) {
-          result.errorCode = "GE_BRIDGE_BUILD_FAILED";
-          result.message = "failed to build the parent-side collar face for bend " + bridge.bendId;
-          return result;
-        }
-
-        BRepPrimAPI_MakePrism collarPrism(collarFace.Face(), gp_Vec(0.0, 0.0, thicknessMm), true);
-        if (!collarPrism.IsDone() || collarPrism.Shape().IsNull()) {
-          result.errorCode = "GE_BRIDGE_BUILD_FAILED";
-          result.message = "failed to thicken the parent-side collar for bend " + bridge.bendId;
-          return result;
-        }
-
-        gp_Trsf parentTrsf = ToGpTrsf(parent.pose);
-        BRepBuilderAPI_Transform placedCollar(collarPrism.Shape(), parentTrsf, /*Copy=*/true);
-        collarSolidByBendId[bridge.bendId] = placedCollar.Shape();
-      }
     }
 
-    // Fuse in parent-panel -> bridge -> child-panel order (not "all panels then
-    // all bridges") — an un-bridged panel pair may not touch or overlap at all
-    // once BA>0, so fusing two panels before their connecting bridge exists would
-    // spuriously report a disconnected result. `layout.panels[0]` is the root
-    // (Evaluate()'s own BFS always visits it first); walking `layout.bridges` in
-    // parent-before-child order (also guaranteed by that same BFS) interleaves
-    // each bridge between its parent and child panel correctly, including for a
-    // tree with branching, not just a straight chain.
+    // Fuse in parent-panel -> bridge -> child-panel order (not "all panels
+    // then all bridges") — an un-bridged panel pair may not touch or overlap
+    // at all, so fusing two panels before their connecting bridge exists
+    // would spuriously report a disconnected result. `layout.panels[0]` is
+    // the root (Evaluate()'s own BFS always visits it first); walking
+    // `layout.bridges` in parent-before-child order (also guaranteed by that
+    // same BFS) interleaves each bridge between its parent and child panel
+    // correctly, including for a tree with branching, not just a straight
+    // chain.
     std::vector<TopoDS_Shape> orderedPieces;
-    orderedPieces.reserve(layout.panels.size() + layout.bridges.size() +
-                           collarSolidByBendId.size());
+    orderedPieces.reserve(layout.panels.size() + layout.bridges.size());
     orderedPieces.push_back(panelSolidById.at(layout.panels[0].regionPanelId));
     for (const auto& bridge : layout.bridges) {
-      auto collarIt = collarSolidByBendId.find(bridge.bendId);
-      if (collarIt != collarSolidByBendId.end()) {
-        orderedPieces.push_back(collarIt->second);
-      }
       orderedPieces.push_back(bridgeSolidByBendId.at(bridge.bendId));
       orderedPieces.push_back(panelSolidById.at(bridge.childRegionPanelId));
     }
@@ -377,9 +307,7 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
           result.errorCode = "GE_CONSTRUCTION_FAILED";
           result.message = "fuse produced " + std::to_string(solidCount) +
                             " disconnected solid(s) joining piece index " + std::to_string(i) +
-                            " of " + std::to_string(orderedPieces.size()) +
-                            " (collars=" + std::to_string(collarSolidByBendId.size()) +
-                            ") — every panel/bridge pair is expected to share a coincident face";
+                            " — every panel/bridge pair is expected to share a coincident face";
           return result;
         }
       }

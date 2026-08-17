@@ -15,31 +15,24 @@
  *
  * Each panel is built as its own independently-thickened, closed solid, placed via
  * its already-computed pose. Every bend also contributes a real BRIDGE solid — the
- * bend zone's own material, built by revolving a zone-boundary quad about the
- * bend's already-computed pivot axis (EvaluateResult::bridges) through the full
- * bend angle, via BRepPrimAPI_MakeRevol. That quad is anchored at the TRUE
- * tangent line (the raw hinge, BridgeLayout::hingeA/hingeB, transformed by the
- * parent panel's own pose) rather than the parent's own bend-allowance-clipped
- * region boundary — and since the child panel's pose was derived from this same
- * pivot (Evaluate()'s childShift cancellation), the revolve's end-cap coincides
- * exactly with the child's zone-boundary quad at any bend radius, not just
- * radiusMm=0.
- *
- * The parent panel's own solid, though, IS built from its bend-allowance-clipped
- * region boundary (unchanged) — which stops short of the true tangent line by
- * half the zone width whenever that width is nonzero (radiusMm>0 or kFactor>0).
- * A panel can be parent to more than one bend (branching), so there is no single
- * per-panel pose shift that could close this gap the way the child side's does —
- * each bridge instead contributes its own small flat COLLAR solid spanning from
- * the parent's clipped edge to the true tangent line, closing that gap locally,
- * per bend. At zone width 0 (sharp fold) the gap is exactly zero and no collar is
- * built. This is what makes fusing panels, collars, and bridges together
- * well-conditioned regardless of fold direction (mountain/valley), bend radius,
- * or how many bends share one parent panel (docs/BUG_REPORT_nonzero_default_
- * bend_radius_breaks_mesh_construction.md — omitting the collar left a real gap
- * at any bend radius > 0 on a panel with more than one child). This retires the
- * old "sharp fold" idealization entirely: there is no separate zero-radius code
- * path, and no GE_SHARP_FOLD_GAP case any more — a real bend, however small,
+ * bend zone's own material, built by revolving the parent panel's zone-boundary
+ * quad (its bottomFace/topFace edge tagged with that bend's id) about the bend's
+ * already-computed pivot axis (EvaluateResult::bridges) through the full bend
+ * angle, via BRepPrimAPI_MakeRevol. The bridge solid's own start-cap is exactly
+ * the parent's zone-boundary quad, and (since the child panel's pose was derived
+ * from the SAME pivot/shift) its end-cap is exactly the child's zone-boundary
+ * quad — coincident faces, not approximate overlaps, so fusing panels and bridges
+ * together is well-conditioned regardless of fold direction (mountain/valley) or
+ * bend radius, including radiusMm=0 (a real, non-degenerate bridge still exists
+ * there, since the bottom-surface radius r_b is never exactly zero for a valley
+ * fold — see manufacturing_graph_evaluator.hpp's own header comment). Every
+ * region panel is clipped at zero offset from its own touching bends' raw hinge
+ * lines and then translated by its accumulated bend-allowance shift
+ * (Evaluate()'s own pose walk) — never shrunk to make room for a bend zone — so
+ * this coincidence holds regardless of how many bends share one parent panel
+ * (docs/BUG_REPORT_outline_never_grows_for_bend_allowance.md). This retires
+ * the old "sharp fold" idealization entirely: there is no separate zero-radius
+ * code path, and no GE_SHARP_FOLD_GAP case any more — a real bend, however small,
  * always has real bridge material connecting its two sides.
  *
  * This module DOES touch OCCT (unlike manufacturing_graph_evaluator, which stays

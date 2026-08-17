@@ -1474,14 +1474,31 @@ public:
         }
       }
 
+      // Panel-extraction cutter bleed: deliberately over-sized past the
+      // panel's own true thickness (bestDist) so adjacent walls' corner
+      // material overlaps into this slab (see the extraction comment below
+      // — merge_bodies_with_bend's own seam detection relies on that
+      // overlap to find a shared edge at all). Attempted reducing this to
+      // ~0.2mm (an order of magnitude below a real bend's own ~1x-radius
+      // 3D positional effect, e.g. ~2mm for docs/BUG_REPORT_outline_never_
+      // grows_for_bend_allowance.md's reported scenario) so the bleed would
+      // stop contaminating radius-scale geometric measurements — but this
+      // broke real bend/seam detection (production_workflow_test.cc:154,
+      // :614; geometry_test.cc:940 — bendCount fell to 0). The margin is
+      // currently load-bearing for seam-detection finding a shared edge at
+      // all, not just cosmetic bleed; shrinking it needs that detection
+      // made robust to near-zero overlap first, not a smaller constant
+      // here. Reverted to the known-good value pending that fix.
+      constexpr double kPanelBleedEachSideMm = 0.5;
       double dx = uMax - uMin;
       double dy = vMax - vMin;
-      double dz = bestDist + 1.0; // 0.5 mm bleed on each side
+      double dz = bestDist + 2.0 * kPanelBleedEachSideMm;
 
       if (dx <= 1e-3 || dy <= 1e-3 || dz <= 1e-3) continue;
 
-      // Origin at local U*uMin + V*vMin + N*(nValue - bestDist - 0.5)
-      gp_Pnt origin(U.XYZ() * uMin + V.XYZ() * vMin + N.XYZ() * (nValue - bestDist - 0.5));
+      // Origin at local U*uMin + V*vMin + N*(nValue - bestDist - bleed)
+      gp_Pnt origin(U.XYZ() * uMin + V.XYZ() * vMin +
+                    N.XYZ() * (nValue - bestDist - kPanelBleedEachSideMm));
       gp_Ax2 localSystem(origin, N, U);
 
       BRepPrimAPI_MakeBox boxMaker(localSystem, dx, dy, dz);
@@ -1519,9 +1536,9 @@ public:
       s_.shells[panelId] = ShellState{panelId, parentId, extract.Shape()};
       panelIds.push_back(panelId);
       // bestDist is this panel's own outer/inner face-group distance,
-      // measured BEFORE the cutter box's own dz=bestDist+1.0 safety-margin
-      // bleed below — the correct true thickness, not the (possibly
-      // material-inflated) extracted slab's own vertex extent.
+      // measured BEFORE the cutter box's own dz=bestDist+2*kPanelBleedEachSideMm
+      // safety-margin bleed above — the correct true thickness, not the
+      // (possibly material-inflated) extracted slab's own vertex extent.
       panelThicknessMm.push_back(bestDist);
       (void)protrusionIds;       // reserved for future post-cut handling
       (void)protrusionParents;   // reserved for future post-cut handling

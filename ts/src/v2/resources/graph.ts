@@ -27,6 +27,7 @@ import {
   mapPointToWorld,
   mapPointToFlat,
   evaluateFindings,
+  toNapiPartGraphSpec,
 } from '../graph/evaluate-client';
 import { geometryBinding } from '../../geometry/binding';
 import { buildFlatPatternDxf } from './dxf';
@@ -283,14 +284,26 @@ function readFlatPattern(store: GraphStore, partId: string): FlatPatternResponse
   }));
 
   const snapshot = store.snapshotPart(partId);
-  const bendLines: FlatPatternBend[] = snapshot.bends.map((b) => ({
-    bendId: b.bendId,
-    hingeA: b.hingeA,
-    hingeB: b.hingeB,
-    angleDeg: b.angleDeg,
-    radiusMm: b.radiusMm,
-    radiusMeasured: b.radiusMeasured,
-  }));
+  const bendLines: FlatPatternBend[] = snapshot.bends.map((b) => {
+    const bridge = evaluated.bridges.find((br) => br.bendId === b.bendId);
+    return {
+      bendId: b.bendId,
+      hingeA: bridge ? bridge.hingeA : b.hingeA,
+      hingeB: bridge ? bridge.hingeB : b.hingeB,
+      angleDeg: b.angleDeg,
+      radiusMm: b.radiusMm,
+      radiusMeasured: b.radiusMeasured,
+    };
+  });
+
+  const flatOutline = geometryBinding.buildFlatOutline(toNapiPartGraphSpec(snapshot), evaluated);
+  if (!flatOutline.ok) {
+    throwError(
+      (flatOutline.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
+      flatOutline.message || `buildFlatOutline failed for part ${partId}`,
+      false,
+    );
+  }
 
   const { entry } = ensureFlatPatternDxfBlobFresh(store, partId);
   const key = buildBlobCacheKey(partId, 'flat-pattern', 'default');
@@ -299,7 +312,7 @@ function readFlatPattern(store: GraphStore, partId: string): FlatPatternResponse
     partId,
     thicknessMm: part.thicknessMm,
     kFactor: part.kFactor,
-    outline: part.outline,
+    outline: flatOutline.outer,
     holes: part.holes,
     regionPanels,
     bendLines,
@@ -329,20 +342,39 @@ export function ensureFlatPatternDxfBlobFresh(
   if (!part) {
     throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${partId}`, false);
   }
+  const evaluated = evaluatePart(store, partId);
+  if (!evaluated.ok) {
+    throwError(
+      (evaluated.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
+      evaluated.message || `evaluatePartGraph failed for part ${partId}`,
+      false,
+    );
+  }
   const snapshot = store.snapshotPart(partId);
-  const bendLines: FlatPatternBend[] = snapshot.bends.map((b) => ({
-    bendId: b.bendId,
-    hingeA: b.hingeA,
-    hingeB: b.hingeB,
-    angleDeg: b.angleDeg,
-    radiusMm: b.radiusMm,
-    radiusMeasured: b.radiusMeasured,
-  }));
+  const bendLines: FlatPatternBend[] = snapshot.bends.map((b) => {
+    const bridge = evaluated.bridges.find((br) => br.bendId === b.bendId);
+    return {
+      bendId: b.bendId,
+      hingeA: bridge ? bridge.hingeA : b.hingeA,
+      hingeB: bridge ? bridge.hingeB : b.hingeB,
+      angleDeg: b.angleDeg,
+      radiusMm: b.radiusMm,
+      radiusMeasured: b.radiusMeasured,
+    };
+  });
+  const flatOutline = geometryBinding.buildFlatOutline(toNapiPartGraphSpec(snapshot), evaluated);
+  if (!flatOutline.ok) {
+    throwError(
+      (flatOutline.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
+      flatOutline.message || `buildFlatOutline failed for part ${partId}`,
+      false,
+    );
+  }
   const key = buildBlobCacheKey(partId, 'flat-pattern', 'default');
   const currentHash = computePartContentHash(store, partId);
   const before = v2BlobCache.get(key);
   const entry = v2BlobCache.getOrRebuild(key, 'application/dxf', currentHash, () =>
-    Buffer.from(buildFlatPatternDxf(part.outline, bendLines, part.holes), 'utf8'),
+    Buffer.from(buildFlatPatternDxf(flatOutline.outer, bendLines, part.holes), 'utf8'),
   );
   const changed = !before || before.builtFromContentHash !== entry.builtFromContentHash;
   return { entry, changed };
@@ -378,11 +410,25 @@ function readFull(store: GraphStore, partId: string): FullResponse {
   }
   const snapshot = store.snapshotPart(partId);
   const findingsResult = evaluateFindings(store, partId);
+
+  // bends[].hingeA/hingeB report the bend's one true 2D position (the same
+  // Evaluate()-computed fact every other resource reads) — never a
+  // BendRow's own raw, start-of-zone hingeA/hingeB. A geometry failure
+  // here doesn't block the rest of this structural resource (same
+  // graceful-degradation convention evaluateFindings itself already uses
+  // for its own geometry-dependent rules) — bends fall back to their raw
+  // stored position rather than failing the whole read.
+  const evaluated = evaluatePart(store, partId);
+  const bends = snapshot.bends.map((b) => {
+    const bridge = evaluated.ok ? evaluated.bridges.find((br) => br.bendId === b.bendId) : undefined;
+    return bridge ? { ...b, hingeA: bridge.hingeA, hingeB: bridge.hingeB } : b;
+  });
+
   return {
     partId,
     part: snapshot.part,
     regionPanels: snapshot.regionPanels,
-    bends: snapshot.bends,
+    bends,
     findings: findingsResult.findings,
   };
 }
@@ -440,15 +486,10 @@ export function ensureBoundaryBlobFresh(
   const snapshot = store.snapshotPart(partId);
   const bendsById = new Map(snapshot.bends.map((b) => [b.bendId, b]));
 
-  // bottomFaceTrue/topFaceTrue, not bottomFace/topFace: this resource is
-  // documented as the part's exact 3D boundary (matching graph://part/{id}/
-  // mesh), not the flat-pattern-facing clip — see manufacturing_graph_
-  // evaluator.hpp's own doc comment on RegionPanelLayout::bottomFaceTrue and
-  // docs/BUG_REPORT_boundary_resource_disagrees_with_mesh_after_collar_fix.md.
   const regionPanels: BoundaryRegionPanel[] = evaluated.panels.map((p) => ({
     regionPanelId: p.regionPanelId,
-    bottomFace: p.bottomFaceTrue,
-    topFace: p.topFaceTrue,
+    bottomFace: p.bottomFace,
+    topFace: p.topFace,
     regionPolygonHoles: p.regionPolygonHoles,
     regionCircleHoles: p.regionCircleHoles,
   }));
@@ -457,6 +498,9 @@ export function ensureBoundaryBlobFresh(
     if (!bend) {
       throwError(ErrorCodes.INTERNAL_ERROR, `bridge references unknown bend ${br.bendId}`, false);
     }
+    // bridge.hingeA/hingeB IS the bend's one true 2D position (computed
+    // once in Evaluate() — manufacturing_graph_evaluator.hpp's own doc
+    // comment), never a BendSpec's own raw hingeA/hingeB.
     return {
       bendId: br.bendId,
       parentRegionPanelId: br.parentRegionPanelId,
@@ -465,8 +509,8 @@ export function ensureBoundaryBlobFresh(
       pivotAxisWorld: br.pivotAxisWorld,
       angleDeg: br.angleDeg,
       radiusMm: bend.radiusMm,
-      hingeA: bend.hingeA,
-      hingeB: bend.hingeB,
+      hingeA: br.hingeA,
+      hingeB: br.hingeB,
     };
   });
 
