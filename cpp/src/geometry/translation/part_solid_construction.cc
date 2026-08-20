@@ -26,6 +26,7 @@
 #include <Standard_Failure.hxx>
 
 #include <cmath>
+#include <iostream>
 #include <unordered_map>
 
 namespace mcp_cad::translation {
@@ -38,6 +39,11 @@ namespace {
 // rebuild/17-numerical-policy.md §2.1.
 constexpr double kBooleanFuzzMm = 1e-5;
 constexpr double kPi = 3.14159265358979323846;
+
+double Dist3(const Point3& a, const Point3& b) {
+  double dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+  return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
 
 gp_Trsf ToGpTrsf(const Transform3& t) {
   gp_Trsf trsf;
@@ -168,18 +174,20 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
       panelSolidById[panel.regionPanelId] = placed.Shape();
     }
 
-    // Each bend contributes a real bridge solid: the zone's own material,
-    // built by revolving the parent's own zone-boundary quad (bottomFace/
-    // topFace at the edge tagged with this bend's id) about the bend's own
-    // pivot axis through the full bend angle. The axis sits exactly on the
-    // raw hinge (manufacturing_graph_evaluator.cc's own pose-walk comment),
-    // so this quad is automatically, exactly tangent to the bridge's
-    // cylinder — no separate tangent-line offset, no parent-side collar.
-    //
-    // The bridge's own END face (the same quad, rotated by the full bend
-    // angle about the same axis) IS the child panel's real edge — the
-    // child's pose is that identical rotation and nothing else, so no
-    // connector piece is needed to close any gap; there isn't one.
+    // Each bend contributes a real bridge solid, built in three pieces
+    // (docs/BUG_REPORT_reconstructed_envelope_grows_with_bend_radius.md):
+    // the parent's and child's own real walls are deliberately left
+    // un-trimmed (RegionOf/BoundingBends stay zero-offset, for the flat-
+    // pattern/DXF side), but the axis now sits `setbackMm` in-plane off the
+    // raw hinge, so those real walls no longer reach the axis's own tangent
+    // points. A flat "collar" slab closes each side's own gap: one from the
+    // parent's real edge out to its true tangent quad
+    // (parentTangent{Bottom,Top}{A,B}), the real tangent-preserving revolve
+    // between the parent and child tangent quads, and a matching collar
+    // from the child's true tangent quad to the child's own real edge.
+    // Skipped (falls back to the direct revolve, as before) at radiusMm=0 /
+    // kFactor=0, where every tangent quad coincides exactly with its real
+    // edge and a collar would be a degenerate, zero-volume slab.
     std::unordered_map<std::string, TopoDS_Shape> bridgeSolidByBendId;
     for (const auto& bridge : layout.bridges) {
       auto parentIt = panelById.find(bridge.parentRegionPanelId);
@@ -205,54 +213,166 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
         return result;
       }
 
+      auto parentChildIt = panelById.find(bridge.childRegionPanelId);
+      if (parentChildIt == panelById.end()) {
+        result.errorCode = "GE_BRIDGE_EDGE_NOT_FOUND";
+        result.message = "bridge " + bridge.bendId + " references unknown child region panel " +
+                          bridge.childRegionPanelId;
+        return result;
+      }
+      const RegionPanelLayout& child = *parentChildIt->second;
+      int childEdgeIdx = FindZoneEdge(child, bridge.bendId);
+      if (childEdgeIdx == -1) {
+        result.errorCode = "GE_BRIDGE_EDGE_NOT_FOUND";
+        result.message = "no zone-boundary edge tagged for bend " + bridge.bendId +
+                          " on region panel " + child.regionPanelId;
+        return result;
+      }
+      if (childEdgeIdx == -2) {
+        result.errorCode = "GE_BRIDGE_UNSUPPORTED_TOPOLOGY";
+        result.message = "bend " + bridge.bendId + "'s zone boundary spans more than one edge "
+                          "on region panel " + child.regionPanelId + " — only a single-edge "
+                          "zone boundary is supported this slice";
+        return result;
+      }
+
       size_t i0 = static_cast<size_t>(edgeIdx);
       size_t i1 = (i0 + 1) % parent.rawOuter.size();
-
       Point3 b0 = parent.bottomFace[i0];
       Point3 b1 = parent.bottomFace[i1];
       Point3 t1 = parent.topFace[i1];
       Point3 t0 = parent.topFace[i0];
 
-      BRepBuilderAPI_MakePolygon quadMaker;
-      quadMaker.Add(gp_Pnt(b0.x, b0.y, b0.z));
-      quadMaker.Add(gp_Pnt(b1.x, b1.y, b1.z));
-      quadMaker.Add(gp_Pnt(t1.x, t1.y, t1.z));
-      quadMaker.Add(gp_Pnt(t0.x, t0.y, t0.z));
-      quadMaker.Close();
-      if (!quadMaker.IsDone()) {
-        result.errorCode = "GE_BRIDGE_BUILD_FAILED";
-        result.message = "failed to build the zone-boundary quad wire for bend " + bridge.bendId;
-        return result;
+      size_t j0 = static_cast<size_t>(childEdgeIdx);
+      size_t j1 = (j0 + 1) % child.rawOuter.size();
+      Point3 cb0 = child.bottomFace[j0];
+      Point3 cb1 = child.bottomFace[j1];
+      Point3 ct1 = child.topFace[j1];
+      Point3 ct0 = child.topFace[j0];
+
+      // Each side's tangent points, derived directly from its own REAL
+      // (RegionOf-clipped) edge corners — see BridgeLayout's own header
+      // comment on why hingeA/hingeB-based absolute positions can't be
+      // used here (exaggerated half-span, doesn't match a real edge).
+      auto plus = [](const Point3& p, const Point3& v, double s) -> Point3 {
+        return {p.x + s * v.x, p.y + s * v.y, p.z + s * v.z};
+      };
+      Point3 parentTanB0 = plus(b0, bridge.nLeftWorld, bridge.setbackMm);
+      Point3 parentTanB1 = plus(b1, bridge.nLeftWorld, bridge.setbackMm);
+      Point3 parentTanT0 = plus(t0, bridge.nLeftWorld, bridge.setbackMm);
+      Point3 parentTanT1 = plus(t1, bridge.nLeftWorld, bridge.setbackMm);
+      Point3 childTanB0 = plus(cb0, bridge.childNLeftWorld, -bridge.setbackMm);
+      Point3 childTanB1 = plus(cb1, bridge.childNLeftWorld, -bridge.setbackMm);
+
+      // Extrude a planar quad (given in perimeter order) by a world-space
+      // vector — the same "2D outline + thickness vector" shape the panel
+      // prisms above use, just built directly in world space (these
+      // corners are already-posed panel/tangent points, not a fresh local
+      // 2D outline needing its own pose transform afterward).
+      auto extrudeQuad = [&](const Point3& p0, const Point3& p1, const Point3& p2, const Point3& p3,
+                              const Point3& vec, const char* label) -> TopoDS_Shape {
+        BRepBuilderAPI_MakePolygon quadMaker;
+        quadMaker.Add(gp_Pnt(p0.x, p0.y, p0.z));
+        quadMaker.Add(gp_Pnt(p1.x, p1.y, p1.z));
+        quadMaker.Add(gp_Pnt(p2.x, p2.y, p2.z));
+        quadMaker.Add(gp_Pnt(p3.x, p3.y, p3.z));
+        quadMaker.Close();
+        if (!quadMaker.IsDone()) {
+          result.errorCode = "GE_BRIDGE_BUILD_FAILED";
+          result.message = std::string("failed to build the ") + label + " quad wire for bend " +
+                            bridge.bendId;
+          return {};
+        }
+        BRepBuilderAPI_MakeFace quadFace(quadMaker.Wire());
+        if (!quadFace.IsDone()) {
+          result.errorCode = "GE_BRIDGE_BUILD_FAILED";
+          result.message = std::string("failed to build the ") + label + " quad face for bend " +
+                            bridge.bendId;
+          return {};
+        }
+        BRepPrimAPI_MakePrism prism(quadFace.Face(), gp_Vec(vec.x, vec.y, vec.z), true);
+        if (!prism.IsDone() || prism.Shape().IsNull()) {
+          result.errorCode = "GE_BRIDGE_BUILD_FAILED";
+          result.message = std::string("failed to extrude the ") + label + " for bend " + bridge.bendId;
+          return {};
+        }
+        return prism.Shape();
+      };
+
+      constexpr double kCollarLengthEpsilon = 1e-9;
+      bool parentCollarNeeded = Dist3(b0, parentTanB0) > kCollarLengthEpsilon;
+      bool childCollarNeeded = Dist3(childTanB0, cb0) > kCollarLengthEpsilon;
+
+      std::vector<TopoDS_Shape> bridgePieces;
+
+      if (parentCollarNeeded) {
+        Point3 vec{t0.x - b0.x, t0.y - b0.y, t0.z - b0.z};
+        TopoDS_Shape collar = extrudeQuad(b0, b1, parentTanB1, parentTanB0, vec, "parent collar");
+        if (collar.IsNull()) return result;
+        bridgePieces.push_back(collar);
       }
 
-      BRepBuilderAPI_MakeFace quadFace(quadMaker.Wire());
-      if (!quadFace.IsDone()) {
-        result.errorCode = "GE_BRIDGE_BUILD_FAILED";
-        result.message = "failed to build the zone-boundary quad face for bend " + bridge.bendId;
-        return result;
+      // Real, tangent-preserving revolve between the parent and child
+      // tangent quads — BRepPrimAPI_MakeRevol requires a non-negative angle
+      // in [0, 2*Pi]; a negative bend angle (valley fold) is realized by
+      // reversing the axis direction instead (RH-rule about -axis by
+      // +angle == RH-rule about +axis by -angle).
+      {
+        BRepBuilderAPI_MakePolygon quadMaker;
+        quadMaker.Add(gp_Pnt(parentTanB0.x, parentTanB0.y, parentTanB0.z));
+        quadMaker.Add(gp_Pnt(parentTanB1.x, parentTanB1.y, parentTanB1.z));
+        quadMaker.Add(gp_Pnt(parentTanT1.x, parentTanT1.y, parentTanT1.z));
+        quadMaker.Add(gp_Pnt(parentTanT0.x, parentTanT0.y, parentTanT0.z));
+        quadMaker.Close();
+        if (!quadMaker.IsDone()) {
+          result.errorCode = "GE_BRIDGE_BUILD_FAILED";
+          result.message = "failed to build the zone-boundary quad wire for bend " + bridge.bendId;
+          return result;
+        }
+        BRepBuilderAPI_MakeFace quadFace(quadMaker.Wire());
+        if (!quadFace.IsDone()) {
+          result.errorCode = "GE_BRIDGE_BUILD_FAILED";
+          result.message = "failed to build the zone-boundary quad face for bend " + bridge.bendId;
+          return result;
+        }
+        double angleRad = bridge.angleDeg * kPi / 180.0;
+        gp_Pnt axisOrigin(bridge.pivotOriginWorld.x, bridge.pivotOriginWorld.y,
+                           bridge.pivotOriginWorld.z);
+        gp_Dir axisDir(bridge.pivotAxisWorld.x, bridge.pivotAxisWorld.y, bridge.pivotAxisWorld.z);
+        if (angleRad < 0.0) {
+          axisDir.Reverse();
+          angleRad = -angleRad;
+        }
+        gp_Ax1 axis(axisOrigin, axisDir);
+        BRepPrimAPI_MakeRevol revol(quadFace.Face(), axis, angleRad, /*Copy=*/Standard_False);
+        if (!revol.IsDone() || revol.Shape().IsNull()) {
+          result.errorCode = "GE_BRIDGE_BUILD_FAILED";
+          result.message = "failed to revolve the bridge solid for bend " + bridge.bendId;
+          return result;
+        }
+        bridgePieces.push_back(revol.Shape());
       }
 
-      // BRepPrimAPI_MakeRevol requires a non-negative angle in [0, 2*Pi] — a
-      // negative bend angle (valley fold) is realized by reversing the axis
-      // direction instead, which is the identical rotation (RH-rule about -axis
-      // by +angle == RH-rule about +axis by -angle).
-      double angleRad = bridge.angleDeg * kPi / 180.0;
-      gp_Pnt axisOrigin(bridge.pivotOriginWorld.x, bridge.pivotOriginWorld.y,
-                         bridge.pivotOriginWorld.z);
-      gp_Dir axisDir(bridge.pivotAxisWorld.x, bridge.pivotAxisWorld.y, bridge.pivotAxisWorld.z);
-      if (angleRad < 0.0) {
-        axisDir.Reverse();
-        angleRad = -angleRad;
+      if (childCollarNeeded) {
+        Point3 vec{ct0.x - cb0.x, ct0.y - cb0.y, ct0.z - cb0.z};
+        TopoDS_Shape collar = extrudeQuad(childTanB0, childTanB1, cb1, cb0, vec, "child collar");
+        if (collar.IsNull()) return result;
+        bridgePieces.push_back(collar);
       }
-      gp_Ax1 axis(axisOrigin, axisDir);
 
-      BRepPrimAPI_MakeRevol revol(quadFace.Face(), axis, angleRad, /*Copy=*/Standard_False);
-      if (!revol.IsDone() || revol.Shape().IsNull()) {
-        result.errorCode = "GE_BRIDGE_BUILD_FAILED";
-        result.message = "failed to revolve the bridge solid for bend " + bridge.bendId;
-        return result;
+      TopoDS_Shape bridgeShape = bridgePieces[0];
+      for (size_t k = 1; k < bridgePieces.size(); ++k) {
+        BRepAlgoAPI_Fuse fuser(bridgeShape, bridgePieces[k]);
+        fuser.SetFuzzyValue(kBooleanFuzzMm);
+        fuser.Build();
+        if (!fuser.IsDone()) {
+          result.errorCode = "GE_BRIDGE_BUILD_FAILED";
+          result.message = "failed to fuse the collar/revolve pieces for bend " + bridge.bendId;
+          return result;
+        }
+        bridgeShape = fuser.Shape();
       }
-      bridgeSolidByBendId[bridge.bendId] = revol.Shape();
+      bridgeSolidByBendId[bridge.bendId] = bridgeShape;
     }
 
     // Fuse in parent-panel -> bridge -> child-panel order (not "all panels

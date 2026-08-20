@@ -180,25 +180,30 @@ function checkBridgeRoundTrip(
  * exactly two live region panels joined by one real bend, and constructs to
  * a manifold solid.
  *
- * Volume is checked bounded below the naive flat-area*thickness sum (90),
- * never above it — NOT exact equality. This isn't a merge-specific
- * concession: part_solid_construction_test.cc's own tests (e.g. "N=4 square
- * tube (mountain/up fold)... volume bounded below the naive sum") document
- * why: each panel is built as an independently-thickened rectangular prism,
- * so at a mountain fold the panels' OUTER (top) surfaces genuinely overlap
- * near the hinge (their inner/bottom surfaces meet exactly; nothing trims
- * the outer corners to miter). BRepAlgoAPI_Fuse correctly removes that
- * double-counted overlap, so true volume < naive sum — by design, not a
- * defect. NOT just a plausibility match: proven exactly, not merely bounded,
- * by a new permanent test ("N=2 asymmetric sharp mountain fold — measured
- * panel/panel overlap exactly accounts for the naive-sum shortfall",
- * part_solid_construction_test.cc) that independently builds the two panel
- * solids and measures their real BRepAlgoAPI_Common overlap directly — it
- * equals the shortfall to machine precision. The flat-pattern area itself
- * is separately exactly additive too (part_merge_test.cc's own ShoelaceArea
- * oracle, no OCCT involved) — confirming the merge's own reconciliation
- * step is exact, and 100% of the shortfall traces to this well-understood,
- * pre-existing, already-tested construction-time overlap.
+ * Volume used to be checked bounded below the naive flat-area*thickness sum
+ * (90) and never above it, on the reasoning that a boolean fuse never adds
+ * material. That reasoning held only for the OLD (buggy) construction: it
+ * placed panel B's own edge exactly at the bridge's far end, so a real
+ * bend's own curved material and any panel/panel overlap happened to net
+ * out to something at or below the flat sum, coincidentally.
+ * docs/BUG_REPORT_reconstructed_envelope_grows_with_bend_radius.md's fix
+ * moves panel B's edge to its true position — which correctly leaves room
+ * for the bend's own real material — so the naive flat sum is no longer an
+ * upper bound at all: a real, non-sharp bend genuinely contains MORE
+ * material than its two flat panels alone, because unlike a sharp corner it
+ * has to have actual curved material connecting them. The old bound was
+ * checking that a bug's specific side effect stayed within a range, not
+ * verifying anything about the true geometry.
+ *
+ * What IS meaningful: total volume should equal the two flat panels' own
+ * volume (naiveSum) PLUS the bend's own real material — the standard
+ * sheet-metal bend-allowance quantity, `BA = angleRad * (radiusMm +
+ * kFactor*thicknessMm)` (same formula ComputeBendGeometry uses in C++),
+ * times the seam width and thickness — minus a small, expected panel/panel
+ * overlap at the mountain-fold corner (the same effect the old comment
+ * described, now smaller since the panels no longer meet edge-to-edge).
+ * Checked to a tight (2mm3, ~2%) tolerance around that physically-derived
+ * expectation, not an arbitrary wide band.
  */
 function checkMergeStructureAndSolid(
   store: GraphStore,
@@ -228,12 +233,28 @@ function checkMergeStructureAndSolid(
   const manifold = geometryBinding.checkManifold(constructResult.shellId);
   expect(manifold.isManifold, JSON.stringify(manifold.issues)).toBe(true);
 
-  // naiveSum = (A's 10x5 + B's 5x8) * thicknessMm(1) = 90. Observed volume
-  // ~77.7 (a ~12.3mm3 mountain-fold overlap, generously bounded below).
+  // naiveSum = (A's 10x5 + B's 5x8) * thicknessMm(1) = 90 — the two flat
+  // panels alone, no bend material.
   const naiveSum = 90;
+  // The merge's own authored bend: angle_deg=90, radius_mm=2, k_factor=0.4
+  // (mergeTwoParts above), seam width 5mm (edge_a/edge_b's shared length),
+  // thicknessMm=1 (authorTwoParts above) — same formula ComputeBendGeometry
+  // uses in C++ (BendGeometryMm::allowanceMm).
+  const angleRad = (90 * Math.PI) / 180;
+  const radiusMm = 2.0;
+  const kFactor = 0.4;
+  const thicknessMm = 1.0;
+  const seamWidthMm = 5.0;
+  const bendAllowanceMm = angleRad * (radiusMm + kFactor * thicknessMm);
+  const bendMaterialMm3 = bendAllowanceMm * seamWidthMm * thicknessMm;
+  const expectedVolume = naiveSum + bendMaterialMm3;
+
   const mass = geometryBinding.computeMassProperties(constructResult.shellId, ['volume']);
-  expect(mass.volume).toBeLessThanOrEqual(naiveSum + 1e-6); // fuse never ADDS material
-  expect(mass.volume).toBeGreaterThanOrEqual(naiveSum - 20);
+  expect(mass.volume).toBeGreaterThan(naiveSum); // a real bend has real material, unlike the old bug
+  // Tight, physically-derived tolerance (~2% of expectedVolume) — not an
+  // arbitrary wide band; the residual is the small mountain-fold panel/panel
+  // overlap this construction still has near the bend corner.
+  expect(Math.abs(mass.volume! - expectedVolume)).toBeLessThan(2);
 }
 
 d('v2 merge_bodies_with_bend — authored, independently-authored parts', () => {

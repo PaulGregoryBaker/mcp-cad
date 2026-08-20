@@ -353,4 +353,290 @@ d('[v2] import_part fixture verification', () => {
     expect(unionMinZ).toBeGreaterThan(rawBbox.z_min - marginMm);
     expect(unionMaxZ).toBeLessThan(rawBbox.z_max + marginMm);
   });
+
+  function dist(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }) {
+    return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2);
+  }
+
+  // docs/BUG_REPORT_reconstructed_envelope_grows_with_bend_radius.md: the
+  // 4-panel/3-bend "inner cube" component is a branching TREE (root parent
+  // to two bends, one of which has its own child) — 3 of the box's 4
+  // corners are real, modeled bends; the 4th (between the tree's two open/
+  // free ends) is never a bend at all, just two free edges relying on the
+  // reconstructed geometry landing back where it started. This is very
+  // likely a SYMPTOM of the same root cause the companion "opposite walls"
+  // test below documents directly (panel reach growing with bend radius,
+  // since no setback trim is applied) rather than an independent defect:
+  // as the 3 real bends' own reach grows with radius, the untouched 4th
+  // corner is dragged out of alignment with them. Confirmed by direct
+  // measurement: 0.0000mm gap at radius=0, 5.6569mm at radius=2 (this
+  // test's own value below) — this is NOT the childShiftWorld tangency bug
+  // fixed earlier the same day (every real bend, both surfaces, is
+  // independently verified exact elsewhere in this file). KNOWN FAILING —
+  // left red on purpose as the tracking regression; solution not yet
+  // decided (see the bug report).
+  it('testcube.step: branching inner-cube component closes its unmodeled 4th seam at a real bend radius', () => {
+    const store = new GraphStore();
+    const result = dispatchGraphTool(store, 'import_part', {
+      file: path.join(FIXTURES, 'testcube.step'),
+      profile: { rules: { default_bend_radius_mm: 2 } },
+    }) as ImportPartResult;
+
+    const allPartIds = [result.part_id, ...result.component_part_ids];
+    let checked = false;
+    for (const partId of allPartIds) {
+      const snap = store.snapshotPart(partId);
+      if (snap.bends.length !== 3) continue;
+      checked = true;
+      const evaluated = evaluatePart(store, partId);
+      expect(evaluated.ok).toBe(true);
+
+      const parentIds = new Set(evaluated.bridges.map((b) => b.parentRegionPanelId));
+      const leaves = evaluated.panels.filter((p) => !parentIds.has(p.regionPanelId));
+      expect(leaves.length).toBe(2);
+      const [leafA, leafB] = leaves;
+
+      let bestGap = Infinity;
+      for (let ia = 0; ia < leafA!.edgeBendId.length; ia++) {
+        if (leafA!.edgeBendId[ia] !== '') continue;
+        const ia2 = (ia + 1) % leafA!.bottomFace.length;
+        for (let ib = 0; ib < leafB!.edgeBendId.length; ib++) {
+          if (leafB!.edgeBendId[ib] !== '') continue;
+          const ib2 = (ib + 1) % leafB!.bottomFace.length;
+          const d1 =
+            dist(leafA!.bottomFace[ia]!, leafB!.bottomFace[ib]!) +
+            dist(leafA!.bottomFace[ia2]!, leafB!.bottomFace[ib2]!);
+          const d2 =
+            dist(leafA!.bottomFace[ia]!, leafB!.bottomFace[ib2]!) +
+            dist(leafA!.bottomFace[ia2]!, leafB!.bottomFace[ib]!);
+          bestGap = Math.min(bestGap, d1, d2);
+        }
+      }
+
+      // eslint-disable-next-line no-console
+      console.log(`[unmodeled-seam] part=${partId} bestSummedGap=${bestGap.toFixed(4)}mm`);
+      expect(bestGap).toBeLessThan(1e-3);
+    }
+    expect(checked).toBe(true);
+  });
+
+  // docs/BUG_REPORT_reconstructed_envelope_grows_with_bend_radius.md's own
+  // direct reproduction: the real inner cube is a 150mm part, and its
+  // outer envelope must stay 150mm regardless of which bend radius is
+  // chosen to manufacture it — a different radius may change a joint's
+  // local shape, never the resulting part's overall size. The
+  // perpendicular distance between each pair of opposite walls (TOP vs
+  // BOTTOM, LEFT vs RIGHT) is a property of where those two panels' own
+  // planes actually sit in 3D — it does not depend on whether their free
+  // edges happen to touch anything, so it catches a wrong panel position
+  // directly, independent of the closure question above. KNOWN FAILING —
+  // measures 154mm at radius=2mm (root cause: no setback trim is applied,
+  // so each panel's own reach grows with radius instead of staying
+  // anchored to the true, radius-invariant envelope).
+  // Shared measurement helper (used by both the single-point bound check
+  // below and the radius-sweep invariance check that follows it): imports
+  // testcube.step fresh at the given radius, finds the branching inner-cube
+  // component (bends.length === 3), and measures the perpendicular distance
+  // between each pair of opposite walls (TOP vs BOTTOM, LEFT vs RIGHT).
+  function measureInnerCubeOppositeWalls(defaultBendRadiusMm: number): {
+    topBottomMm: number;
+    leftRightMm: number;
+  } {
+    const store = new GraphStore();
+    const result = dispatchGraphTool(store, 'import_part', {
+      file: path.join(FIXTURES, 'testcube.step'),
+      profile: { rules: { default_bend_radius_mm: defaultBendRadiusMm } },
+    }) as ImportPartResult;
+
+    const allPartIds = [result.part_id, ...result.component_part_ids];
+    for (const partId of allPartIds) {
+      const snap = store.snapshotPart(partId);
+      if (snap.bends.length !== 3) continue;
+      const evaluated = evaluatePart(store, partId);
+      expect(evaluated.ok).toBe(true);
+
+      // root = TOP (parent of two bends). Its two direct children are LEFT
+      // and RIGHT. Whichever of those two is itself a parent of the third
+      // bend has BOTTOM as its child. TOP/BOTTOM and LEFT/RIGHT are the two
+      // opposite-wall pairs.
+      const parentCounts = new Map<string, number>();
+      for (const b of evaluated.bridges) {
+        parentCounts.set(b.parentRegionPanelId, (parentCounts.get(b.parentRegionPanelId) ?? 0) + 1);
+      }
+      const top = evaluated.panels.find((p) => (parentCounts.get(p.regionPanelId) ?? 0) === 2)!;
+      expect(top).toBeDefined();
+      const topChildren = evaluated.bridges
+        .filter((b) => b.parentRegionPanelId === top.regionPanelId)
+        .map((b) => b.childRegionPanelId);
+      expect(topChildren.length).toBe(2);
+      const rightId = topChildren.find((id) => (parentCounts.get(id) ?? 0) === 1)!;
+      const leftId = topChildren.find((id) => id !== rightId)!;
+      const right = evaluated.panels.find((p) => p.regionPanelId === rightId)!;
+      const left = evaluated.panels.find((p) => p.regionPanelId === leftId)!;
+      const bottomId = evaluated.bridges.find((b) => b.parentRegionPanelId === rightId)!.childRegionPanelId;
+      const bottom = evaluated.panels.find((p) => p.regionPanelId === bottomId)!;
+
+      const planeNormal = (face: { x: number; y: number; z: number }[]) => {
+        const e01 = { x: face[1]!.x - face[0]!.x, y: face[1]!.y - face[0]!.y, z: face[1]!.z - face[0]!.z };
+        const e12 = { x: face[2]!.x - face[1]!.x, y: face[2]!.y - face[1]!.y, z: face[2]!.z - face[1]!.z };
+        const n = {
+          x: e01.y * e12.z - e01.z * e12.y,
+          y: e01.z * e12.x - e01.x * e12.z,
+          z: e01.x * e12.y - e01.y * e12.x,
+        };
+        const len = Math.sqrt(n.x ** 2 + n.y ** 2 + n.z ** 2);
+        return { x: n.x / len, y: n.y / len, z: n.z / len };
+      };
+      const planeDistance = (
+        panelA: { bottomFace: { x: number; y: number; z: number }[] },
+        panelB: { bottomFace: { x: number; y: number; z: number }[] },
+      ) => {
+        const n = planeNormal(panelA.bottomFace);
+        const a0 = panelA.bottomFace[0]!;
+        const b0 = panelB.bottomFace[0]!;
+        const v = { x: b0.x - a0.x, y: b0.y - a0.y, z: b0.z - a0.z };
+        return Math.abs(v.x * n.x + v.y * n.y + v.z * n.z);
+      };
+
+      return { topBottomMm: planeDistance(top, bottom), leftRightMm: planeDistance(left, right) };
+    }
+    throw new Error('inner-cube component (bends.length === 3) not found');
+  }
+
+  it('testcube.step: 3D distance between opposite walls of the inner cube does not exceed 150mm', () => {
+    const { topBottomMm, leftRightMm } = measureInnerCubeOppositeWalls(2);
+    // eslint-disable-next-line no-console
+    console.log(`[opposite-walls] radius=2 topBottom=${topBottomMm.toFixed(4)}mm leftRight=${leftRightMm.toFixed(4)}mm`);
+    expect(topBottomMm).toBeLessThanOrEqual(150);
+    expect(leftRightMm).toBeLessThanOrEqual(150);
+  });
+
+  // docs/BUG_REPORT_reconstructed_envelope_grows_with_bend_radius.md's
+  // testing-strategy item 2 (strengthened from a bound to an equality
+  // check): the manufacturing method (which bend radius is chosen) must
+  // not change the resulting part's overall shape. The opposite-wall
+  // distance measured at radius=0 (the reconciled ground truth) must be
+  // IDENTICAL at every other radius, not merely bounded from one side.
+  // KNOWN FAILING — radius=0 gives 150mm, every larger radius gives a
+  // larger value (154mm at radius=2), confirming the growth is real and
+  // monotonic, not a one-off measurement artifact.
+  it('testcube.step: opposite-wall distance is identical across a bend-radius sweep (manufacturing method must not change the shape)', () => {
+    const reference = measureInnerCubeOppositeWalls(0);
+    for (const radius of [0.5, 1, 2, 5]) {
+      const measured = measureInnerCubeOppositeWalls(radius);
+      // eslint-disable-next-line no-console
+      console.log(
+        `[opposite-walls sweep] radius=${radius} topBottom=${measured.topBottomMm.toFixed(4)}mm ` +
+          `(reference=${reference.topBottomMm.toFixed(4)}mm) leftRight=${measured.leftRightMm.toFixed(4)}mm ` +
+          `(reference=${reference.leftRightMm.toFixed(4)}mm)`,
+      );
+      expect(measured.topBottomMm).toBeCloseTo(reference.topBottomMm, 6);
+      expect(measured.leftRightMm).toBeCloseTo(reference.leftRightMm, 6);
+    }
+  });
+
+  // The bounding box of each individually reconstructed part — not just
+  // their union (the earlier radius=0 test) — checked at a real, nonzero
+  // bend radius against ground truth: the outer/root assembly against the
+  // TRUE original solid's own bbox (must match tightly — root has no
+  // unmodeled seam, so growth from bend allowance is the only expected
+  // difference and this fixture's allowance is small relative to its
+  // scale), and the inner component against the CONTAINMENT invariant a
+  // nested sub-assembly must always satisfy (it cannot occupy space outside
+  // its own containing shell), independent of whether its own internal
+  // seam closes exactly.
+  it('testcube.step: outer assembly and inner component bounding boxes, checked individually (not just unioned)', () => {
+    const rawId = geometryBinding.loadStep(path.join(FIXTURES, 'testcube.step'));
+    geometryBinding.healGeometryEx(rawId, true, true);
+    const rawBbox = geometryBinding.computeBoundingBox(rawId);
+
+    const store = new GraphStore();
+    const result = dispatchGraphTool(store, 'import_part', {
+      file: path.join(FIXTURES, 'testcube.step'),
+      profile: { rules: { default_bend_radius_mm: 2 } },
+    }) as ImportPartResult;
+
+    let outerBbox: ReturnType<typeof geometryBinding.computeBoundingBox> | undefined;
+    let innerBbox: ReturnType<typeof geometryBinding.computeBoundingBox> | undefined;
+    for (const partId of [result.part_id, ...result.component_part_ids]) {
+      const snap = store.snapshotPart(partId);
+      const constructed = constructPart(store, partId);
+      const bbox = geometryBinding.computeBoundingBox(constructed.shellId);
+      // eslint-disable-next-line no-console
+      console.log(
+        `[per-part bbox] partId=${partId} bends=${snap.bends.length} bbox x[${bbox.x_min.toFixed(2)},${bbox.x_max.toFixed(2)}] ` +
+          `y[${bbox.y_min.toFixed(2)},${bbox.y_max.toFixed(2)}] z[${bbox.z_min.toFixed(2)},${bbox.z_max.toFixed(2)}]`,
+      );
+      if (snap.bends.length === 5) outerBbox = bbox;
+      if (snap.bends.length === 3) innerBbox = bbox;
+    }
+    expect(outerBbox).toBeDefined();
+    expect(innerBbox).toBeDefined();
+
+    // Outer/root: no unmodeled seam, so its own bbox should track the true
+    // original closely — generous margin only for this fixture's bend
+    // allowance growth at radius=2 (a few mm at this scale).
+    const outerMarginMm = 8.0;
+    expect(outerBbox!.x_min).toBeGreaterThan(rawBbox.x_min - outerMarginMm);
+    expect(outerBbox!.x_max).toBeLessThan(rawBbox.x_max + outerMarginMm);
+    expect(outerBbox!.y_min).toBeGreaterThan(rawBbox.y_min - outerMarginMm);
+    expect(outerBbox!.y_max).toBeLessThan(rawBbox.y_max + outerMarginMm);
+    expect(outerBbox!.z_min).toBeGreaterThan(rawBbox.z_min - outerMarginMm);
+    expect(outerBbox!.z_max).toBeLessThan(rawBbox.z_max + outerMarginMm);
+
+    // Inner: must stay nested inside the outer shell it's meant to sit
+    // within, regardless of whether its own internal seam closes exactly.
+    expect(innerBbox!.x_min).toBeGreaterThan(outerBbox!.x_min);
+    expect(innerBbox!.x_max).toBeLessThan(outerBbox!.x_max);
+    expect(innerBbox!.y_min).toBeGreaterThan(outerBbox!.y_min);
+    expect(innerBbox!.y_max).toBeLessThan(outerBbox!.y_max);
+    expect(innerBbox!.z_min).toBeGreaterThan(outerBbox!.z_min);
+    expect(innerBbox!.z_max).toBeLessThan(outerBbox!.z_max);
+  });
+
+  // docs/BUG_REPORT_reconstructed_envelope_grows_with_bend_radius.md's
+  // testing-strategy item 4: the same envelope-invariance requirement
+  // checked against a second, structurally different fixture, to see
+  // whether the defect is specific to testcube's branching topology or
+  // general to any part with bends. Uses the union bounding box of every
+  // reconstructed part (root + components + protrusions) rather than a
+  // fixture-specific opposite-wall pair, since cauldron.step's own panel
+  // topology hasn't been mapped out the way testcube's has — the union
+  // bbox is the one measurement that doesn't require knowing it.
+  it('cauldron.step: overall reconstructed bounding box stays identical across a bend-radius sweep', () => {
+    function measureUnionBbox(defaultBendRadiusMm: number) {
+      const store = new GraphStore();
+      const result = dispatchGraphTool(store, 'import_part', {
+        file: path.join(FIXTURES, 'cauldron.step'),
+        profile: { rules: { default_bend_radius_mm: defaultBendRadiusMm } },
+      }) as ImportPartResult;
+      const allPartIds = [result.part_id, ...result.component_part_ids, ...result.protrusion_part_ids];
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
+      for (const partId of allPartIds) {
+        const constructed = constructPart(store, partId);
+        const bbox = geometryBinding.computeBoundingBox(constructed.shellId);
+        minX = Math.min(minX, bbox.x_min); maxX = Math.max(maxX, bbox.x_max);
+        minY = Math.min(minY, bbox.y_min); maxY = Math.max(maxY, bbox.y_max);
+        minZ = Math.min(minZ, bbox.z_min); maxZ = Math.max(maxZ, bbox.z_max);
+      }
+      return { minX, maxX, minY, maxY, minZ, maxZ };
+    }
+
+    const reference = measureUnionBbox(0);
+    // eslint-disable-next-line no-console
+    console.log(`[cauldron envelope] radius=0 (reference) bbox x[${reference.minX.toFixed(2)},${reference.maxX.toFixed(2)}] ` +
+      `y[${reference.minY.toFixed(2)},${reference.maxY.toFixed(2)}] z[${reference.minZ.toFixed(2)},${reference.maxZ.toFixed(2)}]`);
+    for (const radius of [0.5, 1, 2]) {
+      const measured = measureUnionBbox(radius);
+      // eslint-disable-next-line no-console
+      console.log(`[cauldron envelope] radius=${radius} bbox x[${measured.minX.toFixed(2)},${measured.maxX.toFixed(2)}] ` +
+        `y[${measured.minY.toFixed(2)},${measured.maxY.toFixed(2)}] z[${measured.minZ.toFixed(2)},${measured.maxZ.toFixed(2)}]`);
+      expect(measured.minX).toBeCloseTo(reference.minX, 3);
+      expect(measured.maxX).toBeCloseTo(reference.maxX, 3);
+      expect(measured.minY).toBeCloseTo(reference.minY, 3);
+      expect(measured.maxY).toBeCloseTo(reference.maxY, 3);
+      expect(measured.minZ).toBeCloseTo(reference.minZ, 3);
+      expect(measured.maxZ).toBeCloseTo(reference.maxZ, 3);
+    }
+  });
 });

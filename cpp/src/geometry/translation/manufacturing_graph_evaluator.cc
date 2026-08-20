@@ -489,25 +489,51 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
       double rBottom = BottomRadiusMm(*bend, graph.thicknessMm);
       double pivotZ = concave ? -rBottom : rBottom;
 
-      // Axis in-plane position: the RAW hinge, unmodified — no offset.
-      // Tangency requires only that the axis's perpendicular distance to
-      // the flat plane equal rBottom (the pivotZ derivation above); it does
-      // NOT depend on in-plane position, as long as the wall built from
-      // that raw coordinate sits at the SAME in-plane position as the
-      // axis — which it does here (bottomFace/topFace below are built from
-      // rawOuter directly). This makes both the parent's AND child's raw
-      // wall exactly tangent to the bridge's cylinder on both surfaces, at
-      // any radius, matching the original (radiusMm=0) part's own topology
-      // exactly, with no collar needed at either connection. (A previous
-      // version of this code offset the axis in-plane, using pivotZ's own
-      // magnitude, to try to land the far corner in the right place — that
-      // offset differs by rBottom between a mountain and valley fold of the
-      // SAME nominal radius, purely because rBottom's own formula does
-      // (radiusMm vs radiusMm+thicknessMm) — producing asymmetric collar
-      // geometry and a real, measured mountain/valley volume mismatch. See
-      // childShiftWorld below for where that correction now lives instead.)
-      Point3 hingeA3{bend->hingeA.x, bend->hingeA.y, pivotZ};
-      Point3 hingeB3{bend->hingeB.x, bend->hingeB.y, pivotZ};
+      // Axis in-plane position, plus a matching child-side extension
+      // (docs/BUG_REPORT_reconstructed_envelope_grows_with_bend_radius.md).
+      // A wall built from the raw, un-widened hinge coordinate is tangent to
+      // the bend's own cylinder (pivotZ above) but that alone does not keep
+      // the part's overall envelope fixed as radiusMm changes — proved
+      // algebraically: for ANY in-plane axis offset, with height held at
+      // pivotZ, rotating a fixed-length child by exactly angleDeg about that
+      // axis reproduces the sharp-corner (radiusMm=0) target only in the
+      // trivial radiusMm=0 case itself. (A rotation about a parallel axis
+      // always differs from one about the true, radiusMm=0 axis by exactly
+      // one constant translation; cancelling that translation for every
+      // point at once forces pivotZ back to its own radiusMm=0 value — so
+      // axis position alone, or a translation added afterward alone, can
+      // never do it while pivotZ stays real.) The only way to keep a real,
+      // tangent pivotZ AND the sharp-corner envelope is to also change how
+      // far the child's own local frame reaches: a per-bend, purely local
+      // setback — a function of this bend's own radiusMm and angleDeg only,
+      // never anything upstream — both moves the axis and extends the
+      // child's effective local origin by twice that amount. This composes
+      // correctly down an arbitrarily deep chain with no extra running
+      // total: each bend reads only its own raw hinge and the pose its
+      // parent already carries (which already carries every ancestor's own
+      // correction), so nothing needs threading through cumulativeShift or
+      // any other side channel. Verified exactly (0 residual, both fold
+      // directions, five bend angles, chained two deep) in the bug report
+      // above. The general, fully-signed formula is D*tan(angleRad/2), where
+      // D = pivotZ_true - pivotZ = concave ? +radiusMm : -radiusMm and
+      // angleRad uses angleDeg's OWN sign (not its magnitude) — this must
+      // NOT be simplified to a magnitude-only |angleDeg| shortcut: concave
+      // and angleDeg's sign are independent facts (BottomIsConcave's own doc
+      // comment), not always aligned — a real, reconciled graph can and does
+      // set bottomIsConcave true with a negative angleDeg (or vice versa),
+      // which the |angleDeg| shortcut silently gets backwards (a real bug
+      // this exact case caught, see the bug report above). When concave and
+      // angleDeg's sign DO happen to align (the common authored case), D and
+      // angleRad's signs cancel and this reduces to the simpler
+      // radiusMm*tan(|angleRad|/2), always toward the child — but that's a
+      // consequence of this formula, not a separate rule.
+      double signedD = concave ? bend->radiusMm : -bend->radiusMm;
+      double axisInPlaneOffset = signedD * std::tan(DegToRad(bend->angleDeg) / 2.0);
+
+      Point3 hingeA3{bend->hingeA.x + axisInPlaneOffset * nLeft.x,
+                      bend->hingeA.y + axisInPlaneOffset * nLeft.y, pivotZ};
+      Point3 hingeB3{bend->hingeB.x + axisInPlaneOffset * nLeft.x,
+                      bend->hingeB.y + axisInPlaneOffset * nLeft.y, pivotZ};
       Point3 hingeAWorld = parentPose.Apply(hingeA3);
       Point3 hingeBWorld = parentPose.Apply(hingeB3);
       Point3 axis = Normalize3(Sub3(hingeBWorld, hingeAWorld));
@@ -518,36 +544,15 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
       }
       Transform3 worldFold = Transform3::RotationAboutAxis(hingeAWorld, axis, bend->angleDeg);
 
-      // The child's pose is this tangent-preserving fold alone — no further
-      // correction. A circle tangent to a line at a known point has no
-      // freedom in where its centre sits: it must lie on the perpendicular
-      // to that line through that point. The axis above is defined to sit
-      // exactly on that perpendicular (raw hinge, offset by rBottom in Z),
-      // so the raw hinge point already IS the tangent point, for the parent
-      // AND — since rotation preserves distance to the axis — for the
-      // child too, at any radius, either fold direction. Nothing further to
-      // solve for.
-      //
-      // A previous version of this code added a rigid-translation
-      // correction (childShiftWorld, sized off this bend's own flat-
-      // pattern allowance `ba`) after this fold, trying to also land the
-      // child's far corner on a `ba`-grown, zero-height-axis reference. That
-      // reference is a flat-pattern (2D, unrolled) fact — `ba` is exactly
-      // and only the allowance this bend's own `cumulativeShift` pass
-      // already grows regionOuter by, for DXF/nesting purposes (see this
-      // file's own header comment and docs/BUG_REPORT_outline_never_grows_
-      // for_bend_allowance.md, which independently verified the
-      // cumulativeShift-only architecture end-to-end against testcube.step
-      // before childShiftWorld was later, mistakenly, added on top of it).
-      // Applying it again here as a 3D translation double-counts that
-      // growth: it pushes the child's near edge `ba` millimetres off the
-      // true cylinder, breaking tangency (confirmed numerically — the near
-      // edge's distance from the true axis becomes rBottom + ba instead of
-      // rBottom, for every case except the degenerate ba=0 one), and is
-      // exactly what forced ConstructPartSolid's connector piece to exist
-      // to close the resulting gap, with a mountain/valley volume mismatch
-      // as a direct consequence. Removed; not replaced.
-      Transform3 childPose = worldFold.Compose(parentPose);
+      // Child-side extension: every point of the child's own subtree is
+      // translated by 2x this bend's own in-plane offset, along nLeft, in
+      // the shared flat frame, BEFORE the fold above is applied — composed
+      // as the innermost transform so ancestor corrections (already baked
+      // into parentPose) carry through first, and this bend's own
+      // correction is added on top, once.
+      Transform3 childExtension = Transform3::Translation(
+          2.0 * axisInPlaneOffset * nLeft.x, 2.0 * axisInPlaneOffset * nLeft.y, 0.0);
+      Transform3 childPose = worldFold.Compose(parentPose).Compose(childExtension);
       poseByRegionPanel[bend->childRegionPanelId] = childPose;
       cumulativeShift[bend->childRegionPanelId] = {parentShift.x + ba * nLeft.x,
                                                      parentShift.y + ba * nLeft.y};
@@ -567,6 +572,15 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
       bridge.angleDeg = bend->angleDeg;
       bridge.hingeA = {hingeAShifted.x + 0.5 * ba * nLeft.x, hingeAShifted.y + 0.5 * ba * nLeft.y};
       bridge.hingeB = {hingeBShifted.x + 0.5 * ba * nLeft.x, hingeBShifted.y + 0.5 * ba * nLeft.y};
+
+      // Setback + world-space directions (see this struct's own header
+      // comment) — ConstructPartSolid derives each side's own tangent
+      // points from these, applied to the REAL (RegionOf-clipped) edge
+      // points it has, not from any hingeA/hingeB-based absolute position.
+      // Signed (see axisInPlaneOffset's own comment above) — never abs().
+      bridge.setbackMm = axisInPlaneOffset;
+      bridge.nLeftWorld = parentPose.ApplyVector({nLeft.x, nLeft.y, 0.0});
+      bridge.childNLeftWorld = worldFold.ApplyVector(bridge.nLeftWorld);
       result.bridges.push_back(std::move(bridge));
     }
   }

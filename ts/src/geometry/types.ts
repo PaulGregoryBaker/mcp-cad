@@ -703,6 +703,15 @@ export interface NapiBridgeLayout {
   // manufacturing_graph_evaluator.hpp).
   hingeA: NapiPoint2;
   hingeB: NapiPoint2;
+  // Setback + world-space directions ConstructPartSolid uses to derive each
+  // side's own tangent points from the REAL (already-clipped) edge points —
+  // see BridgeLayout's own doc comment (manufacturing_graph_evaluator.hpp)
+  // for why an absolute tangent position can't be precomputed in C++ and
+  // handed across as-is (hingeA/hingeB use an exaggerated half-span that
+  // doesn't match a real edge).
+  setbackMm: number;
+  nLeftWorld: NapiPoint3;
+  childNLeftWorld: NapiPoint3;
 }
 
 export interface EvaluatePartGraphResult {

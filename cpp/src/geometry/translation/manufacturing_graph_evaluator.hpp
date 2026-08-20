@@ -279,14 +279,30 @@ struct BridgeLayout {
   // none of them should ever read a BendSpec's own hingeA/hingeB directly.
   Point2 hingeA;
   Point2 hingeB;
-  // The axis sits exactly on the raw hinge (no in-plane offset — see the
-  // pose walk's own comment): the parent's and child's own raw walls are
-  // therefore both exactly tangent to the bridge's cylinder, on both
-  // surfaces, with no collar or connector needed at either connection.
-  // The child's pose is this fold and nothing else — ConstructPartSolid
-  // sweeps the bridge about pivotOriginWorld/pivotAxisWorld through
-  // angleDeg and fuses it directly between the parent and child panel
-  // solids.
+  // The axis now sits `setbackMm` in-plane off the raw hinge (docs/
+  // BUG_REPORT_reconstructed_envelope_grows_with_bend_radius.md) — the
+  // parent's and child's own raw walls are deliberately left untrimmed
+  // (RegionOf/BoundingBends stay zero-offset, unchanged, for the
+  // flat-pattern/DXF side), so they no longer reach the axis's own tangent
+  // points, by exactly `setbackMm` on the parent side and `setbackMm` again
+  // on the child side (the same per-bend value both places — see the pose
+  // walk's own comment on why). `nLeftWorld`/`childNLeftWorld` are the
+  // world-space unit directions a real edge point needs to move along to
+  // reach its own tangent point — parentTangent = parentRealEdgePoint +
+  // setbackMm*nLeftWorld; childTangent = childRealEdgePoint -
+  // setbackMm*childNLeftWorld (subtracted: the child's real edge is
+  // FURTHER out than its tangent point, by construction). Deliberately NOT
+  // precomputed absolute tangent points here — this bend's own raw
+  // hingeA/hingeB use an intentionally exaggerated half-span (so the
+  // infinite hinge line visually crosses the whole panel even with a Y
+  // offset — MakeStrip's own test-only convention, but RegionOf's real
+  // clip authoring can do the same), which does NOT match a real edge's
+  // own corner positions — only the panel's own already-clipped
+  // bottomFace/topFace points (computed later, from RegionOf) are the real
+  // corners a tangent point must be measured relative to.
+  double setbackMm = 0.0;
+  Point3 nLeftWorld;
+  Point3 childNLeftWorld;
 };
 
 enum class EvaluateErrorCode {

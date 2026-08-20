@@ -24,17 +24,25 @@ double TestBendAllowanceMm(double angleDeg, double radiusMm, double kFactor,
   return angleRad * (radiusMm + kFactor * thicknessMm);
 }
 
-// Same pivot-offset formula manufacturing_graph_evaluator.cc's Evaluate() uses
-// (duplicated here for the same reason TestBendAllowanceMm is). This is the ONLY
-// z-height (relative to the panel's own bottom/z=0 surface) that sits exactly ON
-// the fold's rotation axis — every other z-height sweeps around it and picks up a
-// residual translation once the fold's own radius is nonzero, so it is the correct
-// reference for a raw flat-corner closure check, not z=0 (z=0 only happens to
-// coincide with the pivot for a mountain fold at radiusMm=0).
-double TestPivotZOffset(double angleDeg, double radiusMm, double thicknessMm) {
+// The panel's own TRUE crease height — the one z-height that is the SAME
+// physical point regardless of which bend radius reconstructed it (0 for a
+// mountain fold, thicknessMm for a valley fold — see BottomRadiusMm's own
+// header comment on why a valley fold's true crease is never at z=0, even
+// at radiusMm=0). This used to be radiusMm-dependent (the fold's own pivot
+// height, `+/-rBottom`) because that was the one height the OLD, in-plane-
+// unmodified axis construction held invariant as radiusMm changed — a fact
+// about that specific (buggy) construction, not a physical truth. Now that
+// Evaluate() carries a per-bend, radius-dependent in-plane offset AND a
+// matching child-side extension
+// (docs/BUG_REPORT_reconstructed_envelope_grows_with_bend_radius.md), EVERY
+// z-height is radius-invariant, not just one — so the correct, and
+// simplest, choice for a raw flat-corner closure check is the true,
+// physical crease line itself. `radiusMm` is intentionally unused now (kept
+// so call sites don't all need editing); `angleDeg`'s sign still selects
+// fold direction the same way BottomIsConcave's own fallback does.
+double TestPivotZOffset(double angleDeg, double /*radiusMm*/, double thicknessMm) {
   bool isMountain = angleDeg >= 0.0;
-  double rBottom = isMountain ? radiusMm : radiusMm + thicknessMm;
-  return isMountain ? -rBottom : rBottom;
+  return isMountain ? 0.0 : thicknessMm;
 }
 
 // Builds an N-segment strip with N-1 bends of `angleDeg` each, real (possibly
@@ -173,6 +181,27 @@ Transform3 MakeTumbledAnchor() {
   return translation.Compose(rotation);
 }
 
+// Perpendicular distance between two panels' own planes, using panelA's
+// bottomFace to derive the plane normal (via two edge vectors) and
+// projecting the vector to a panelB corner onto it. Used for the
+// opposite-wall/envelope-invariance checks below — a property of where two
+// panels' planes actually sit in 3D, independent of whether their edges
+// happen to touch anything.
+double PlaneDistance(const RegionPanelLayout& panelA, const RegionPanelLayout& panelB) {
+  const Point3& a0 = panelA.bottomFace[0];
+  const Point3& a1 = panelA.bottomFace[1];
+  const Point3& a2 = panelA.bottomFace[2];
+  Point3 e01{a1.x - a0.x, a1.y - a0.y, a1.z - a0.z};
+  Point3 e12{a2.x - a1.x, a2.y - a1.y, a2.z - a1.z};
+  Point3 n{e01.y * e12.z - e01.z * e12.y, e01.z * e12.x - e01.x * e12.z,
+           e01.x * e12.y - e01.y * e12.x};
+  double len = std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
+  n = {n.x / len, n.y / len, n.z / len};
+  const Point3& b0 = panelB.bottomFace[0];
+  Point3 v{b0.x - a0.x, b0.y - a0.y, b0.z - a0.z};
+  return std::fabs(v.x * n.x + v.y * n.y + v.z * n.z);
+}
+
 }  // namespace
 
 // ─── C22-equivalent closure family: N-gon prism via N-1 equal bends ──────────
@@ -233,6 +262,120 @@ TEST_CASE("GraphEvaluator: N=4 square tube closes exactly, angle down",
   Point3 start0 = seg0->pose.Apply({near0.x, near0.y, z});
   Point3 end0 = segLast->pose.Apply({far0.x, far0.y, z});
   CHECK(Dist(start0, end0) < 1e-6);
+}
+
+// docs/BUG_REPORT_reconstructed_envelope_grows_with_bend_radius.md's
+// testing-strategy item 3: the N-gon closure tests above only ever check
+// that the loop meets back up with itself — they never check that it
+// closes at the RIGHT SIZE. A defect that grows every corner's reach by
+// the same proportion still closes exactly (the whole loop scales
+// together), which is exactly why this defect went undetected by every
+// closure test in this file despite being present the whole time. This
+// test closes the gap: for a square tube (opposite walls seg0/seg2 and
+// seg1/seg3), the flat-to-flat distance between opposite walls must be
+// IDENTICAL to the radius=0 reference at every other radius — the
+// manufacturing method (bend radius) must not change the resulting
+// shape's size. KNOWN FAILING until the setback-based fix (see the bug
+// report's "Solution approach") lands.
+TEST_CASE("GraphEvaluator: N=4 square tube's opposite-wall spacing stays "
+          "fixed regardless of bend radius",
+          "[translation][closure][envelope]") {
+  double kFactor = 0.4, thicknessMm = 2.0;
+
+  auto measure = [&](double radiusMm) -> std::pair<double, double> {
+    auto graph = MakeStrip(4, 100.0, 50.0, thicknessMm, 90.0, radiusMm, kFactor, 0.0, 0.0,
+                           Transform3::Identity(), /*closesLoop=*/true);
+    EvaluateResult result = Evaluate(graph);
+    REQUIRE(result.ok);
+    REQUIRE(result.panels.size() == 4);
+    const RegionPanelLayout *seg0 = nullptr, *seg1 = nullptr, *seg2 = nullptr, *seg3 = nullptr;
+    for (auto& p : result.panels) {
+      if (p.regionPanelId == "seg0") seg0 = &p;
+      if (p.regionPanelId == "seg1") seg1 = &p;
+      if (p.regionPanelId == "seg2") seg2 = &p;
+      if (p.regionPanelId == "seg3") seg3 = &p;
+    }
+    REQUIRE(seg0 != nullptr);
+    REQUIRE(seg1 != nullptr);
+    REQUIRE(seg2 != nullptr);
+    REQUIRE(seg3 != nullptr);
+    return {PlaneDistance(*seg0, *seg2), PlaneDistance(*seg1, *seg3)};
+  };
+
+  auto [refA, refB] = measure(0.0);
+  INFO("radius=0 (reference) seg0-seg2=" << refA << " seg1-seg3=" << refB);
+  for (double radiusMm : {0.5, 1.0, 1.5, 3.0}) {
+    auto [a, b] = measure(radiusMm);
+    INFO("radiusMm=" << radiusMm << " seg0-seg2=" << a << " (reference=" << refA << ") "
+                      << "seg1-seg3=" << b << " (reference=" << refB << ")");
+    CHECK(a == Approx(refA).margin(1e-6));
+    CHECK(b == Approx(refB).margin(1e-6));
+  }
+}
+
+// The N-gon closure tests above all use a REGULAR loop — every bend
+// identical (same angle, radius, kFactor, thickness) — which is exactly
+// what makes closure survive this bug: each bend's own reach distortion
+// acts as a scalar multiplying that bend's own step vector, and if the
+// scalar is the SAME for every step (guaranteed only when every bend is
+// identical), the closed-loop vector sum v1+v2+...+vN=0 becomes
+// k*(v1+...+vN) = k*0 = 0 regardless of k — the loop still closes, just at
+// the wrong size. A real part's bends are not generally identical to each
+// other (different radii is a completely ordinary thing to specify). This
+// test breaks that special-case symmetry on purpose: same 4-panel loop as
+// the N=4 tests above, but with ONE of the three bends given a different
+// radius than the other two.
+//
+// The assertion is that the loop DOES close (gap < 1e-6, the same
+// tolerance every other closure test in this file uses) — because a real,
+// correctly manufactured part closes regardless of which bend radius was
+// used at which corner; the outer shape is the source of truth (see the
+// bug report's "Statement of the requirement"). Once each bend's own
+// reach is made radius-invariant (the agreed fix), every individual
+// bend's contribution to the loop returns to its own r=0 value regardless
+// of that bend's own radius, so the total sum returns to its r=0 (closed)
+// value too — for ANY mix of radii, not just uniform ones. KNOWN FAILING
+// under the current code: mixing radii breaks the uniform-scaling
+// cancellation that (coincidentally) keeps the regular-loop tests above
+// passing, exposing the same defect as an outright non-closure here
+// instead of just a size discrepancy.
+TEST_CASE("GraphEvaluator: N=4 loop with non-uniform bend radii still closes "
+          "exactly (breaks the uniform-scaling symmetry that hides the "
+          "envelope bug in the regular-loop closure tests)",
+          "[translation][closure][envelope]") {
+  double kFactor = 0.4, thicknessMm = 2.0;
+  auto graph = MakeStrip(4, 100.0, 50.0, thicknessMm, 90.0, /*radiusMm=*/1.5, kFactor, 0.0, 0.0,
+                         Transform3::Identity(), /*closesLoop=*/true);
+  REQUIRE(graph.bends.size() == 3);
+  // bend0 and bend2 keep the base radius; bend1 alone gets a different one.
+  graph.bends[1].radiusMm = 3.5;
+
+  EvaluateResult result = Evaluate(graph);
+  REQUIRE(result.ok);
+  REQUIRE(result.panels.size() == 4);
+
+  const RegionPanelLayout* seg0 = nullptr;
+  const RegionPanelLayout* segLast = nullptr;
+  for (auto& p : result.panels) {
+    if (p.regionPanelId == "seg0") seg0 = &p;
+    if (p.regionPanelId == "seg3") segLast = &p;
+  }
+  REQUIRE(seg0 != nullptr);
+  REQUIRE(segLast != nullptr);
+
+  // bend2 (the closing corner's own parent-side bend) still uses the base
+  // radius, so its own pivot height is the same reference the other
+  // regular-loop tests use.
+  double z = TestPivotZOffset(90.0, 1.5, thicknessMm);
+  Point2 near0 = FindCorner(*seg0, /*wantMaxX=*/false, 0.0);
+  Point2 far0 = FindCorner(*segLast, /*wantMaxX=*/true, 0.0);
+  Point3 start0 = seg0->pose.Apply({near0.x, near0.y, z});
+  Point3 end0 = segLast->pose.Apply({far0.x, far0.y, z});
+  double gap = Dist(start0, end0);
+  INFO("gap between seg0's own corner and segLast's far corner = " << gap << "mm "
+       << "(a real, correctly manufactured part closes regardless of which radius "
+       << "was used at which corner)");
+  CHECK(gap < 1e-6);
 }
 
 TEST_CASE("GraphEvaluator: N=5 pentagon tube closes exactly, angle up",
@@ -341,6 +484,40 @@ TEST_CASE("GraphEvaluator: N=6 hexagon tube closes exactly, angle down",
   Point3 start0 = seg0->pose.Apply({near0.x, near0.y, z});
   Point3 end0 = segLast->pose.Apply({far0.x, far0.y, z});
   CHECK(Dist(start0, end0) < 1e-6);
+}
+
+// Second even-N confirmation of the same envelope defect, independent of
+// N=4's own scale/thickness/kFactor choices (see the N=4 companion test's
+// own comment for the full rationale). seg0/seg3 are the hexagon's own
+// opposite-wall pair.
+TEST_CASE("GraphEvaluator: N=6 hexagon's opposite-wall spacing stays fixed "
+          "regardless of bend radius",
+          "[translation][closure][envelope]") {
+  double kFactor = 0.33, thicknessMm = 1.6;
+
+  auto measure = [&](double radiusMm) -> double {
+    auto graph = MakeStrip(6, 70.0, 40.0, thicknessMm, 60.0, radiusMm, kFactor, 0.0, 0.0,
+                           Transform3::Identity(), /*closesLoop=*/true);
+    EvaluateResult result = Evaluate(graph);
+    REQUIRE(result.ok);
+    REQUIRE(result.panels.size() == 6);
+    const RegionPanelLayout *seg0 = nullptr, *seg3 = nullptr;
+    for (auto& p : result.panels) {
+      if (p.regionPanelId == "seg0") seg0 = &p;
+      if (p.regionPanelId == "seg3") seg3 = &p;
+    }
+    REQUIRE(seg0 != nullptr);
+    REQUIRE(seg3 != nullptr);
+    return PlaneDistance(*seg0, *seg3);
+  };
+
+  double ref = measure(0.0);
+  INFO("radius=0 (reference) seg0-seg3=" << ref);
+  for (double radiusMm : {0.5, 1.0, 1.5, 2.5}) {
+    double d = measure(radiusMm);
+    INFO("radiusMm=" << radiusMm << " seg0-seg3=" << d << " (reference=" << ref << ")");
+    CHECK(d == Approx(ref).margin(1e-6));
+  }
 }
 
 TEST_CASE("GraphEvaluator: N=3..9 triangle-through-nonagon prisms all close",
@@ -546,27 +723,29 @@ TEST_CASE("GraphEvaluator: N=3..9 prisms still close under an arbitrary "
   }
 }
 
-// ─── RESOLVED: a panel's own far, free corner does NOT stay at a fixed ──────
-// ─── world position as R varies, and that is physically correct ────────────
+// ─── far outer corner position for a fixed nominal leg length does NOT ─────
+// ─── vary with bend radius — this used to be pinned as expected drift ──────
 //
-// This was an open investigation; it is now resolved. seg1's own near edge
-// (its raw hinge coordinate) is rigidly rotated about an axis that sits
-// pivotZ off the flat plane — pivotZ is real (radius-scale), so the ROTATED
-// image of that near edge itself moves by a real, radius-scale amount as R
-// varies (on the order of 2*|pivotZ|*sin(angle/2) — see this fix's own plan
-// document), and the panel's far edge, rigidly attached to it, moves with
-// it. This is not a residual bug: a real, nonzero-radius fillet physically
-// occupies space a sharp (r=0) corner doesn't, so its true surfaces cannot
-// sit at the same 3D position as the idealized sharp-corner reference for
-// every radius simultaneously. What this fix DOES guarantee (checked by the
-// child-side tangency test above) is self-consistency: bottomFace/topFace
-// exactly match where the actual constructed solid's surfaces are, for any
-// R — the drift below is real geometry, not a mismatch between two
-// disagreeing representations of it.
+// A previous session concluded the drift asserted below was real, expected
+// geometry — reasoning that pivotZ is real (radius-scale), so the rotated
+// image of the near edge must move by a radius-scale amount as R varies,
+// and the panel's far edge, rigidly attached to it, moves with it. That
+// reasoning is incomplete: it only accounts for the axis's HEIGHT. It does
+// not hold once the axis also carries its own in-plane offset and a
+// matching child-side extension
+// (docs/BUG_REPORT_reconstructed_envelope_grows_with_bend_radius.md) — with
+// both in place, this far corner is provably radius-invariant (verified
+// exactly, both fold directions, five bend angles, chained multiple bends
+// deep, in the bug report above). The "far corner must drift because a real
+// fillet occupies space a sharp corner doesn't" intuition conflates two
+// different things: the fillet's own curved material really does occupy
+// different space at different radii, but the FLAT leg beyond it does not
+// have to — its own reach is exactly what the per-bend setback and
+// extension correct for. This test used to pin the drift as correct; it now
+// pins its absence.
 TEST_CASE("GraphEvaluator: far outer corner position for a fixed nominal leg "
-          "length varies with bend radius — real, expected drift (see comment "
-          "above), not a bug",
-          "[translation][investigation]") {
+          "length stays fixed regardless of bend radius",
+          "[translation][envelope]") {
   double L = 100.0, widthMm = 50.0, thicknessMm = 2.0, kFactor = 0.4;
 
   std::vector<double> radii = {0.0, 1.0, 2.0, 5.0, 10.0};
@@ -592,12 +771,12 @@ TEST_CASE("GraphEvaluator: far outer corner position for a fixed nominal leg "
     farTopCorners.push_back(farTop);
   }
 
-  // The far corner moves substantially as R varies — real, expected drift
-  // (see this TEST_CASE's own banner comment), not a defect to fix.
+  // The far corner must NOT move as R varies (see this TEST_CASE's own
+  // banner comment) — the whole point of the setback/extension fix.
   double driftFromR0 = Dist(farTopCorners.back(), farTopCorners.front());
   INFO("total drift from radiusMm=0 to radiusMm=" << radii.back() << ": " << driftFromR0
                                                     << "mm");
-  CHECK(driftFromR0 > 1.0);
+  CHECK(driftFromR0 < 1e-6);
 }
 
 // ─── bottomFace/topFace: exact thickness offset, index-correlated ───────────
@@ -910,15 +1089,21 @@ TEST_CASE("GraphEvaluator: bend allowance shifts the child's subtree, leaves "
     CHECK(t.z == Approx(thicknessMm).margin(1e-9));
   }
 
-  // Child-side tangency (the actual bug this fix addresses — the parent-side
-  // check above always passed, even under the old, buggy childShift
-  // construction, since the parent's own pose never involves its own
-  // outgoing bend). Rotating seg1's own bend-adjacent bottomFace/topFace
-  // BACK by the bridge's own angle, about the bridge's own axis (both
-  // independently exposed fields, not internals of pose), must land it
-  // EXACTLY on seg0's own tangent point at the SAME raw hinge vertex — this
-  // is the coordinate-geometry tangency proof from the header comment,
-  // checked numerically rather than just asserted.
+  // Child-side landing point (docs/BUG_REPORT_reconstructed_envelope_grows_
+  // with_bend_radius.md). Rotating seg1's own bend-adjacent bottomFace/
+  // topFace BACK by the bridge's own angle, about the bridge's own axis,
+  // used to land it exactly on the raw hinge vertex — that was only true
+  // because the child's own local frame wasn't extended at all. Now it's
+  // extended by 2x this bend's own setback (radiusMm*tan(|angleDeg|/2)) —
+  // the same per-bend, purely local quantity that also moves the axis — so
+  // unfolding lands 2x setback further out along nLeft than the raw hinge,
+  // never short of it, on either surface.
+  Point2 hingeDir{bend.hingeB.x - bend.hingeA.x, bend.hingeB.y - bend.hingeA.y};
+  double hingeDirLen = std::sqrt(hingeDir.x * hingeDir.x + hingeDir.y * hingeDir.y);
+  Point2 nLeft{-hingeDir.y / hingeDirLen, hingeDir.x / hingeDirLen};
+  double setbackMm = bend.radiusMm * std::tan(std::fabs(bend.angleDeg) * kTestPi / 180.0 / 2.0);
+  double extend = 2.0 * setbackMm;
+
   Transform3 unfold = Transform3::RotationAboutAxis(bridge.pivotOriginWorld,
                                                       bridge.pivotAxisWorld, -bridge.angleDeg);
   int checkedChildEdges = 0;
@@ -928,10 +1113,12 @@ TEST_CASE("GraphEvaluator: bend allowance shifts the child's subtree, leaves "
     const Point3& ct = seg1->topFace[j];
     Point3 unfoldedB = unfold.Apply(cb);
     Point3 unfoldedT = unfold.Apply(ct);
-    bool atHingeA =
-        std::fabs(unfoldedB.x - bend.hingeA.x) < 1e-6 && std::fabs(unfoldedB.y - bend.hingeA.y) < 1e-6;
-    bool atHingeB =
-        std::fabs(unfoldedB.x - bend.hingeB.x) < 1e-6 && std::fabs(unfoldedB.y - bend.hingeB.y) < 1e-6;
+    Point2 extendedHingeA{bend.hingeA.x + extend * nLeft.x, bend.hingeA.y + extend * nLeft.y};
+    Point2 extendedHingeB{bend.hingeB.x + extend * nLeft.x, bend.hingeB.y + extend * nLeft.y};
+    bool atHingeA = std::fabs(unfoldedB.x - extendedHingeA.x) < 1e-6 &&
+                     std::fabs(unfoldedB.y - extendedHingeA.y) < 1e-6;
+    bool atHingeB = std::fabs(unfoldedB.x - extendedHingeB.x) < 1e-6 &&
+                     std::fabs(unfoldedB.y - extendedHingeB.y) < 1e-6;
     CHECK((atHingeA || atHingeB));
     CHECK(unfoldedB.z == Approx(0.0).margin(1e-6));
     CHECK(unfoldedT.x == Approx(unfoldedB.x).margin(1e-6));
@@ -1042,24 +1229,18 @@ TEST_CASE("ComputeBendGeometry: setback matches the standard sheet-metal formula
   CHECK(geom2.setbackMm == Approx(geom.setbackMm).margin(1e-12));
 }
 
-// ─── DIAGNOSTIC PROBE (temporary, not a permanent test): direct tangency ────
-// check, independent of pose composition self-consistency. For the wall built
-// from a panel's raw hinge coordinate to be physically tangent to the bend's
-// own cylinder, the axis must sit at EXACTLY rBottom (or rBottom+thicknessMm)
-// perpendicular distance from that raw coordinate — this checks that fact
-// directly from bridge.pivotOriginWorld/pivotAxisWorld and the panel's own
-// bottomFace/topFace, with zero dependency on any duplicated formula.
-// Permanent regression test (promoted from a throwaway probe): a wall built
-// from a panel's own raw hinge coordinate is tangent to the bend's cylinder,
-// checked on BOTH the parent's and the child's own real edge, both surfaces,
-// both fold directions, across radii. This is the physical requirement a
-// real manufactured bend cannot violate — a line tangent to a circle at a
-// known point forces the circle's centre onto the perpendicular through that
-// point, with no remaining freedom, so nothing beyond the fold rotation
-// itself should be needed to keep both sides on the cylinder.
-TEST_CASE("GraphEvaluator: parent AND child wall edges are both exactly "
-          "tangent to the bend's own pivot axis, both surfaces, both fold "
-          "directions, across radii",
+// The wall built from a panel's raw hinge coordinate is no longer exactly
+// tangent to the bend's own cylinder (docs/BUG_REPORT_reconstructed_
+// envelope_grows_with_bend_radius.md) — that was only achievable by leaving
+// the panel's own far edge free to drift with radiusMm, which is the bug
+// this fix addresses. With the axis now offset in-plane by this bend's own
+// setback, a wall edge that itself didn't move sits `setbackMm` off the
+// axis's own in-plane position, so its distance to the axis is no longer
+// the bare radius but the hypotenuse of that offset against it —
+// `sqrt(setbackMm^2 + radius^2)` — on both surfaces, both fold directions.
+TEST_CASE("GraphEvaluator: parent AND child wall edges sit exactly "
+          "sqrt(setback^2 + radius^2) from the bend's own pivot axis, both "
+          "surfaces, both fold directions, across radii",
           "[translation][probe]") {
   double thicknessMm = 2.0;
   for (double angleDeg : {90.0, -90.0}) {
@@ -1082,8 +1263,11 @@ TEST_CASE("GraphEvaluator: parent AND child wall edges are both exactly "
     REQUIRE(seg1 != nullptr);
 
     bool concave = angleDeg >= 0.0;
-    double expectedBottom = concave ? radiusMm : radiusMm + thicknessMm;
-    double expectedTop = concave ? radiusMm + thicknessMm : radiusMm;
+    double rBottom = concave ? radiusMm : radiusMm + thicknessMm;
+    double rTop = concave ? radiusMm + thicknessMm : radiusMm;
+    double setbackMm = radiusMm * std::tan(std::fabs(angleDeg) * kTestPi / 180.0 / 2.0);
+    double expectedBottom = std::sqrt(setbackMm * setbackMm + rBottom * rBottom);
+    double expectedTop = std::sqrt(setbackMm * setbackMm + rTop * rTop);
 
     // Perpendicular distance from a world point to the axis line.
     auto distToAxis = [&](const Point3& p) -> double {
@@ -1118,16 +1302,21 @@ TEST_CASE("GraphEvaluator: parent AND child wall edges are both exactly "
 
 // The bridge's own end face (parent's tagged edge, rotated by the full bend
 // angle about the axis — exactly reproducing what ConstructPartSolid
-// computes) must land EXACTLY on the child panel's own real wall edge, with
-// no correction of any kind — the child's pose IS that rotation. Pure
-// coordinate math, no solids — checked for both fold directions.
-TEST_CASE("GraphEvaluator: bridge end face exactly reaches the child panel's "
-          "own real wall edge, both corners, both surfaces, no shift needed",
+// computes) no longer lands exactly on the child panel's own real wall edge
+// (docs/BUG_REPORT_reconstructed_envelope_grows_with_bend_radius.md) — the
+// child's pose is that rotation PLUS its own 2x-setback extension, so the
+// two now differ by exactly that extension's own world-space length (a
+// rotation preserves vector length, so the gap is exactly `2*setbackMm`
+// regardless of fold direction or which corner) — checked for both fold
+// directions.
+TEST_CASE("GraphEvaluator: bridge end face reaches the child panel's own "
+          "real wall edge, offset by exactly 2x this bend's own setback",
           "[translation][allowance]") {
   for (double radiusMm : {0.0, 1.5}) {
     double kFactor = radiusMm > 0 ? 0.4 : 0.0;
     double thicknessMm = 2.0;
     for (double angleDeg : {90.0, -90.0}) {
+      double setbackMm = radiusMm * std::tan(std::fabs(angleDeg) * kTestPi / 180.0 / 2.0);
       auto graph = MakeStrip(2, 100.0, 50.0, thicknessMm, angleDeg, radiusMm, kFactor);
       EvaluateResult result = Evaluate(graph);
       REQUIRE(result.ok);
@@ -1173,7 +1362,7 @@ TEST_CASE("GraphEvaluator: bridge end face exactly reaches the child panel's "
                           << ": end=(" << end.x << "," << end.y << "," << end.z << ") child=("
                           << childPt.x << "," << childPt.y << "," << childPt.z
                           << ") residual=" << residual);
-        CHECK(residual < 1e-6);
+        CHECK(residual == Approx(2.0 * setbackMm).margin(1e-6));
       };
       check("i0/bottom", seg0->bottomFace[i0], seg1->bottomFace[childForI0]);
       check("i1/bottom", seg0->bottomFace[i1], seg1->bottomFace[childForI1]);
@@ -1189,14 +1378,16 @@ TEST_CASE("GraphEvaluator: bridge end face exactly reaches the child panel's "
 // pivotZ height — neither of which involves composing a fold). Everything
 // else here is measured straight off the two panels' own real, placed
 // vertices: the dihedral angle between their surfaces (via plane normals)
-// must equal the bend's authored angleDeg, their tagged edges must be the
-// same 3D line (not just close afterward), and both surfaces must sit at
-// the authored radius from the axis. A bug in the pose walk's own rotation
-// math (e.g. composing in the wrong order, or reintroducing a shift) would
-// have to also corrupt this independently-derived measurement to slip past
-// both checks — this is the closest this test file gets to "measure the
-// real geometry and compare to spec" rather than "compare one derivation
-// to another derivation of the same formula."
+// must equal the bend's authored angleDeg; their tagged edges are no longer
+// the same 3D line (docs/BUG_REPORT_reconstructed_envelope_grows_with_bend_
+// radius.md — the child's own 2x-setback extension moves it by exactly that
+// much), and both surfaces sit `sqrt(setback^2 + radius^2)` from the axis,
+// not the bare radius (see the probe test above for the same relationship).
+// A bug in the pose walk's own rotation math (e.g. composing in the wrong
+// order) would still have to also corrupt this independently-derived
+// measurement to slip past both checks — this is the closest this test file
+// gets to "measure the real geometry and compare to spec" rather than
+// "compare one derivation to another derivation of the same formula."
 TEST_CASE("GraphEvaluator: bend geometry measured directly off the two "
           "placed panels' own real vertices matches the authored spec",
           "[translation][probe]") {
@@ -1204,6 +1395,7 @@ TEST_CASE("GraphEvaluator: bend geometry measured directly off the two "
   for (double angleDeg : {90.0, -90.0, 45.0, -30.0}) {
   for (double radiusMm : {0.0, 1.0, 2.5}) {
     double kFactor = radiusMm > 0 ? 0.4 : 0.0;
+    double setbackMm = radiusMm * std::tan(std::fabs(angleDeg) * kTestPi / 180.0 / 2.0);
     INFO("angleDeg=" << angleDeg << " radiusMm=" << radiusMm);
     auto graph = MakeStrip(2, 100.0, 50.0, thicknessMm, angleDeg, radiusMm, kFactor);
     EvaluateResult result = Evaluate(graph);
@@ -1246,13 +1438,18 @@ TEST_CASE("GraphEvaluator: bend geometry measured directly off the two "
     size_t childForI0 = j0MatchesI0 ? j0 : j1;
     size_t childForI1 = j0MatchesI0 ? j1 : j0;
 
-    // Edge coincidence: no gap, measured as plain distance once the
-    // parent's edge is carried through the same fold the child's own pose
-    // applies — nothing else derived, nothing else composed.
-    CHECK(Dist(worldFold.Apply(seg0->bottomFace[i0]), seg1->bottomFace[childForI0]) < 1e-6);
-    CHECK(Dist(worldFold.Apply(seg0->bottomFace[i1]), seg1->bottomFace[childForI1]) < 1e-6);
-    CHECK(Dist(worldFold.Apply(seg0->topFace[i0]), seg1->topFace[childForI0]) < 1e-6);
-    CHECK(Dist(worldFold.Apply(seg0->topFace[i1]), seg1->topFace[childForI1]) < 1e-6);
+    // Edge gap: the parent's edge carried through the same fold the child's
+    // own pose applies now falls short of the child's real edge by exactly
+    // 2x this bend's own setback (a rotation preserves vector length, so
+    // this holds regardless of fold direction or which corner).
+    CHECK(Dist(worldFold.Apply(seg0->bottomFace[i0]), seg1->bottomFace[childForI0]) ==
+          Approx(2.0 * setbackMm).margin(1e-6));
+    CHECK(Dist(worldFold.Apply(seg0->bottomFace[i1]), seg1->bottomFace[childForI1]) ==
+          Approx(2.0 * setbackMm).margin(1e-6));
+    CHECK(Dist(worldFold.Apply(seg0->topFace[i0]), seg1->topFace[childForI0]) ==
+          Approx(2.0 * setbackMm).margin(1e-6));
+    CHECK(Dist(worldFold.Apply(seg0->topFace[i1]), seg1->topFace[childForI1]) ==
+          Approx(2.0 * setbackMm).margin(1e-6));
 
     // Dihedral angle between the two panels' own surface planes, measured
     // via their normals (cross product of two edges within each panel's
@@ -1278,10 +1475,14 @@ TEST_CASE("GraphEvaluator: bend geometry measured directly off the two "
     CHECK(measuredAngleDeg == Approx(angleDeg).margin(1e-6));
 
     // Radius from the axis's simple position (raw hinge + pivotZ height —
-    // not the rotation/composition step under test).
+    // not the rotation/composition step under test) — sqrt(setback^2 +
+    // radius^2), same relationship as the probe test above, since the
+    // child's own edge sits `setbackMm` off the axis's in-plane position.
     bool concave = angleDeg >= 0.0;
-    double expectedBottom = concave ? radiusMm : radiusMm + thicknessMm;
-    double expectedTop = concave ? radiusMm + thicknessMm : radiusMm;
+    double rBottom = concave ? radiusMm : radiusMm + thicknessMm;
+    double rTop = concave ? radiusMm + thicknessMm : radiusMm;
+    double expectedBottom = std::sqrt(setbackMm * setbackMm + rBottom * rBottom);
+    double expectedTop = std::sqrt(setbackMm * setbackMm + rTop * rTop);
     auto distToAxis = [&](const Point3& p) -> double {
       Point3 v{p.x - bridge.pivotOriginWorld.x, p.y - bridge.pivotOriginWorld.y,
                 p.z - bridge.pivotOriginWorld.z};
