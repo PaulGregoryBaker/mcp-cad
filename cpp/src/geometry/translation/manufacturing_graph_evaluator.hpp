@@ -303,6 +303,24 @@ struct BridgeLayout {
   double setbackMm = 0.0;
   Point3 nLeftWorld;
   Point3 childNLeftWorld;
+  // The TRUE, un-widened hinge line (bend->hingeA/hingeB, straight from the
+  // graph — deliberately NOT `hingeA`/`hingeB` above, which are the shifted
+  // flat-pattern-position fact) plus the flat-frame (pre-pose) left-hand
+  // normal used to derive it. Only the LINE these two points define is
+  // meaningful (an exaggerated half-span, same caveat as `hingeA`/`hingeB`'s
+  // own doc note) — never their exact positions. ConstructPartSolid uses
+  // this to trim each panel's own wall solid back to its true tangent line
+  // (line + setbackMm*nLeftFlat, keeping the side away from the bend) before
+  // extruding — a solid-construction-only trim, independent of and NOT
+  // feeding back into RegionOf/BoundingBends' own zero-offset flat-pattern
+  // clip, which stays untouched. Without this, a panel's own flat, straight
+  // edge visibly protrudes past the bridge's rounded (convex-side) surface,
+  // since the panel's own un-trimmed edge reaches all the way to the sharp-
+  // corner position the envelope fix requires, and a real rounded corner's
+  // outer surface sits inside that sharp-corner extent, not out to it.
+  Point2 rawHingeA;
+  Point2 rawHingeB;
+  Point2 nLeftFlat;
 };
 
 enum class EvaluateErrorCode {

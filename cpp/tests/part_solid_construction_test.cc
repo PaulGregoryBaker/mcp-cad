@@ -9,8 +9,10 @@
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepGProp.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
@@ -18,7 +20,9 @@
 #include <GProp_GProps.hxx>
 #include <TopExp_Explorer.hxx>
 #include <gp_Ax1.hxx>
+#include <gp_Ax2.hxx>
 #include <gp_Dir.hxx>
+#include <gp_Lin.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
@@ -971,5 +975,126 @@ TEST_CASE("ConstructPartSolid: mountain and valley volumes of the same "
                       << " validV=" << analyzerV.IsValid() << " solidsM=" << CountSolids(itM->second.shape)
                       << " solidsV=" << CountSolids(itV->second.shape));
     CHECK(volM == Approx(volV).epsilon(1e-6));
+  }
+}
+
+// Direct, implementation-independent check for the protrusion a real bend's
+// panel walls must never have past its own true rounded surface (reported
+// live, visually, in Form.AI.tion — a flat panel edge visibly poking past
+// the round). Checks the one fact that actually matters (confirmed with the
+// user): each panel's own wall boundary — where its flat material stops and
+// the bridge's curved material begins — must sit at EXACTLY the bend's true
+// radius on both surfaces (rBottom on the concave/bottom face, rTop on the
+// convex/top face), for both the parent and child side.
+//
+// A prior version of this test instead subtracted a single cylinder of
+// radius max(rBottom,rTop) from the whole constructed part and required
+// exactly 2 disconnected solids. That's the wrong check: rBottom and rTop
+// differ whenever thickness is nonzero, so the bend's own bridge material
+// genuinely occupies some of the same 3D region the flat wall's un-trimmed
+// tail does near the tangent line — a real, harmless fact of a straight-quad
+// revolve, absorbed by the union, not a defect (confirmed with the user:
+// small overlap on the concave/inner side doesn't matter, since it's still
+// just one union — only a gap or a genuine protrusion past the true radius
+// would be a real bug). On top of that, the outer surface's own edge is
+// EXACTLY tangent (not merely close), so a single boolean cut at exactly
+// that radius leaves a zero-volume tangent contact along the whole sweep —
+// which keeps the two sides topologically "connected" even when the
+// construction is perfect. Neither of those is what the original bug (a
+// visibly protruding flat edge) actually was, so this test checks the wall
+// boundary's own position directly instead of relying on a boolean split.
+TEST_CASE("ConstructPartSolid: each wall's own tangent-line boundary sits "
+          "exactly on the bend's true radius, both surfaces, both sides",
+          "[translation][construction][walltrim]") {
+  double thicknessMm = 2.0;
+  double widthMm = 50.0;
+  for (double angleDeg : {90.0, -90.0}) {
+    for (double radiusMm : {1.0, 1.5, 2.0, 3.0}) {
+      double kFactor = 0.4;
+      auto graph = MakeStrip(2, 100.0, widthMm, thicknessMm, angleDeg, radiusMm, kFactor);
+      EvaluateResult layout = Evaluate(graph);
+      REQUIRE(layout.ok);
+      REQUIRE(layout.bridges.size() == 1);
+      const BridgeLayout& bridge = layout.bridges[0];
+
+      GeometryState state;
+      ConstructPartSolidResult result = ConstructPartSolid(state, layout, thicknessMm);
+      INFO("angleDeg=" << angleDeg << " radiusMm=" << radiusMm << " errorCode=" << result.errorCode
+                        << " message=" << result.message);
+      REQUIRE(result.ok);
+      auto it = state.solids.find(result.shellId);
+      REQUIRE(it != state.solids.end());
+
+      bool concave = angleDeg >= 0.0;
+      double rBottom = concave ? radiusMm : radiusMm + thicknessMm;
+      double rTop = concave ? radiusMm + thicknessMm : radiusMm;
+
+      gp_Pnt axisOrigin(bridge.pivotOriginWorld.x, bridge.pivotOriginWorld.y,
+                         bridge.pivotOriginWorld.z);
+      gp_Dir axisDir(bridge.pivotAxisWorld.x, bridge.pivotAxisWorld.y, bridge.pivotAxisWorld.z);
+      gp_Lin axisLine(axisOrigin, axisDir);
+
+      for (const auto& panel : layout.panels) {
+        bool isParent = panel.regionPanelId == bridge.parentRegionPanelId;
+        bool isChild = panel.regionPanelId == bridge.childRegionPanelId;
+        if (!isParent && !isChild) continue;
+
+        // bridge.rawHingeA/B carry an intentionally exaggerated half-span
+        // (BridgeLayout's own header comment) — fine as a LINE for a
+        // half-plane clip, but not a real point on the panel. Find this
+        // panel's own real hinge-adjacent edge (the same lookup the bridge
+        // quad and BuildSetbackExtensionRing use) and test at its own
+        // midpoint instead, so the probe point actually lands on the real
+        // panel width, not out in the exaggerated Y range.
+        int edgeIdx = -1;
+        for (size_t i = 0; i < panel.edgeBendId.size(); ++i) {
+          if (panel.edgeBendId[i] == bridge.bendId) {
+            edgeIdx = static_cast<int>(i);
+            break;
+          }
+        }
+        REQUIRE(edgeIdx >= 0);
+        const Point2& edgeA = panel.rawOuter[static_cast<size_t>(edgeIdx)];
+        const Point2& edgeB = panel.rawOuter[(static_cast<size_t>(edgeIdx) + 1) % panel.rawOuter.size()];
+        Point2 edgeMid{(edgeA.x + edgeB.x) / 2.0, (edgeA.y + edgeB.y) / 2.0};
+
+        // The wall boundary's own local (pre-pose) position — independently
+        // derived here from the same rawHinge + sideSign*setbackMm*nLeftFlat
+        // fact TrimToTangentLines/BuildSetbackExtensionRing use, verified
+        // numerically (zero residual, every angle/radius/concavity
+        // combination, including the mixed concave-vs-signed-angle cases
+        // real STEP data produces) before either was implemented.
+        double sideSign = isChild ? -1.0 : 1.0;
+        double offset = sideSign * bridge.setbackMm;
+        Point2 tangentPt2D{edgeMid.x + offset * bridge.nLeftFlat.x,
+                            edgeMid.y + offset * bridge.nLeftFlat.y};
+        Point3 bottomLocal{tangentPt2D.x, tangentPt2D.y, 0.0};
+        Point3 topLocal{tangentPt2D.x, tangentPt2D.y, thicknessMm};
+        Point3 bottomWorld = panel.pose.Apply(bottomLocal);
+        Point3 topWorld = panel.pose.Apply(topLocal);
+        gp_Pnt bottomPnt(bottomWorld.x, bottomWorld.y, bottomWorld.z);
+        gp_Pnt topPnt(topWorld.x, topWorld.y, topWorld.z);
+
+        double dBottom = axisLine.Distance(bottomPnt);
+        double dTop = axisLine.Distance(topPnt);
+        INFO("panel=" << panel.regionPanelId << " isParent=" << isParent << " angleDeg=" << angleDeg
+                       << " radiusMm=" << radiusMm << " dBottom=" << dBottom << " rBottom="
+                       << rBottom << " dTop=" << dTop << " rTop=" << rTop);
+        CHECK(dBottom == Approx(rBottom).margin(1e-6));
+        CHECK(dTop == Approx(rTop).margin(1e-6));
+
+        // And confirm the CONSTRUCTED solid's own surface actually reaches
+        // these exact points — not just that the formula predicts them —
+        // catching a real extrusion/pose/fuse bug the formula alone can't.
+        BRepBuilderAPI_MakeVertex vBottom(bottomPnt);
+        BRepBuilderAPI_MakeVertex vTop(topPnt);
+        BRepExtrema_DistShapeShape distBottom(vBottom.Shape(), it->second.shape);
+        BRepExtrema_DistShapeShape distTop(vTop.Shape(), it->second.shape);
+        REQUIRE(distBottom.IsDone());
+        REQUIRE(distTop.IsDone());
+        CHECK(distBottom.Value() < 1e-6);
+        CHECK(distTop.Value() < 1e-6);
+      }
+    }
   }
 }

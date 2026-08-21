@@ -581,6 +581,9 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
       bridge.setbackMm = axisInPlaneOffset;
       bridge.nLeftWorld = parentPose.ApplyVector({nLeft.x, nLeft.y, 0.0});
       bridge.childNLeftWorld = worldFold.ApplyVector(bridge.nLeftWorld);
+      bridge.rawHingeA = bend->hingeA;
+      bridge.rawHingeB = bend->hingeB;
+      bridge.nLeftFlat = nLeft;
       result.bridges.push_back(std::move(bridge));
     }
   }

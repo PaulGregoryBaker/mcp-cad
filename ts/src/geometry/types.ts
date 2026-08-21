@@ -712,6 +712,13 @@ export interface NapiBridgeLayout {
   setbackMm: number;
   nLeftWorld: NapiPoint3;
   childNLeftWorld: NapiPoint3;
+  // The true, un-widened hinge line (only the LINE it defines is meaningful,
+  // never the exact positions — see BridgeLayout's own doc comment) plus its
+  // flat-frame left-hand normal, used by ConstructPartSolid to trim each
+  // panel's own wall solid back to its true tangent line before extruding.
+  rawHingeA: NapiPoint2;
+  rawHingeB: NapiPoint2;
+  nLeftFlat: NapiPoint2;
 }
 
 export interface EvaluatePartGraphResult {

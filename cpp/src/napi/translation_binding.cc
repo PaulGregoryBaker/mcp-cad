@@ -388,6 +388,9 @@ Napi::Object WriteBridgeLayout(Napi::Env env, const BridgeLayout& bridge) {
   obj.Set("setbackMm", Napi::Number::New(env, bridge.setbackMm));
   obj.Set("nLeftWorld", WritePoint3(env, bridge.nLeftWorld));
   obj.Set("childNLeftWorld", WritePoint3(env, bridge.childNLeftWorld));
+  obj.Set("rawHingeA", WritePoint2(env, bridge.rawHingeA));
+  obj.Set("rawHingeB", WritePoint2(env, bridge.rawHingeB));
+  obj.Set("nLeftFlat", WritePoint2(env, bridge.nLeftFlat));
   return obj;
 }
 
@@ -533,6 +536,18 @@ EvaluateResult ReadEvaluateResult(const Napi::Object& obj) {
     Napi::Value childNLeftWorldV = bridgeObj.Get("childNLeftWorld");
     if (childNLeftWorldV.IsObject()) {
       bridge.childNLeftWorld = ReadPoint3(childNLeftWorldV.As<Napi::Object>());
+    }
+    Napi::Value rawHingeAV = bridgeObj.Get("rawHingeA");
+    if (rawHingeAV.IsObject()) {
+      bridge.rawHingeA = ReadPoint2(rawHingeAV.As<Napi::Object>());
+    }
+    Napi::Value rawHingeBV = bridgeObj.Get("rawHingeB");
+    if (rawHingeBV.IsObject()) {
+      bridge.rawHingeB = ReadPoint2(rawHingeBV.As<Napi::Object>());
+    }
+    Napi::Value nLeftFlatV = bridgeObj.Get("nLeftFlat");
+    if (nLeftFlatV.IsObject()) {
+      bridge.nLeftFlat = ReadPoint2(nLeftFlatV.As<Napi::Object>());
     }
     result.bridges.push_back(std::move(bridge));
   }
