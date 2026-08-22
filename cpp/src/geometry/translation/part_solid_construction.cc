@@ -46,164 +46,35 @@ gp_Trsf ToGpTrsf(const Transform3& t) {
   return trsf;
 }
 
-// Locates the single regionOuter edge of `panel` whose edgeBendId matches
-// `bendId` — the parent panel's own zone-boundary quad, which the bridge's
-// revolve profile is built from. Returns -1 if no such edge exists, -2 if the
-// zone boundary spans more than one edge (a general polygon, not yet supported —
-// this slice's own scope is straight chains only, where a rectangular clip
-// always yields exactly one edge per bend).
-int FindZoneEdge(const RegionPanelLayout& panel, const std::string& bendId) {
-  int found = -1;
-  for (size_t i = 0; i < panel.edgeBendId.size(); ++i) {
-    if (panel.edgeBendId[i] == bendId) {
-      if (found != -1) return -2;
-      found = static_cast<int>(i);
-    }
-  }
-  return found;
-}
-
-// ─── Wall-solid trim (see BridgeLayout's own doc comment on rawHingeA/B/
-// nLeftFlat) ──────────────────────────────────────────────────────────────
-// A standalone half-plane clip, deliberately duplicated here rather than
-// shared with manufacturing_graph_evaluator.cc's own ClipHalfPlane/RegionOf:
-// this trim is a solid-construction-only fact (it must NEVER feed back into
-// the flat-pattern/DXF-facing region clip, which stays at zero offset), so
-// it has no business living in, or depending on, that file.
+// Local, named numerical-robustness constant, shared by FindZoneEdges below
+// and the wall-solid trim section further down (see that section's own
+// header comment for why this file deliberately doesn't share code with
+// manufacturing_graph_evaluator.cc's own version of the same idea).
 constexpr double kClipEpsilon = 1e-9;
 
-double Cross2Local(const Point2& a, const Point2& b) { return a.x * b.y - a.y * b.x; }
-Point2 Sub2Local(const Point2& a, const Point2& b) { return {a.x - b.x, a.y - b.y}; }
-
-bool IsInsideLocal(const Point2& p, const Point2& lineA, const Point2& lineB, bool keepLeft) {
-  double cross = Cross2Local(Sub2Local(lineB, lineA), Sub2Local(p, lineA));
-  return keepLeft ? (cross > kClipEpsilon) : (cross < -kClipEpsilon);
-}
-
-Point2 LineIntersectLocal(const Point2& a, const Point2& b, const Point2& lineA,
-                           const Point2& lineB) {
-  Point2 d1 = Sub2Local(b, a);
-  Point2 d2 = Sub2Local(lineB, lineA);
-  double denom = Cross2Local(d1, d2);
-  if (std::fabs(denom) < kClipEpsilon) return a;
-  Point2 diff = Sub2Local(lineA, a);
-  double t = Cross2Local(diff, d2) / denom;
-  return {a.x + d1.x * t, a.y + d1.y * t};
-}
-
-// Standard Sutherland-Hodgman single-clip pass, keeping the `keepLeft` side
-// of directed line lineA->lineB.
-std::vector<Point2> ClipHalfPlaneLocal(const std::vector<Point2>& polygon, const Point2& lineA,
-                                        const Point2& lineB, bool keepLeft) {
-  if (polygon.empty()) return polygon;
-  std::vector<Point2> out;
-  out.reserve(polygon.size() + 1);
-  for (size_t i = 0; i < polygon.size(); ++i) {
-    const Point2& current = polygon[i];
-    const Point2& prev = polygon[(i + polygon.size() - 1) % polygon.size()];
-    bool currentIn = IsInsideLocal(current, lineA, lineB, keepLeft);
-    bool prevIn = IsInsideLocal(prev, lineA, lineB, keepLeft);
-    if (currentIn) {
-      if (!prevIn) out.push_back(LineIntersectLocal(prev, current, lineA, lineB));
-      out.push_back(current);
-    } else if (prevIn) {
-      out.push_back(LineIntersectLocal(prev, current, lineA, lineB));
-    }
+// Locates every rawOuter edge of `panel` whose edgeBendId matches `bendId` —
+// the parent panel's own zone-boundary quads, which the bridge's revolve
+// profiles are built from (one quad per edge; RegionOf's own tagging pass
+// already established that a bend's true zone can legitimately span several
+// edges — a faceted ring touching another faceted ring along more than one
+// facet — not just the single straight edge a simple rectangular clip
+// happens to yield). Zero-length edges (RegionOf's clip can leave a
+// duplicate-point, zero-length edge tagged at a seam between two other
+// bends) are skipped — they carry no real material, and a quad built from a
+// zero-length edge would be degenerate. Returned in `panel.rawOuter`'s own
+// winding order.
+std::vector<size_t> FindZoneEdges(const RegionPanelLayout& panel, const std::string& bendId) {
+  std::vector<size_t> found;
+  size_t n = panel.rawOuter.size();
+  for (size_t i = 0; i < panel.edgeBendId.size(); ++i) {
+    if (panel.edgeBendId[i] != bendId) continue;
+    const Point2& a = panel.rawOuter[i];
+    const Point2& b = panel.rawOuter[(i + 1) % n];
+    double dx = b.x - a.x, dy = b.y - a.y;
+    if (dx * dx + dy * dy < kClipEpsilon * kClipEpsilon) continue;  // zero-length, skip
+    found.push_back(i);
   }
-  return out;
-}
-
-// Same "child = left side" convention BoundingBends uses (manufacturing_
-// graph_evaluator.cc) — fixed and shared in spirit, not by code, since this
-// file deliberately doesn't depend on that one.
-constexpr bool kChildSideIsLeftLocal = true;
-
-// Trims `outer` back to each bridge's true tangent line, wherever `panel`
-// touches one (as parent OR child) — so the wall solid's own edge lands
-// exactly where the bridge's own tangent quad does, instead of reaching out
-// to the sharp-corner position the envelope fix (docs/BUG_REPORT_
-// reconstructed_envelope_grows_with_bend_radius.md) requires for the
-// UNtrimmed pose. Operates on a plain point list — callable for a panel's
-// own outer ring or any of its polygon holes alike.
-//
-// Parent and child do NOT clip against the same line: the child's own local
-// frame already carries the pose walk's `childExtension` (2*setbackMm along
-// nLeft, applied before the fold — manufacturing_graph_evaluator.cc), so a
-// child-local point p lands in the shared pre-fold frame at p+2*setbackMm,
-// not at p. Solving for which child-local F reaches the true tangent point
-// (shared-F = rawHinge+setbackMm) gives rawHinge-setbackMm — the mirror of
-// the parent's own rawHinge+setbackMm. Verified numerically, simulating the
-// full childExtension-then-rotate pose, before this code was written: both
-// give exact tangency (zero residual) on both the bottom and top surfaces,
-// across every angle/radius/concavity combination tried, including the
-// "mixed" concave-vs-signed-angle cases real STEP data produces.
-std::vector<Point2> TrimToTangentLines(std::vector<Point2> outer,
-                                        const RegionPanelLayout& panel,
-                                        const std::vector<BridgeLayout>& bridges) {
-  for (const auto& bridge : bridges) {
-    bool isParent = panel.regionPanelId == bridge.parentRegionPanelId;
-    bool isChild = panel.regionPanelId == bridge.childRegionPanelId;
-    if (!isParent && !isChild) continue;
-    double sideSign = isChild ? -1.0 : 1.0;
-    double offset = sideSign * bridge.setbackMm;
-    Point2 lineA{bridge.rawHingeA.x + offset * bridge.nLeftFlat.x,
-                 bridge.rawHingeA.y + offset * bridge.nLeftFlat.y};
-    Point2 lineB{bridge.rawHingeB.x + offset * bridge.nLeftFlat.x,
-                 bridge.rawHingeB.y + offset * bridge.nLeftFlat.y};
-    bool keepLeft = isChild ? kChildSideIsLeftLocal : !kChildSideIsLeftLocal;
-    outer = ClipHalfPlaneLocal(outer, lineA, lineB, keepLeft);
-    if (outer.size() < 3) break;  // clipped away to nothing — leave degenerate, caller handles
-  }
-  return outer;
-}
-
-// The flat sliver between a panel's own real (already-clipped) hinge-
-// adjacent edge and its own true tangent line (that edge + sideSign*
-// setbackMm*nLeftFlat, sideSign=+1 parent/-1 child — the exact line
-// TrimToTangentLines clips against, see that function's own header
-// comment), for whichever side(s) TrimToTangentLines' clip is a no-op
-// because the panel's real material never reaches that line in the first
-// place. That happens for a given side exactly when its own signed
-// target-F falls OUTSIDE the panel's existing [raw-hinge, far-edge) range —
-// which, worked through both sides' own sign conventions, reduces to the
-// SAME condition for both: setbackMm > 0 means BOTH parent and child fall
-// short and need this extension; setbackMm < 0 means BOTH already overlap
-// the tangent line and only need TrimToTangentLines' clip (this mirrors the
-// standard sheet-metal fact that bend allowance and 2x setback are
-// generally different quantities — the flat pattern can need to be either
-// longer or shorter than the sharp-corner sum, never one leg longer and the
-// other shorter).
-//
-// Deliberately built from `panel.rawOuter`'s OWN hinge-adjacent edge
-// (located the same way the bridge quad above locates it, via
-// FindZoneEdge), never from bridge.rawHingeA/B directly — those carry an
-// intentionally exaggerated half-span (BridgeLayout's own header comment)
-// so the infinite trim LINE reaches across the whole panel even with a Y
-// offset, which is fine for a half-plane clip but wrong for a solid corner:
-// using them here once produced an extension box wider (in Y) than the
-// panel's own real edge, leaving a genuine step at the seam instead of a
-// flush union — confirmed by a live vertex dump (a spurious 98mm-scale
-// "excess" traced to exactly this box's own oversized corners) before this
-// was fixed.
-std::vector<Point2> BuildSetbackExtensionRing(const RegionPanelLayout& panel,
-                                               const BridgeLayout& bridge) {
-  bool isParent = panel.regionPanelId == bridge.parentRegionPanelId;
-  bool isChild = panel.regionPanelId == bridge.childRegionPanelId;
-  if (!isParent && !isChild) return {};
-  if (bridge.setbackMm <= kClipEpsilon) return {};
-  int edgeIdx = FindZoneEdge(panel, bridge.bendId);
-  if (edgeIdx < 0) return {};  // no single-edge zone boundary found — caller's main
-                                // FindZoneEdge call (bridge construction) already
-                                // surfaces this as a proper error; nothing to add here
-  size_t i0 = static_cast<size_t>(edgeIdx);
-  size_t i1 = (i0 + 1) % panel.rawOuter.size();
-  const Point2& realA = panel.rawOuter[i0];
-  const Point2& realB = panel.rawOuter[i1];
-  double sideSign = isChild ? -1.0 : 1.0;
-  double offset = sideSign * bridge.setbackMm;
-  Point2 farA{realA.x + offset * bridge.nLeftFlat.x, realA.y + offset * bridge.nLeftFlat.y};
-  Point2 farB{realB.x + offset * bridge.nLeftFlat.x, realB.y + offset * bridge.nLeftFlat.y};
-  return {realA, realB, farB, farA};
+  return found;
 }
 
 }  // namespace
@@ -236,23 +107,23 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
 
     // Each panel becomes its own independently-thickened solid, placed via its
     // already-computed pose (never re-derived here — see this file's header).
-    // The wall itself is built from `trimmedOuter`, not `panel.rawOuter`
-    // directly — trimmed back to each touching bend's true tangent line
-    // (TrimToTangentLines, above) so the wall's own edge lands where the
-    // bridge's tangent quad does, not out at the sharp-corner position the
-    // envelope fix's (untrimmed) pose alone would place it. `panel.rawOuter`
-    // itself is untouched — this trim is solid-construction-only.
+    // The wall itself is built from `panel.wallOuter` — RegionOf's own
+    // setback-trimmed region — not `panel.rawOuter` (which stays the raw,
+    // zero-offset shape for its own separate consumers: bottomFace/topFace,
+    // point_mapping.cc, and this file's own bridge-construction loop below,
+    // which already adds setback on top of rawOuter's bottomFace/topFace
+    // explicitly — see RegionPanelLayout's own header comment). wallOuter's
+    // own edge lands where the bridge's tangent quad does, not out at the
+    // sharp-corner position an untrimmed wall would sit at.
     std::unordered_map<std::string, TopoDS_Shape> panelSolidById;
     for (const auto& panel : layout.panels) {
-      std::vector<Point2> trimmedOuter = TrimToTangentLines(panel.rawOuter, panel, layout.bridges);
-      if (trimmedOuter.size() < 3) {
+      if (panel.wallOuter.size() < 3) {
         result.errorCode = "GE_POLYGON_BUILD_FAILED";
-        result.message = "region panel " + panel.regionPanelId +
-                          " was clipped away to nothing trimming to its own tangent line(s)";
+        result.message = "region panel " + panel.regionPanelId + " has fewer than 3 vertices";
         return result;
       }
       BRepBuilderAPI_MakePolygon polyMaker;
-      for (const auto& v : trimmedOuter) {
+      for (const auto& v : panel.wallOuter) {
         polyMaker.Add(gp_Pnt(v.x, v.y, 0.0));
       }
       polyMaker.Close();
@@ -276,7 +147,7 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
       // solution, never a solid that silently disagrees with its own flat
       // pattern). Hole wires are stored/generated with the opposite winding
       // from the outer wire, OCCT's own convention for a face's inner loops.
-      for (const auto& holeRing : panel.rawPolygonHoles) {
+      for (const auto& holeRing : panel.wallPolygonHoles) {
         BRepBuilderAPI_MakePolygon holePolyMaker;
         for (const auto& v : holeRing) {
           holePolyMaker.Add(gp_Pnt(v.x, v.y, 0.0));
@@ -289,7 +160,7 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
         }
         faceMaker.Add(holePolyMaker.Wire());
       }
-      for (const auto& circleHole : panel.rawCircleHoles) {
+      for (const auto& circleHole : panel.wallCircleHoles) {
         // -Z axis direction winds the circle CW as seen from +Z, opposite the
         // outer wire's CCW — a true circular wire, never tessellated.
         gp_Circ circ(gp_Ax2(gp_Pnt(circleHole.center.x, circleHole.center.y, 0.0),
@@ -323,54 +194,6 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
       BRepBuilderAPI_Transform placed(prism.Shape(), worldTrsf, /*Copy=*/true);
       TopoDS_Shape panelSolid = placed.Shape();
 
-      // Fuse on the setback-extension sliver for any bend where this panel's
-      // own material falls short of the true tangent line (see
-      // BuildSetbackExtensionRing's own header comment) — built in the same
-      // local frame and posed with the exact same transform as the wall
-      // above, so the two meet exactly, no seam.
-      for (const auto& bridge : layout.bridges) {
-        std::vector<Point2> extRing = BuildSetbackExtensionRing(panel, bridge);
-        if (extRing.empty()) continue;
-
-        BRepBuilderAPI_MakePolygon extPolyMaker;
-        for (const auto& v : extRing) {
-          extPolyMaker.Add(gp_Pnt(v.x, v.y, 0.0));
-        }
-        extPolyMaker.Close();
-        if (!extPolyMaker.IsDone()) {
-          result.errorCode = "GE_POLYGON_BUILD_FAILED";
-          result.message = "failed to build the setback-extension wire for region panel " +
-                            panel.regionPanelId + " on bend " + bridge.bendId;
-          return result;
-        }
-        BRepBuilderAPI_MakeFace extFaceMaker(extPolyMaker.Wire());
-        if (!extFaceMaker.IsDone()) {
-          result.errorCode = "GE_POLYGON_BUILD_FAILED";
-          result.message = "failed to build the setback-extension face for region panel " +
-                            panel.regionPanelId + " on bend " + bridge.bendId;
-          return result;
-        }
-        BRepPrimAPI_MakePrism extPrism(extFaceMaker.Face(), gp_Vec(0.0, 0.0, thicknessMm), true);
-        if (!extPrism.IsDone() || extPrism.Shape().IsNull()) {
-          result.errorCode = "GE_EXTRUDE_FAILED";
-          result.message = "failed to thicken the setback-extension for region panel " +
-                            panel.regionPanelId + " on bend " + bridge.bendId;
-          return result;
-        }
-        BRepBuilderAPI_Transform extPlaced(extPrism.Shape(), worldTrsf, /*Copy=*/true);
-
-        BRepAlgoAPI_Fuse extFuser(panelSolid, extPlaced.Shape());
-        extFuser.SetFuzzyValue(kBooleanFuzzMm);
-        extFuser.Build();
-        if (!extFuser.IsDone()) {
-          result.errorCode = "GE_CONSTRUCTION_FAILED";
-          result.message = "failed to fuse the setback-extension onto region panel " +
-                            panel.regionPanelId + " for bend " + bridge.bendId;
-          return result;
-        }
-        panelSolid = extFuser.Shape();
-      }
-
       panelSolidById[panel.regionPanelId] = panelSolid;
     }
 
@@ -378,9 +201,11 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
     // revolve between the parent's and child's true tangent quads
     // (docs/BUG_REPORT_reconstructed_envelope_grows_with_bend_radius.md).
     // No separate "collar" piece — the panel walls above are already
-    // trimmed back to their own true tangent line (TrimToTangentLines), so
-    // the wall's own edge lands exactly where this revolve starts/ends, on
-    // both sides, with nothing left to fill. (A previous version of this
+    // trimmed back to their own true tangent line (RegionOf's own bend-cut
+    // extraction now does this at the source, in manufacturing_graph_
+    // evaluator.cc, rather than as a separate later pass), so the wall's own
+    // edge lands exactly where this revolve starts/ends, on both sides, with
+    // nothing left to fill. (A previous version of this
     // fix used a flat collar to close the gap left by an UN-trimmed wall —
     // once the wall trim landed, that collar became not just redundant but
     // actively wrong: it kept using the wall's own OLD, untrimmed edge
@@ -399,18 +224,11 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
         return result;
       }
       const RegionPanelLayout& parent = *parentIt->second;
-      int edgeIdx = FindZoneEdge(parent, bridge.bendId);
-      if (edgeIdx == -1) {
+      std::vector<size_t> parentEdges = FindZoneEdges(parent, bridge.bendId);
+      if (parentEdges.empty()) {
         result.errorCode = "GE_BRIDGE_EDGE_NOT_FOUND";
         result.message = "no zone-boundary edge tagged for bend " + bridge.bendId +
                           " on region panel " + parent.regionPanelId;
-        return result;
-      }
-      if (edgeIdx == -2) {
-        result.errorCode = "GE_BRIDGE_UNSUPPORTED_TOPOLOGY";
-        result.message = "bend " + bridge.bendId + "'s zone boundary spans more than one edge "
-                          "on region panel " + parent.regionPanelId + " — only a single-edge "
-                          "zone boundary is supported this slice";
         return result;
       }
 
@@ -422,85 +240,103 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
         return result;
       }
       const RegionPanelLayout& child = *parentChildIt->second;
-      int childEdgeIdx = FindZoneEdge(child, bridge.bendId);
-      if (childEdgeIdx == -1) {
+
+      // Presence-only check: the child must border this bend SOMEWHERE, but
+      // its own edge(s) aren't used for geometry below — every bridge
+      // segment is built purely from the parent's own tangent quad, and the
+      // revolve produces the correctly-positioned child-side connection via
+      // rotation (the two are guaranteed coincident by construction — the
+      // pose walk derived the child's own pose from this SAME axis/angle).
+      if (FindZoneEdges(child, bridge.bendId).empty()) {
         result.errorCode = "GE_BRIDGE_EDGE_NOT_FOUND";
         result.message = "no zone-boundary edge tagged for bend " + bridge.bendId +
                           " on region panel " + child.regionPanelId;
         return result;
       }
-      if (childEdgeIdx == -2) {
-        result.errorCode = "GE_BRIDGE_UNSUPPORTED_TOPOLOGY";
-        result.message = "bend " + bridge.bendId + "'s zone boundary spans more than one edge "
-                          "on region panel " + child.regionPanelId + " — only a single-edge "
-                          "zone boundary is supported this slice";
-        return result;
-      }
 
-      size_t i0 = static_cast<size_t>(edgeIdx);
-      size_t i1 = (i0 + 1) % parent.rawOuter.size();
-      Point3 b0 = parent.bottomFace[i0];
-      Point3 b1 = parent.bottomFace[i1];
-      Point3 t1 = parent.topFace[i1];
-      Point3 t0 = parent.topFace[i0];
-
-      size_t j0 = static_cast<size_t>(childEdgeIdx);
-      size_t j1 = (j0 + 1) % child.rawOuter.size();
-      Point3 cb0 = child.bottomFace[j0];
-      Point3 cb1 = child.bottomFace[j1];
-
-      // Each side's tangent points, derived directly from its own REAL
-      // (RegionOf-clipped) edge corners — see BridgeLayout's own header
-      // comment on why hingeA/hingeB-based absolute positions can't be
-      // used here (exaggerated half-span, doesn't match a real edge).
-      auto plus = [](const Point3& p, const Point3& v, double s) -> Point3 {
-        return {p.x + s * v.x, p.y + s * v.y, p.z + s * v.z};
-      };
-      Point3 parentTanB0 = plus(b0, bridge.nLeftWorld, bridge.setbackMm);
-      Point3 parentTanB1 = plus(b1, bridge.nLeftWorld, bridge.setbackMm);
-      Point3 parentTanT0 = plus(t0, bridge.nLeftWorld, bridge.setbackMm);
-      Point3 parentTanT1 = plus(t1, bridge.nLeftWorld, bridge.setbackMm);
-      Point3 childTanB0 = plus(cb0, bridge.childNLeftWorld, -bridge.setbackMm);
-      Point3 childTanB1 = plus(cb1, bridge.childNLeftWorld, -bridge.setbackMm);
-
-      // Tangent-preserving revolve between the parent and child tangent
-      // quads — BRepPrimAPI_MakeRevol requires a non-negative angle in
-      // [0, 2*Pi]; a negative bend angle (valley fold) is realized by
-      // reversing the axis direction instead (RH-rule about -axis by
-      // +angle == RH-rule about +axis by -angle).
-      BRepBuilderAPI_MakePolygon quadMaker;
-      quadMaker.Add(gp_Pnt(parentTanB0.x, parentTanB0.y, parentTanB0.z));
-      quadMaker.Add(gp_Pnt(parentTanB1.x, parentTanB1.y, parentTanB1.z));
-      quadMaker.Add(gp_Pnt(parentTanT1.x, parentTanT1.y, parentTanT1.z));
-      quadMaker.Add(gp_Pnt(parentTanT0.x, parentTanT0.y, parentTanT0.z));
-      quadMaker.Close();
-      if (!quadMaker.IsDone()) {
-        result.errorCode = "GE_BRIDGE_BUILD_FAILED";
-        result.message = "failed to build the zone-boundary quad wire for bend " + bridge.bendId;
-        return result;
-      }
-      BRepBuilderAPI_MakeFace quadFace(quadMaker.Wire());
-      if (!quadFace.IsDone()) {
-        result.errorCode = "GE_BRIDGE_BUILD_FAILED";
-        result.message = "failed to build the zone-boundary quad face for bend " + bridge.bendId;
-        return result;
-      }
-      double angleRad = bridge.angleDeg * kPi / 180.0;
+      // One revolve segment per real tagged edge on the parent — a bend's
+      // true zone can legitimately span several edges (two faceted rings
+      // touching along more than one facet, not just the single straight
+      // edge a simple rectangular clip happens to yield), each fused
+      // together into this bend's own combined bridge solid below.
+      double angleRad0 = bridge.angleDeg * kPi / 180.0;
       gp_Pnt axisOrigin(bridge.pivotOriginWorld.x, bridge.pivotOriginWorld.y,
                          bridge.pivotOriginWorld.z);
-      gp_Dir axisDir(bridge.pivotAxisWorld.x, bridge.pivotAxisWorld.y, bridge.pivotAxisWorld.z);
-      if (angleRad < 0.0) {
-        axisDir.Reverse();
-        angleRad = -angleRad;
+      gp_Dir axisDir0(bridge.pivotAxisWorld.x, bridge.pivotAxisWorld.y, bridge.pivotAxisWorld.z);
+      if (angleRad0 < 0.0) {
+        axisDir0.Reverse();
+        angleRad0 = -angleRad0;
       }
-      gp_Ax1 axis(axisOrigin, axisDir);
-      BRepPrimAPI_MakeRevol revol(quadFace.Face(), axis, angleRad, /*Copy=*/Standard_False);
-      if (!revol.IsDone() || revol.Shape().IsNull()) {
-        result.errorCode = "GE_BRIDGE_BUILD_FAILED";
-        result.message = "failed to revolve the bridge solid for bend " + bridge.bendId;
-        return result;
+      gp_Ax1 axis(axisOrigin, axisDir0);
+
+      TopoDS_Shape bridgeSolid;
+      bool bridgeSolidSet = false;
+      for (size_t i0 : parentEdges) {
+        size_t i1 = (i0 + 1) % parent.rawOuter.size();
+        Point3 b0 = parent.bottomFace[i0];
+        Point3 b1 = parent.bottomFace[i1];
+        Point3 t1 = parent.topFace[i1];
+        Point3 t0 = parent.topFace[i0];
+
+        // This edge's own tangent points, derived directly from its own
+        // REAL (RegionOf-clipped) edge corners — see BridgeLayout's own
+        // header comment on why hingeA/hingeB-based absolute positions
+        // can't be used here (exaggerated half-span, doesn't match a real
+        // edge).
+        auto plus = [](const Point3& p, const Point3& v, double s) -> Point3 {
+          return {p.x + s * v.x, p.y + s * v.y, p.z + s * v.z};
+        };
+        Point3 parentTanB0 = plus(b0, bridge.nLeftWorld, bridge.setbackMm);
+        Point3 parentTanB1 = plus(b1, bridge.nLeftWorld, bridge.setbackMm);
+        Point3 parentTanT0 = plus(t0, bridge.nLeftWorld, bridge.setbackMm);
+        Point3 parentTanT1 = plus(t1, bridge.nLeftWorld, bridge.setbackMm);
+
+        // Tangent-preserving revolve of this edge's own quad —
+        // BRepPrimAPI_MakeRevol requires a non-negative angle in
+        // [0, 2*Pi]; a negative bend angle (valley fold) is realized by
+        // reversing the axis direction instead (RH-rule about -axis by
+        // +angle == RH-rule about +axis by -angle) — already folded into
+        // `axis` above, shared by every segment of this same bend.
+        BRepBuilderAPI_MakePolygon quadMaker;
+        quadMaker.Add(gp_Pnt(parentTanB0.x, parentTanB0.y, parentTanB0.z));
+        quadMaker.Add(gp_Pnt(parentTanB1.x, parentTanB1.y, parentTanB1.z));
+        quadMaker.Add(gp_Pnt(parentTanT1.x, parentTanT1.y, parentTanT1.z));
+        quadMaker.Add(gp_Pnt(parentTanT0.x, parentTanT0.y, parentTanT0.z));
+        quadMaker.Close();
+        if (!quadMaker.IsDone()) {
+          result.errorCode = "GE_BRIDGE_BUILD_FAILED";
+          result.message = "failed to build the zone-boundary quad wire for bend " + bridge.bendId;
+          return result;
+        }
+        BRepBuilderAPI_MakeFace quadFace(quadMaker.Wire());
+        if (!quadFace.IsDone()) {
+          result.errorCode = "GE_BRIDGE_BUILD_FAILED";
+          result.message = "failed to build the zone-boundary quad face for bend " + bridge.bendId;
+          return result;
+        }
+        BRepPrimAPI_MakeRevol revol(quadFace.Face(), axis, angleRad0, /*Copy=*/Standard_False);
+        if (!revol.IsDone() || revol.Shape().IsNull()) {
+          result.errorCode = "GE_BRIDGE_BUILD_FAILED";
+          result.message = "failed to revolve the bridge solid for bend " + bridge.bendId;
+          return result;
+        }
+
+        if (!bridgeSolidSet) {
+          bridgeSolid = revol.Shape();
+          bridgeSolidSet = true;
+          continue;
+        }
+        BRepAlgoAPI_Fuse segFuser(bridgeSolid, revol.Shape());
+        segFuser.SetFuzzyValue(kBooleanFuzzMm);
+        segFuser.Build();
+        if (!segFuser.IsDone()) {
+          result.errorCode = "GE_BRIDGE_BUILD_FAILED";
+          result.message = "failed to fuse bridge segments together for bend " + bridge.bendId;
+          return result;
+        }
+        bridgeSolid = segFuser.Shape();
       }
-      bridgeSolidByBendId[bridge.bendId] = revol.Shape();
+      bridgeSolidByBendId[bridge.bendId] = bridgeSolid;
     }
 
     // Fuse in parent-panel -> bridge -> child-panel order (not "all panels

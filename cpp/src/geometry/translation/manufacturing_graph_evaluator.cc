@@ -1,6 +1,7 @@
 #include "manufacturing_graph_evaluator.hpp"
 #include "ring_containment.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <optional>
 #include <unordered_map>
@@ -195,139 +196,593 @@ namespace {
 // drops grazing points to "outside," and the ENTER/EXIT transitions still
 // correctly reconstruct the region's own real boundary via LineIntersect
 // (proven exact for F0 by hand and empirically before this change landed).
-bool IsInside(const Point2& p, const Point2& lineA, const Point2& lineB, bool keepLeft) {
-  double cross = Cross2(Sub2(lineB, lineA), Sub2(p, lineA));
-  return keepLeft ? (cross > kGeometricEpsilon) : (cross < -kGeometricEpsilon);
+constexpr double kEndpointMatchToleranceMm = 1e-6;
+bool NearlyEqual2Local(const Point2& a, const Point2& b) {
+  return Length2(Sub2(a, b)) < kEndpointMatchToleranceMm;
 }
 
-Point2 LineIntersect(const Point2& a, const Point2& b, const Point2& lineA, const Point2& lineB) {
-  // Intersection of segment (a,b) with the infinite line (lineA,lineB).
-  Point2 d1 = Sub2(b, a);
-  Point2 d2 = Sub2(lineB, lineA);
-  double denom = Cross2(d1, d2);
-  if (std::fabs(denom) < kGeometricEpsilon) return a;  // parallel — degenerate, caller handles
-  Point2 diff = Sub2(lineA, a);
-  double t = Cross2(diff, d2) / denom;
-  return {a.x + d1.x * t, a.y + d1.y * t};
-}
+// ─── Region extraction via bend-strip subtraction (2D, no OCCT) ────────────
+//
+// A bend's zone is not just an infinite dividing line — it's a bounded strip
+// (the bend's own hinge segment, widened by its own real setbackMm on each
+// side) that gets removed from the whole combined outline. Removing every
+// bend's own strip disconnects the outline into exactly as many pieces as
+// there are region panels; a panel's own region is simply "the piece
+// containing its own known corner point." This replaces the old sequential
+// half-plane intersection — that approach could only ever distinguish
+// "which side of one infinite line," which cannot tell a panel's own
+// material apart from an unrelated sibling's that happens to sit on the
+// same side of the same line (confirmed on real cauldron.step data: a
+// wall's own clipped region silently absorbed a fragment of a structurally
+// unrelated neighboring wall, reachable only because BOTH satisfied the
+// SAME single half-plane test with nothing to separate them). A bounded
+// strip removal can't make that mistake, because it only ever affects
+// material within its own local footprint.
+//
+// hingeA/hingeB are already exact vertices of `graph.outline.outer` for
+// every STEP-reconciled graph (the combined outline is built vertex-by-
+// vertex from real piece boundaries, so a bend's hinge is always literally
+// a shared vertex.
+//
+// A hand-authored graph is a different story: a bend's hinge is often
+// authored as an INFINITE LINE's direction+position only, with hingeA/hingeB
+// themselves deliberately extended well past the panel's own real width
+// (MakeStrip's own doc comment: "cosmetic," since the old infinite-
+// half-plane clip never used the segment's bounded extent). For such a
+// bend, hingeA/hingeB are not real ring vertices at all, so
+// EnsureHingeVertices instead finds where the infinite line through them
+// actually crosses the CURRENT ring's own boundary, and uses those two real
+// crossings as this bend's EFFECTIVE hinge points from here on — this
+// fallback only ever triggers when NEITHER given endpoint is already a
+// genuine ring vertex, never as a general "is this point on the line" scan
+// over an already-well-formed ring, so it can't reintroduce the original
+// false-positive-tagging bug this whole rewrite replaces.
+//
+// The margin used is this bend's own real setbackMm (BridgeLayout's own,
+// envelope-preserving signed value — see BuildBendCuts' own comment), not an
+// arbitrary robustness constant: this function's job is to produce each
+// panel's region already trimmed to its true tangent line, not a
+// zero-offset placeholder trimmed again later.
 
-// Clips `polygon` to the half-plane on the `keepLeft` side of directed line
-// lineA->lineB. Standard Sutherland-Hodgman single-clip pass.
-std::vector<Point2> ClipHalfPlane(const std::vector<Point2>& polygon, const Point2& lineA,
-                                   const Point2& lineB, bool keepLeft) {
-  if (polygon.empty()) return polygon;
-  std::vector<Point2> out;
-  out.reserve(polygon.size() + 1);
-  for (size_t i = 0; i < polygon.size(); ++i) {
-    const Point2& current = polygon[i];
-    const Point2& prev = polygon[(i + polygon.size() - 1) % polygon.size()];
-    bool currentIn = IsInside(current, lineA, lineB, keepLeft);
-    bool prevIn = IsInside(prev, lineA, lineB, keepLeft);
-    if (currentIn) {
-      if (!prevIn) {
-        out.push_back(LineIntersect(prev, current, lineA, lineB));
-      }
-      out.push_back(current);
-    } else if (prevIn) {
-      out.push_back(LineIntersect(prev, current, lineA, lineB));
-    }
-  }
-  return out;
-}
-
-// One touching-bend constraint for boundingBends(p) (14 §2.1's formula, verified by
-// hand in that doc against linear chains, branching roots, and merge compatibility —
-// NOT a tree walk, just p's own immediately-touching bends). `lineA`/`lineB` is the
-// bend's own raw hinge centreline — region clipping happens at zero offset from it
-// (both parent and child side clip at the SAME line, keeping opposite sides); the
-// real-width bend-allowance zone this leaves neither side "owning" is inserted, and
-// each panel's territory beyond it translated outward to make room, by the pose
-// walk's own cumulative-shift pass in Evaluate() — never by widening the clip itself
-// (see that pass's own comment for why: a parent may touch several bends at once, so
-// no single per-panel clip offset could be correct for all of them simultaneously).
-struct HalfPlaneConstraint {
-  Point2 lineA;
-  Point2 lineB;
-  bool keepLeft;
-  std::string bendId;
+struct EffectiveHinge {
+  Point2 hingeA, hingeB;
 };
 
-// Convention (arbitrary but fixed, and self-consistent with the 3D fold rotation's
-// axis direction hingeA->hingeB in Evaluate()): the CHILD side of a bend is the LEFT
-// side of the directed line hingeA->hingeB.
-constexpr bool kChildSideIsLeft = true;
-
-std::vector<HalfPlaneConstraint> BoundingBends(const PartGraphSpec& graph,
-                                                const std::string& regionPanelId) {
-  std::vector<HalfPlaneConstraint> out;
+std::pair<std::vector<Point2>, std::vector<EffectiveHinge>> EnsureHingeVertices(
+    std::vector<Point2> ring, const PartGraphSpec& graph) {
+  std::vector<EffectiveHinge> effective;
+  effective.reserve(graph.bends.size());
   for (const auto& bend : graph.bends) {
-    if (bend.childRegionPanelId != regionPanelId && bend.parentRegionPanelId != regionPanelId) {
+    bool foundA = false, foundB = false;
+    for (const auto& v : ring) {
+      if (NearlyEqual2Local(v, bend.hingeA)) foundA = true;
+      if (NearlyEqual2Local(v, bend.hingeB)) foundB = true;
+    }
+    if (foundA || foundB) {
+      effective.push_back({bend.hingeA, bend.hingeB});
       continue;
     }
-    bool isChild = bend.childRegionPanelId == regionPanelId;
-    out.push_back({bend.hingeA, bend.hingeB, isChild == kChildSideIsLeft, bend.id});
+
+    size_t n = ring.size();
+    std::vector<std::pair<size_t, Point2>> crossings;  // (edge index, crossing point)
+    for (size_t i = 0; i < n; ++i) {
+      const Point2& a = ring[i];
+      const Point2& b = ring[(i + 1) % n];
+      double crossA = Cross2(Sub2(bend.hingeB, bend.hingeA), Sub2(a, bend.hingeA));
+      double crossB = Cross2(Sub2(bend.hingeB, bend.hingeA), Sub2(b, bend.hingeA));
+      if (std::fabs(crossA) < kGeometricEpsilon || std::fabs(crossB) < kGeometricEpsilon) {
+        continue;  // touches at (or right next to) an existing vertex — not a clean crossing
+      }
+      if ((crossA > 0.0) == (crossB > 0.0)) continue;  // doesn't cross this edge
+      Point2 d1 = Sub2(b, a);
+      Point2 d2 = Sub2(bend.hingeB, bend.hingeA);
+      double denom = Cross2(d1, d2);
+      if (std::fabs(denom) < kGeometricEpsilon) continue;  // parallel
+      double t = Cross2(Sub2(bend.hingeA, a), d2) / denom;
+      crossings.push_back({i, {a.x + d1.x * t, a.y + d1.y * t}});
+    }
+
+    if (crossings.size() == 2) {
+      Point2 p0 = crossings[0].second;
+      Point2 p1 = crossings[1].second;
+      bool p0IsA = Length2(Sub2(p0, bend.hingeA)) <= Length2(Sub2(p1, bend.hingeA));
+      effective.push_back(p0IsA ? EffectiveHinge{p0, p1} : EffectiveHinge{p1, p0});
+      // Insert from the highest edge index down so earlier indices stay valid.
+      std::sort(crossings.begin(), crossings.end(),
+                [](const auto& x, const auto& y) { return x.first > y.first; });
+      for (const auto& [edgeIdx, pt] : crossings) {
+        ring.insert(ring.begin() + static_cast<long>(edgeIdx + 1), pt);
+      }
+      continue;
+    }
+
+    // No clean transversal crossing — the hinge may instead run COLLINEAR
+    // with existing ring edges rather than through them (e.g. a wall
+    // flap's own boundary already sits exactly on the hinge line, extended
+    // past its real endpoints by an authored overhang, the same "cosmetic,
+    // exaggerated span" convention as MakeStrip's — confirmed on a real
+    // regression test, MakeTray's pinwheel-arranged wall flaps). Find every
+    // ring vertex lying exactly on the infinite line AND within the given
+    // (possibly exaggerated) hinge's own parametric span — excluding a
+    // vertex that merely happens to sit on the SAME line but belongs to an
+    // unrelated, further-out neighbor (confirmed: two DIFFERENT walls'
+    // flaps can each contribute a collinear corner beyond this hinge's own
+    // real endpoints). If exactly two survive, they ARE the true,
+    // un-exaggerated hinge endpoints.
+    {
+      Point2 dir = Sub2(bend.hingeA, bend.hingeB);
+      double dirLenSq = dir.x * dir.x + dir.y * dir.y;
+      std::vector<size_t> onLine;
+      if (dirLenSq >= kGeometricEpsilon) {
+        for (size_t i = 0; i < n; ++i) {
+          double cross = Cross2(dir, Sub2(ring[i], bend.hingeB));
+          if (std::fabs(cross) >= kGeometricEpsilon) continue;
+          double t = (Sub2(ring[i], bend.hingeB).x * dir.x + Sub2(ring[i], bend.hingeB).y * dir.y) /
+                     dirLenSq;
+          if (t >= -1e-6 && t <= 1.0 + 1e-6) onLine.push_back(i);
+        }
+      }
+      if (onLine.size() == 2) {
+        Point2 p0 = ring[onLine[0]];
+        Point2 p1 = ring[onLine[1]];
+        bool p0IsA = Length2(Sub2(p0, bend.hingeA)) <= Length2(Sub2(p1, bend.hingeA));
+        effective.push_back(p0IsA ? EffectiveHinge{p0, p1} : EffectiveHinge{p1, p0});
+      } else {
+        // Unresolvable — leave as the original, ungrounded coordinates;
+        // downstream match failure surfaces as the existing "region clip
+        // failed" error rather than a guessed cut.
+        effective.push_back({bend.hingeA, bend.hingeB});
+      }
+    }
   }
-  return out;
+  return {ring, effective};
 }
 
-struct RegionOfResult {
-  std::vector<Point2> outer;
-  // Parallel to `outer`: edgeBendId[i] describes the edge (outer[i],
-  // outer[(i+1)%n]) — see the field's doc comment on RegionPanelLayout for why this
-  // is computed here (where boundingBends() already exists) and nowhere else.
-  std::vector<std::string> edgeBendId;
-  // Phase 5 Slice 9a: holes belonging to this region panel (see
-  // RegionPanelLayout's own doc comment).
-  std::vector<std::vector<Point2>> polygonHoles;
-  std::vector<CircleHoleSpec> circleHoles;
+struct BendCut {
+  std::string bendId;
+  Point2 hingeA, hingeB;
+  Point2 childShiftA, childShiftB;
+  Point2 parentShiftA, parentShiftB;
+  int iA = -1;
+  int iB = -1;
 };
 
-// True if point `p` lies on the infinite line through (lineA, lineB), within
-// kGeometricEpsilon (scaled by line length, since Cross2's magnitude grows with it).
-bool PointOnLine(const Point2& p, const Point2& lineA, const Point2& lineB) {
-  Point2 dir = Sub2(lineB, lineA);
-  double lineLen = Length2(dir);
-  if (lineLen < kGeometricEpsilon) return false;
-  double cross = Cross2(dir, Sub2(p, lineA));
-  return std::fabs(cross) / lineLen < 1e-6;  // distance-from-line, in the same units as coordinates
+std::vector<BendCut> BuildBendCuts(const PartGraphSpec& graph,
+                                    const std::vector<EffectiveHinge>& effective,
+                                    bool zeroOffset) {
+  std::vector<BendCut> cuts;
+  for (size_t bi = 0; bi < graph.bends.size(); ++bi) {
+    const BendSpec& bend = graph.bends[bi];
+    const Point2& hingeA = effective[bi].hingeA;
+    const Point2& hingeB = effective[bi].hingeB;
+    // Left-hand normal of hingeA->hingeB, same convention as the pose walk
+    // and every other consumer of a bend's own hinge direction — points
+    // toward the child side.
+    Point2 dir = Sub2(hingeB, hingeA);
+    double len = Length2(dir);
+    Point2 nLeft{0.0, 0.0};
+    if (len >= kGeometricEpsilon) {
+      nLeft = {-dir.y / len, dir.x / len};
+    }
+    // Bit-for-bit the same signed value Evaluate()'s own pose walk derives
+    // for BridgeLayout::setbackMm (docs/BUG_REPORT_reconstructed_envelope_
+    // grows_with_bend_radius.md) — NOT ComputeBendGeometry's classic
+    // reff*tan(angle/2) setback, a different (unsigned, kFactor-inclusive)
+    // quantity that's never actually consumed downstream. Reusing this exact
+    // value, rather than recomputing something that merely looks similar, is
+    // deliberate: it's what keeps the reconstructed envelope from growing or
+    // shrinking with bend radius, a previously-fixed bug this must not
+    // reintroduce.
+    //
+    // `zeroOffset` forces a bare cut exactly at the hinge line, with no
+    // width at all — the flat-pattern/DXF-facing region (RegionPanelLayout::
+    // regionOuter, built from this): a bend's real allowance zone is grown
+    // in by BuildFlatOutline/the pose walk's own cumulativeShift translation
+    // instead, never by widening the clip itself (a parent may touch several
+    // bends at once, so no single per-panel clip offset could be correct for
+    // all of them simultaneously).
+    bool concave = BottomIsConcave(bend);
+    double signedD = concave ? bend.radiusMm : -bend.radiusMm;
+    double sb = zeroOffset ? 0.0 : signedD * std::tan(DegToRad(bend.angleDeg) / 2.0);
+    BendCut cut;
+    cut.bendId = bend.id;
+    cut.hingeA = hingeA;
+    cut.hingeB = hingeB;
+    // Bit-for-bit the same sideSign/offset convention already verified
+    // elsewhere (part_solid_construction.cc's TrimToTangentLines, before its
+    // own removal): child = -setbackMm along nLeft, parent = +setbackMm.
+    cut.childShiftA = {hingeA.x - sb * nLeft.x, hingeA.y - sb * nLeft.y};
+    cut.childShiftB = {hingeB.x - sb * nLeft.x, hingeB.y - sb * nLeft.y};
+    cut.parentShiftA = {hingeA.x + sb * nLeft.x, hingeA.y + sb * nLeft.y};
+    cut.parentShiftB = {hingeB.x + sb * nLeft.x, hingeB.y + sb * nLeft.y};
+    cuts.push_back(cut);
+  }
+  return cuts;
 }
 
-std::optional<RegionOfResult> RegionOf(const PartGraphSpec& graph,
-                                        const std::string& regionPanelId) {
-  auto constraints = BoundingBends(graph, regionPanelId);
-  std::vector<Point2> region = graph.outline.outer;
-  for (const auto& constraint : constraints) {
-    region = ClipHalfPlane(region, constraint.lineA, constraint.lineB, constraint.keepLeft);
-    if (region.size() < 3) return std::nullopt;  // clipped away to nothing — degenerate
-  }
+struct TaggedEdge {
+  Point2 from;
+  Point2 to;
+  std::string bendId;
+  // Explicit successor index — NOT re-derived from `to`'s coordinate: at
+  // zero setback (the flat-pattern-facing pass), a bend's child- and
+  // parent-side shift points collapse to the exact same coordinate as each
+  // other, so several logically distinct edges can share one physical
+  // point. Matching by coordinate there is ambiguous and silently traces
+  // the wrong loop (confirmed live: a simple 2-panel test's "parent" region
+  // came back as the WHOLE combined outline, both panels merged). Since
+  // this function is the one constructing every edge, it already knows
+  // which one structurally follows which — recorded here instead of
+  // re-discovered.
+  size_t next = 0;
+};
 
-  RegionOfResult out;
-  out.outer = region;
-  out.edgeBendId.assign(region.size(), std::string());
-  for (size_t i = 0; i < region.size(); ++i) {
-    const Point2& a = region[i];
-    const Point2& b = region[(i + 1) % region.size()];
-    Point2 mid{(a.x + b.x) / 2.0, (a.y + b.y) / 2.0};
-    for (const auto& constraint : constraints) {
-      if (PointOnLine(a, constraint.lineA, constraint.lineB) &&
-          PointOnLine(b, constraint.lineA, constraint.lineB) &&
-          PointOnLine(mid, constraint.lineA, constraint.lineB)) {
-        out.edgeBendId[i] = constraint.bendId;
+// Builds the directed-edge set representing the WHOLE outline with every
+// bend's own strip removed simultaneously.
+//
+// A ring vertex can be hingeB (or hingeA) for MORE than one bend at once —
+// not just the "two adjacent bends share a parent's corner" case, but also
+// when a panel is fully interior (every one of its own edges is itself a
+// bend to a further child, so it contributes NO edge of its own to the
+// ring) — confirmed on a real regression test (Latin-cross cube net): a
+// panel surrounded on all 4 sides has one of its own bends sharing a vertex
+// with the bend that reaches its own subtree from the outside. Resolving
+// this is interval nesting, not first-match-wins: among however many cuts
+// share a vertex as hingeB, the one with the SMALLEST forward span
+// (iB->iA) is the one whose own child material genuinely starts at this
+// exact point (an inner, more-nested bend), so it claims the outgoing
+// main-loop edge; the one with the LARGEST span is the outermost bend
+// passing over everything nested inside it, so it claims the "unclaimed,
+// jump past this whole subtree" redirect instead (same idea, mirrored, for
+// hingeA and the incoming edge). A single match at a vertex is just the
+// n=1 case of this same rule — nothing changes for the ordinary, non-shared
+// case.
+//   - hingeB present: innermost (min span) claims outgoing edge -> childShiftB;
+//     outermost (max span) claims the "unclaimed" edge ending here -> parentShiftB,
+//     continuing via its own parent bridge.
+//   - hingeA present: innermost claims incoming edge -> childShiftA; outermost
+//     claims the "unclaimed" edge starting here -> parentShiftA, reached from
+//     its own parent bridge.
+//   - both present (a vertex shared by an incoming and an outgoing bend, e.g.
+//     two walls meeting at a parent's own corner): neither outermost bend has
+//     a surviving main-loop edge here at all — a fresh connector edge
+//     outermostA.parentShiftA -> outermostB.parentShiftB bridges the gap,
+//     spliced between the two bends' own parent bridges.
+// Every bend also gets its own parent-side bridge (always, since parent's
+// sequence never directly connects hingeB to hingeA once a child exists
+// there) and its own child-side closing bridge (only when hingeB/hingeA
+// aren't already directly adjacent in the ring — when they are, the single
+// modified original edge already IS that closing edge).
+struct CutEdgesResult {
+  std::vector<TaggedEdge> edges;
+  // Parallel to `cuts`: the edge index that unambiguously belongs to that
+  // bend's own child loop / parent loop — NOT a coordinate (see
+  // TaggedEdge::next's own comment: at zero setback, a bend's child- and
+  // parent-side shift points can be the exact same coordinate, so only
+  // edge identity, never a point value, can tell the two loops apart).
+  std::vector<size_t> childSeedEdge;
+  std::vector<size_t> parentSeedEdge;
+};
+
+CutEdgesResult BuildCutEdges(const std::vector<Point2>& ring, std::vector<BendCut> cuts) {
+  size_t n = ring.size();
+  std::vector<std::vector<size_t>> hingeBAt(n);
+  std::vector<std::vector<size_t>> hingeAAt(n);
+  for (size_t c = 0; c < cuts.size(); ++c) {
+    for (size_t i = 0; i < n; ++i) {
+      if (NearlyEqual2Local(ring[i], cuts[c].hingeB)) {
+        hingeBAt[i].push_back(c);
+        cuts[c].iB = static_cast<int>(i);
+        break;
+      }
+    }
+    for (size_t i = 0; i < n; ++i) {
+      if (NearlyEqual2Local(ring[i], cuts[c].hingeA)) {
+        hingeAAt[i].push_back(c);
+        cuts[c].iA = static_cast<int>(i);
         break;
       }
     }
   }
+  // Each cut's own forward span (iB -> iA, in ring order) — the interval-
+  // nesting metric: a smaller span is more deeply nested.
+  std::vector<size_t> span(cuts.size(), 0);
+  for (size_t c = 0; c < cuts.size(); ++c) {
+    if (cuts[c].iA >= 0 && cuts[c].iB >= 0) {
+      span[c] = (static_cast<size_t>(cuts[c].iA) - static_cast<size_t>(cuts[c].iB) + n) % n;
+    }
+  }
+  auto minSpanOf = [&](const std::vector<size_t>& group) {
+    size_t best = group[0];
+    for (size_t c : group) {
+      if (span[c] < span[best]) best = c;
+    }
+    return best;
+  };
+  auto maxSpanOf = [&](const std::vector<size_t>& group) {
+    size_t best = group[0];
+    for (size_t c : group) {
+      if (span[c] > span[best]) best = c;
+    }
+    return best;
+  };
 
-  // Phase 5 Slice 9a: a hole belongs to this region panel iff it's fully
-  // contained in THIS panel's own just-clipped `region` — the same
-  // containment primitive cut_panel's own write-time validation uses (never
-  // a second, independently-derived containment test).
+  std::vector<TaggedEdge> edges(n);
+  for (size_t i = 0; i < n; ++i) {
+    size_t j = (i + 1) % n;
+    edges[i].from = ring[i];
+    edges[i].to = ring[j];
+    edges[i].next = j;  // default: continue around the original ring
+    if (!hingeBAt[i].empty()) {
+      size_t ci = minSpanOf(hingeBAt[i]);
+      edges[i].from = cuts[ci].childShiftB;
+      // Tagging is separate from the endpoint shift above: this main-loop
+      // edge is genuinely the bend's OWN zone-boundary edge only when it
+      // directly spans hingeB to hingeA with nothing spliced in between
+      // (the "directly adjacent" case — the same edge already used as the
+      // whole cut). Otherwise this edge merely touches a hinge point from
+      // an unrelated direction (e.g. a panel's own far edge happening to
+      // end at its own hinge vertex) and must stay untagged — the real
+      // zone-boundary tag lives on the dedicated bridge edges added below.
+      if (NearlyEqual2Local(ring[j], cuts[ci].hingeA)) edges[i].bendId = cuts[ci].bendId;
+    }
+    if (!hingeAAt[j].empty()) {
+      size_t ci = minSpanOf(hingeAAt[j]);
+      edges[i].to = cuts[ci].childShiftA;
+    }
+  }
+
+  // Parent bridges first, in their own pass — a child bridge's own "next"
+  // (below) may need to point at ANOTHER cut's parent bridge instead of a
+  // raw ring index (see this function's own header comment on interior
+  // panels), so every parentBridgeIdx must already exist before any
+  // childBridgeIdx is computed.
+  std::vector<size_t> parentBridgeIdx(cuts.size());
+  for (size_t ci = 0; ci < cuts.size(); ++ci) {
+    const auto& cut = cuts[ci];
+    parentBridgeIdx[ci] = edges.size();
+    edges.push_back({cut.parentShiftB, cut.parentShiftA, cut.bendId, 0});
+  }
+
+  std::vector<size_t> childBridgeIdx(cuts.size(), SIZE_MAX);  // SIZE_MAX = none (directly adjacent)
+  for (size_t ci = 0; ci < cuts.size(); ++ci) {
+    const auto& cut = cuts[ci];
+    bool directlyAdjacent =
+        cut.iB >= 0 && cut.iA >= 0 &&
+        static_cast<size_t>(cut.iA) == (static_cast<size_t>(cut.iB) + 1) % n;
+    if (directlyAdjacent) continue;
+    // Where this bend's OWN child material resumes after closing the loop
+    // back at its own hingeB: ordinarily the raw main-loop edge there. But
+    // if that same vertex is ALSO hingeB for a MORE nested cut (this one
+    // isn't the innermost claim there — a fully-interior panel, surrounded
+    // on all sides, sharing a vertex with the bend that reaches its own
+    // subtree from outside), that main-loop edge was claimed by the inner
+    // cut for ITS OWN, unrelated child material — this bend's own loop must
+    // instead chain directly into the inner cut's own parent bridge,
+    // bypassing the ring entirely.
+    size_t resumeAt = cut.iB >= 0 ? static_cast<size_t>(cut.iB) : 0;
+    if (cut.iB >= 0 && hingeBAt[static_cast<size_t>(cut.iB)].size() > 1 &&
+        minSpanOf(hingeBAt[static_cast<size_t>(cut.iB)]) != ci) {
+      resumeAt = parentBridgeIdx[minSpanOf(hingeBAt[static_cast<size_t>(cut.iB)])];
+    }
+    childBridgeIdx[ci] = edges.size();
+    edges.push_back({cut.childShiftA, cut.childShiftB, cut.bendId, resumeAt});
+  }
+
+  for (size_t v = 0; v < n; ++v) {
+    size_t prev = (v + n - 1) % n;
+    bool isB = !hingeBAt[v].empty();
+    bool isA = !hingeAAt[v].empty();
+    if (isB && !isA) {
+      size_t ci = maxSpanOf(hingeBAt[v]);
+      edges[prev].to = cuts[ci].parentShiftB;
+      edges[prev].next = parentBridgeIdx[ci];
+    } else if (isA && !isB) {
+      size_t outer = maxSpanOf(hingeAAt[v]);
+      edges[v].from = cuts[outer].parentShiftA;
+      edges[parentBridgeIdx[outer]].next = v;
+      // Every OTHER (more nested) cut sharing this same hingeA vertex has no
+      // main-loop edge of its own left to close through (the outer cut just
+      // claimed it) — its own parent bridge instead closes directly back
+      // into the outer cut's own entry point, the mirror image of
+      // childBridgeIdx's own redirect above (a fully-interior panel's own
+      // loop returning to where it started, e.g. F1 in the Latin-cross net).
+      for (size_t inner : hingeAAt[v]) {
+        if (inner == outer) continue;
+        edges[parentBridgeIdx[inner]].next =
+            childBridgeIdx[outer] != SIZE_MAX
+                ? childBridgeIdx[outer]
+                : (cuts[outer].iB >= 0 ? static_cast<size_t>(cuts[outer].iB) : v);
+      }
+    } else if (isA && isB) {
+      size_t ciA = maxSpanOf(hingeAAt[v]);
+      size_t ciB = maxSpanOf(hingeBAt[v]);
+      size_t connectorIdx = edges.size();
+      edges.push_back({cuts[ciA].parentShiftA, cuts[ciB].parentShiftB, std::string(),
+                        parentBridgeIdx[ciB]});
+      edges[parentBridgeIdx[ciA]].next = connectorIdx;
+    }
+  }
+
+  for (size_t ci = 0; ci < cuts.size(); ++ci) {
+    if (childBridgeIdx[ci] == SIZE_MAX) continue;  // directly adjacent — nothing more to wire up
+    if (cuts[ci].iA < 0) continue;  // hinge never grounded in the ring — nothing to wire up here
+    size_t iA = static_cast<size_t>(cuts[ci].iA);
+    // Only the innermost cut at this hingeA vertex actually owns the
+    // main-loop edge ending here (edges[prevA].to == childShiftA(ci)) — see
+    // the main-edge-building pass above, which uses the same minSpanOf. A
+    // more-outer cut sharing the same iA needs no wiring here at all: its
+    // own childBridge closes elsewhere entirely (handled by the isA&&!isB
+    // branch above, which redirects the true innermost cut's own parent
+    // bridge back to it directly).
+    if (hingeAAt[iA].size() > 1 && minSpanOf(hingeAAt[iA]) != ci) continue;
+    size_t prevA = (iA + n - 1) % n;
+    edges[prevA].next = childBridgeIdx[ci];
+  }
+
+  CutEdgesResult result;
+  result.edges = std::move(edges);
+  result.childSeedEdge.resize(cuts.size());
+  result.parentSeedEdge.resize(cuts.size());
+  for (size_t ci = 0; ci < cuts.size(); ++ci) {
+    // Prefer this cut's own closing bridge as the seed — unambiguously its
+    // own edge — over the raw main-loop edge at iB, which a more-nested
+    // cut sharing the same hingeB vertex may have claimed for unrelated
+    // material (a fully-interior panel's own parent bend, e.g. F1's own
+    // b01 in the Latin-cross net — see this function's own header
+    // comment). Tracing from either point reaches the identical cycle when
+    // there's no such sharing, so this is safe in the ordinary case too.
+    if (childBridgeIdx[ci] != SIZE_MAX) {
+      result.childSeedEdge[ci] = childBridgeIdx[ci];
+    } else {
+      result.childSeedEdge[ci] = cuts[ci].iB >= 0 ? static_cast<size_t>(cuts[ci].iB) : SIZE_MAX;
+    }
+    result.parentSeedEdge[ci] = parentBridgeIdx[ci];
+  }
+  return result;
+}
+
+struct Loop {
+  std::vector<Point2> points;
+  // Parallel to `points`: edgeBendId[i] is the tag of edge (points[i],
+  // points[(i+1)%n]).
+  std::vector<std::string> edgeBendId;
+};
+
+// Every edge built above has an explicit, unambiguous successor (see
+// TaggedEdge::next's own comment on why coordinate-matching can't be used
+// here), so tracing a loop out of the edge set is a plain walk from a known
+// starting edge (identified by INDEX, never by coordinate — see
+// CutEdgesResult's own comment on why a bare point value can't
+// disambiguate which loop it belongs to) until back at the loop's own
+// start.
+Loop TraceLoopFrom(const std::vector<TaggedEdge>& edges, size_t startEdge) {
+  Loop loop;
+  size_t cur = startEdge;
+  std::vector<bool> visited(edges.size(), false);
+  while (cur < edges.size() && !visited[cur]) {
+    visited[cur] = true;
+    loop.points.push_back(edges[cur].from);
+    loop.edgeBendId.push_back(edges[cur].bendId);
+    cur = edges[cur].next;
+  }
+  return loop;
+}
+
+struct RegionOfResult {
+  // The panel's region trimmed to its own true tangent line at every
+  // touching bend (this bend's own real, signed setbackMm) — what
+  // ConstructPartSolid builds the panel wall from (RegionPanelLayout::
+  // rawOuter).
+  std::vector<Point2> outer;
+  // Parallel to `outer`: edgeBendId[i] describes the edge (outer[i],
+  // outer[(i+1)%n]) — see the field's doc comment on RegionPanelLayout for why this
+  // is computed here (where the bend cuts already exist) and nowhere else.
+  std::vector<std::string> edgeBendId;
+  // The SAME panel's region cut with zero margin, exactly at each bend's raw
+  // hinge line — the flat-pattern/DXF-facing shape (RegionPanelLayout::
+  // regionOuter, after Evaluate()'s own cumulativeShift translation); this is
+  // what BuildFlatOutline's own allowance-driven union math expects to union
+  // against, unaffected by solid-construction's own setback trim.
+  std::vector<Point2> outerZeroOffset;
+  // Parallel to `outerZeroOffset` — see RegionPanelLayout::regionEdgeBendId.
+  std::vector<std::string> zeroOffsetEdgeBendId;
+  // Phase 5 Slice 9a: holes belonging to this region panel (see
+  // RegionPanelLayout's own doc comment) — tested against `outer`.
+  std::vector<std::vector<Point2>> polygonHoles;
+  std::vector<CircleHoleSpec> circleHoles;
+  // Same holes, tested against `outerZeroOffset` instead (RegionPanelLayout::
+  // regionPolygonHoles/regionCircleHoles).
+  std::vector<std::vector<Point2>> zeroOffsetPolygonHoles;
+  std::vector<CircleHoleSpec> zeroOffsetCircleHoles;
+};
+
+// Runs the cut-edges/trace/select pipeline once for a given set of bend
+// cuts, returning the one loop belonging to regionPanelId (see
+// BuildCutEdges and TraceLoopFrom's own header comments) — shared by
+// RegionOf's two passes (real setback, and zero-offset) since they differ
+// only in which BendCut set feeds in.
+std::optional<Loop> ExtractLoop(const PartGraphSpec& graph, const std::string& regionPanelId,
+                                 const std::vector<Point2>& ring,
+                                 const std::vector<BendCut>& cuts) {
+  CutEdgesResult built = BuildCutEdges(ring, cuts);
+
+  // Seed edge: whichever bend touches regionPanelId — as child, its own
+  // childSeedEdge (the main-loop edge starting at that bend's own
+  // childShiftB); as the root (no parent bend of its own), any of its own
+  // bends' parentSeedEdge. Identified by EDGE INDEX, never by point value:
+  // at zero setback, a bend's child- and parent-shift points can be the
+  // exact same coordinate, so only edge identity can tell the two loops
+  // apart (confirmed live: coordinate matching silently returned the wrong
+  // panel's region for a simple 2-panel case).
+  size_t seedEdge = SIZE_MAX;
+  for (size_t bi = 0; bi < graph.bends.size(); ++bi) {
+    if (graph.bends[bi].childRegionPanelId != regionPanelId) continue;
+    seedEdge = built.childSeedEdge[bi];
+    break;
+  }
+  if (seedEdge == SIZE_MAX) {
+    for (size_t bi = 0; bi < graph.bends.size(); ++bi) {
+      if (graph.bends[bi].parentRegionPanelId != regionPanelId) continue;
+      seedEdge = built.parentSeedEdge[bi];
+      break;
+    }
+  }
+  if (seedEdge == SIZE_MAX) return std::nullopt;  // regionPanelId touches no bend at all — invalid graph
+
+  Loop loop = TraceLoopFrom(built.edges, seedEdge);
+  if (loop.points.size() < 3) return std::nullopt;  // malformed cut
+  return loop;
+}
+
+std::optional<RegionOfResult> RegionOf(const PartGraphSpec& graph,
+                                        const std::string& regionPanelId) {
+  if (graph.bends.empty()) {
+    // No bends anywhere — nothing to cut; the whole outline IS the (single)
+    // region panel's own region, both views alike.
+    RegionOfResult out;
+    out.outer = graph.outline.outer;
+    out.outerZeroOffset = graph.outline.outer;
+    out.edgeBendId.assign(out.outer.size(), std::string());
+    out.zeroOffsetEdgeBendId.assign(out.outerZeroOffset.size(), std::string());
+    for (const auto& hole : graph.outline.polygonHoles) {
+      if (RingFullyInsidePolygon(hole, out.outer)) {
+        out.polygonHoles.push_back(hole);
+        out.zeroOffsetPolygonHoles.push_back(hole);
+      }
+    }
+    for (const auto& hole : graph.outline.circleHoles) {
+      if (CircleFullyInsidePolygon(hole.center, hole.radiusMm, out.outer)) {
+        out.circleHoles.push_back(hole);
+        out.zeroOffsetCircleHoles.push_back(hole);
+      }
+    }
+    return out;
+  }
+
+  auto [ring, effectiveHinges] = EnsureHingeVertices(graph.outline.outer, graph);
+  std::vector<BendCut> cuts = BuildBendCuts(graph, effectiveHinges, /*zeroOffset=*/false);
+  std::vector<BendCut> cutsZero = BuildBendCuts(graph, effectiveHinges, /*zeroOffset=*/true);
+
+  std::optional<Loop> loop = ExtractLoop(graph, regionPanelId, ring, cuts);
+  std::optional<Loop> loopZero = ExtractLoop(graph, regionPanelId, ring, cutsZero);
+  if (!loop.has_value() || !loopZero.has_value()) return std::nullopt;
+
+  RegionOfResult out;
+  out.outer = loop->points;
+  out.edgeBendId = loop->edgeBendId;
+  out.outerZeroOffset = loopZero->points;
+  out.zeroOffsetEdgeBendId = loopZero->edgeBendId;
   for (const auto& hole : graph.outline.polygonHoles) {
-    if (RingFullyInsidePolygon(hole, region)) out.polygonHoles.push_back(hole);
+    if (RingFullyInsidePolygon(hole, out.outer)) out.polygonHoles.push_back(hole);
+    if (RingFullyInsidePolygon(hole, out.outerZeroOffset)) out.zeroOffsetPolygonHoles.push_back(hole);
   }
   for (const auto& hole : graph.outline.circleHoles) {
-    if (CircleFullyInsidePolygon(hole.center, hole.radiusMm, region)) {
+    if (CircleFullyInsidePolygon(hole.center, hole.radiusMm, out.outer)) {
       out.circleHoles.push_back(hole);
+    }
+    if (CircleFullyInsidePolygon(hole.center, hole.radiusMm, out.outerZeroOffset)) {
+      out.zeroOffsetCircleHoles.push_back(hole);
     }
   }
   return out;
@@ -414,15 +869,17 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
   // Also computed here, alongside the pose: `cumulativeShift[p]`, a running 2D
   // offset (in the shared flat frame F) that makes each region panel's own
   // territory land where it truly belongs once every bend it descends from
-  // actually consumes real, inserted bend-allowance material — rather than the
-  // zero-offset clip below (BoundingBends) carving that material OUT of a
-  // panel's own measured length. `cumulativeShift[root] = 0`; each bend adds
-  // its own full bend allowance, along the hinge's own outward (child-side)
-  // normal, to every panel in its child's subtree — never HALF of it split
-  // across parent and child, because the PARENT'S OWN territory is never
-  // touched by widening (only what lies beyond, in the child's subtree, moves)
-  // — see the zero-offset clip's own comment for why a per-panel offset at the
-  // clip itself can't work once a panel touches more than one bend.
+  // actually consumes real, inserted bend-allowance material — this is a
+  // SEPARATE, 3D-placement-facing quantity (the full bend allowance, ba)
+  // from RegionOf's own per-panel setback trim (each panel's flat region is
+  // trimmed to its true tangent line at its own setbackMm, not this
+  // allowance). `cumulativeShift[root] = 0`; each bend adds its own full bend
+  // allowance, along the hinge's own outward (child-side) normal, to every
+  // panel in its child's subtree — never HALF of it split across parent and
+  // child, because the PARENT'S OWN territory is never touched by widening
+  // (only what lies beyond, in the child's subtree, moves) — a single
+  // cumulative running total can't be attributed per-panel-touching-bend any
+  // other way once a panel touches more than one bend.
   std::unordered_map<std::string, Transform3> poseByRegionPanel;
   poseByRegionPanel[graph.rootRegionPanelId] = graph.anchor.transform;
   std::unordered_map<std::string, Point2> cumulativeShift;
@@ -440,8 +897,9 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
     const Transform3& parentPose = poseByRegionPanel.at(current);
     const Point2& parentShift = cumulativeShift.at(current);
     for (const auto* bend : childrenOf[current]) {
-      // Left-hand normal of hingeA->hingeB — same convention/formula BoundingBends
-      // uses (14's fixed "child = left side" rule) — points toward the child side.
+      // Left-hand normal of hingeA->hingeB — same convention/formula RegionOf's
+      // own bend cuts use (14's fixed "child = left side" rule) — points toward
+      // the child side.
       Point2 hingeDir = Sub2(bend->hingeB, bend->hingeA);
       double hingeDirLen = Length2(hingeDir);
       Point2 nLeft{0.0, 0.0};
@@ -491,6 +949,18 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
 
       // Axis in-plane position, plus a matching child-side extension
       // (docs/BUG_REPORT_reconstructed_envelope_grows_with_bend_radius.md).
+      // This is a SEPARATE property from RegionOf's own per-panel setback
+      // trim (confirmed by real test failures, not assumed): trimming each
+      // panel's own rawOuter to its true tangent line makes THAT panel's own
+      // wall edge locally tangent to its own bend's cylinder, but does
+      // nothing to stop the CUMULATIVE 3D pose of a multi-bend chain (e.g. an
+      // N-gon tube closing on itself) from drifting as radiusMm varies —
+      // removing this block once, to test whether it had become redundant
+      // with RegionOf's new trim, reintroduced exactly that drift (confirmed
+      // via the N=4/5/6 closed-tube tests, off by an amount scaling with
+      // radiusMm), while the single-bend tangency test stayed green either
+      // way. The two corrections address different scopes and both stay.
+      //
       // A wall built from the raw, un-widened hinge coordinate is tangent to
       // the bend's own cylinder (pivotZ above) but that alone does not keep
       // the part's overall envelope fixed as radiusMm changes — proved
@@ -574,10 +1044,9 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
       bridge.hingeB = {hingeBShifted.x + 0.5 * ba * nLeft.x, hingeBShifted.y + 0.5 * ba * nLeft.y};
 
       // Setback + world-space directions (see this struct's own header
-      // comment) — ConstructPartSolid derives each side's own tangent
-      // points from these, applied to the REAL (RegionOf-clipped) edge
-      // points it has, not from any hingeA/hingeB-based absolute position.
-      // Signed (see axisInPlaneOffset's own comment above) — never abs().
+      // comment) — RegionOf's own bend cuts derive each side's own tangent
+      // points from this exact same value (BuildBendCuts), not from any
+      // hingeA/hingeB-based absolute position. Signed — never abs().
       bridge.setbackMm = axisInPlaneOffset;
       bridge.nLeftWorld = parentPose.ApplyVector({nLeft.x, nLeft.y, 0.0});
       bridge.childNLeftWorld = worldFold.ApplyVector(bridge.nLeftWorld);
@@ -604,27 +1073,42 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
       return result;
     }
     const Point2& shift = cumulativeShift.at(regionPanelId);
-    // Raw copies BEFORE the shift below mutates them — the same clip
-    // topology as regionOuter/regionPolygonHoles/regionCircleHoles, just
-    // without the 2D flat-pattern shift. bottomFace/topFace and solid-wall
-    // construction use these (see header comment); regionOuter (shifted,
-    // below) stays the flat-pattern/DXF-only view.
-    std::vector<Point2> rawOuter = regionResult->outer;
-    std::vector<std::vector<Point2>> rawPolygonHoles = regionResult->polygonHoles;
-    std::vector<CircleHoleSpec> rawCircleHoles = regionResult->circleHoles;
+    // rawOuter is the panel's raw, zero-offset region — cut exactly at each
+    // bend's raw hinge line, no setback — the shape bottomFace/topFace,
+    // point_mapping.cc, and the bridge-construction loop's own tangent-point
+    // math (which already adds this same setbackMm ON TOP of rawOuter's
+    // bottomFace/topFace itself, via BridgeLayout::setbackMm) all expect.
+    // wallOuter is the SEPARATE setback-trimmed region (RegionOf's own
+    // non-zero-margin pass) — solid-wall polygon construction alone uses
+    // this, for the same reason TrimToTangentLines used to operate on a
+    // purely LOCAL copy rather than rawOuter itself: rawOuter is a shared
+    // field with independent consumers that all expect the raw shape (one
+    // that already needing setback bakes it in explicitly, never implicitly
+    // via a shifted rawOuter — confirmed by real test failures when this was
+    // tried the other way: bottomFace/topFace being setback-shifted made the
+    // "wall sits sqrt(setback^2+radius^2) from the axis" invariant silently
+    // cancel to the bare radius, since the axis ALSO carries this same
+    // in-plane offset (axisInPlaneOffset, this file's own pose-walk
+    // comment)). regionOuter is rawOuter's own further-shifted (by
+    // cumulativeShift below) flat-pattern/DXF-only view.
+    std::vector<Point2> rawOuter = regionResult->outerZeroOffset;
+    std::vector<std::vector<Point2>> rawPolygonHoles = regionResult->zeroOffsetPolygonHoles;
+    std::vector<CircleHoleSpec> rawCircleHoles = regionResult->zeroOffsetCircleHoles;
 
-    std::vector<Point2> regionOuter = std::move(regionResult->outer);
+    std::vector<Point2> regionOuter = rawOuter;
     for (auto& v : regionOuter) {
       v.x += shift.x;
       v.y += shift.y;
     }
-    for (auto& ring : regionResult->polygonHoles) {
+    std::vector<std::vector<Point2>> regionPolygonHoles = rawPolygonHoles;
+    for (auto& ring : regionPolygonHoles) {
       for (auto& v : ring) {
         v.x += shift.x;
         v.y += shift.y;
       }
     }
-    for (auto& hole : regionResult->circleHoles) {
+    std::vector<CircleHoleSpec> regionCircleHoles = rawCircleHoles;
+    for (auto& hole : regionCircleHoles) {
       hole.center.x += shift.x;
       hole.center.y += shift.y;
     }
@@ -634,10 +1118,14 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
     layout.regionPanelId = regionPanelId;
     layout.regionOuter = regionOuter;
     layout.rawOuter = rawOuter;
+    layout.wallOuter = regionResult->outer;
+    layout.wallPolygonHoles = regionResult->polygonHoles;
+    layout.wallCircleHoles = regionResult->circleHoles;
     layout.pose = pose;
-    layout.edgeBendId = regionResult->edgeBendId;
-    layout.regionPolygonHoles = regionResult->polygonHoles;
-    layout.regionCircleHoles = regionResult->circleHoles;
+    layout.edgeBendId = regionResult->zeroOffsetEdgeBendId;
+    layout.regionEdgeBendId = regionResult->zeroOffsetEdgeBendId;
+    layout.regionPolygonHoles = regionPolygonHoles;
+    layout.regionCircleHoles = regionCircleHoles;
     layout.rawPolygonHoles = rawPolygonHoles;
     layout.rawCircleHoles = rawCircleHoles;
     layout.bottomFace.reserve(rawOuter.size());

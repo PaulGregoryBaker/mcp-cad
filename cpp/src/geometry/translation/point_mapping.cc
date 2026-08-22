@@ -120,7 +120,7 @@ BridgeZone FindBridgeZone(const EvaluateResult& layout, const BendSpec& bend) {
   auto findTaggedEdge = [&](const RegionPanelLayout* panel, Point2* a, Point2* b) -> bool {
     size_t n = panel->regionOuter.size();
     for (size_t i = 0; i < n; ++i) {
-      if (panel->edgeBendId[i] == bend.id) {
+      if (panel->regionEdgeBendId[i] == bend.id) {
         *a = panel->regionOuter[i];
         *b = panel->regionOuter[(i + 1) % n];
         return true;

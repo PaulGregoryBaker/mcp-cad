@@ -218,25 +218,48 @@ struct RegionPanelLayout {
   std::vector<Point2> regionOuter;  // regionOf(p) — outer ring only, Slice 1
   // The SAME clipped ring as regionOuter, BEFORE the 2D cumulativeShift pass
   // is applied — index-correlated with regionOuter (same clip topology and
-  // order, just with/without the shift). This is what bottomFace/topFace
-  // below are built from, and what ConstructPartSolid must build panel
-  // walls/holes from too (see this file's header comment) — regionOuter
-  // stays the flat-pattern/DXF-only view.
+  // order, just with/without the shift), cut with ZERO setback margin,
+  // exactly at each bend's raw hinge line. This is what bottomFace/topFace
+  // below are built from, and what point_mapping.cc and the bridge-
+  // construction loop's own tangent-point math read directly — that math
+  // already adds this bend's own setbackMm ON TOP of rawOuter's
+  // bottomFace/topFace point explicitly (BridgeLayout::setbackMm), so
+  // rawOuter itself must stay the raw, un-shifted shape: it's a SHARED field
+  // with independent consumers, all of which expect the raw geometry (one
+  // exception, wallOuter, gets its own dedicated field below rather than
+  // overloading this one — confirmed necessary by a real regression: making
+  // rawOuter itself setback-shifted made a wall's measured distance to its
+  // own bend axis silently cancel to the bare radius, since the axis ALSO
+  // carries an equal in-plane offset for a different reason, envelope
+  // preservation across a multi-bend chain — see Evaluate()'s own pose-walk
+  // comment on axisInPlaneOffset).
   std::vector<Point2> rawOuter;
+  // The panel's region trimmed to its own true tangent line at every
+  // touching bend (this bend's own real, signed setbackMm) — ConstructPartSolid
+  // builds the actual wall SOLID's own polygon from this, and ONLY this
+  // (never rawOuter, which must stay raw for its own, separate consumers —
+  // see rawOuter's own comment above).
+  std::vector<Point2> wallOuter;
   // Index-correlated with regionOuter and with each other (13 §3.3's closing
   // paragraph: side-wall quad i is bottomFace[i],bottomFace[i+1],topFace[i+1],topFace[i]).
   // Built from rawOuter (not regionOuter) — see header comment.
   std::vector<Point3> bottomFace;
   std::vector<Point3> topFace;
   Transform3 pose;  // the cached chain product for this panel (13 §4.1)
-  // edgeBendId[i] names the bend whose zone the edge (regionOuter[i],
-  // regionOuter[i+1]) borders, or "" if the edge is a true outer boundary. Computed
-  // once, here, from the exact same boundingBends() query regionOf(p) itself uses —
-  // never re-derived by a second, independent query (constitution v2.0.0 principle
+  // edgeBendId[i] names the bend whose zone the edge (rawOuter[i],
+  // rawOuter[i+1]) borders, or "" if the edge is a true outer boundary.
+  // Computed once, here, by RegionOf's own bend-cut extraction — never
+  // re-derived by a second, independent query (constitution v2.0.0 principle
   // III). A solid-construction consumer (ConstructPartSolid) MUST build a flat
   // side-wall quad only where this is "" — a non-empty entry means the neighbouring
   // material is real bridge (curved) geometry instead, see EvaluateResult::bridges.
   std::vector<std::string> edgeBendId;
+  // The SAME tags — rawOuter and regionOuter share the same clip topology
+  // now (both cut at zero setback, one shifted by cumulativeShift and one
+  // not), so this is index-correlated with regionOuter identically to how
+  // edgeBendId is with rawOuter. BuildFlatOutline (the flat-pattern/DXF
+  // consumer) uses this one.
+  std::vector<std::string> regionEdgeBendId;
   // Phase 5 Slice 9a: the subset of graph.outline.polygonHoles/circleHoles that
   // belong to THIS region panel — computed once, in RegionOf, via
   // ring_containment.hpp's containment check against this panel's own
@@ -245,11 +268,15 @@ struct RegionPanelLayout {
   std::vector<std::vector<Point2>> regionPolygonHoles;
   std::vector<CircleHoleSpec> regionCircleHoles;
   // Raw (pre-cumulativeShift) counterparts of the two fields above — same
-  // relationship as rawOuter to regionOuter, same reason (solid-construction
-  // holes must be cut from the raw, tangent-consistent wall, not the
-  // flat-pattern-shifted one).
+  // relationship as rawOuter to regionOuter.
   std::vector<std::vector<Point2>> rawPolygonHoles;
   std::vector<CircleHoleSpec> rawCircleHoles;
+  // wallOuter's own holes — tested against wallOuter's own (setback-trimmed)
+  // boundary rather than rawOuter's, so a hole sitting close to a bend line
+  // is judged consistently against the same ring ConstructPartSolid actually
+  // punches it into.
+  std::vector<std::vector<Point2>> wallPolygonHoles;
+  std::vector<CircleHoleSpec> wallCircleHoles;
 };
 
 // One bend's realized bridge geometry (13 §4.3's Z_i, the cylindrical chart) —

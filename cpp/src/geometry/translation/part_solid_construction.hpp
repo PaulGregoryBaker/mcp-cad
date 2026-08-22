@@ -54,11 +54,13 @@ struct ConstructPartSolidResult {
   std::string errorCode;  // "" | GE_INVALID_LAYOUT | GE_EMPTY_LAYOUT |
                            // GE_INVALID_SHEET_METAL | GE_POLYGON_BUILD_FAILED |
                            // GE_EXTRUDE_FAILED | GE_BRIDGE_EDGE_NOT_FOUND |
-                           // GE_BRIDGE_UNSUPPORTED_TOPOLOGY (a bend's zone
-                           // boundary spans more than one panel edge — only
-                           // straight chains with a single-edge zone boundary are
-                           // supported this slice) | GE_BRIDGE_BUILD_FAILED |
-                           // GE_CONSTRUCTION_FAILED
+                           // GE_BRIDGE_BUILD_FAILED | GE_CONSTRUCTION_FAILED
+                           // (GE_BRIDGE_UNSUPPORTED_TOPOLOGY retired — a
+                           // bend's zone boundary spanning more than one
+                           // panel edge, e.g. two faceted rings touching
+                           // along several facets, is now supported: one
+                           // revolve segment per real tagged edge, fused
+                           // together into that bend's own bridge solid)
   std::string message;
   ShellId shellId;  // valid only when ok == true; a request-scoped registry entry —
                      // see rebuild/19 §3's N13 audit note, not held beyond this call

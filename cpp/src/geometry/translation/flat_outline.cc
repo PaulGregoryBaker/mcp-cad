@@ -110,13 +110,13 @@ FlatOutlineResult BuildFlatOutline(const PartGraphSpec& graph, const EvaluateRes
       return result;
     }
 
-    std::vector<bool> parentTagged(parentPanel->edgeBendId.size(), false);
-    for (size_t i = 0; i < parentPanel->edgeBendId.size(); ++i) {
-      parentTagged[i] = (parentPanel->edgeBendId[i] == bridge.bendId);
+    std::vector<bool> parentTagged(parentPanel->regionEdgeBendId.size(), false);
+    for (size_t i = 0; i < parentPanel->regionEdgeBendId.size(); ++i) {
+      parentTagged[i] = (parentPanel->regionEdgeBendId[i] == bridge.bendId);
     }
-    std::vector<bool> childTagged(childPanel->edgeBendId.size(), false);
-    for (size_t i = 0; i < childPanel->edgeBendId.size(); ++i) {
-      childTagged[i] = (childPanel->edgeBendId[i] == bridge.bendId);
+    std::vector<bool> childTagged(childPanel->regionEdgeBendId.size(), false);
+    for (size_t i = 0; i < childPanel->regionEdgeBendId.size(); ++i) {
+      childTagged[i] = (childPanel->regionEdgeBendId[i] == bridge.bendId);
     }
     auto parentRuns = FindCyclicRuns(parentTagged);
     auto childRuns = FindCyclicRuns(childTagged);

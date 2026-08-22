@@ -364,14 +364,18 @@ Napi::Object WriteRegionPanelLayout(Napi::Env env, const RegionPanelLayout& pane
   obj.Set("regionPanelId", Napi::String::New(env, panel.regionPanelId));
   obj.Set("regionOuter", WritePoint2Array(env, panel.regionOuter));
   obj.Set("rawOuter", WritePoint2Array(env, panel.rawOuter));
+  obj.Set("wallOuter", WritePoint2Array(env, panel.wallOuter));
   obj.Set("bottomFace", WritePoint3Array(env, panel.bottomFace));
   obj.Set("topFace", WritePoint3Array(env, panel.topFace));
   obj.Set("pose", WriteTransform3(env, panel.pose));
   obj.Set("edgeBendId", WriteStringArray(env, panel.edgeBendId));
+  obj.Set("regionEdgeBendId", WriteStringArray(env, panel.regionEdgeBendId));
   obj.Set("regionPolygonHoles", WritePolygonHoleArray(env, panel.regionPolygonHoles));
   obj.Set("regionCircleHoles", WriteCircleHoleArray(env, panel.regionCircleHoles));
   obj.Set("rawPolygonHoles", WritePolygonHoleArray(env, panel.rawPolygonHoles));
   obj.Set("rawCircleHoles", WriteCircleHoleArray(env, panel.rawCircleHoles));
+  obj.Set("wallPolygonHoles", WritePolygonHoleArray(env, panel.wallPolygonHoles));
+  obj.Set("wallCircleHoles", WriteCircleHoleArray(env, panel.wallCircleHoles));
   return obj;
 }
 
@@ -446,6 +450,16 @@ EvaluateResult ReadEvaluateResult(const Napi::Object& obj) {
         panel.rawOuter.push_back(ReadPoint2(rawOuterArr.Get(j).As<Napi::Object>()));
       }
     }
+    // wallOuter (RegionOf's own setback-trimmed region — ConstructPartSolid's
+    // wall-solid polygon, distinct from rawOuter's own raw/zero-offset shape,
+    // see RegionPanelLayout's own header comment) round-trips the same way.
+    Napi::Value wallOuterV = panelObj.Get("wallOuter");
+    if (wallOuterV.IsArray()) {
+      Napi::Array wallOuterArr = wallOuterV.As<Napi::Array>();
+      for (uint32_t j = 0; j < wallOuterArr.Length(); ++j) {
+        panel.wallOuter.push_back(ReadPoint2(wallOuterArr.Get(j).As<Napi::Object>()));
+      }
+    }
     Napi::Array bottomFaceArr = panelObj.Get("bottomFace").As<Napi::Array>();
     for (uint32_t j = 0; j < bottomFaceArr.Length(); ++j) {
       panel.bottomFace.push_back(ReadPoint3(bottomFaceArr.Get(j).As<Napi::Object>()));
@@ -458,6 +472,13 @@ EvaluateResult ReadEvaluateResult(const Napi::Object& obj) {
     Napi::Array edgeBendIdArr = panelObj.Get("edgeBendId").As<Napi::Array>();
     for (uint32_t j = 0; j < edgeBendIdArr.Length(); ++j) {
       panel.edgeBendId.push_back(edgeBendIdArr.Get(j).As<Napi::String>().Utf8Value());
+    }
+    Napi::Value regionEdgeBendIdV = panelObj.Get("regionEdgeBendId");
+    if (regionEdgeBendIdV.IsArray()) {
+      Napi::Array regionEdgeBendIdArr = regionEdgeBendIdV.As<Napi::Array>();
+      for (uint32_t j = 0; j < regionEdgeBendIdArr.Length(); ++j) {
+        panel.regionEdgeBendId.push_back(regionEdgeBendIdArr.Get(j).As<Napi::String>().Utf8Value());
+      }
     }
     // Phase 5 Slice 9a: this is the exact round trip ConstructPartSolid relies
     // on (evaluatePartGraph's JS result is passed straight back in as
@@ -500,6 +521,24 @@ EvaluateResult ReadEvaluateResult(const Napi::Object& obj) {
         circle.center = ReadPoint2(circleObj.Get("center").As<Napi::Object>());
         circle.radiusMm = circleObj.Get("radiusMm").As<Napi::Number>().DoubleValue();
         panel.rawCircleHoles.push_back(circle);
+      }
+    }
+    Napi::Value wallPolygonHolesV = panelObj.Get("wallPolygonHoles");
+    if (wallPolygonHolesV.IsArray()) {
+      Napi::Array holesArr = wallPolygonHolesV.As<Napi::Array>();
+      for (uint32_t j = 0; j < holesArr.Length(); ++j) {
+        panel.wallPolygonHoles.push_back(ReadPoint2Array(holesArr.Get(j).As<Napi::Array>()));
+      }
+    }
+    Napi::Value wallCircleHolesV = panelObj.Get("wallCircleHoles");
+    if (wallCircleHolesV.IsArray()) {
+      Napi::Array circleArr = wallCircleHolesV.As<Napi::Array>();
+      for (uint32_t j = 0; j < circleArr.Length(); ++j) {
+        Napi::Object circleObj = circleArr.Get(j).As<Napi::Object>();
+        CircleHoleSpec circle;
+        circle.center = ReadPoint2(circleObj.Get("center").As<Napi::Object>());
+        circle.radiusMm = circleObj.Get("radiusMm").As<Napi::Number>().DoubleValue();
+        panel.wallCircleHoles.push_back(circle);
       }
     }
     result.panels.push_back(std::move(panel));
