@@ -356,18 +356,45 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
       orderedPieces.push_back(panelSolidById.at(bridge.childRegionPanelId));
     }
 
+    // kJoinRetryFuzzMm: fallback fuzzy value tried only when the tight
+    // kBooleanFuzzMm leaves a join's fuse result invalid. Root cause (verified
+    // on real cauldron.step data): sub-micron floating-point noise (~2e-4mm at
+    // this model's ~3000mm scale) accumulated through a long chained-bend pose
+    // walk, not a real geometric feature — ShapeFix_Shape post-hoc healing was
+    // tried and empirically does not touch this defect (the shape is already
+    // one connected solid, not the free/disconnected sub-shapes it targets).
+    // Sheet-metal fabrication can't hold better than ~0.1mm in practice, so
+    // 1e-3mm stays ~100x under any achievable real tolerance, and ~150x below
+    // the previously-documented 0.15mm value that discarded real kerf-notch
+    // detail — retried once, only for the specific join that failed, so every
+    // other join keeps the tight kBooleanFuzzMm untouched.
+    constexpr double kJoinRetryFuzzMm = 1e-3;
+
+    auto fuseJoin = [](double fuzzMm, const TopoDS_Shape& a, const TopoDS_Shape& b,
+                        TopoDS_Shape* outShape, bool* built) -> bool {
+      BRepAlgoAPI_Fuse f(a, b);
+      f.SetFuzzyValue(fuzzMm);
+      f.Build();
+      *built = f.IsDone();
+      if (!*built) return false;
+      *outShape = f.Shape();
+      return BRepCheck_Analyzer(*outShape).IsValid();
+    };
+
     TopoDS_Shape currentShape = orderedPieces[0];
     for (size_t i = 1; i < orderedPieces.size(); ++i) {
-      BRepAlgoAPI_Fuse fuser(currentShape, orderedPieces[i]);
-      fuser.SetFuzzyValue(kBooleanFuzzMm);
-      fuser.Build();
-      if (!fuser.IsDone()) {
+      TopoDS_Shape nextShape;
+      bool built = false;
+      bool valid = fuseJoin(kBooleanFuzzMm, currentShape, orderedPieces[i], &nextShape, &built);
+      if (built && !valid) {
+        valid = fuseJoin(kJoinRetryFuzzMm, currentShape, orderedPieces[i], &nextShape, &built);
+      }
+      if (!built) {
         result.errorCode = "GE_CONSTRUCTION_FAILED";
         result.message = "boolean fuse failed joining piece index " + std::to_string(i);
         return result;
       }
 
-      TopoDS_Shape nextShape = fuser.Shape();
       BRepCheck_Analyzer checker(nextShape);
       if (!checker.IsValid()) {
         result.errorCode = "GE_CONSTRUCTION_FAILED";
