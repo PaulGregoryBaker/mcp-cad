@@ -225,8 +225,12 @@ d('[v2] flat-pattern resource (Phase 5 Slice 7)', () => {
     // A sharp (r=0) fold's bend zone has zero width, so the region panels'
     // combined area can equal the whole outline's exactly (no material is
     // excluded) — unlike the hand-authored radius_mm=1.0 case above, this is
-    // <=, not a strict <.
-    expect(regionArea).toBeLessThanOrEqual(outlineArea);
+    // <=, not a strict <. regionArea and outlineArea are each a shoelace sum
+    // over a DIFFERENT ring (2 separate panel rings vs. 1 combined outline
+    // ring), so exact equality lands within a few ULPs, not bit-for-bit —
+    // a tiny fixed epsilon (dwarfed by both areas' own ~50000mm^2 scale)
+    // absorbs that without hiding any real excess.
+    expect(regionArea).toBeLessThanOrEqual(outlineArea + 1e-6);
     expect(regionArea).toBeGreaterThan(0);
     const dxf = await fetchDxf(flat);
     expect(dxf).toContain('LWPOLYLINE');
