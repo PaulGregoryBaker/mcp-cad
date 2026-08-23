@@ -666,6 +666,69 @@ TEST_CASE("ConstructPartSolid: Latin-cross cube net builds one manifold cube",
   CHECK(volume > 10000.0);
 }
 
+TEST_CASE("ConstructPartSolid: a bend whose OWN hinge lands on a vertex already "
+          "shared by two other (parent-side) bends still builds one manifold solid",
+          "[translation][construction][net][regression]") {
+  // Regression for a real cauldron.step failure (piece-30 "fuse result is
+  // invalid"): three bends shared the exact same 2D ring vertex with MIXED
+  // roles — two of them ending their own span there (hingeA), one of them
+  // starting its own span there (hingeB) — not just the "two ending, none
+  // starting" case the Latin-cross fixture above already covers at (0,s)
+  // (b01/b1L). BuildCutEdges' corner-vertex logic wired only the outer
+  // hingeA cut against the outer hingeB cut (miter); the OTHER (inner)
+  // hingeA cut's own parent bridge was left with its default, never-
+  // overwritten `next` (0) whenever a hingeB cut ALSO shared the vertex —
+  // producing a broken loop jump instead of a closed panel outline. Confirmed
+  // on real cauldron data that the fix is the SAME formula the pure-hingeA
+  // (no hingeB) case already uses (redirect the inner cut to the outer cut's
+  // own childBridgeIdx) — this just needed to run regardless of hingeB also
+  // being present. Reproduced here with one more bend (F0's own further
+  // child F0W) whose hingeB lands exactly on (0,s) — the SAME vertex already
+  // shared by b01 (hingeA, outer/larger span) and b1L (hingeA, inner/smaller
+  // span) in MakeCrossCubeNet above.
+  double faceSizeMm = 50.0, thicknessMm = 1.0, s = faceSizeMm;
+  auto graph = MakeCrossCubeNet(faceSizeMm, thicknessMm);
+
+  BendSpec bendF0W;
+  bendF0W.id = "bF0W";
+  bendF0W.parentRegionPanelId = "F0";
+  bendF0W.childRegionPanelId = "F0W";
+  bendF0W.hingeA = {0, 0};
+  bendF0W.hingeB = {0, s};
+  bendF0W.angleDeg = 90.0;
+  bendF0W.radiusMm = 0.0;
+  bendF0W.kFactor = 0.0;
+  graph.bends.push_back(bendF0W);
+
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+  REQUIRE(layout.panels.size() == 7);  // F0,F1,F2,F3,L,R,F0W
+
+  // The direct, local-code-point check: F1 is a plain 50x50 square touching
+  // 4 bends (b01, b12, b1L, b1R) — its own region must stay a simple 4-vertex
+  // square regardless of bF0W's unrelated presence at one shared corner. The
+  // broken wiring described above instead leaks F1's trace into F0's own
+  // territory, silently absorbing it into a larger, wrong polygon — a defect
+  // a boolean-fuse-level check (BRepCheck/CountSolids alone) can miss, since
+  // fusing two overlapping valid solids is still a single valid solid.
+  const RegionPanelLayout* f1 = nullptr;
+  for (const auto& p : layout.panels) {
+    if (p.regionPanelId == "F1") f1 = &p;
+  }
+  REQUIRE(f1 != nullptr);
+  REQUIRE(f1->rawOuter.size() == 4);
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, thicknessMm);
+  REQUIRE(result.ok);
+
+  auto it = state.solids.find(result.shellId);
+  REQUIRE(it != state.solids.end());
+  BRepCheck_Analyzer analyzer(it->second.shape);
+  CHECK(analyzer.IsValid());
+  CHECK(CountSolids(it->second.shape) == 1);
+}
+
 // ─── Branching (multi-child parent) + real bend radius ──────────────────────
 //
 // docs/BUG_REPORT_nonzero_default_bend_radius_breaks_mesh_construction.md: a

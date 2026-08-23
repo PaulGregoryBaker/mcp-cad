@@ -50,6 +50,19 @@ Point2 Sub2(const Point2& a, const Point2& b) { return {a.x - b.x, a.y - b.y}; }
 double Cross2(const Point2& a, const Point2& b) { return a.x * b.y - a.y * b.x; }
 double Length2(const Point2& v) { return std::sqrt(v.x * v.x + v.y * v.y); }
 
+// Intersection of the infinite line through (p1, p1+d1) with the infinite
+// line through (p2, p2+d2) — same t-parameter convention already used by
+// EnsureHingeVertices' own transversal-crossing search above. Returns
+// std::nullopt for (near-)parallel lines, the one case with no single
+// answer.
+std::optional<Point2> LineIntersect2(const Point2& p1, const Point2& d1, const Point2& p2,
+                                      const Point2& d2) {
+  double denom = Cross2(d1, d2);
+  if (std::fabs(denom) < kGeometricEpsilon) return std::nullopt;
+  double t = Cross2(Sub2(p2, p1), d2) / denom;
+  return Point2{p1.x + d1.x * t, p1.y + d1.y * t};
+}
+
 // ─── 3D vector helpers ───────────────────────────────────────────────────────
 
 Point3 Sub3(const Point3& a, const Point3& b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
@@ -444,10 +457,11 @@ struct TaggedEdge {
 //     claims the "unclaimed" edge starting here -> parentShiftA, reached from
 //     its own parent bridge.
 //   - both present (a vertex shared by an incoming and an outgoing bend, e.g.
-//     two walls meeting at a parent's own corner): neither outermost bend has
-//     a surviving main-loop edge here at all — a fresh connector edge
-//     outermostA.parentShiftA -> outermostB.parentShiftB bridges the gap,
-//     spliced between the two bends' own parent bridges.
+//     two walls meeting at a parent's own corner): neither outermost bend
+//     has a surviving main-loop edge here at all — their own parent bridges
+//     are re-pointed to meet at a single miter point (the two bends' own
+//     offset lines, extended, intersected) instead of the raw ring vertex,
+//     and chained directly into each other.
 // Every bend also gets its own parent-side bridge (always, since parent's
 // sequence never directly connects hingeB to hingeA once a child exists
 // there) and its own child-side closing bridge (only when hingeB/hingeA
@@ -573,34 +587,57 @@ CutEdgesResult BuildCutEdges(const std::vector<Point2>& ring, std::vector<BendCu
     size_t prev = (v + n - 1) % n;
     bool isB = !hingeBAt[v].empty();
     bool isA = !hingeAAt[v].empty();
-    if (isB && !isA) {
-      size_t ci = maxSpanOf(hingeBAt[v]);
-      edges[prev].to = cuts[ci].parentShiftB;
-      edges[prev].next = parentBridgeIdx[ci];
-    } else if (isA && !isB) {
-      size_t outer = maxSpanOf(hingeAAt[v]);
-      edges[v].from = cuts[outer].parentShiftA;
-      edges[parentBridgeIdx[outer]].next = v;
-      // Every OTHER (more nested) cut sharing this same hingeA vertex has no
-      // main-loop edge of its own left to close through (the outer cut just
-      // claimed it) — its own parent bridge instead closes directly back
-      // into the outer cut's own entry point, the mirror image of
-      // childBridgeIdx's own redirect above (a fully-interior panel's own
-      // loop returning to where it started, e.g. F1 in the Latin-cross net).
+    size_t outerA = isA ? maxSpanOf(hingeAAt[v]) : 0;
+    size_t outerB = isB ? maxSpanOf(hingeBAt[v]) : 0;
+
+    // Every OTHER (more nested) cut sharing this same hingeA vertex has no
+    // main-loop edge of its own left to close through (outerA just claimed
+    // it, or — when isB is ALSO true below — outerA closes directly into
+    // outerB instead) — its own parent bridge instead closes directly back
+    // into outerA's own entry point, the mirror image of childBridgeIdx's
+    // own redirect above (a fully-interior panel's own loop returning to
+    // where it started, e.g. F1 in the Latin-cross net). This must run
+    // whenever isA — an UNRELATED bend on a different panel also starting
+    // here (isB) doesn't change that THIS vertex's own nested hingeA cuts
+    // still need their own redirect (confirmed on real cauldron.step data: a
+    // bend's own parent bridge was left with its default, never-overwritten
+    // `next` whenever isB was also true here, since it used to be handled
+    // only inside the isA-and-not-isB case below).
+    if (isA) {
       for (size_t inner : hingeAAt[v]) {
-        if (inner == outer) continue;
+        if (inner == outerA) continue;
         edges[parentBridgeIdx[inner]].next =
-            childBridgeIdx[outer] != SIZE_MAX
-                ? childBridgeIdx[outer]
-                : (cuts[outer].iB >= 0 ? static_cast<size_t>(cuts[outer].iB) : v);
+            childBridgeIdx[outerA] != SIZE_MAX
+                ? childBridgeIdx[outerA]
+                : (cuts[outerA].iB >= 0 ? static_cast<size_t>(cuts[outerA].iB) : v);
       }
+    }
+
+    if (isB && !isA) {
+      edges[prev].to = cuts[outerB].parentShiftB;
+      edges[prev].next = parentBridgeIdx[outerB];
+    } else if (isA && !isB) {
+      edges[v].from = cuts[outerA].parentShiftA;
+      edges[parentBridgeIdx[outerA]].next = v;
     } else if (isA && isB) {
-      size_t ciA = maxSpanOf(hingeAAt[v]);
-      size_t ciB = maxSpanOf(hingeBAt[v]);
-      size_t connectorIdx = edges.size();
-      edges.push_back({cuts[ciA].parentShiftA, cuts[ciB].parentShiftB, std::string(),
-                        parentBridgeIdx[ciB]});
-      edges[parentBridgeIdx[ciA]].next = connectorIdx;
+      // The true, pre-offset corner (ring[v]) is shared by both bends, so
+      // their own offset parent lines meet at one corresponding point too —
+      // a single miter corner, not two separate points joined by a bevel
+      // diagonal (which runs each line all the way out to its own untrimmed
+      // hinge endpoint instead of stopping at the real inset corner —
+      // confirmed on testcube.step's own 4-sided base panel, where a bevel
+      // produced a self-intersecting outline). One formula for every
+      // corner, degenerate case included: when the two lines don't
+      // converge (an exact 180deg straight pass-through — no real corner to
+      // miter), both offset points already sit at essentially the same
+      // place, so either one stands in for the corner.
+      Point2 dirA = Sub2(cuts[outerA].hingeB, cuts[outerA].hingeA);
+      Point2 dirB = Sub2(cuts[outerB].hingeB, cuts[outerB].hingeA);
+      Point2 miter = LineIntersect2(cuts[outerA].parentShiftA, dirA, cuts[outerB].parentShiftB, dirB)
+                         .value_or(cuts[outerA].parentShiftA);
+      edges[parentBridgeIdx[outerA]].to = miter;
+      edges[parentBridgeIdx[outerB]].from = miter;
+      edges[parentBridgeIdx[outerA]].next = parentBridgeIdx[outerB];
     }
   }
 
