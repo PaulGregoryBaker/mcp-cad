@@ -626,17 +626,48 @@ d('[v2] import_part fixture verification', () => {
     // eslint-disable-next-line no-console
     console.log(`[cauldron envelope] radius=0 (reference) bbox x[${reference.minX.toFixed(2)},${reference.maxX.toFixed(2)}] ` +
       `y[${reference.minY.toFixed(2)},${reference.maxY.toFixed(2)}] z[${reference.minZ.toFixed(2)},${reference.maxZ.toFixed(2)}]`);
+    // Sub-micron equality isn't the right invariant here: cauldron's own root
+    // panel is parent to several bends meeting at shared (mitered) corners —
+    // e.g. three faces of a cube folding up from one flat panel. Two bends
+    // converging on one corner need a relief notch cut from that panel's own
+    // flat material (or F1/F2 would physically try to occupy the same space
+    // right at the corner), and that notch's size is setback-driven
+    // (radius*tan(angle/2) per bend), so it genuinely grows with radius —
+    // real material removed, not a construction defect. axisInPlaneOffset/
+    // childExtension keeps every bend's OWN child tangent line exactly fixed
+    // (verified: every panel's own pose is bit-for-bit radius-independent —
+    // see the N=4/5/6 tube-closure tests), but was only ever proven for one
+    // bend at a time; it has no way to also cancel a shared corner's own
+    // notch, because that notch is real, not an artifact to hide.
+    // radiusMarginMm bounds how far the notch is allowed to grow before it'd
+    // indicate an actual regression (cauldron's own measured drift: ~0.03mm
+    // per 1mm of radius at its worst corner) — generous relative to that, but
+    // far tighter than a real construction bug would produce (those showed
+    // multi-hundred-to-thousand mm deviations before being fixed).
     for (const radius of [0.5, 1, 2]) {
       const measured = measureUnionBbox(radius);
       // eslint-disable-next-line no-console
       console.log(`[cauldron envelope] radius=${radius} bbox x[${measured.minX.toFixed(2)},${measured.maxX.toFixed(2)}] ` +
         `y[${measured.minY.toFixed(2)},${measured.maxY.toFixed(2)}] z[${measured.minZ.toFixed(2)},${measured.maxZ.toFixed(2)}]`);
-      expect(measured.minX).toBeCloseTo(reference.minX, 3);
-      expect(measured.maxX).toBeCloseTo(reference.maxX, 3);
-      expect(measured.minY).toBeCloseTo(reference.minY, 3);
-      expect(measured.maxY).toBeCloseTo(reference.maxY, 3);
-      expect(measured.minZ).toBeCloseTo(reference.minZ, 3);
-      expect(measured.maxZ).toBeCloseTo(reference.maxZ, 3);
+      const floatNoiseMm = 0.001;
+      const radiusMarginMm = 0.5;
+      // Never grows PAST the sharp-corner (radius=0) envelope — that's the
+      // original bug (docs/BUG_REPORT_reconstructed_envelope_grows_with_
+      // bend_radius.md) this test still guards against.
+      expect(measured.minX).toBeGreaterThanOrEqual(reference.minX - floatNoiseMm);
+      expect(measured.maxX).toBeLessThanOrEqual(reference.maxX + floatNoiseMm);
+      expect(measured.minY).toBeGreaterThanOrEqual(reference.minY - floatNoiseMm);
+      expect(measured.maxY).toBeLessThanOrEqual(reference.maxY + floatNoiseMm);
+      expect(measured.minZ).toBeGreaterThanOrEqual(reference.minZ - floatNoiseMm);
+      expect(measured.maxZ).toBeLessThanOrEqual(reference.maxZ + floatNoiseMm);
+      // May recede inward (a growing relief notch at a shared corner), but
+      // only up to the bounded margin above.
+      expect(measured.minX).toBeLessThanOrEqual(reference.minX + radiusMarginMm);
+      expect(measured.maxX).toBeGreaterThanOrEqual(reference.maxX - radiusMarginMm);
+      expect(measured.minY).toBeLessThanOrEqual(reference.minY + radiusMarginMm);
+      expect(measured.maxY).toBeGreaterThanOrEqual(reference.maxY - radiusMarginMm);
+      expect(measured.minZ).toBeLessThanOrEqual(reference.minZ + radiusMarginMm);
+      expect(measured.maxZ).toBeGreaterThanOrEqual(reference.maxZ - radiusMarginMm);
     }
   });
 });
