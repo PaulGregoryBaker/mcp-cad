@@ -7,6 +7,7 @@
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
+#include <BOPAlgo_GlueEnum.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
@@ -370,33 +371,39 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
     // other join keeps the tight kBooleanFuzzMm untouched.
     constexpr double kJoinRetryFuzzMm = 1e-3;
 
-    auto fuseJoin = [](double fuzzMm, const TopoDS_Shape& a, const TopoDS_Shape& b,
+    auto fuseJoin = [](double fuzzMm, bool glue, const TopoDS_Shape& a, const TopoDS_Shape& b,
                         TopoDS_Shape* outShape, bool* built) -> bool {
       BRepAlgoAPI_Fuse f(a, b);
       f.SetFuzzyValue(fuzzMm);
+      if (glue) f.SetGlue(BOPAlgo_GlueShift);
       f.Build();
       *built = f.IsDone();
       if (!*built) return false;
       *outShape = f.Shape();
       return BRepCheck_Analyzer(*outShape).IsValid();
     };
+    auto countSolids = [](const TopoDS_Shape& shape) {
+      int n = 0;
+      for (TopExp_Explorer ex(shape, TopAbs_SOLID); ex.More(); ex.Next()) ++n;
+      return n;
+    };
 
     TopoDS_Shape currentShape = orderedPieces[0];
     for (size_t i = 1; i < orderedPieces.size(); ++i) {
       TopoDS_Shape nextShape;
       bool built = false;
-      bool valid = fuseJoin(kBooleanFuzzMm, currentShape, orderedPieces[i], &nextShape, &built);
+      bool valid =
+          fuseJoin(kBooleanFuzzMm, /*glue=*/false, currentShape, orderedPieces[i], &nextShape, &built);
       if (built && !valid) {
-        valid = fuseJoin(kJoinRetryFuzzMm, currentShape, orderedPieces[i], &nextShape, &built);
+        valid = fuseJoin(kJoinRetryFuzzMm, /*glue=*/false, currentShape, orderedPieces[i], &nextShape,
+                          &built);
       }
       if (!built) {
         result.errorCode = "GE_CONSTRUCTION_FAILED";
         result.message = "boolean fuse failed joining piece index " + std::to_string(i);
         return result;
       }
-
-      BRepCheck_Analyzer checker(nextShape);
-      if (!checker.IsValid()) {
+      if (!valid) {
         result.errorCode = "GE_CONSTRUCTION_FAILED";
         result.message = "fuse result is invalid after joining piece index " + std::to_string(i);
         return result;
@@ -405,22 +412,39 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
       // BRepAlgoAPI_Fuse always returns a COMPOUND wrapper, even for a single
       // connected solid result — unwrap to the bare solid, matching the existing
       // fuseBodies() reference pattern (geometry_service_booleans.cc).
+      int solidCount = nextShape.ShapeType() == TopAbs_SOLID ? 1 : countSolids(nextShape);
+      if (solidCount != 1) {
+        // Glue mode: OCCT's own mechanism for a panel/bridge pair that
+        // genuinely touches (verified on real cauldron.step data via
+        // BRepExtrema_DistShapeShape: exact zero distance) along a truly
+        // coincident face but the plain boolean leaves them as two separate
+        // touching solids instead of merging across it — observed at a real,
+        // near-flat ~3.4deg bend, where the dihedral angle between the two
+        // panel solids is close enough to 180deg that the classifier can't
+        // resolve a proper union. Retried once, only for the specific join
+        // that came back disconnected, so every other join is unaffected.
+        bool glueBuilt = false;
+        TopoDS_Shape gluedShape;
+        bool glueValid = fuseJoin(kBooleanFuzzMm, /*glue=*/true, currentShape, orderedPieces[i],
+                                   &gluedShape, &glueBuilt);
+        if (glueBuilt && glueValid) {
+          nextShape = gluedShape;
+          solidCount = nextShape.ShapeType() == TopAbs_SOLID ? 1 : countSolids(nextShape);
+        }
+      }
+      if (solidCount != 1) {
+        result.errorCode = "GE_CONSTRUCTION_FAILED";
+        result.message = "fuse produced " + std::to_string(solidCount) +
+                          " disconnected solid(s) joining piece index " + std::to_string(i) +
+                          " — every panel/bridge pair is expected to share a coincident face";
+        return result;
+      }
       if (nextShape.ShapeType() != TopAbs_SOLID) {
         TopoDS_Solid theSolid;
-        int solidCount = 0;
         for (TopExp_Explorer ex(nextShape, TopAbs_SOLID); ex.More(); ex.Next()) {
           theSolid = TopoDS::Solid(ex.Current());
-          ++solidCount;
         }
-        if (solidCount == 1) {
-          nextShape = theSolid;
-        } else {
-          result.errorCode = "GE_CONSTRUCTION_FAILED";
-          result.message = "fuse produced " + std::to_string(solidCount) +
-                            " disconnected solid(s) joining piece index " + std::to_string(i) +
-                            " — every panel/bridge pair is expected to share a coincident face";
-          return result;
-        }
+        nextShape = theSolid;
       }
       currentShape = nextShape;
     }
