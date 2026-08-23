@@ -10,6 +10,8 @@
 #include <BOPAlgo_GlueEnum.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepGProp.hxx>
+#include <GProp_GProps.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
 #include <ShapeUpgrade_UnifySameDomain.hxx>
@@ -26,6 +28,7 @@
 #include <gp_Vec.hxx>
 #include <Standard_Failure.hxx>
 
+#include <algorithm>
 #include <cmath>
 #include <unordered_map>
 
@@ -371,8 +374,14 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
     // other join keeps the tight kBooleanFuzzMm untouched.
     constexpr double kJoinRetryFuzzMm = 1e-3;
 
-    auto fuseJoin = [](double fuzzMm, bool glue, const TopoDS_Shape& a, const TopoDS_Shape& b,
-                        TopoDS_Shape* outShape, bool* built) -> bool {
+    auto solidVolume = [](const TopoDS_Shape& shape) {
+      GProp_GProps props;
+      BRepGProp::VolumeProperties(shape, props);
+      return props.Mass();
+    };
+    auto fuseJoin = [&solidVolume](double fuzzMm, bool glue, const TopoDS_Shape& a,
+                                    const TopoDS_Shape& b, TopoDS_Shape* outShape,
+                                    bool* built) -> bool {
       BRepAlgoAPI_Fuse f(a, b);
       f.SetFuzzyValue(fuzzMm);
       if (glue) f.SetGlue(BOPAlgo_GlueShift);
@@ -380,7 +389,20 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
       *built = f.IsDone();
       if (!*built) return false;
       *outShape = f.Shape();
-      return BRepCheck_Analyzer(*outShape).IsValid();
+      if (!BRepCheck_Analyzer(*outShape).IsValid()) return false;
+      // A fuse computes a set union, A∪B — its volume can never be LESS than
+      // either operand's own volume (a property of union, not a tolerance).
+      // BRepAlgoAPI_Fuse can still report IsDone()+valid while silently
+      // discarding one operand for a pathological pairing (confirmed on real
+      // cauldron.step data: a huge accumulated shape fused with a tiny,
+      // near-flat bridge sliver came back as just the sliver, volume
+      // matching it exactly) — checking this invariant here, as part of
+      // fuseJoin's own success contract, means the SAME retry ladder already
+      // used for invalid/disconnected results (looser fuzz, then glue mode)
+      // automatically also covers it, with no separate branch needed.
+      constexpr double kVolumeRelTol = 1e-6;
+      double maxInVolume = std::max(solidVolume(a), solidVolume(b));
+      return solidVolume(*outShape) >= maxInVolume * (1.0 - kVolumeRelTol);
     };
     auto countSolids = [](const TopoDS_Shape& shape) {
       int n = 0;
@@ -403,34 +425,38 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
         result.message = "boolean fuse failed joining piece index " + std::to_string(i);
         return result;
       }
-      if (!valid) {
-        result.errorCode = "GE_CONSTRUCTION_FAILED";
-        result.message = "fuse result is invalid after joining piece index " + std::to_string(i);
-        return result;
-      }
 
       // BRepAlgoAPI_Fuse always returns a COMPOUND wrapper, even for a single
       // connected solid result — unwrap to the bare solid, matching the existing
       // fuseBodies() reference pattern (geometry_service_booleans.cc).
-      int solidCount = nextShape.ShapeType() == TopAbs_SOLID ? 1 : countSolids(nextShape);
-      if (solidCount != 1) {
-        // Glue mode: OCCT's own mechanism for a panel/bridge pair that
-        // genuinely touches (verified on real cauldron.step data via
-        // BRepExtrema_DistShapeShape: exact zero distance) along a truly
-        // coincident face but the plain boolean leaves them as two separate
-        // touching solids instead of merging across it — observed at a real,
-        // near-flat ~3.4deg bend, where the dihedral angle between the two
-        // panel solids is close enough to 180deg that the classifier can't
-        // resolve a proper union. Retried once, only for the specific join
-        // that came back disconnected, so every other join is unaffected.
+      int solidCount = valid ? (nextShape.ShapeType() == TopAbs_SOLID ? 1 : countSolids(nextShape)) : 0;
+      if (!valid || solidCount != 1) {
+        // Glue mode: OCCT's own mechanism for two operands sharing coincident
+        // sub-shapes — covers every failure fuseJoin's own contract can still
+        // catch on a plain fuzzy boolean: a panel/bridge pair that genuinely
+        // touches (verified on real cauldron.step data via
+        // BRepExtrema_DistShapeShape: exact zero distance) but comes back as
+        // separate solids instead of merging (a real, near-flat ~3.4deg
+        // bend's dihedral angle too close to 180deg for the classifier), and
+        // a huge accumulated shape fused with a tiny sliver that silently
+        // discards the sliver (caught by fuseJoin's own union-volume
+        // invariant, confirmed on a real ~4.3deg bend). Retried once, only
+        // for the specific join that failed, so every other join keeps the
+        // tight kBooleanFuzzMm untouched.
         bool glueBuilt = false;
         TopoDS_Shape gluedShape;
         bool glueValid = fuseJoin(kBooleanFuzzMm, /*glue=*/true, currentShape, orderedPieces[i],
                                    &gluedShape, &glueBuilt);
         if (glueBuilt && glueValid) {
           nextShape = gluedShape;
+          valid = true;
           solidCount = nextShape.ShapeType() == TopAbs_SOLID ? 1 : countSolids(nextShape);
         }
+      }
+      if (!valid) {
+        result.errorCode = "GE_CONSTRUCTION_FAILED";
+        result.message = "fuse result is invalid after joining piece index " + std::to_string(i);
+        return result;
       }
       if (solidCount != 1) {
         result.errorCode = "GE_CONSTRUCTION_FAILED";
