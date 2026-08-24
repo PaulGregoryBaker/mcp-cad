@@ -110,6 +110,15 @@ const ToolSchemas = {
     max_recursion_depth: z.number().optional(),
   }),
 
+  // split_part_at_bend: the graph-level inverse of merge_bodies_with_bend.
+  // bend_id omitted -> split every bend on the part (N bends -> N+1 flat
+  // parts); keep_corner_on applies to every bend split in that one call.
+  split_part_at_bend: z.object({
+    part_id: z.string().min(1),
+    bend_id: z.string().min(1).optional(),
+    keep_corner_on: z.enum(['parent', 'child']),
+  }),
+
   // circle required iff kind=circle, polygon_ring required iff kind=polygon —
   // today's declared JSON Schema only says this in prose; the handler enforces
   // it, the schema didn't capture it. Encoded for real here via superRefine.

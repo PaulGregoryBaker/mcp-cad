@@ -776,6 +776,16 @@ export interface ReconcileOutlinesResult {
   hingeB: NapiPoint2;
 }
 
+// part_split.hpp's SplitAtBendResult — the graph-level inverse of
+// merge_bodies_with_bend's ReconcileOutlinesResult above, within one part.
+export interface SplitPartAtBendResult {
+  ok: boolean;
+  errorCode: string; // "" | "GE_SPLIT_HINGE_NOT_GROUNDED" | "GE_SPLIT_CORNER_ZONE_NOT_GROUNDED" | "GE_DEGENERATE_OUTLINE"
+  message: string;
+  parentOutline: NapiPoint2[];
+  childOutline: NapiPoint2[];
+}
+
 // rebuild/13-translation-module-design.md §6 / step_reconciliation.hpp —
 // Phase 5 Slice 5. One kernel-measured flat panel piece — mirrors
 // PanelFrameResult's own shape exactly (world origin/u/v/normal + a CCW

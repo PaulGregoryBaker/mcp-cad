@@ -18,6 +18,7 @@
 #include "../geometry/translation/manufacturing_graph_evaluator.hpp"
 #include "../geometry/translation/point_mapping.hpp"
 #include "../geometry/translation/part_merge.hpp"
+#include "../geometry/translation/part_split.hpp"
 #include "../geometry/translation/step_reconciliation.hpp"
 #include "../geometry/translation/polygon_boolean.hpp"
 #include "../geometry/translation/flat_outline.hpp"
@@ -45,6 +46,9 @@ using translation::MapToWorldResult;
 using translation::MergeErrorCode;
 using translation::PartGraphSpec;
 using translation::ReconcileOutlinesResult;
+using translation::CornerSide;
+using translation::SplitAtBendResult;
+using translation::SplitErrorCode;
 using translation::Point2;
 using translation::Point3;
 using translation::RegionPanelLayout;
@@ -100,6 +104,16 @@ const char* MergeErrorCodeToString(MergeErrorCode code) {
     case MergeErrorCode::kInvalidEdgeRef: return "GE_INVALID_EDGE_REF";
     case MergeErrorCode::kMergeEdgeMismatch: return "GE_MERGE_EDGE_MISMATCH";
     case MergeErrorCode::kMergeSelfIntersecting: return "GE_MERGE_SELF_INTERSECTION";
+  }
+  return "GE_UNKNOWN_ERROR";
+}
+
+const char* SplitErrorCodeToString(SplitErrorCode code) {
+  switch (code) {
+    case SplitErrorCode::kNone: return "";
+    case SplitErrorCode::kHingeNotGrounded: return "GE_SPLIT_HINGE_NOT_GROUNDED";
+    case SplitErrorCode::kCornerZoneNotGrounded: return "GE_SPLIT_CORNER_ZONE_NOT_GROUNDED";
+    case SplitErrorCode::kDegenerateResult: return "GE_DEGENERATE_OUTLINE";
   }
   return "GE_UNKNOWN_ERROR";
 }
@@ -194,6 +208,27 @@ std::vector<Point2> ReadPoint2Array(const Napi::Array& arr) {
     pts.push_back(ReadPoint2(arr.Get(i).As<Napi::Object>()));
   }
   return pts;
+}
+
+BendSpec ReadBendSpec(const Napi::Object& bendObj) {
+  BendSpec bend;
+  bend.id = bendObj.Get("id").As<Napi::String>().Utf8Value();
+  bend.parentRegionPanelId = bendObj.Get("parentRegionPanelId").As<Napi::String>().Utf8Value();
+  bend.childRegionPanelId = bendObj.Get("childRegionPanelId").As<Napi::String>().Utf8Value();
+  bend.hingeA = ReadPoint2(bendObj.Get("hingeA").As<Napi::Object>());
+  bend.hingeB = ReadPoint2(bendObj.Get("hingeB").As<Napi::Object>());
+  bend.angleDeg = bendObj.Get("angleDeg").As<Napi::Number>().DoubleValue();
+  Napi::Value radiusV = bendObj.Get("radiusMm");
+  bend.radiusMm = radiusV.IsNumber() ? radiusV.As<Napi::Number>().DoubleValue() : 0.0;
+  Napi::Value kFactorV = bendObj.Get("kFactor");
+  bend.kFactor = kFactorV.IsNumber() ? kFactorV.As<Napi::Number>().DoubleValue() : 0.0;
+  Napi::Value bottomIsConcaveV = bendObj.Get("bottomIsConcave");
+  if (bottomIsConcaveV.IsBoolean()) {
+    bend.bottomIsConcave = bottomIsConcaveV.As<Napi::Boolean>().Value();
+  }
+  Napi::Value radiusMeasuredV = bendObj.Get("radiusMeasured");
+  bend.radiusMeasured = radiusMeasuredV.IsBoolean() ? radiusMeasuredV.As<Napi::Boolean>().Value() : true;
+  return bend;
 }
 
 std::vector<Point3> ReadPoint3Array(const Napi::Array& arr) {
@@ -807,6 +842,16 @@ Napi::Value ReconcileOutlinesBinding(const Napi::CallbackInfo& info) {
   }
 }
 
+Napi::Object WriteSplitAtBendResult(Napi::Env env, const SplitAtBendResult& result) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("ok", Napi::Boolean::New(env, result.ok));
+  obj.Set("errorCode", Napi::String::New(env, SplitErrorCodeToString(result.errorCode)));
+  obj.Set("message", Napi::String::New(env, result.message));
+  obj.Set("parentOutline", WritePoint2Array(env, result.parentOutline));
+  obj.Set("childOutline", WritePoint2Array(env, result.childOutline));
+  return obj;
+}
+
 Napi::Object WritePolygonBooleanResult(Napi::Env env, const PolygonBooleanResult& result) {
   Napi::Object obj = Napi::Object::New(env);
   obj.Set("ok", Napi::Boolean::New(env, result.ok));
@@ -814,6 +859,33 @@ Napi::Object WritePolygonBooleanResult(Napi::Env env, const PolygonBooleanResult
   obj.Set("message", Napi::String::New(env, result.message));
   obj.Set("outer", WritePoint2Array(env, result.outer));
   return obj;
+}
+
+Napi::Value SplitPartAtBendBinding(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 4 || !info[0].IsArray() || !info[1].IsObject() || !info[2].IsNumber() ||
+      !info[3].IsString()) {
+    Napi::TypeError::New(
+        env, "splitPartAtBend(outline: Point2[], bend: BendSpec, thicknessMm: number, "
+             "keepCornerOn: 'parent' | 'child')")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    std::vector<Point2> outline = ReadPoint2Array(info[0].As<Napi::Array>());
+    BendSpec bend = ReadBendSpec(info[1].As<Napi::Object>());
+    double thicknessMm = info[2].As<Napi::Number>().DoubleValue();
+    std::string keepCornerOnStr = info[3].As<Napi::String>().Utf8Value();
+    CornerSide keepCornerOn =
+        keepCornerOnStr == "child" ? CornerSide::kChild : CornerSide::kParent;
+
+    SplitAtBendResult result =
+        translation::SplitPartAtBend(outline, bend, thicknessMm, keepCornerOn);
+    return WriteSplitAtBendResult(env, result);
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
 }
 
 Napi::Value PolygonUnionBinding(const Napi::CallbackInfo& info) {
@@ -1269,6 +1341,7 @@ void RegisterTranslationMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("mapPointToWorld", Napi::Function::New(env, MapPointToWorldBinding));
   exports.Set("mapPointToFlat", Napi::Function::New(env, MapPointToFlatBinding));
   exports.Set("reconcileOutlines", Napi::Function::New(env, ReconcileOutlinesBinding));
+  exports.Set("splitPartAtBend", Napi::Function::New(env, SplitPartAtBendBinding));
   exports.Set("reconcilePieces", Napi::Function::New(env, ReconcilePiecesBinding));
   exports.Set("polygonUnion", Napi::Function::New(env, PolygonUnionBinding));
   exports.Set("buildFlatOutline", Napi::Function::New(env, BuildFlatOutlineBinding));

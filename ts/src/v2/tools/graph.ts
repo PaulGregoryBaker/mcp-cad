@@ -15,6 +15,8 @@ import {
   importPart,
   fuseBodies,
   splitBodyByBendsStandalone,
+  splitPartAtBend,
+  splitPartByAllBends,
   cutPanel,
   closeGap,
   addFlange,
@@ -270,6 +272,28 @@ export const graphToolDefinitions = [
         max_recursion_depth: { type: 'number' },
       },
       required: ['file'],
+    },
+  },
+  {
+    name: 'split_part_at_bend',
+    description:
+      "Split a LIVE graph part into two independent parts at one of its own bends — the graph-level inverse of merge_bodies_with_bend. The bend is removed entirely (not flattened in place like delete_node(bend); a fresh part_id is minted for the bend's own child subtree). A real bend meets a real bend-allowance corner at TWO tangent lines (one per leg) bracketing the curved zone between them; keep_corner_on picks which side is cut at ITS OWN tangent line (keeping its normal, full corner-reaching shape, kFactor's stretch included) while the OTHER side is cut at that SAME line and ends up trimmed past even a raw-hinge cut, losing the whole allowance band. Omit bend_id to split every bend on the part in one call (an N-bend part becomes N+1 flat parts); keep_corner_on then applies uniformly to every bend split. The original part_id survives as the PARENT side of each split; every split-off child gets a new part_id. Both resulting parts keep the original part's own anchor unchanged, since every region panel already shares one flat frame — this is what keeps each piece exactly where it was, no 3D re-derivation. First-cut scope: a part with holes is not yet supported (which side a hole belongs to after the cut isn't resolved).",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        part_id: { type: 'string' },
+        bend_id: {
+          type: 'string',
+          description: 'Omit to split every bend on the part at once.',
+        },
+        keep_corner_on: {
+          type: 'string',
+          enum: ['parent', 'child'],
+          description:
+            'Which side is cut at its own tangent line and keeps its full, corner-reaching shape; the other side is cut at that same line and loses the whole bend-allowance band.',
+        },
+      },
+      required: ['part_id', 'keep_corner_on'],
     },
   },
   {
@@ -592,6 +616,8 @@ export function dispatchGraphTool(
       return handleMoveEdge(store, args);
     case 'split_body_by_bends':
       return handleSplitBodyByBends(args);
+    case 'split_part_at_bend':
+      return handleSplitPartAtBend(store, args);
     case 'cut_panel':
       return handleCutPanel(store, args);
     case 'close_gap':
@@ -715,6 +741,37 @@ function handleMergeBodiesWithBend(
       bend_id: bend.bendId,
       child_region_panel_id: childRegionPanel.regionPanelId,
     };
+  } catch (err) {
+    if (err instanceof GraphStoreError) {
+      throwError(err.code, err.message, false);
+    }
+    throw err;
+  }
+}
+
+function handleSplitPartAtBend(
+  store: GraphStore,
+  args: Record<string, unknown>,
+): { part_id: string; new_part_ids: string[] } {
+  const partId = requireString(args, 'part_id');
+  const bendId = optString(args, 'bend_id');
+  const keepCornerOnRaw = requireString(args, 'keep_corner_on');
+  if (keepCornerOnRaw !== 'parent' && keepCornerOnRaw !== 'child') {
+    throwError(
+      ErrorCodes.INTERNAL_ERROR,
+      `keep_corner_on must be 'parent' or 'child', got '${keepCornerOnRaw}'`,
+      false,
+    );
+  }
+  const keepCornerOn = keepCornerOnRaw as 'parent' | 'child';
+
+  try {
+    if (bendId !== undefined) {
+      const { childPart } = splitPartAtBend(store, { partId, bendId, keepCornerOn });
+      return { part_id: partId, new_part_ids: [childPart.partId] };
+    }
+    const { partIds } = splitPartByAllBends(store, { partId, keepCornerOn });
+    return { part_id: partId, new_part_ids: partIds.filter((id) => id !== partId) };
   } catch (err) {
     if (err instanceof GraphStoreError) {
       throwError(err.code, err.message, false);

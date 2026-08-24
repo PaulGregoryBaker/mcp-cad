@@ -274,6 +274,107 @@ export function mergePartsWithBend(
   });
 }
 
+export interface SplitPartAtBendInput {
+  partId: string;
+  bendId: string;
+  keepCornerOn: 'parent' | 'child';
+}
+
+/**
+ * split_part_at_bend: the graph-level inverse of mergePartsWithBend, within
+ * one part. Calls the ONE place this geometry is computed (part_split.hpp's
+ * SplitPartAtBend, pure C++) on the part's own stored outline + the target
+ * bend's own fields — never re-derived here (constitution v2.0.0 principle
+ * IV) — and, only on success, applies the result as an ordinary GraphStore
+ * mutation. A geometry failure (the hinge or the corner-biased cut line
+ * doesn't cross the outline cleanly) is a normal, typed, retryable outcome,
+ * same convention as mergePartsWithBend's own reconcileOutlines failure path.
+ */
+export function splitPartAtBend(
+  store: GraphStore,
+  input: SplitPartAtBendInput,
+): { childPart: PartRow; bendId: string } {
+  const part = store.getPart(input.partId);
+  if (!part) {
+    throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${input.partId}`, false);
+  }
+  const bend = store.getBend(input.bendId);
+  if (!bend) {
+    throwError(ErrorCodes.GRAPH_BEND_NOT_FOUND, `no bend with id ${input.bendId}`, false);
+  }
+  if (bend.partId !== input.partId) {
+    throwError(
+      ErrorCodes.GRAPH_SPLIT_BEND_NOT_ON_PART,
+      `bend ${input.bendId} does not belong to part ${input.partId}`,
+      false,
+    );
+  }
+
+  const split = geometryBinding.splitPartAtBend(
+    part.outline,
+    {
+      id: bend.bendId,
+      parentRegionPanelId: bend.parentRegionPanelId,
+      childRegionPanelId: bend.childRegionPanelId,
+      hingeA: bend.hingeA,
+      hingeB: bend.hingeB,
+      angleDeg: bend.angleDeg,
+      radiusMm: bend.radiusMm,
+      kFactor: bend.kFactorOverride ?? part.kFactor,
+      bottomIsConcave: bend.bottomIsConcave ?? undefined,
+      radiusMeasured: bend.radiusMeasured,
+    },
+    part.thicknessMm,
+    input.keepCornerOn,
+  );
+  if (!split.ok) {
+    throwError(
+      (split.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
+      split.message || 'splitPartAtBend failed',
+      true,
+    );
+  }
+
+  const { childPart } = store.splitPartAtBend({
+    partId: input.partId,
+    bendId: input.bendId,
+    parentOutline: split.parentOutline,
+    childOutline: split.childOutline,
+  });
+  return { childPart, bendId: input.bendId };
+}
+
+/**
+ * split_part_by_bends (bend_id omitted): repeatedly splits off one bend at a
+ * time until the target part (and every part split off from it) has no
+ * bends of its own left — an N-bend part becomes N+1 flat parts. Processes
+ * a worklist rather than assuming a chain (14 §2.1's fold tree is general),
+ * pushing BOTH resulting sides back on since either can still have its own
+ * remaining bends.
+ */
+export function splitPartByAllBends(
+  store: GraphStore,
+  input: { partId: string; keepCornerOn: 'parent' | 'child' },
+): { partIds: string[] } {
+  const worklist = [input.partId];
+  const done: string[] = [];
+  while (worklist.length > 0) {
+    const partId = worklist.pop() as string;
+    const snapshot = store.snapshotPart(partId);
+    if (snapshot.bends.length === 0) {
+      done.push(partId);
+      continue;
+    }
+    const { childPart } = splitPartAtBend(store, {
+      partId,
+      bendId: snapshot.bends[0].bendId,
+      keepCornerOn: input.keepCornerOn,
+    });
+    worklist.push(partId, childPart.partId);
+  }
+  return { partIds: done };
+}
+
 export interface FuseBodiesInput {
   partAId: string;
   partBId: string;

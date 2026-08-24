@@ -183,6 +183,12 @@ export const ErrorCodes = {
   // panel-level merge, 14 §2.1.1; move_edge's vertex_range bounds check).
   GRAPH_BEND_NOT_FOUND: 'GRAPH_BEND_NOT_FOUND',
   GRAPH_INVALID_VERTEX_RANGE: 'GRAPH_INVALID_VERTEX_RANGE',
+  // split_part_at_bend: the given bend doesn't belong to the given part.
+  GRAPH_SPLIT_BEND_NOT_ON_PART: 'GRAPH_SPLIT_BEND_NOT_ON_PART',
+  // split_part_at_bend's first-cut scope: a part with holes isn't split yet
+  // (which side a hole belongs to after the cut isn't resolved) — same
+  // deferred-scope discipline as GRAPH_FUSE_PART_B_NOT_SIMPLE above.
+  GRAPH_SPLIT_HOLES_NOT_SUPPORTED: 'GRAPH_SPLIT_HOLES_NOT_SUPPORTED',
   // Phase 5 Slice 9a: cut_panel — a candidate hole (circle or polygon) does
   // not fit fully within any live region panel (cut_panel.hpp).
   GE_CUT_HOLE_NOT_CONTAINED: 'GE_CUT_HOLE_NOT_CONTAINED',
@@ -202,6 +208,12 @@ export const ErrorCodes = {
   GE_INVALID_EDGE_REF: 'GE_INVALID_EDGE_REF',
   GE_MERGE_EDGE_MISMATCH: 'GE_MERGE_EDGE_MISMATCH',
   GE_MERGE_SELF_INTERSECTION: 'GE_MERGE_SELF_INTERSECTION',
+
+  // split_part_at_bend — the graph-level inverse of merge_bodies_with_bend,
+  // within one part (part_split.hpp). Verbatim string matches for
+  // translation::SplitErrorCode.
+  GE_SPLIT_HINGE_NOT_GROUNDED: 'GE_SPLIT_HINGE_NOT_GROUNDED',
+  GE_SPLIT_CORNER_ZONE_NOT_GROUNDED: 'GE_SPLIT_CORNER_ZONE_NOT_GROUNDED',
 
   // Phase 5 Slice 5 — ingest STEP -> graph (rebuild/13-translation-module-
   // design.md §6). Verbatim string matches for translation::ReconcileErrorCode

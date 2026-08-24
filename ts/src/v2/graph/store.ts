@@ -69,6 +69,16 @@ export interface MergePartsWithBendInput {
   radiusMeasured?: boolean;
 }
 
+/** split_part_at_bend's graph bookkeeping input — `parentOutline`/
+ * `childOutline` are already C++-computed (part_split.hpp's SplitAtBendResult),
+ * this store only applies them. */
+export interface SplitPartAtBendInput {
+  partId: string;
+  bendId: string;
+  parentOutline: Point2[];
+  childOutline: Point2[];
+}
+
 /**
  * fuse_bodies (Phase 5 Slice 6, first-cut scope — rebuild/06-plan.md):
  * absorbs a simple flat part B into part A by replacing A's outline with the
@@ -507,6 +517,98 @@ export class GraphStore {
       mergedRegionPanelId: bend.childRegionPanelId,
       ontoRegionPanelId: bend.parentRegionPanelId,
     };
+  }
+
+  /**
+   * split_part_at_bend — the graph-level inverse of mergePartsWithBend, but
+   * within one part: (1) mint a fresh part_id for the bend's own child
+   * subtree, (2) re-parent every region-panel/bend row in that subtree onto
+   * it, (3) delete the split bend row itself (it no longer connects two
+   * regions of the SAME part — the two sides are now separate parts), (4)
+   * replace the original part's outline with its own (now smaller)
+   * remainder. The new part keeps the ORIGINAL part's own anchor unchanged
+   * — both parts still share the one flat frame F's coordinates, so copying
+   * the anchor forward (rather than resetting to identity) is what keeps
+   * each piece exactly where it was, with no 3D transform to re-derive.
+   * `parentOutline`/`childOutline` are already-computed C++ output
+   * (part_split.hpp) — this method only applies them, never derives them
+   * (constitution v2.0.0 principle IV).
+   */
+  splitPartAtBend(input: SplitPartAtBendInput): { childPart: PartRow } {
+    const part = this.parts.get(input.partId);
+    if (!part) {
+      throw new GraphStoreError(`no part with id ${input.partId}`, ErrorCodes.GRAPH_PART_NOT_FOUND);
+    }
+    if (part.mergedIntoPartId !== null) {
+      throw new GraphStoreError(
+        `part ${input.partId} is an alias (already merged), not a live part`,
+        ErrorCodes.GRAPH_PART_ALIASED,
+      );
+    }
+    const bend = this.bends.get(input.bendId);
+    if (!bend) {
+      throw new GraphStoreError(`no bend with id ${input.bendId}`, ErrorCodes.GRAPH_BEND_NOT_FOUND);
+    }
+    if (bend.partId !== input.partId) {
+      throw new GraphStoreError(
+        `bend ${input.bendId} does not belong to part ${input.partId}`,
+        ErrorCodes.GRAPH_SPLIT_BEND_NOT_ON_PART,
+      );
+    }
+    // First-cut scope (mirrors GRAPH_FUSE_PART_B_NOT_SIMPLE): which side of
+    // the cut a hole belongs to isn't resolved yet.
+    if (part.holes.length > 0) {
+      throw new GraphStoreError(
+        `part ${input.partId} has holes — split_part_at_bend's first-cut scope does not ` +
+          `support splitting a part with holes yet`,
+        ErrorCodes.GRAPH_SPLIT_HOLES_NOT_SUPPORTED,
+      );
+    }
+
+    const childPartId = randomUUID();
+    const childPart: PartRow = {
+      partId: childPartId,
+      name: `${part.name} (split)`,
+      rootRegionPanelId: bend.childRegionPanelId,
+      outline: input.childOutline,
+      holes: [],
+      anchor: part.anchor,
+      materialId: part.materialId,
+      thicknessMm: part.thicknessMm,
+      kFactor: part.kFactor,
+      schemaVersion: part.schemaVersion,
+      mergedIntoPartId: null,
+    };
+    this.parts.set(childPartId, childPart);
+
+    // The bend's own child region panel plus everything folded beneath it
+    // in the fold tree (BFS over the OTHER live bends still on this part).
+    const subtreeRegionPanelIds = new Set<string>([bend.childRegionPanelId]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const b of this.bends.values()) {
+        if (b.bendId === input.bendId) continue;
+        if (b.partId !== input.partId) continue;
+        if (subtreeRegionPanelIds.has(b.parentRegionPanelId) && !subtreeRegionPanelIds.has(b.childRegionPanelId)) {
+          subtreeRegionPanelIds.add(b.childRegionPanelId);
+          grew = true;
+        }
+      }
+    }
+    for (const panelId of subtreeRegionPanelIds) {
+      const panel = this.regionPanels.get(panelId);
+      if (panel) panel.partId = childPartId;
+    }
+    for (const b of this.bends.values()) {
+      if (b.bendId === input.bendId) continue;
+      if (subtreeRegionPanelIds.has(b.parentRegionPanelId)) b.partId = childPartId;
+    }
+
+    this.bends.delete(input.bendId);
+    part.outline = input.parentOutline;
+
+    return { childPart };
   }
 
   /** move_edge (Phase 5 Slice 8, 15 §4.3, 14 §2.2 K2). */

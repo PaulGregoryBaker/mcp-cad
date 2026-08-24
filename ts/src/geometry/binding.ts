@@ -71,6 +71,7 @@ import type {
   MapToWorldResult,
   MapToFlatResult,
   ReconcileOutlinesResult,
+  SplitPartAtBendResult,
   NapiPanelPieceSpec,
   ReconcilePiecesResult,
   PolygonBooleanResult,
@@ -345,6 +346,14 @@ export interface GeometryAddon {
     edgeB0: NapiPoint2,
     edgeB1: NapiPoint2,
   ): ReconcileOutlinesResult;
+
+  // ── split_part_at_bend: the graph-level inverse of merge_bodies_with_bend ──
+  splitPartAtBend?(
+    outline: NapiPoint2[],
+    bend: NapiBendSpec,
+    thicknessMm: number,
+    keepCornerOn: 'parent' | 'child',
+  ): SplitPartAtBendResult;
 
   // ── Phase 5 Slice 5: ingest STEP -> graph piece reconciliation ────────────
   // profile is optional; only its rules.defaultBendRadiusMm is read (the
@@ -1381,6 +1390,22 @@ export class GeometryBinding {
     }
     try {
       return this.addon.reconcileOutlines(outlineA, edgeA0, edgeA1, outlineB, edgeB0, edgeB1);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  splitPartAtBend(
+    outline: NapiPoint2[],
+    bend: NapiBendSpec,
+    thicknessMm: number,
+    keepCornerOn: 'parent' | 'child',
+  ): SplitPartAtBendResult {
+    if (!this.addon.splitPartAtBend) {
+      throw new Error('Geometry addon does not expose splitPartAtBend');
+    }
+    try {
+      return this.addon.splitPartAtBend(outline, bend, thicknessMm, keepCornerOn);
     } catch (err) {
       throw toStructuredError(err);
     }
