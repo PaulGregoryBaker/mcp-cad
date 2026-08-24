@@ -580,6 +580,27 @@ public:
       faceCentroid[i] = fp.CentreOfMass();
     }
 
+    // Precompute each face's own bounding box once. BRepExtrema_DistShapeShape
+    // (used throughout the thinness tests below) is a genuinely expensive
+    // numerical solve, not O(1) — a cheap AABB-distance lower bound (the same
+    // Enlarge+IsOut technique splitMode2 already uses) lets every hot loop
+    // below skip the solver entirely for face pairs that can't possibly be
+    // within maxThicknessMm, without changing which pairs are ultimately
+    // accepted: an AABB-to-AABB distance is always <= the true face-to-face
+    // distance, so this can only ever prune a pair that would have failed
+    // the real distance test anyway, never skip a real match.
+    std::vector<Bnd_Box> faceBox(nFaces + 1);
+    for (int i = 1; i <= nFaces; ++i) {
+      for (TopExp_Explorer ex(TopoDS::Face(faceMap(i)), TopAbs_VERTEX); ex.More(); ex.Next()) {
+        faceBox[i].Add(BRep_Tool::Pnt(TopoDS::Vertex(ex.Current())));
+      }
+    }
+    auto tooFarForThickness = [&](int idxA, int idxB) {
+      Bnd_Box a = faceBox[idxA];
+      a.Enlarge(maxThicknessMm);
+      return a.IsOut(faceBox[idxB]);
+    };
+
     for (int g = 0; g < (int)groups.size(); ++g) {
       if (!groups[g].isOuter || groupAttach[g].empty()) continue;
       if (claimedPanelGroup[g]) continue;
@@ -659,6 +680,7 @@ public:
           for (int j = i + 1; j < (int)component.size(); ++j) {
             const TopoDS_Face& fJ = TopoDS::Face(faceMap(component[j]));
             if (nI.Dot(faceOutwardNormal(fJ)) >= -0.95) continue;
+            if (tooFarForThickness(component[i], component[j])) continue;
             BRepExtrema_DistShapeShape d(fI, fJ);
             if (d.IsDone() && d.Value() <= maxThicknessMm) { thinEnough = true; break; }
           }
@@ -668,6 +690,7 @@ public:
             const TopoDS_Face& panelF = TopoDS::Face(faceMap(fi));
             gp_Vec pnNorm = faceOutwardNormal(panelF);
             if (std::abs(capNormVec.Dot(pnNorm)) <= 0.85) continue;
+            if (tooFarForThickness(capIdx, fi)) continue;
             BRepExtrema_DistShapeShape d(capFace, panelF);
             if (d.IsDone() && d.Value() <= maxThicknessMm) { thinEnough = true; break; }
           }
@@ -679,6 +702,7 @@ public:
               const TopoDS_Face& panelF = TopoDS::Face(faceMap(fi));
               gp_Vec pnNorm = faceOutwardNormal(panelF);
               if (std::abs(capNormVec.Dot(pnNorm)) <= 0.85) continue;
+              if (tooFarForThickness(capIdx, fi)) continue;
               BRepExtrema_DistShapeShape d(capFace, panelF);
               if (d.IsDone() && d.Value() <= maxThicknessMm) {
                 thinEnough = true;
@@ -739,6 +763,7 @@ public:
           const TopoDS_Face& f = TopoDS::Face(faceMap(fi));
           gp_Vec fn = faceOutwardNormal(f);
           if (std::abs(capNormVec.Dot(fn)) <= 0.85) continue;
+          if (tooFarForThickness(capIdx, fi)) continue;
           BRepExtrema_DistShapeShape d(capFace, f);
           if (d.IsDone() && d.Value() <= maxThicknessMm) {
             claimed[fi] = true;
@@ -1356,6 +1381,21 @@ public:
     std::vector<PanelCut> cuts;
     cuts.reserve(groups.size());
 
+    // Precompute each group's own bounding box ONCE — the pairing loop below
+    // is O(G^2); rebuilding a group's bbox from its face vertices inside the
+    // inner loop (previously done for boxJ on every (i, j) pair, i.e. O(G)
+    // times PER outer i) was pure redundant work, since a group's bbox never
+    // changes across iterations. Same values as before, computed once.
+    std::vector<Bnd_Box> groupBoxes(groups.size());
+    for (int g = 0; g < (int)groups.size(); ++g) {
+      for (int idx : groups[g].faceIndices) {
+        const TopoDS_Face& f = TopoDS::Face(faceMap(idx));
+        for (TopExp_Explorer ex(f, TopAbs_VERTEX); ex.More(); ex.Next()) {
+          groupBoxes[g].Add(BRep_Tool::Pnt(TopoDS::Vertex(ex.Current())));
+        }
+      }
+    }
+
     for (int i = 0; i < (int)groups.size(); ++i) {
       if (!groups[i].isOuter) continue;
 
@@ -1364,14 +1404,7 @@ public:
       Handle(Geom_Surface) surfOut = BRep_Tool::Surface(fOut);
       if (surfOut.IsNull() || !surfOut->IsKind(STANDARD_TYPE(Geom_Plane))) continue;
 
-      // Compute bounding box for group i safely using vertices
-      Bnd_Box boxI;
-      for (int idx : groups[i].faceIndices) {
-        const TopoDS_Face& f = TopoDS::Face(faceMap(idx));
-        for (TopExp_Explorer ex(f, TopAbs_VERTEX); ex.More(); ex.Next()) {
-          boxI.Add(BRep_Tool::Pnt(TopoDS::Vertex(ex.Current())));
-        }
-      }
+      const Bnd_Box& boxI = groupBoxes[i];
 
       double bestDist = std::numeric_limits<double>::max();
       int    bestJ    = -1;
@@ -1380,14 +1413,7 @@ public:
         if (i == j || groups[j].isOuter) continue;
         if (groups[i].normal.Dot(groups[j].normal) > -0.95) continue;
 
-        // Compute bounding box for group j safely using vertices
-        Bnd_Box boxJ;
-        for (int idx : groups[j].faceIndices) {
-          const TopoDS_Face& f = TopoDS::Face(faceMap(idx));
-          for (TopExp_Explorer ex(f, TopAbs_VERTEX); ex.More(); ex.Next()) {
-            boxJ.Add(BRep_Tool::Pnt(TopoDS::Vertex(ex.Current())));
-          }
-        }
+        const Bnd_Box& boxJ = groupBoxes[j];
 
         // Check if group i and group j overlap transversely by inflating boxI
         Bnd_Box boxI_inflated = boxI;

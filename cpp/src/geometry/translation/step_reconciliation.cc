@@ -1,10 +1,13 @@
 #include "geometry/translation/step_reconciliation.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <map>
 #include <unordered_map>
+#include <utility>
 
 namespace mcp_cad::translation {
 
@@ -220,28 +223,78 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
   // 3. Find every pairwise shared edge (reversed-correspondence match, real
   // CCW panels meeting at a real fold always traverse their shared edge in
   // opposite order — same fact part_merge.hpp relies on).
+  //
+  // Accelerated via a spatial hash on edge endpoints rather than the naive
+  // O(n^2 * e^2) all-pairs-all-edges scan: the grid cell size equals the
+  // match tolerance, so any two points within tolerance of each other are
+  // guaranteed to land in the same cell or one of its 26 neighbours (a
+  // standard property of a tolerance-sized uniform grid — a coordinate
+  // cannot move by <= one cell width without its floored cell index
+  // changing by more than 1). Every candidate the grid turns up is still
+  // verified with the EXACT same NearlyEqual3 predicate the brute force
+  // used — the grid only prunes which pairs get tested, it never changes
+  // the accept/reject decision — and results are re-sorted into the brute
+  // force's own (pieceA, pieceB, edgeA, edgeB) iteration order before being
+  // appended, so `edges` ends up identical to what the O(n^2 * e^2) version
+  // would have produced (this matters: BFS tree-edge selection in step 4
+  // below depends on `edges`' insertion order when multiple candidate
+  // edges connect the same two pieces).
   struct AdjacencyEdge {
     size_t pieceA, edgeA, pieceB, edgeB;
   };
   std::vector<AdjacencyEdge> edges;
-  for (size_t i = 0; i < n; ++i) {
-    size_t ni = simplifiedPieces[i].ringLocal.size();
-    for (size_t j = i + 1; j < n; ++j) {
+  {
+    using CellKey = std::array<int64_t, 3>;
+    auto cellOf = [](const Point3& p) -> CellKey {
+      return {static_cast<int64_t>(std::floor(p.x / kPieceEdgeMatchToleranceMm)),
+              static_cast<int64_t>(std::floor(p.y / kPieceEdgeMatchToleranceMm)),
+              static_cast<int64_t>(std::floor(p.z / kPieceEdgeMatchToleranceMm))};
+    };
+
+    // Index every piece's every edge by its END point (the "b1" side of the
+    // reversed-correspondence test below).
+    std::map<CellKey, std::vector<std::pair<size_t, size_t>>> endIndex;
+    for (size_t j = 0; j < n; ++j) {
       size_t nj = simplifiedPieces[j].ringLocal.size();
+      for (size_t eb = 0; eb < nj; ++eb) {
+        const Point3& b1 = trueRootLocalRing[j][(eb + 1) % nj];
+        endIndex[cellOf(b1)].push_back({j, eb});
+      }
+    }
+
+    for (size_t i = 0; i < n; ++i) {
+      size_t ni = simplifiedPieces[i].ringLocal.size();
       for (size_t ea = 0; ea < ni; ++ea) {
         const Point3& a0 = trueRootLocalRing[i][ea];
         const Point3& a1 = trueRootLocalRing[i][(ea + 1) % ni];
-        for (size_t eb = 0; eb < nj; ++eb) {
-          const Point3& b0 = trueRootLocalRing[j][eb];
-          const Point3& b1 = trueRootLocalRing[j][(eb + 1) % nj];
-          // Reversed correspondence: a0~b1 and a1~b0.
-          if (NearlyEqual3(a0, b1, kPieceEdgeMatchToleranceMm) &&
-              NearlyEqual3(a1, b0, kPieceEdgeMatchToleranceMm)) {
-            edges.push_back({i, ea, j, eb});
+        CellKey base = cellOf(a0);
+        for (int64_t dx = -1; dx <= 1; ++dx) {
+          for (int64_t dy = -1; dy <= 1; ++dy) {
+            for (int64_t dz = -1; dz <= 1; ++dz) {
+              auto it = endIndex.find({base[0] + dx, base[1] + dy, base[2] + dz});
+              if (it == endIndex.end()) continue;
+              for (const auto& [j, eb] : it->second) {
+                if (j <= i) continue;  // preserve the brute force's i<j convention
+                size_t nj = simplifiedPieces[j].ringLocal.size();
+                const Point3& b0 = trueRootLocalRing[j][eb];
+                const Point3& b1 = trueRootLocalRing[j][(eb + 1) % nj];
+                if (NearlyEqual3(a0, b1, kPieceEdgeMatchToleranceMm) &&
+                    NearlyEqual3(a1, b0, kPieceEdgeMatchToleranceMm)) {
+                  edges.push_back({i, ea, j, eb});
+                }
+              }
+            }
           }
         }
       }
     }
+
+    std::sort(edges.begin(), edges.end(), [](const AdjacencyEdge& a, const AdjacencyEdge& b) {
+      if (a.pieceA != b.pieceA) return a.pieceA < b.pieceA;
+      if (a.pieceB != b.pieceB) return a.pieceB < b.pieceB;
+      if (a.edgeA != b.edgeA) return a.edgeA < b.edgeA;
+      return a.edgeB < b.edgeB;
+    });
   }
 
   // 4. Spanning tree via BFS from root; extra edges are non-fatal notes
