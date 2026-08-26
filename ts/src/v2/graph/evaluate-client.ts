@@ -335,11 +335,35 @@ export function splitPartAtBend(
     );
   }
 
+  // The bend's own childRegionPanelId pose, read WHILE the bend is still
+  // live — the chain-product 3D transform (root anchor + every ancestor
+  // bend) that panel had while folded. This becomes the new child part's
+  // anchor below, so it keeps its exact 3D position with no live bend left
+  // to fold it there (see SplitPartAtBendInput.childAnchor's own comment,
+  // store.ts).
+  const layout = evaluatePart(store, input.partId);
+  if (!layout.ok) {
+    throwError(
+      (layout.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
+      layout.message || `evaluatePartGraph failed for part ${input.partId}`,
+      false,
+    );
+  }
+  const childPanelLayout = layout.panels.find((p) => p.regionPanelId === bend.childRegionPanelId);
+  if (!childPanelLayout) {
+    throwError(
+      ErrorCodes.INTERNAL_ERROR,
+      `evaluatePartGraph result for part ${input.partId} is missing panel ${bend.childRegionPanelId}`,
+      false,
+    );
+  }
+
   const { childPart } = store.splitPartAtBend({
     partId: input.partId,
     bendId: input.bendId,
     parentOutline: split.parentOutline,
     childOutline: split.childOutline,
+    childAnchor: childPanelLayout.pose,
   });
   return { childPart, bendId: input.bendId };
 }
@@ -351,28 +375,44 @@ export function splitPartAtBend(
  * a worklist rather than assuming a chain (14 §2.1's fold tree is general),
  * pushing BOTH resulting sides back on since either can still have its own
  * remaining bends.
+ *
+ * All-or-nothing: each iteration's splitPartAtBend is its own atomic store
+ * mutation, but a LATER bend's cut can fail against geometry an EARLIER
+ * bend's cut in this SAME call already reshaped (part_split.hpp cuts one
+ * bend at a time with no knowledge of any other bend on the same ring —
+ * see its own header comment — so bends whose corners share territory,
+ * e.g. three walls folded off one base, can hit this). Without a snapshot/
+ * restore around the whole loop, that failure would leave the store with
+ * whatever prefix of splits already succeeded applied — a partially-split,
+ * inconsistent parent instead of either a full split or none at all.
  */
 export function splitPartByAllBends(
   store: GraphStore,
   input: { partId: string; keepCornerOn: 'parent' | 'child' },
 ): { partIds: string[] } {
-  const worklist = [input.partId];
-  const done: string[] = [];
-  while (worklist.length > 0) {
-    const partId = worklist.pop() as string;
-    const snapshot = store.snapshotPart(partId);
-    if (snapshot.bends.length === 0) {
-      done.push(partId);
-      continue;
+  const before = store.snapshotAll();
+  try {
+    const worklist = [input.partId];
+    const done: string[] = [];
+    while (worklist.length > 0) {
+      const partId = worklist.pop() as string;
+      const snapshot = store.snapshotPart(partId);
+      if (snapshot.bends.length === 0) {
+        done.push(partId);
+        continue;
+      }
+      const { childPart } = splitPartAtBend(store, {
+        partId,
+        bendId: snapshot.bends[0].bendId,
+        keepCornerOn: input.keepCornerOn,
+      });
+      worklist.push(partId, childPart.partId);
     }
-    const { childPart } = splitPartAtBend(store, {
-      partId,
-      bendId: snapshot.bends[0].bendId,
-      keepCornerOn: input.keepCornerOn,
-    });
-    worklist.push(partId, childPart.partId);
+    return { partIds: done };
+  } catch (err) {
+    store.restoreAll(before);
+    throw err;
   }
-  return { partIds: done };
 }
 
 export interface FuseBodiesInput {

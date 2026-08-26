@@ -71,12 +71,20 @@ export interface MergePartsWithBendInput {
 
 /** split_part_at_bend's graph bookkeeping input — `parentOutline`/
  * `childOutline` are already C++-computed (part_split.hpp's SplitAtBendResult),
- * this store only applies them. */
+ * this store only applies them. `childAnchor` is the split bend's own
+ * childRegionPanelId `pose` (evaluate-client.ts reads it from
+ * evaluatePartGraph BEFORE the bend is removed) — the chain-product 3D
+ * transform (root anchor + every ancestor bend's rotation) that panel had
+ * WHILE still folded. Copying the parent's own anchor forward is only
+ * correct for a zero-angle bend; baking in this pose is what keeps the
+ * split-off part exactly where it was in 3D, with no live bend left to fold
+ * it there anymore. */
 export interface SplitPartAtBendInput {
   partId: string;
   bendId: string;
   parentOutline: Point2[];
   childOutline: Point2[];
+  childAnchor: Transform3Row;
 }
 
 /**
@@ -526,11 +534,12 @@ export class GraphStore {
    * it, (3) delete the split bend row itself (it no longer connects two
    * regions of the SAME part — the two sides are now separate parts), (4)
    * replace the original part's outline with its own (now smaller)
-   * remainder. The new part keeps the ORIGINAL part's own anchor unchanged
-   * — both parts still share the one flat frame F's coordinates, so copying
-   * the anchor forward (rather than resetting to identity) is what keeps
-   * each piece exactly where it was, with no 3D transform to re-derive.
-   * `parentOutline`/`childOutline` are already-computed C++ output
+   * remainder. The PARENT part keeps its own anchor unchanged (it still has
+   * every OTHER bend it had before, so nothing about its own folding
+   * changed). The new CHILD part's anchor is `input.childAnchor` — the
+   * split bend's own childRegionPanelId pose, already computed by the
+   * caller (evaluate-client.ts) via evaluatePartGraph BEFORE this bend was
+   * removed. `parentOutline`/`childOutline` are already-computed C++ output
    * (part_split.hpp) — this method only applies them, never derives them
    * (constitution v2.0.0 principle IV).
    */
@@ -572,7 +581,7 @@ export class GraphStore {
       rootRegionPanelId: bend.childRegionPanelId,
       outline: input.childOutline,
       holes: [],
-      anchor: part.anchor,
+      anchor: input.childAnchor,
       materialId: part.materialId,
       thicknessMm: part.thicknessMm,
       kFactor: part.kFactor,
@@ -754,6 +763,31 @@ export class GraphStore {
       regionPanels: [...this.regionPanels.values()],
       bends: [...this.bends.values()],
     };
+  }
+
+  /**
+   * Whole-store, deep-cloned snapshot — for a caller that needs to attempt
+   * SEVERAL mutations as one all-or-nothing unit (e.g. split_part_at_bend's
+   * bend_id-omitted path, which mints several new parts across several
+   * internal splitPartAtBend calls). Deep-cloned (not `serialize()`'s bare
+   * references) because rows are mutated in place elsewhere (e.g.
+   * `part.outline = ...`) — a reference snapshot would already reflect a
+   * later mutation by the time anything tried to roll back to it.
+   */
+  snapshotAll(): { parts: PartRow[]; regionPanels: RegionPanelRow[]; bends: BendRow[] } {
+    return structuredClone(this.serialize());
+  }
+
+  /** Discards every current row and replaces them with a deep-cloned copy
+   * of `snapshot` (from `snapshotAll()`) — the rollback half of that pair. */
+  restoreAll(snapshot: { parts: PartRow[]; regionPanels: RegionPanelRow[]; bends: BendRow[] }): void {
+    const clone = structuredClone(snapshot);
+    this.parts.clear();
+    this.regionPanels.clear();
+    this.bends.clear();
+    for (const part of clone.parts) this.parts.set(part.partId, part);
+    for (const panel of clone.regionPanels) this.regionPanels.set(panel.regionPanelId, panel);
+    for (const bend of clone.bends) this.bends.set(bend.bendId, bend);
   }
 
   static deserialize(data: {

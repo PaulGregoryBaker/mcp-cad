@@ -11,10 +11,27 @@ import { describe, expect, it } from 'vitest';
 
 import { GraphStore } from '../../src/v2/graph/store';
 import { dispatchGraphTool } from '../../src/v2/tools/graph';
+import { evaluatePart } from '../../src/v2/graph/evaluate-client';
 import { McpToolError } from '../../src/mcp/errors';
+import type { Point2 } from '../../src/v2/graph/types';
+import type { NapiTransform3 } from '../../src/geometry/types';
 
 const ENABLED = process.env.SUITE_V2_DRIVER === '1';
 const d = ENABLED ? describe : describe.skip;
+
+/** p' = R*p + t (row-major 3x3 r), z=0 — mirrors Transform3::Apply
+ * (manufacturing_graph_evaluator.hpp) so the test can independently verify
+ * a `pose` bakes a flat-frame point to the SAME 3D position on both sides
+ * of a split, without depending on any internal helper under test. */
+function applyPose(pose: NapiTransform3, p: Point2): { x: number; y: number; z: number } {
+  const [r0, r1, r2, r3, r4, r5, r6, r7, r8] = pose.r;
+  const [tx, ty, tz] = pose.t;
+  return {
+    x: r0 * p.x + r1 * p.y + r2 * 0 + tx,
+    y: r3 * p.x + r4 * p.y + r5 * 0 + ty,
+    z: r6 * p.x + r7 * p.y + r8 * 0 + tz,
+  };
+}
 
 interface MergeToolResult {
   part_id: string;
@@ -103,6 +120,19 @@ d('split_part_at_bend', () => {
     const combinedArea = shoelaceArea(store.getPart(partAId)!.outline);
     expect(combinedArea).toBeCloseTo(10 * 5 + 5 * 8, 6);
 
+    // Capture the bend's own hinge (frame F) and the pose it folds that
+    // hinge to in 3D WHILE the merge is still intact — the ground truth
+    // "where this material actually is" the split must not disturb.
+    const bendRow = store.getBend(merged.bend_id)!;
+    const layoutBefore = evaluatePart(store, partAId);
+    expect(layoutBefore.ok).toBe(true);
+    const childPanelBefore = layoutBefore.panels.find(
+      (p) => p.regionPanelId === merged.child_region_panel_id,
+    )!;
+    expect(childPanelBefore).toBeDefined();
+    const hingeA3dBefore = applyPose(childPanelBefore.pose, bendRow.hingeA);
+    const hingeB3dBefore = applyPose(childPanelBefore.pose, bendRow.hingeB);
+
     const split = dispatchGraphTool(store, 'split_part_at_bend', {
       part_id: partAId,
       bend_id: merged.bend_id,
@@ -127,8 +157,28 @@ d('split_part_at_bend', () => {
     expect(childArea).toBeGreaterThan(5 * 8);
     expect(parentArea).toBeLessThan(10 * 5);
 
-    // Both parts share the original combined part's own anchor.
-    expect(store.getPart(childId)!.anchor).toEqual(store.getPart(partAId)!.anchor);
+    // The split-off part no longer has a live bend to fold it — its own
+    // anchor must already bake in the fold, so the SAME frame-F hinge
+    // points land at the SAME 3D position as they did while still merged.
+    const layoutAfter = evaluatePart(store, childId);
+    expect(layoutAfter.ok).toBe(true);
+    const childPanelAfter = layoutAfter.panels.find(
+      (p) => p.regionPanelId === merged.child_region_panel_id,
+    )!;
+    expect(childPanelAfter).toBeDefined();
+    const hingeA3dAfter = applyPose(childPanelAfter.pose, bendRow.hingeA);
+    const hingeB3dAfter = applyPose(childPanelAfter.pose, bendRow.hingeB);
+    expect(hingeA3dAfter.x).toBeCloseTo(hingeA3dBefore.x, 6);
+    expect(hingeA3dAfter.y).toBeCloseTo(hingeA3dBefore.y, 6);
+    expect(hingeA3dAfter.z).toBeCloseTo(hingeA3dBefore.z, 6);
+    expect(hingeB3dAfter.x).toBeCloseTo(hingeB3dBefore.x, 6);
+    expect(hingeB3dAfter.y).toBeCloseTo(hingeB3dBefore.y, 6);
+    expect(hingeB3dAfter.z).toBeCloseTo(hingeB3dBefore.z, 6);
+
+    // Regression guard: for a real (non-zero-angle) bend, the child's own
+    // anchor must NOT just be a copy of the parent's (that was the bug —
+    // it silently un-folds the part back to flat).
+    expect(store.getPart(childId)!.anchor).not.toEqual(store.getPart(partAId)!.anchor);
   });
 
   it('keep_corner_on=parent gives the mirror-image partition', () => {
@@ -226,5 +276,67 @@ d('split_part_at_bend', () => {
       expect(bendsOnPart).toHaveLength(0);
     }
     expect(totalAreaAfter).toBeCloseTo(totalAreaBefore, 6);
+  });
+
+  it('bend_id omitted, all-or-nothing: a failed multi-bend split leaves the store untouched', () => {
+    const store = new GraphStore();
+    // A 20x20 base with 3 walls folded up on 3 of its 4 edges — adjacent
+    // bends that share corners with each other. part_split.hpp cuts one
+    // bend at a time with no knowledge of any other bend on the same ring
+    // (its own header comment), so once the first wall is split away, the
+    // next bend's hinge no longer grounds cleanly against the reshaped
+    // remainder — this must fail cleanly (typed error), not leave a
+    // partially-split, corrupted graph behind.
+    const part = dispatchGraphTool(store, 'create_part', {
+      name: 'box3',
+      outline: [
+        { x: 0, y: 0 },
+        { x: 20, y: 0 },
+        { x: 20, y: 20 },
+        { x: 0, y: 20 },
+      ],
+      thickness_mm: 1.0,
+    }) as { part_id: string; root_region_panel_id: string };
+
+    const edges: Array<[Point2, Point2]> = [
+      [{ x: 0, y: 0 }, { x: 20, y: 0 }],
+      [{ x: 20, y: 0 }, { x: 20, y: 20 }],
+      [{ x: 20, y: 20 }, { x: 0, y: 20 }],
+    ];
+    for (const [hingeA, hingeB] of edges) {
+      dispatchGraphTool(store, 'create_node', {
+        kind: 'bend',
+        part_id: part.part_id,
+        parent_region_panel_id: part.root_region_panel_id,
+        hinge_a: hingeA,
+        hinge_b: hingeB,
+        angle_deg: 90,
+        radius_mm: 1.0,
+      });
+    }
+
+    // Deep-cloned (snapshotAll, not serialize) — serialize() returns live
+    // row references, which a partial split would mutate in place, making
+    // this baseline useless for an untouched-state comparison below.
+    const before = store.snapshotAll();
+
+    let threw: unknown;
+    try {
+      dispatchGraphTool(store, 'split_part_at_bend', {
+        part_id: part.part_id,
+        keep_corner_on: 'parent',
+      });
+    } catch (err) {
+      threw = err;
+    }
+    expect(threw).toBeInstanceOf(McpToolError);
+
+    // Untouched: same parts, same bends, nothing minted or half-mutated.
+    const after = store.serialize();
+    expect(after.parts.map((p) => p.partId).sort()).toEqual(before.parts.map((p) => p.partId).sort());
+    expect(after.bends.map((b) => b.bendId).sort()).toEqual(before.bends.map((b) => b.bendId).sort());
+    const beforePart = before.parts.find((p) => p.partId === part.part_id)!;
+    expect(store.getPart(part.part_id)!.outline).toEqual(beforePart.outline);
+    expect(store.snapshotPart(part.part_id).bends).toHaveLength(3);
   });
 });
