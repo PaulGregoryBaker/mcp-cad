@@ -36,6 +36,7 @@ import {
   optBoolean,
   optTransform,
   requirePoint2,
+  optPoint2,
   requirePoint2Array,
   requirePoint2ArrayAllowEmpty,
   requireEdgeRef,
@@ -203,7 +204,7 @@ export const graphToolDefinitions = [
   {
     name: 'update_node',
     description:
-      "Update an existing v2 manufacturing-graph entity's fields in place (rebuild/06 Slice 8, rebuild/15 §4.3). kind=part: patch may include name, material_id, k_factor, anchor (a whole-part move — v2's replacement for v1's translate_body). kind=bend: patch may include angle_deg, radius_mm, k_factor_override (number or null to clear), bottom_is_concave (boolean or null to clear), radius_measured (boolean). Setting radius_mm implicitly sets radius_measured=true (an explicit edit is by definition no longer import_part's unmeasured placeholder) — pass radius_measured explicitly only to override that. kind=region_panel: patch may include label, k_factor_override (number or null). Only fields present in patch are changed.",
+      "Update an existing v2 manufacturing-graph entity's fields in place (rebuild/06 Slice 8, rebuild/15 §4.3). kind=part: patch may include name, material_id, k_factor, anchor (a whole-part move — v2's replacement for v1's translate_body). kind=bend: patch may include angle_deg, radius_mm, k_factor_override (number or null to clear), bottom_is_concave (boolean or null to clear), hinge_a, hinge_b ({x,y} — repositions the fold line in place; the bend keeps its own id and existing parent/child region panels, unlike delete_node+create_node), radius_measured (boolean). Setting radius_mm implicitly sets radius_measured=true (an explicit edit is by definition no longer import_part's unmeasured placeholder) — pass radius_measured explicitly only to override that. kind=region_panel: patch may include label, k_factor_override (number or null). Only fields present in patch are changed.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -905,6 +906,8 @@ function handleUpdateNode(
           radiusMm: optNumber(patch, 'radius_mm'),
           kFactorOverride: optNullableNumber(patch, 'k_factor_override'),
           bottomIsConcave: optNullableBoolean(patch, 'bottom_is_concave'),
+          hingeA: optPoint2(patch, 'hinge_a'),
+          hingeB: optPoint2(patch, 'hinge_b'),
           radiusMeasured: optBoolean(patch, 'radius_measured'),
         });
         return { bend_id: bend.bendId };

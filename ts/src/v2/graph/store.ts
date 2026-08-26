@@ -119,14 +119,25 @@ export interface UpdatePartInput {
 }
 
 /** update_node(kind=bend) (15 §4.3) — bend angle/radius/k-factor-override/
- * pivot-side edits. `kFactorOverride`/`bottomIsConcave` accept `null`
- * (explicit clear) distinctly from `undefined` (field omitted, unchanged). */
+ * pivot-side/hinge-position edits. `kFactorOverride`/`bottomIsConcave` accept
+ * `null` (explicit clear) distinctly from `undefined` (field omitted,
+ * unchanged). `hingeA`/`hingeB` reposition the fold line in place — a plain
+ * field patch like every other field here (14 §2's region-panel shape is
+ * derived lazily by evaluatePart, never stored, so moving a hinge needs no
+ * special recompute step at mutation time, unlike delete_node's re-parenting
+ * bookkeeping: the bend keeps its own id and its existing parent/child region
+ * panel ids, only the line's endpoints change). A resulting hinge that no
+ * longer lies within its parent region panel's outline is NOT pre-validated
+ * here — it surfaces as a typed geometry error the next time the part is
+ * evaluated, same "no silent fallback" discipline as move_edge. */
 export interface UpdateBendInput {
   bendId: string;
   angleDeg?: number;
   radiusMm?: number;
   kFactorOverride?: number | null;
   bottomIsConcave?: boolean | null;
+  hingeA?: Point2;
+  hingeB?: Point2;
   /** See BendRow.radiusMeasured's own doc comment. Omitted: left as-is,
    * UNLESS radiusMm is provided in this same patch, in which case it's set
    * true automatically — an explicit radius edit is by definition no longer
@@ -457,6 +468,8 @@ export class GraphStore {
     }
     if (input.kFactorOverride !== undefined) bend.kFactorOverride = input.kFactorOverride;
     if (input.bottomIsConcave !== undefined) bend.bottomIsConcave = input.bottomIsConcave;
+    if (input.hingeA !== undefined) bend.hingeA = input.hingeA;
+    if (input.hingeB !== undefined) bend.hingeB = input.hingeB;
     if (input.radiusMeasured !== undefined) bend.radiusMeasured = input.radiusMeasured;
     return bend;
   }

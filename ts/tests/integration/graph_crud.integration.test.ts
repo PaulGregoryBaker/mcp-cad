@@ -129,6 +129,52 @@ d('[v2] update_node (Phase 5 Slice 8)', () => {
     expect(bend?.angleDeg).toBe(45);
   });
 
+  it('kind=bend: repositions the hinge line in place via hinge_a/hinge_b, keeping the same bend id and parent/child region panels', () => {
+    const store = new GraphStore();
+    const part = createRectPart(store, 'update-bend-hinge');
+    const created = createBend(store, part.part_id, part.root_region_panel_id, 5);
+
+    const result = dispatchGraphTool(store, 'update_node', {
+      kind: 'bend',
+      id: created.bend_id,
+      patch: { hinge_a: { x: 6, y: 0 }, hinge_b: { x: 6, y: 5 } },
+    }) as { bend_id: string };
+
+    expect(result.bend_id).toBe(created.bend_id);
+    const bend = store.getBend(created.bend_id);
+    expect(bend?.hingeA).toEqual({ x: 6, y: 0 });
+    expect(bend?.hingeB).toEqual({ x: 6, y: 5 });
+    // Identity and tree position are unchanged — this is a plain field
+    // patch, not a delete+recreate.
+    expect(bend?.parentRegionPanelId).toBe(part.root_region_panel_id);
+    expect(bend?.childRegionPanelId).toBe(created.child_region_panel_id);
+  });
+
+  it('kind=bend: hinge_a/hinge_b can be patched independently, and omitting both leaves the hinge untouched', () => {
+    const store = new GraphStore();
+    const part = createRectPart(store, 'update-bend-hinge-partial');
+    const created = createBend(store, part.part_id, part.root_region_panel_id, 5);
+    const originalHingeB = store.getBend(created.bend_id)!.hingeB;
+
+    dispatchGraphTool(store, 'update_node', {
+      kind: 'bend',
+      id: created.bend_id,
+      patch: { hinge_a: { x: 6, y: 0 } },
+    });
+    let bend = store.getBend(created.bend_id);
+    expect(bend?.hingeA).toEqual({ x: 6, y: 0 });
+    expect(bend?.hingeB).toEqual(originalHingeB);
+
+    dispatchGraphTool(store, 'update_node', {
+      kind: 'bend',
+      id: created.bend_id,
+      patch: { angle_deg: 30 },
+    });
+    bend = store.getBend(created.bend_id);
+    expect(bend?.hingeA).toEqual({ x: 6, y: 0 });
+    expect(bend?.angleDeg).toBe(30);
+  });
+
   it('kind=region_panel: patches label and k_factor_override', () => {
     const store = new GraphStore();
     const part = createRectPart(store, 'update-panel');

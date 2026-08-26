@@ -70,6 +70,17 @@ export function requirePoint2(args: Record<string, unknown>, key: string): Point
   return { x: val['x'] as number, y: val['y'] as number };
 }
 
+/** Like requirePoint2, but returns undefined when `key` is absent — for
+ * optional patch fields (e.g. update_node(kind=bend)'s hinge_a/hinge_b). */
+export function optPoint2(args: Record<string, unknown>, key: string): Point2 | undefined {
+  const val = args[key];
+  if (val === undefined) return undefined;
+  if (!isPoint2Like(val)) {
+    throwError(ErrorCodes.INTERNAL_ERROR, `${key} must be an {x,y} point`, false);
+  }
+  return { x: val['x'] as number, y: val['y'] as number };
+}
+
 function isTransform3Like(val: unknown): val is Record<string, unknown> {
   if (typeof val !== 'object' || val === null) return false;
   const r = (val as Record<string, unknown>)['r'];
