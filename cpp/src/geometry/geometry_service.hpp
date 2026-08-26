@@ -446,13 +446,6 @@ using AssemblyId  = std::string;
 using ComponentId = std::string;
 
 // ── Boolean results ───────────────────────────────────────────────────────────
-struct FuseResult {
-  ShellId solidId;
-  bool disjoint;
-  SnapshotId rollbackToken;
-  std::vector<ShapeHistoryRecord> shapeHistory;
-};
-
 struct CutResult {
   ShellId solidId;
   SnapshotId rollbackToken;
@@ -803,7 +796,11 @@ public:
   virtual ExploreResult        exploreTopology(const std::string& entityId, const std::string& returnType) = 0;
 
   // ── Feature 006-geometry-primitives US1 (Boolean Operations) ────────────────
-  virtual FuseResult           fuseBodies(const std::vector<ShellId>& tools, double fuzzyTolerance) = 0;
+  // fuseBodies (ShellId-based whole-solid fuse) was removed 2026-08-26:
+  // unreachable from any live v2 tool (the v2 fuse_bodies MCP tool goes
+  // through FuseCoplanarParts/polygon_boolean.cc's graph-level 2D pipeline
+  // instead — the only fuse implementation this codebase now has, per
+  // constitution v2.0.0 principle III, "one geometric solution").
   virtual CutResult            cutBodies(const ShellId& blank, const std::vector<ShellId>& tools, bool keepTools) = 0;
   virtual IntersectResult      intersectBodies(const ShellId& a, const ShellId& b) = 0;
 

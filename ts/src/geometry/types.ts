@@ -343,13 +343,6 @@ export type AssemblyId = string;
 export type ComponentId = string;
 
 // ── Boolean results ───────────────────────────────────────────────────────────
-export interface FuseResult {
-  solid_id: string;
-  disjoint: boolean;
-  rollback_token: string;
-  shape_history?: ShapeHistoryRecord[];
-}
-
 export interface CutResult {
   solid_id: string;
   rollback_token: string;

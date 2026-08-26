@@ -153,4 +153,60 @@ d('[v2] fuse_bodies onto an already bend-merged (chained/composite) part_a', () 
       expect(fusedBbox[k]).toBeCloseTo(expectedUnion[k], 0);
     }
   });
+
+  /**
+   * Regression for a real live-app symptom (2026-08-26): a protrusion
+   * manually translated to align onto a panel landed a hair off — a real
+   * small XY gap, not a coplanarity issue — and fuse_bodies rejected it
+   * with GE_FUSE_DISJOINT_RESULT even though the two pieces were clearly
+   * meant to touch. FuseCoplanarParts now closes a small real gap exactly
+   * (a position correction, not a tolerance override — see
+   * polygon_boolean.cc's own comment) before unioning. Same bracket/flange
+   * fixture as the test above, but the flange is authored 0.3mm short of
+   * true contact.
+   */
+  it('a flange landing a hair short of true contact still fuses cleanly (gap closed, not rejected)', () => {
+    const store = new GraphStore();
+    const { partAId } = authorBracket(store);
+
+    // Independent reconstruction, BEFORE the fuse: volume is translation-
+    // invariant, so the bracket's own volume plus the flange's own volume
+    // (at its authored, still-gapped position) is the correct oracle for
+    // the fused result — same "union of independent reconstructions"
+    // pattern as the test above, applied to volume instead of bbox.
+    const bracketSolo = constructPart(store, partAId);
+    expect(bracketSolo.ok, bracketSolo.message).toBe(true);
+    const bracketVolume = geometryBinding.computeMassProperties(bracketSolo.shellId, ['volume']).volume!;
+
+    const flange = dispatchGraphTool(store, 'create_part', {
+      name: 'flange-gapped',
+      outline: [
+        { x: 2, y: 5.3 },
+        { x: 8, y: 5.3 },
+        { x: 8, y: 8.3 },
+        { x: 2, y: 8.3 },
+      ],
+      thickness_mm: 1.0,
+    }) as CreatePartResult;
+    const flangeSolo = constructPart(store, flange.part_id);
+    expect(flangeSolo.ok, flangeSolo.message).toBe(true);
+    const flangeVolume = geometryBinding.computeMassProperties(flangeSolo.shellId, ['volume']).volume!;
+
+    const fused = dispatchGraphTool(store, 'fuse_bodies', {
+      part_a_id: partAId,
+      part_b_id: flange.part_id,
+    }) as { part_id: string };
+    expect(fused.part_id).toBe(partAId);
+
+    const postFuse = constructPart(store, partAId);
+    expect(postFuse.ok, postFuse.message).toBe(true);
+    const manifold = geometryBinding.checkManifold(postFuse.shellId);
+    expect(manifold.isManifold, JSON.stringify(manifold.issues)).toBe(true);
+
+    // The gap closed to exactly zero (a real position correction, not a
+    // sliver or an overlap artifact) — the fused volume is exactly the sum
+    // of the two independently-reconstructed volumes.
+    const mass = geometryBinding.computeMassProperties(postFuse.shellId, ['volume']);
+    expect(mass.volume).toBeCloseTo(bracketVolume + flangeVolume, 0);
+  });
 });

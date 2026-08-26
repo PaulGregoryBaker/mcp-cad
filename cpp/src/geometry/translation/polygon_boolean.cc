@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace mcp_cad::translation {
 
@@ -40,6 +41,60 @@ double PolygonArea2(const std::vector<Point2>& ring) {
     sum += a.x * b.y - b.x * a.y;
   }
   return std::fabs(sum) / 2.0;
+}
+
+Point2 ClosestPointOnSegment(const Point2& p, const Point2& a, const Point2& b) {
+  double abx = b.x - a.x;
+  double aby = b.y - a.y;
+  double abLenSq = abx * abx + aby * aby;
+  if (abLenSq < 1e-18) return a;  // degenerate (zero-length) segment
+  double t = ((p.x - a.x) * abx + (p.y - a.y) * aby) / abLenSq;
+  t = std::clamp(t, 0.0, 1.0);
+  return {a.x + t * abx, a.y + t * aby};
+}
+
+struct ClosestRingPointsResult {
+  Point2 onA{0.0, 0.0};
+  Point2 onB{0.0, 0.0};
+  double distMm = 0.0;
+};
+
+// The minimum-distance point pair between two closed 2D rings — checked as
+// every vertex of one ring against every EDGE of the other (both
+// directions), which covers every true segment-segment closest-point case
+// (vertex-to-edge projection or vertex-to-vertex) without a separate full
+// segment-segment-distance routine. O(nA*nB); both rings here are small,
+// authored/reconciled outlines, not tessellated curves.
+ClosestRingPointsResult NearestPointsBetweenRings(const std::vector<Point2>& ringA,
+                                                   const std::vector<Point2>& ringB) {
+  ClosestRingPointsResult best;
+  best.distMm = std::numeric_limits<double>::infinity();
+  size_t nA = ringA.size();
+  size_t nB = ringB.size();
+  if (nA == 0 || nB == 0) return best;
+
+  auto consider = [&](const Point2& onA, const Point2& onB) {
+    double dx = onA.x - onB.x;
+    double dy = onA.y - onB.y;
+    double d = std::sqrt(dx * dx + dy * dy);
+    if (d < best.distMm) {
+      best.distMm = d;
+      best.onA = onA;
+      best.onB = onB;
+    }
+  };
+
+  for (const auto& pb : ringB) {
+    for (size_t i = 0; i < nA; ++i) {
+      consider(ClosestPointOnSegment(pb, ringA[i], ringA[(i + 1) % nA]), pb);
+    }
+  }
+  for (const auto& pa : ringA) {
+    for (size_t j = 0; j < nB; ++j) {
+      consider(pa, ClosestPointOnSegment(pa, ringB[j], ringB[(j + 1) % nB]));
+    }
+  }
+  return best;
 }
 
 // Builds a planar face in the z=0 plane from a CCW (or CW — MakeFace/
@@ -231,8 +286,28 @@ PolygonBooleanResult FuseCoplanarParts(const std::vector<Point2>& outlineA,
   // material thickness when that's larger than the base floor: real
   // STEP-import misalignment well under a panel's own thickness is expected
   // noise, not a defect (docs/BUG_REPORT_fuse_bodies_coplanar_tolerance_too_strict.md).
+  //
+  // For any part with REAL material thickness, also floored at the
+  // established ~2mm STEP-import-noise precedent this codebase already uses
+  // everywhere else two independently-reconciled pieces of the same real
+  // fixture are compared for "close enough to call the same seam/surface"
+  // — kMergeEdgeAlignmentToleranceMm (part_merge.cc),
+  // kPieceEdgeMatchToleranceMm/kSelfConsistencyToleranceMm
+  // (step_reconciliation.cc), the MapPointToFlat precedent (point_mapping.cc).
+  // A thin-material fuse (thicknessMm < 2mm, the common case) was otherwise
+  // held to a TIGHTER bar here than every other STEP-reconciliation check in
+  // the pipeline, for no principled reason — confirmed live (2026-08-26): a
+  // real testcube.step panel+protrusion fuse failed at a 1.025mm gap against
+  // a 0.95mm (thickness-only) tolerance, well inside this already-accepted
+  // 2mm noise floor. Gated on thicknessMm > 0 (not applied unconditionally)
+  // so a deliberately zero-thickness input — this module's own test for "no
+  // thickness-based leniency" — stays exactly as strict as before; only
+  // parts with real material get the import-noise allowance.
   constexpr double kCoplanarToleranceMm = 0.05;
-  const double coplanarToleranceMm = std::max(kCoplanarToleranceMm, thicknessMm);
+  constexpr double kImportNoiseToleranceMm = 2.0;
+  const double coplanarToleranceMm = thicknessMm > 0.0
+      ? std::max({kCoplanarToleranceMm, thicknessMm, kImportNoiseToleranceMm})
+      : kCoplanarToleranceMm;
 
   // B's outline lives in B's own flat frame (z=0 there); embed each point at
   // z=0, map into WORLD via anchorB, then into A's LOCAL frame via
@@ -254,6 +329,36 @@ PolygonBooleanResult FuseCoplanarParts(const std::vector<Point2>& outlineA,
       return result;
     }
     ringBInA.push_back({inA.x, inA.y});
+  }
+
+  // Snap B's projected outline to close any small residual XY gap against
+  // A — NOT a tolerance override on the boolean itself. v2's constitution
+  // (principle III/VI) deliberately rejects a "gap tolerance" fallback for
+  // this exact disjoint-result case (see fuse_bodies.integration.test.ts's
+  // own header comment on why v1's DXF-drift compensation was not ported):
+  // v2 measures each panel's outline once, from one real ring, so two
+  // panels genuinely meant to touch in 3D should never show a fake gap. A
+  // real one (e.g. a manually-entered alignment translate landing a hair
+  // off) is a real position error, not measurement drift — so this closes
+  // it exactly, the same "move the part to its true touching position"
+  // idea close_gap.hpp already applies WITHIN one part (close_gap.cc,
+  // ComputeCloseGapDelta), extended here across two independently-anchored
+  // parts: find the closest point pair between A's outline and B's
+  // projected outline, and if it's within the same STEP-import-noise scale
+  // already accepted above for the Z-coplanarity check, rigidly translate
+  // ALL of B by that exact delta before the union, so the touching edges
+  // end up EXACTLY coincident. A genuinely large gap (unrelated parts) is
+  // left untouched — PolygonUnion still rejects it exactly as before.
+  if (!ringBInA.empty()) {
+    ClosestRingPointsResult nearest = NearestPointsBetweenRings(outlineA, ringBInA);
+    if (nearest.distMm > 1e-9 && nearest.distMm <= coplanarToleranceMm) {
+      double dx = nearest.onA.x - nearest.onB.x;
+      double dy = nearest.onA.y - nearest.onB.y;
+      for (auto& p : ringBInA) {
+        p.x += dx;
+        p.y += dy;
+      }
+    }
   }
 
   return PolygonUnion(outlineA, ringBInA);

@@ -225,8 +225,6 @@ public:
                                         const std::string& returnType) override;
 
   // ── Boolean operations ────────────────────────────────────────────────────
-  FuseResult      fuseBodies(const std::vector<ShellId>& tools,
-                              double fuzzyTolerance) override;
   CutResult       cutBodies(const ShellId& blank, const std::vector<ShellId>& tools,
                              bool keepTools) override;
   IntersectResult intersectBodies(const ShellId& a, const ShellId& b) override;

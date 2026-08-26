@@ -1459,40 +1459,8 @@ Napi::Value ExploreTopology(const Napi::CallbackInfo& info) {
   return env.Undefined();
 }
 
-Napi::Value FuseBodies(const Napi::CallbackInfo& info) {
-  Napi::Env env = info.Env();
-  if (info.Length() < 2) {
-    Napi::TypeError::New(env, "fuseBodies(tools: Array<string>, fuzzyTolerance: number)").ThrowAsJavaScriptException();
-    return env.Undefined();
-  }
-  Napi::Array toolsArr = info[0].As<Napi::Array>();
-  std::vector<std::string> tools;
-  tools.reserve(toolsArr.Length());
-  for (uint32_t i = 0; i < toolsArr.Length(); ++i) {
-    tools.push_back(toolsArr.Get(i).As<Napi::String>().Utf8Value());
-  }
-  double fuzzyTolerance = info[1].As<Napi::Number>().DoubleValue();
-
-  TRY_GEOMETRY(env, {
-    FuseResult res = svc().fuseBodies(tools, fuzzyTolerance);
-    Napi::Object result = Napi::Object::New(env);
-    result.Set("solid_id",       Napi::String::New(env, res.solidId));
-    result.Set("disjoint",      Napi::Boolean::New(env, res.disjoint));
-    result.Set("rollback_token",  Napi::String::New(env, res.rollbackToken));
-    Napi::Array histArr = Napi::Array::New(env, res.shapeHistory.size());
-    for (size_t i = 0; i < res.shapeHistory.size(); ++i) {
-      Napi::Object rec = Napi::Object::New(env);
-      rec.Set("verdict",         Napi::String::New(env, res.shapeHistory[i].verdict));
-      rec.Set("original_id",     Napi::String::New(env, res.shapeHistory[i].originalId));
-      rec.Set("new_id",          Napi::String::New(env, res.shapeHistory[i].newId));
-      rec.Set("operation_label", Napi::String::New(env, res.shapeHistory[i].operationLabel));
-      histArr.Set(static_cast<uint32_t>(i), rec);
-    }
-    result.Set("shape_history", histArr);
-    return result;
-  })
-  return env.Undefined();
-}
+// FuseBodies (ShellId-based whole-solid fuse binding) was removed
+// 2026-08-26 — see geometry_service.hpp's own removal note.
 
 Napi::Value CutBodies(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
@@ -2182,7 +2150,6 @@ void RegisterGeometryMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("computeMassProperties", Napi::Function::New(env, ComputeMassProperties));
   exports.Set("measureDistance",       Napi::Function::New(env, MeasureDistance));
   exports.Set("exploreTopology",       Napi::Function::New(env, ExploreTopology));
-  exports.Set("fuseBodies",            Napi::Function::New(env, FuseBodies));
   exports.Set("cutBodies",             Napi::Function::New(env, CutBodies));
   exports.Set("intersectBodies",       Napi::Function::New(env, IntersectBodies));
 

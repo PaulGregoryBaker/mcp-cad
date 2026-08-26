@@ -176,3 +176,57 @@ TEST_CASE("FuseCoplanarParts: a z-offset within the parts' own thickness is acce
   REQUIRE_FALSE(thinResult.ok);
   CHECK(thinResult.errorCode == PolygonBooleanErrorCode::kNotCoplanar);
 }
+
+TEST_CASE("FuseCoplanarParts: a z-offset beyond thickness but within the ~2mm STEP-import-"
+          "noise floor is accepted for real material, still rejected at zero thickness",
+          "[translation][polygon_boolean]") {
+  // A sits at the world origin, identity anchor, 10x5 rectangle.
+  Transform3 anchorA = Transform3::Identity();
+  auto outlineA = Rect(0, 0, 10, 5);
+
+  // B sits 1.025mm out of A's plane — matches the live testcube.step
+  // panel+protrusion fuse this test guards against regressing (real report,
+  // 2026-08-26): thickness-only tolerance (0.95mm, the thinner of the two
+  // parts) rejected it; the ~2mm import-noise floor should not.
+  Transform3 anchorB = Transform3::Translation(10.0, 0.0, 1.025);
+  auto outlineB = Rect(0, 0, 10, 5);
+
+  auto thickResult = FuseCoplanarParts(outlineA, anchorA, outlineB, anchorB, 0.95);
+  REQUIRE(thickResult.ok);
+  CHECK(PolygonArea(thickResult.outer) == Approx(100.0));
+
+  // A part with NO real material thickness gets no import-noise allowance
+  // — same floor as before this fix (0.05mm), not the 2mm one.
+  auto thinResult = FuseCoplanarParts(outlineA, anchorA, outlineB, anchorB, 0.0);
+  REQUIRE_FALSE(thinResult.ok);
+  CHECK(thinResult.errorCode == PolygonBooleanErrorCode::kNotCoplanar);
+}
+
+TEST_CASE("FuseCoplanarParts: a small real XY gap between B's own edge and A's is CLOSED "
+          "(zero-gap position correction), not merely tolerated, before unioning; a large "
+          "gap between genuinely unrelated parts is still rejected",
+          "[translation][polygon_boolean]") {
+  // A sits at the world origin, identity anchor, 10x5 rectangle: x=[0,10], y=[0,5].
+  Transform3 anchorA = Transform3::Identity();
+  auto outlineA = Rect(0, 0, 10, 5);
+
+  // B is meant to sit flush against A's right edge (x=10), but its own
+  // anchor is off by 0.3mm in X — matches a real live scenario (2026-08-26):
+  // a protrusion manually translated to align 90-degrees onto a panel,
+  // landing a hair short instead of exactly flush.
+  Transform3 anchorB = Transform3::Translation(10.3, 0.0, 0.0);
+  auto outlineB = Rect(0, 0, 5, 5);
+
+  auto result = FuseCoplanarParts(outlineA, anchorA, outlineB, anchorB, 0.9);
+  REQUIRE(result.ok);
+  // The union is a clean 10x5 + 5x5 rectangle (15x5) — the gap closed
+  // exactly, not left as a sliver or an overlap artifact.
+  CHECK(PolygonArea(result.outer) == Approx(15.0 * 5.0));
+
+  // Genuinely unrelated, far-apart parts must still be rejected — the snap
+  // is bounded, not an unconditional "always make it work."
+  Transform3 anchorFar = Transform3::Translation(50.0, 0.0, 0.0);
+  auto farResult = FuseCoplanarParts(outlineA, anchorA, outlineB, anchorFar, 0.9);
+  REQUIRE_FALSE(farResult.ok);
+  CHECK(farResult.errorCode == PolygonBooleanErrorCode::kMultipleLoops);
+}

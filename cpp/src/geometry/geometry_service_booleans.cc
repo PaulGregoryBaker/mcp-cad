@@ -136,134 +136,8 @@ class GeometryBooleans {
 public:
   explicit GeometryBooleans(GeometryState& s) : s_(s) {}
 
-  FuseResult fuseBodies(const std::vector<ShellId>& tools, double fuzzyTolerance) {
-    std::lock_guard<std::mutex> lock(s_.mutex);
-    if (tools.size() < 2) {
-      throw GeometryError("GE_BOOLEAN_FAILURE", "At least two shells required for fuse operation", false, "");
-    }
-
-    std::vector<TopoDS_Shape> toolShapes;
-    for (const auto& id : tools) {
-      auto it = s_.shells.find(id);
-      if (it == s_.shells.end()) {
-        throw GeometryError("GE_SHELL_NOT_FOUND", "Shell not found in session: " + id, false, "");
-      }
-      toolShapes.push_back(it->second.shape);
-    }
-
-    // Pre-fuse gap check was removed to support Boolean fuse of disjoint (non-touching) solids
-    // as per Feature 006 spec.md. Disjoint fuses are allowed and return success with disjoint=true.
-
-    SnapshotId token = s_.createSnapshot("before fuseBodies");
-
-    try {
-      TopoDS_Shape currentShape = toolShapes[0];
-      std::vector<ShapeHistoryRecord> history;
-      bool disjoint = false;
-
-      for (size_t i = 1; i < toolShapes.size(); ++i) {
-        BRepAlgoAPI_Fuse fuser(currentShape, toolShapes[i]);
-        if (fuzzyTolerance > 0.0) {
-          fuser.SetFuzzyValue(fuzzyTolerance);
-        }
-        fuser.Build();
-        if (!fuser.IsDone()) {
-          throw GeometryError("GE_BOOLEAN_FAILURE", "Boolean fuse failed", true, "rollback");
-        }
-
-        TopoDS_Shape nextShape = fuser.Shape();
-        BRepCheck_Analyzer checker(nextShape);
-        if (!checker.IsValid()) {
-          throw GeometryError("GE_BOOLEAN_FAILURE", "Boolean fuse result is invalid", true, "rollback");
-        }
-
-        // Post-fuse connectivity check: detect disconnected compounds.
-        {
-          int solidCount = 0;
-          for (TopExp_Explorer ex(nextShape, TopAbs_SOLID); ex.More(); ex.Next()) solidCount++;
-          int shellCount = 0;
-          for (TopExp_Explorer ex(nextShape, TopAbs_SHELL, TopAbs_SOLID); ex.More(); ex.Next()) shellCount++;
-          int topLevelCount = 0;
-          if (solidCount == 0 && shellCount == 0 && nextShape.ShapeType() == TopAbs_COMPOUND) {
-            for (TopoDS_Iterator it(nextShape); it.More(); it.Next()) topLevelCount++;
-          }
-          const bool disconnected = (solidCount > 1)
-              || (solidCount == 0 && shellCount > 1)
-              || (solidCount == 0 && shellCount == 0 && topLevelCount > 1);
-          if (disconnected) {
-            disjoint = true;
-          }
-        }
-
-        auto h1 = captureHistory(fuser, currentShape, [](const TopoDS_Shape& s) { return shapeId(s); }, "fuse_bodies");
-        auto h2 = captureHistory(fuser, toolShapes[i], [](const TopoDS_Shape& s) { return shapeId(s); }, "fuse_bodies");
-        history.insert(history.end(), h1.begin(), h1.end());
-        history.insert(history.end(), h2.begin(), h2.end());
-
-        // BRepAlgoAPI_Fuse returns a COMPOUND wrapper even when the result is
-        // a single connected solid. Downstream ops (mergeBodiesWithBend's fuse
-        // step) behave differently when the input is COMPOUND vs SOLID and can
-        // produce spurious multi-solid results from the corner-cut step. Unwrap
-        // to the bare solid here so the stored shape is always a proper SOLID.
-        if (nextShape.ShapeType() != TopAbs_SOLID) {
-          TopoDS_Solid theSolid;
-          int unwrapCount = 0;
-          for (TopExp_Explorer ex(nextShape, TopAbs_SOLID); ex.More(); ex.Next()) {
-            theSolid = TopoDS::Solid(ex.Current());
-            unwrapCount++;
-          }
-          if (unwrapCount == 1) {
-            nextShape = theSolid;
-          }
-        }
-
-        currentShape = nextShape;
-      }
-
-      // Merge coplanar face fragments left by BRepAlgoAPI_Fuse (unifyFaces=true,
-      // unifyEdges=false). Unifying faces removes the seam at the junction so
-      // downstream splitBodyByBends face-pair matching sees clean inner/outer
-      // wall pairs. unifyEdges must be false: merging C1-tangent arc-to-plane
-      // boundary edges creates phantom inner faces at the wrong depth (z=74
-      // instead of z=75), which defeats unfold cycle detection.
-      {
-        ShapeUpgrade_UnifySameDomain fuseUnifier(currentShape,
-            Standard_False,  // unifyEdges  = false
-            Standard_True,   // unifyFaces  = true
-            Standard_False); // concatBSplines
-        fuseUnifier.Build();
-        TopoDS_Shape unified = fuseUnifier.Shape();
-        if (!unified.IsNull()) {
-          if (unified.ShapeType() != TopAbs_SOLID) {
-            int uCount = 0;
-            TopoDS_Solid uSolid;
-            for (TopExp_Explorer ex(unified, TopAbs_SOLID); ex.More(); ex.Next()) {
-              uSolid = TopoDS::Solid(ex.Current());
-              uCount++;
-            }
-            if (uCount == 1) unified = uSolid;
-          }
-          currentShape = unified;
-        }
-      }
-
-      for (const auto& id : tools) {
-        s_.shells.erase(id);
-      }
-
-      ShellId resultId = generateUUID();
-      s_.shells[resultId] = ShellState{resultId, "", currentShape};
-
-      return FuseResult{resultId, disjoint, token, std::move(history)};
-
-    } catch (const GeometryError&) {
-      throw;
-    } catch (const Standard_Failure& e) {
-      throw GeometryError("GE_BOOLEAN_FAILURE",
-                          std::string("OCCT exception during fuse: ") + e.GetMessageString(),
-                          true, "rollback");
-    }
-  }
+  // fuseBodies (ShellId-based whole-solid fuse) was removed 2026-08-26 —
+  // see geometry_service.hpp's own removal note.
 
   CutResult cutBodies(const ShellId& blank, const std::vector<ShellId>& tools, bool keepTools) {
     std::lock_guard<std::mutex> lock(s_.mutex);
@@ -393,10 +267,6 @@ private:
 };
 
 // ─── Delegation stubs ────────────────────────────────────────────────────────
-
-FuseResult GeometryServiceImpl::fuseBodies(const std::vector<ShellId>& tools, double fuzzyTolerance) {
-  return GeometryBooleans(state_).fuseBodies(tools, fuzzyTolerance);
-}
 
 CutResult GeometryServiceImpl::cutBodies(const ShellId& blank, const std::vector<ShellId>& tools, bool keepTools) {
   return GeometryBooleans(state_).cutBodies(blank, tools, keepTools);

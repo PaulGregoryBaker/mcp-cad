@@ -43,7 +43,6 @@ import type {
   MassPropertiesResult,
   MeasureResult,
   ExploreResult,
-  FuseResult,
   CutResult,
   IntersectResult,
   TransformResult,
@@ -136,7 +135,6 @@ export interface GeometryAddon {
   computeMassProperties(entityId: string, properties?: string[]): MassPropertiesResult;
   measureDistance(entityA: string, entityB: string, measurementType: string): MeasureResult;
   exploreTopology(entityId: string, returnType: string): ExploreResult;
-  fuseBodies(tools: string[], fuzzyTolerance: number): FuseResult;
   cutBodies(blank: string, tools: string[], keepTools: boolean): CutResult;
   intersectBodies(a: string, b: string): IntersectResult;
   translateBody(
@@ -839,14 +837,6 @@ export class GeometryBinding {
   exploreTopology(entityId: string, returnType: string): ExploreResult {
     try {
       return this.addon.exploreTopology(entityId, returnType);
-    } catch (err) {
-      throw toStructuredError(err);
-    }
-  }
-
-  fuseBodies(tools: string[], fuzzyTolerance: number): FuseResult {
-    try {
-      return this.addon.fuseBodies(tools, fuzzyTolerance);
     } catch (err) {
       throw toStructuredError(err);
     }
