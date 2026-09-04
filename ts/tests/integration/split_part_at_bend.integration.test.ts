@@ -54,8 +54,13 @@ function shoelaceArea(poly: Array<{ x: number; y: number }>): number {
   return Math.abs(sum / 2);
 }
 
-/** Same 10x5 A / 5x8 B fixture as merge_bodies_with_bend's own suite —
- * A's right edge (length 5) is the seam. */
+/** Same 10x5 A / 5x8 B fixture as merge_bodies_with_bend's own suite — B is
+ * anchored so its own local edge0 (0,0)-(5,0) folds 90deg onto A's right
+ * edge (10,0)-(10,5); see that suite's own header comment for the hand-
+ * verified anchor derivation (cpp/tests/part_merge_test.cc checks the same
+ * construction against DetectContact directly). docs/TASK_SPEC.md: no
+ * edge_a/edge_b/angle_deg — both are derived from the two parts' own real
+ * anchors. */
 function authorTwoParts(store: GraphStore): {
   partAId: string;
   partBId: string;
@@ -83,6 +88,10 @@ function authorTwoParts(store: GraphStore): {
       { x: 0, y: 8 },
     ],
     thickness_mm: thicknessMm,
+    anchor: {
+      r: [0, 0, -1, -1, 0, 0, 0, 1, 0],
+      t: [10, 5, 0],
+    },
   }) as { part_id: string; root_region_panel_id: string };
 
   return {
@@ -93,19 +102,10 @@ function authorTwoParts(store: GraphStore): {
   };
 }
 
-function mergeTwoParts(
-  store: GraphStore,
-  rootPanelAId: string,
-  partAId: string,
-  rootPanelBId: string,
-  partBId: string,
-): MergeToolResult {
+function mergeTwoParts(store: GraphStore, partAId: string, partBId: string): MergeToolResult {
   return dispatchGraphTool(store, 'merge_bodies_with_bend', {
     part_a_id: partAId,
     part_b_id: partBId,
-    edge_a: { region_panel_id: rootPanelAId, edge_index: 1 },
-    edge_b: { region_panel_id: rootPanelBId, edge_index: 0 },
-    angle_deg: 90,
     radius_mm: 2.0,
     k_factor: 0.4,
   }) as MergeToolResult;
@@ -114,8 +114,8 @@ function mergeTwoParts(
 d('split_part_at_bend', () => {
   it('splits a merged 2-panel part back into two parts whose areas partition the combined outline', () => {
     const store = new GraphStore();
-    const { partAId, partBId, rootPanelAId, rootPanelBId } = authorTwoParts(store);
-    const merged = mergeTwoParts(store, rootPanelAId, partAId, rootPanelBId, partBId);
+    const { partAId, partBId } = authorTwoParts(store);
+    const merged = mergeTwoParts(store, partAId, partBId);
 
     const combinedArea = shoelaceArea(store.getPart(partAId)!.outline);
     expect(combinedArea).toBeCloseTo(10 * 5 + 5 * 8, 6);
@@ -183,8 +183,8 @@ d('split_part_at_bend', () => {
 
   it('keep_corner_on=parent gives the mirror-image partition', () => {
     const store = new GraphStore();
-    const { partAId, partBId, rootPanelAId, rootPanelBId } = authorTwoParts(store);
-    const merged = mergeTwoParts(store, rootPanelAId, partAId, rootPanelBId, partBId);
+    const { partAId, partBId } = authorTwoParts(store);
+    const merged = mergeTwoParts(store, partAId, partBId);
 
     const split = dispatchGraphTool(store, 'split_part_at_bend', {
       part_id: partAId,
@@ -200,8 +200,8 @@ d('split_part_at_bend', () => {
 
   it('split_part_at_bend rejects a bend that does not belong to the given part', () => {
     const store = new GraphStore();
-    const { partAId, partBId, rootPanelAId, rootPanelBId } = authorTwoParts(store);
-    mergeTwoParts(store, rootPanelAId, partAId, rootPanelBId, partBId);
+    const { partAId, partBId } = authorTwoParts(store);
+    mergeTwoParts(store, partAId, partBId);
 
     let threw: unknown;
     try {

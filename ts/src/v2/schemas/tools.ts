@@ -44,12 +44,12 @@ const ToolSchemas = {
     label: z.string().optional(),
   }),
 
+  // docs/TASK_SPEC.md — no edge_a/edge_b/angle_deg: the seam and fold angle
+  // are derived from part_a's and part_b's own real anchors, never supplied
+  // by the caller.
   merge_bodies_with_bend: z.object({
     part_a_id: z.string().min(1),
     part_b_id: z.string().min(1),
-    edge_a: EdgeRefSchema,
-    edge_b: EdgeRefSchema,
-    angle_deg: z.number(),
     radius_mm: z.number().min(0).optional(),
     k_factor: z.number().min(0).max(1).optional(),
     bottom_is_concave: z.boolean().optional(),

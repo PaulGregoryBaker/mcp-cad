@@ -69,6 +69,7 @@ import type {
   NapiPoint3,
   MapToWorldResult,
   MapToFlatResult,
+  DetectContactResult,
   ReconcileOutlinesResult,
   SplitPartAtBendResult,
   NapiPanelPieceSpec,
@@ -335,6 +336,16 @@ export interface GeometryAddon {
     point3d: NapiPoint3,
   ): MapToFlatResult;
 
+  // docs/TASK_SPEC.md §9 step 1 — anchor-driven seam detection, feeding
+  // reconcileOutlines below. No edge refs: the seam is found from each
+  // part's own real anchor.
+  detectContact?(
+    outlineA: NapiPoint2[],
+    anchorA: NapiTransform3,
+    outlineB: NapiPoint2[],
+    anchorB: NapiTransform3,
+  ): DetectContactResult;
+
   // ── Phase 5 Slice 4: merge_bodies_with_bend outline reconciliation ────────
   reconcileOutlines?(
     outlineA: NapiPoint2[],
@@ -542,6 +553,10 @@ export class GeometryBinding {
 
   hasMapPointToFlat(): boolean {
     return typeof this.addon.mapPointToFlat === 'function';
+  }
+
+  hasDetectContact(): boolean {
+    return typeof this.addon.detectContact === 'function';
   }
 
   hasReconcileOutlines(): boolean {
@@ -1362,6 +1377,22 @@ export class GeometryBinding {
     }
     try {
       return this.addon.mapPointToFlat(graph, layout, point3d);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  detectContact(
+    outlineA: NapiPoint2[],
+    anchorA: NapiTransform3,
+    outlineB: NapiPoint2[],
+    anchorB: NapiTransform3,
+  ): DetectContactResult {
+    if (!this.addon.detectContact) {
+      throw new Error('Geometry addon does not expose detectContact');
+    }
+    try {
+      return this.addon.detectContact(outlineA, anchorA, outlineB, anchorB);
     } catch (err) {
       throw toStructuredError(err);
     }

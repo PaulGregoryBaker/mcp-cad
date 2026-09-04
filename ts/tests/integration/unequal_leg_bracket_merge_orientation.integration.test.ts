@@ -181,9 +181,7 @@ d(
           longLeg.thicknessMm,
         );
         expect(reconciled.ok, reconciled.message).toBe(true);
-        const match = reconciled.pieceEdgeMatches[0];
         const bend = reconciled.graph.bends[0];
-        const longIsParent = reconciled.graph.rootRegionPanelId === 'piece0';
 
         // Each part needs its OWN real-world anchor (not the default identity)
         // for merge_bodies_with_bend's edge-resolution to align them in the
@@ -222,28 +220,15 @@ d(
 
         const partA = order === 'longFirst' ? partLong : partShort;
         const partB = order === 'longFirst' ? partShort : partLong;
-        const aIsLong = order === 'longFirst';
 
-        // reconcilePieces resolved its OWN parent choice (longIsParent) —
-        // independent of this test's part_a/part_b argument order — so the
-        // right edge_index for each leg (long vs short) must be looked up by
-        // WHICH LEG it is, then assigned to whichever of part_a/part_b that
-        // leg currently is.
-        const edgeIndexForLong = longIsParent ? match.parentEdgeIndex : match.childEdgeIndex;
-        const edgeIndexForShort = longIsParent ? match.childEdgeIndex : match.parentEdgeIndex;
-
+        // docs/TASK_SPEC.md: no edge_a/edge_b/angle_deg — both parts already
+        // carry their own real anchors (longSolo/shortSolo above), so the
+        // seam and fold angle are derived directly from those, regardless of
+        // reconcilePieces' own parent choice or this test's part_a/part_b
+        // argument order.
         const merged = dispatchGraphTool(store, 'merge_bodies_with_bend', {
           part_a_id: partA.part_id,
           part_b_id: partB.part_id,
-          edge_a: {
-            region_panel_id: partA.root_region_panel_id,
-            edge_index: aIsLong ? edgeIndexForLong : edgeIndexForShort,
-          },
-          edge_b: {
-            region_panel_id: partB.root_region_panel_id,
-            edge_index: aIsLong ? edgeIndexForShort : edgeIndexForLong,
-          },
-          angle_deg: bend.angleDeg,
           // See this file's header comment, finding 2 — the sign-derived
           // default is wrong for this real fixture.
           bottom_is_concave: bend.bottomIsConcave,

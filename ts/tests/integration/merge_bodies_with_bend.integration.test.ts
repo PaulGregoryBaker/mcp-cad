@@ -1,12 +1,18 @@
 /**
- * v2 merge_bodies_with_bend integration suite (Phase 5 Slice 4:
- * rebuild/14-graph-schema.md §2.1.2). Exercises the full real stack — the
+ * v2 merge_bodies_with_bend integration suite (docs/TASK_SPEC.md — anchor-
+ * driven, single-path reconciliation, superseding Phase 5 Slice 4's original
+ * caller-edge-ref design). Exercises the full real stack — the
  * merge_bodies_with_bend tool -> GraphStore.mergePartsWithBend ->
- * evaluate-client -> geometryBinding.reconcileOutlines (C++) -> ordinary
- * createBendNode — on two independently-authored parts with no prior 3D
- * relationship, the exact case the design docs left unspecified (13 §6's own
- * reconciliation pattern presupposes edges that are already identical "by
- * measurement," which does not hold here).
+ * evaluate-client -> geometryBinding.detectContact + reconcileOutlines (C++)
+ * -> ordinary createBendNode — on two independently-authored parts whose
+ * REAL anchors are the only input the seam/angle are derived from; no
+ * edge_a/edge_b/angle_deg args exist on the tool any more.
+ *
+ * Part B's anchor below (r=[0,0,-1,-1,0,0,0,1,0], t=[10,5,0]) is hand-derived
+ * and independently verified (cpp/tests/part_merge_test.cc's own "two
+ * rectangles folded 90deg" case checks the same construction against
+ * DetectContact directly): it folds B's local (0,0)-(5,0) edge 90 degrees
+ * onto A's world (10,0)-(10,5) edge, material extending into +Z.
  *
  * No suite case exists for this (all three T1/*.json cases are level "C",
  * requiring STEP import) — these are hand-authored, following the precedent
@@ -51,10 +57,11 @@ function requirePanel(
   return panel as NapiRegionPanelLayout;
 }
 
-/** A: 10x5 rectangle. B: 5-wide x 8-tall rectangle — B's 5-length edge is the
- * seam, matching A's right edge exactly. Both parts share thicknessMm so the
- * merged solid's flat-pattern area is a clean, hand-verifiable additive
- * check. */
+/** A: 10x5 rectangle at identity. B: 5-wide x 8-tall rectangle, anchored so
+ * its own local edge0 (0,0)-(5,0) folds 90deg onto A's right edge
+ * (10,0)-(10,5) — see this file's header comment for the anchor derivation.
+ * Both parts share thicknessMm so the merged solid's flat-pattern area is a
+ * clean, hand-verifiable additive check. */
 function authorTwoParts(store: GraphStore): {
   partAId: string;
   partBId: string;
@@ -82,6 +89,10 @@ function authorTwoParts(store: GraphStore): {
       { x: 0, y: 8 },
     ],
     thickness_mm: thicknessMm,
+    anchor: {
+      r: [0, 0, -1, -1, 0, 0, 0, 1, 0],
+      t: [10, 5, 0],
+    },
   }) as { part_id: string; root_region_panel_id: string };
 
   return {
@@ -92,23 +103,10 @@ function authorTwoParts(store: GraphStore): {
   };
 }
 
-function mergeTwoParts(
-  store: GraphStore,
-  rootPanelAId: string,
-  partAId: string,
-  rootPanelBId: string,
-  partBId: string,
-): MergeToolResult {
+function mergeTwoParts(store: GraphStore, partAId: string, partBId: string): MergeToolResult {
   return dispatchGraphTool(store, 'merge_bodies_with_bend', {
     part_a_id: partAId,
     part_b_id: partBId,
-    // A's root outline is [(0,0),(10,0),(10,5),(0,5)] — edge 1 is the right
-    // edge (10,0)-(10,5), length 5.
-    edge_a: { region_panel_id: rootPanelAId, edge_index: 1 },
-    // B's root outline is [(0,0),(5,0),(5,8),(0,8)] — edge 0 is (0,0)-(5,0),
-    // length 5, matching A's seam.
-    edge_b: { region_panel_id: rootPanelBId, edge_index: 0 },
-    angle_deg: 90,
     radius_mm: 2.0,
     k_factor: 0.4,
   }) as MergeToolResult;
@@ -260,15 +258,15 @@ function checkMergeStructureAndSolid(
 d('v2 merge_bodies_with_bend — authored, independently-authored parts', () => {
   it('merges two parts into one manifold solid, aliasing B and re-parenting its rows', () => {
     const store = new GraphStore();
-    const { partAId, partBId, rootPanelAId, rootPanelBId } = authorTwoParts(store);
-    const mergeResult = mergeTwoParts(store, rootPanelAId, partAId, rootPanelBId, partBId);
+    const { partAId, partBId, rootPanelBId } = authorTwoParts(store);
+    const mergeResult = mergeTwoParts(store, partAId, partBId);
     checkMergeStructureAndSolid(store, partAId, partBId, rootPanelBId, mergeResult);
   });
 
   it('round-trips region-panel and bridge points across the merge seam with stable ownership', () => {
     const store = new GraphStore();
     const { partAId, partBId, rootPanelAId, rootPanelBId } = authorTwoParts(store);
-    const mergeResult = mergeTwoParts(store, rootPanelAId, partAId, rootPanelBId, partBId);
+    const mergeResult = mergeTwoParts(store, partAId, partBId);
 
     const evalResult = evaluatePart(store, partAId);
     expect(evalResult.ok, evalResult.message).toBe(true);
@@ -293,90 +291,79 @@ d('v2 merge_bodies_with_bend — authored, independently-authored parts', () => 
     checkBridgeRoundTrip(store, partAId, seg0, mergeResult.bend_id);
   });
 
-  it('rejects a mismatched seam edge length with a typed GE_MERGE_EDGE_MISMATCH error', () => {
+  // docs/TASK_SPEC.md F3: an unequal-length seam is a supported case now,
+  // not a rejection — v1's "GE_MERGE_EDGE_MISMATCH" scenario is superseded.
+  // A: 20x5 plate, its right edge (x=20, y in [0,5]) one plain unbroken
+  // edge, no pre-authored splitting. B: a 3x4 flange whose own 3-length
+  // edge0 only covers y in [1,4] of A's edge — hand-derived anchor
+  // independently verified against cpp/tests/part_merge_test.cc's own
+  // "asymmetric seam" case.
+  it('merges an unequal-length (asymmetric) seam directly, without a pre-split outline', () => {
     const store = new GraphStore();
     const partA = dispatchGraphTool(store, 'create_part', {
-      name: 'mismatch-a',
+      name: 'asym-a',
       outline: [
         { x: 0, y: 0 },
-        { x: 10, y: 0 },
-        { x: 10, y: 5 },
+        { x: 20, y: 0 },
+        { x: 20, y: 5 },
         { x: 0, y: 5 },
       ],
       thickness_mm: 1.0,
-    }) as { part_id: string; root_region_panel_id: string };
+    }) as { part_id: string };
     const partB = dispatchGraphTool(store, 'create_part', {
-      name: 'mismatch-b',
+      name: 'asym-b',
       outline: [
         { x: 0, y: 0 },
-        { x: 40, y: 0 }, // length 40, does not match A's seam length 5
-        { x: 40, y: 8 },
-        { x: 0, y: 8 },
+        { x: 3, y: 0 },
+        { x: 3, y: 4 },
+        { x: 0, y: 4 },
       ],
       thickness_mm: 1.0,
-    }) as { part_id: string; root_region_panel_id: string };
+      anchor: {
+        r: [0, 0, -1, -1, 0, 0, 0, 1, 0],
+        t: [20, 4, 0],
+      },
+    }) as { part_id: string };
 
-    let caught: unknown;
-    try {
-      dispatchGraphTool(store, 'merge_bodies_with_bend', {
-        part_a_id: partA.part_id,
-        part_b_id: partB.part_id,
-        edge_a: { region_panel_id: partA.root_region_panel_id, edge_index: 1 },
-        edge_b: { region_panel_id: partB.root_region_panel_id, edge_index: 0 },
-        angle_deg: 90,
-      });
-    } catch (err) {
-      caught = err;
-    }
-    expect(caught).toBeInstanceOf(McpToolError);
-    expect((caught as McpToolError).structured.code).toBe('GE_MERGE_EDGE_MISMATCH');
+    const merged = dispatchGraphTool(store, 'merge_bodies_with_bend', {
+      part_a_id: partA.part_id,
+      part_b_id: partB.part_id,
+    }) as MergeToolResult;
+    expect(merged.part_id).toBe(partA.part_id);
+    expect(merged.bend_id).toBeTruthy();
+    expect(merged.child_region_panel_id).toBeTruthy();
+
+    const evalResult = evaluatePart(store, partA.part_id);
+    expect(evalResult.ok, evalResult.message).toBe(true);
+    expect(evalResult.panels).toHaveLength(2);
+    expect(evalResult.bridges).toHaveLength(1);
+
+    const constructed = constructPart(store, partA.part_id);
+    expect(constructed.ok, constructed.message).toBe(true);
+    const manifold = geometryBinding.checkManifold(constructed.shellId);
+    expect(manifold.isManifold, JSON.stringify(manifold.issues)).toBe(true);
   });
 
-  it('rejects a bend-zone (non-free) edge_ref with GE_INVALID_EDGE_REF', () => {
+  it('rejects two parts with no real contact with a typed GE_MERGE_NO_CONTACT error', () => {
     const store = new GraphStore();
-    const { partAId, partBId, rootPanelAId, rootPanelBId } = authorTwoParts(store);
-
-    // First merge succeeds, consuming A's edge 1 into a bend zone boundary —
-    // a second merge attempt reusing that SAME edge_ref must be rejected,
-    // not silently misinterpreted.
-    mergeTwoParts(store, rootPanelAId, partAId, rootPanelBId, partBId);
-
-    const partC = dispatchGraphTool(store, 'create_part', {
-      name: 'merge-c',
-      outline: [
-        { x: 0, y: 0 },
-        { x: 5, y: 0 },
-        { x: 5, y: 3 },
-        { x: 0, y: 3 },
-      ],
-      thickness_mm: 1.0,
-    }) as { part_id: string; root_region_panel_id: string };
-
-    // Find the bend-zone edge's OWN index on A's (now re-clipped) root panel
-    // dynamically — never assume it's still index 1, since regionOf's clip
-    // may reorder/resize the boundary array.
-    const evalResult = evaluatePart(store, partAId);
-    expect(evalResult.ok, evalResult.message).toBe(true);
-    const rootPanel = requirePanel(
-      new Map(evalResult.panels.map((p) => [p.regionPanelId, p])),
-      rootPanelAId,
-    );
-    const bendZoneIndex = rootPanel.edgeBendId.findIndex((id) => id !== '');
-    expect(bendZoneIndex).toBeGreaterThanOrEqual(0);
+    const { partAId, partBId } = authorTwoParts(store);
+    // Move B far away from A — undo authorTwoParts' own touching anchor.
+    dispatchGraphTool(store, 'update_node', {
+      kind: 'part',
+      id: partBId,
+      patch: { anchor: { r: [1, 0, 0, 0, 1, 0, 0, 0, 1], t: [1000, 1000, 1000] } },
+    });
 
     let caught: unknown;
     try {
       dispatchGraphTool(store, 'merge_bodies_with_bend', {
         part_a_id: partAId,
-        part_b_id: partC.part_id,
-        edge_a: { region_panel_id: rootPanelAId, edge_index: bendZoneIndex },
-        edge_b: { region_panel_id: partC.root_region_panel_id, edge_index: 0 },
-        angle_deg: 90,
+        part_b_id: partBId,
       });
     } catch (err) {
       caught = err;
     }
     expect(caught).toBeInstanceOf(McpToolError);
-    expect((caught as McpToolError).structured.code).toBe('GE_INVALID_EDGE_REF');
+    expect((caught as McpToolError).structured.code).toBe('GE_MERGE_NO_CONTACT');
   });
 });

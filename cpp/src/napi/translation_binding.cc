@@ -101,9 +101,10 @@ const char* MapErrorCodeToString(MapErrorCode code) {
 const char* MergeErrorCodeToString(MergeErrorCode code) {
   switch (code) {
     case MergeErrorCode::kNone: return "";
-    case MergeErrorCode::kInvalidEdgeRef: return "GE_INVALID_EDGE_REF";
-    case MergeErrorCode::kMergeEdgeMismatch: return "GE_MERGE_EDGE_MISMATCH";
+    case MergeErrorCode::kNoContact: return "GE_MERGE_NO_CONTACT";
+    case MergeErrorCode::kCoplanarSeam: return "GE_MERGE_COPLANAR_SEAM";
     case MergeErrorCode::kMergeSelfIntersecting: return "GE_MERGE_SELF_INTERSECTION";
+    case MergeErrorCode::kInternalInconsistency: return "GE_MERGE_INTERNAL_INCONSISTENCY";
   }
   return "GE_UNKNOWN_ERROR";
 }
@@ -652,6 +653,20 @@ Napi::Object WriteMapToFlatResult(Napi::Env env, const MapToFlatResult& result) 
   return obj;
 }
 
+Napi::Object WriteDetectContactResult(Napi::Env env, const translation::DetectContactResult& result) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("ok", Napi::Boolean::New(env, result.ok));
+  obj.Set("errorCode", Napi::String::New(env, MergeErrorCodeToString(result.errorCode)));
+  obj.Set("message", Napi::String::New(env, result.message));
+  obj.Set("aRunStart", WritePoint2(env, result.aRunStart));
+  obj.Set("aRunEnd", WritePoint2(env, result.aRunEnd));
+  obj.Set("bRunStart", WritePoint2(env, result.bRunStart));
+  obj.Set("bRunEnd", WritePoint2(env, result.bRunEnd));
+  obj.Set("angleDeg", Napi::Number::New(env, result.angleDeg));
+  obj.Set("contactRegionCount", Napi::Number::New(env, result.contactRegionCount));
+  return obj;
+}
+
 Napi::Object WriteReconcileOutlinesResult(Napi::Env env, const ReconcileOutlinesResult& result) {
   Napi::Object obj = Napi::Object::New(env);
   obj.Set("ok", Napi::Boolean::New(env, result.ok));
@@ -809,6 +824,31 @@ Napi::Value MapPointToFlatBinding(const Napi::CallbackInfo& info) {
 
     MapToFlatResult result = translation::MapPointToFlat(graph, layout, point3d);
     return WriteMapToFlatResult(env, result);
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
+Napi::Value DetectContactBinding(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 4 || !info[0].IsArray() || !info[1].IsObject() || !info[2].IsArray() ||
+      !info[3].IsObject()) {
+    Napi::TypeError::New(
+        env, "detectContact(outlineA: Point2[], anchorA: Transform3, outlineB: Point2[], "
+             "anchorB: Transform3)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    std::vector<Point2> outlineA = ReadPoint2Array(info[0].As<Napi::Array>());
+    Transform3 anchorA = ReadTransform3(info[1].As<Napi::Object>());
+    std::vector<Point2> outlineB = ReadPoint2Array(info[2].As<Napi::Array>());
+    Transform3 anchorB = ReadTransform3(info[3].As<Napi::Object>());
+
+    translation::DetectContactResult result =
+        translation::DetectContact(outlineA, anchorA, outlineB, anchorB);
+    return WriteDetectContactResult(env, result);
   } catch (const std::exception& e) {
     Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
     return env.Undefined();
@@ -1340,6 +1380,7 @@ void RegisterTranslationMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("constructPartSolid", Napi::Function::New(env, ConstructPartSolidBinding));
   exports.Set("mapPointToWorld", Napi::Function::New(env, MapPointToWorldBinding));
   exports.Set("mapPointToFlat", Napi::Function::New(env, MapPointToFlatBinding));
+  exports.Set("detectContact", Napi::Function::New(env, DetectContactBinding));
   exports.Set("reconcileOutlines", Napi::Function::New(env, ReconcileOutlinesBinding));
   exports.Set("splitPartAtBend", Napi::Function::New(env, SplitPartAtBendBinding));
   exports.Set("reconcilePieces", Napi::Function::New(env, ReconcilePiecesBinding));

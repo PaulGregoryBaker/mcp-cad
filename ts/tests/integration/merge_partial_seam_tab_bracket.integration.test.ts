@@ -1,24 +1,24 @@
 /**
  * v2 port of v1's merge_tab_bracket.integration.test.ts (Phase 5 test
- * migration, 2026-07-26). v1's fixture (tab_bracket_90deg.stp) merges a
- * 100mm-wide flange onto a 200mm-tall plate's edge, where the flange's own
- * seam (100mm) is NARROWER than the full straight run of the plate's edge it
- * sits on (200mm) — a T-shaped, asymmetric-seam merge. v1 detected this via
- * `target_edges: ['all']` (implicit adjacency auto-detection); v2's
- * merge_bodies_with_bend instead takes explicit `edge_a`/`edge_b` index refs
- * that must match in LENGTH exactly (GE_MERGE_EDGE_MISMATCH otherwise — see
- * merge_bodies_with_bend.integration.test.ts's own rejection case), which
- * looked at first glance like a real missing capability (no direct "partial
- * seam" tool parameter exists).
+ * migration, 2026-07-26; rewritten per docs/TASK_SPEC.md §8.1/AC5). v1's
+ * fixture (tab_bracket_90deg.stp) merges a 100mm-wide flange onto a
+ * 200mm-tall plate's edge, where the flange's own seam (100mm) is NARROWER
+ * than the full straight run of the plate's edge it sits on (200mm) — a
+ * T-shaped, asymmetric-seam merge, v1's own `target_edges: ['all']` implicit
+ * adjacency auto-detection.
  *
- * Investigated and confirmed via a scratch script that this is NOT a v2 gap:
- * the SAME real part is representable today by authoring the plate's own
- * outline with the seam pre-split into three COLLINEAR sub-edges (0-50,
- * 50-150, 150-200mm along the shared boundary) and merging onto just the
- * matching 100mm middle edge by index — ordinary polygon vertices, no new
- * primitive needed. This is arguably a more explicit, more topologically
- * honest representation than v1's implicit auto-detection (constitution v2
- * principle III — one geometric solution, no implicit/derived matching).
+ * An earlier version of this test concluded this needed no new v2 capability
+ * — pre-splitting the plate's own outline into three collinear sub-edges and
+ * merging onto the matching 100mm middle edge by index. That conclusion is
+ * superseded: requiring the caller to pre-split an outline by hand to work
+ * around the merge tool's own inability to find a partial overlap is exactly
+ * the kind of caller-side compensation constitution principle III argues
+ * against. This version authors the plate with its REAL, unsplit right edge
+ * (a single edge the full 200mm) and merges directly — the anchor-driven
+ * contact detection finds the true 100mm overlap itself (TASK_SPEC.md F3),
+ * proving unequal-length edges merge directly, not proving the pre-split
+ * workaround.
+ *
  * Confirmed empirically (not just by construction-succeeds): the merge
  * produces exactly 2 region panels + 1 bridge, a manifold solid, and an
  * EXACT (not approximate, unlike v1's own ±20%-tolerance check) flat-pattern
@@ -61,20 +61,16 @@ function shoelaceArea(ring: Array<{ x: number; y: number }>): number {
 }
 
 /** Plate: 100mm wide (x) x 200mm tall (y), thickness 1.5mm. Its RIGHT edge
- * (x=100) is pre-split at y=50 and y=150 into three collinear sub-edges so
- * the flange (below) can attach to just the 100mm MIDDLE segment — the
- * T-shaped, asymmetric-seam scenario. Edge indices: e0=(0,0)-(100,0) bottom,
- * e1=(100,0)-(100,50) right-lower, e2=(100,50)-(100,150) right-middle (the
- * seam), e3=(100,150)-(100,200) right-upper, e4=(100,200)-(0,200) top,
- * e5=(0,200)-(0,0) left. */
+ * (x=100) is its own real, UNSPLIT edge — the flange (below) attaches to
+ * only the middle 100mm of it (y in [50,150]), the T-shaped, asymmetric-seam
+ * scenario, found directly by contact detection (TASK_SPEC.md F3), not by
+ * pre-authoring matching sub-edges. */
 function authorPlate(store: GraphStore): CreatePartResult {
   return dispatchGraphTool(store, 'create_part', {
     name: 'tab-plate',
     outline: [
       { x: 0, y: 0 },
       { x: 100, y: 0 },
-      { x: 100, y: 50 },
-      { x: 100, y: 150 },
       { x: 100, y: 200 },
       { x: 0, y: 200 },
     ],
@@ -82,8 +78,12 @@ function authorPlate(store: GraphStore): CreatePartResult {
   }) as CreatePartResult;
 }
 
-/** Flange: 100mm wide x 100mm deep, thickness 1.5mm — its own edge 0 is
- * exactly 100mm, matching the plate's pre-split middle seam length. */
+/** Flange: 100mm wide x 100mm deep, thickness 1.5mm, anchored so its own
+ * local edge0 (0,0)-(100,0) folds 90deg onto the plate's middle 100mm
+ * segment (100,150)-(100,50) — same hand-verified anchor family as
+ * merge_bodies_with_bend.integration.test.ts's own authorTwoParts (that
+ * file's header comment has the full derivation; here local(0,0) maps to
+ * the plate's world (100,150,0) and local(100,0) to (100,50,0)). */
 function authorFlange(store: GraphStore): CreatePartResult {
   return dispatchGraphTool(store, 'create_part', {
     name: 'tab-flange',
@@ -94,6 +94,10 @@ function authorFlange(store: GraphStore): CreatePartResult {
       { x: 0, y: 100 },
     ],
     thickness_mm: 1.5,
+    anchor: {
+      r: [0, 0, -1, -1, 0, 0, 0, 1, 0],
+      t: [100, 150, 0],
+    },
   }) as CreatePartResult;
 }
 
@@ -106,9 +110,6 @@ d('[v2] merge_bodies_with_bend — T-shaped, asymmetric (partial-run) seam', () 
     const merged = dispatchGraphTool(store, 'merge_bodies_with_bend', {
       part_a_id: plate.part_id,
       part_b_id: flange.part_id,
-      edge_a: { region_panel_id: plate.root_region_panel_id, edge_index: 2 },
-      edge_b: { region_panel_id: flange.root_region_panel_id, edge_index: 0 },
-      angle_deg: 90,
     }) as MergeToolResult;
     expect(merged.part_id).toBe(plate.part_id);
     expect(merged.bend_id).toBeTruthy();

@@ -111,6 +111,11 @@ export const graphToolDefinitions = [
         radius_mm: { type: 'number', minimum: 0 },
         k_factor: { type: 'number', minimum: 0, maximum: 1 },
         label: { type: 'string' },
+        bend_process: {
+          type: 'string',
+          description:
+            'Which manufacturing process forms this bend — an unvalidated free string; the app client sends its own BendProcess enum name (e.g. airBend, bottoming, coining, hemming, rollBend, grooving). Omitted: not tracked.',
+        },
       },
       required: ['kind', 'part_id', 'parent_region_panel_id', 'hinge_a', 'hinge_b', 'angle_deg'],
     },
@@ -118,44 +123,21 @@ export const graphToolDefinitions = [
   {
     name: 'merge_bodies_with_bend',
     description:
-      "Join two independently-authored parts into one, connected by a new bend at a caller-specified seam (rebuild/14 §2.1.2). Not a distinct primitive: reconciles B's outline into A's frame, re-parents B's rows onto A, then an ordinary create_node(bend, ...) at the seam. B is aliased via merged_into_part_id, never deleted.",
+      "Join two independently-authored parts into one, connected by a new bend at their own real, anchor-derived seam (docs/TASK_SPEC.md — no edge refs, no angle_deg: both are found from part_a's and part_b's own stored anchors, the same way fuse_bodies already finds its own coplanar seam). Not a distinct primitive: detects the real contact interval between the two parts' anchored outlines, reconciles B's outline into A's frame at that seam, re-parents B's rows onto A, then an ordinary create_node(bend, ...) with the detected angle. B is aliased via merged_into_part_id, never deleted. Fails with a typed error if the two parts don't actually touch (GE_MERGE_NO_CONTACT) or are genuinely coplanar (GE_MERGE_COPLANAR_SEAM — use fuse_bodies instead for a flush, no-bend absorb).",
     inputSchema: {
       type: 'object',
       properties: {
         part_a_id: { type: 'string' },
         part_b_id: { type: 'string' },
-        edge_a: {
-          type: 'object',
-          description:
-            "The free (non-bend) boundary edge on A's live region panel to use as the seam.",
-          properties: {
-            region_panel_id: { type: 'string' },
-            edge_index: { type: 'number' },
-          },
-          required: ['region_panel_id', 'edge_index'],
-        },
-        edge_b: {
-          type: 'object',
-          description: "The matching free boundary edge on B's live region panel.",
-          properties: {
-            region_panel_id: { type: 'string' },
-            edge_index: { type: 'number' },
-          },
-          required: ['region_panel_id', 'edge_index'],
-        },
-        angle_deg: {
-          type: 'number',
-          description: 'Signed; positive = mountain, negative = valley.',
-        },
         radius_mm: { type: 'number', minimum: 0 },
         k_factor: { type: 'number', minimum: 0, maximum: 1 },
         bottom_is_concave: {
           type: 'boolean',
           description:
-            "Overrides the angle_deg-sign-derived mountain/valley pivot-side default (see BendRow.bottomIsConcave's own doc comment) — a caller that already knows the true pivot side (e.g. from reconcilePieces' own measured bend) should pass it explicitly; the sign-derived rule is a default, not an invariant.",
+            "Overrides the detected-angle-sign-derived mountain/valley pivot-side default (see BendRow.bottomIsConcave's own doc comment) — a caller that already knows the true pivot side should pass it explicitly; the sign-derived rule is a default, not an invariant.",
         },
       },
-      required: ['part_a_id', 'part_b_id', 'edge_a', 'edge_b', 'angle_deg'],
+      required: ['part_a_id', 'part_b_id'],
     },
   },
   {
@@ -204,7 +186,7 @@ export const graphToolDefinitions = [
   {
     name: 'update_node',
     description:
-      "Update an existing v2 manufacturing-graph entity's fields in place (rebuild/06 Slice 8, rebuild/15 §4.3). kind=part: patch may include name, material_id, k_factor, anchor (a whole-part move — v2's replacement for v1's translate_body). kind=bend: patch may include angle_deg, radius_mm, k_factor_override (number or null to clear), bottom_is_concave (boolean or null to clear), hinge_a, hinge_b ({x,y} — repositions the fold line in place; the bend keeps its own id and existing parent/child region panels, unlike delete_node+create_node), radius_measured (boolean). Setting radius_mm implicitly sets radius_measured=true (an explicit edit is by definition no longer import_part's unmeasured placeholder) — pass radius_measured explicitly only to override that. kind=region_panel: patch may include label, k_factor_override (number or null). Only fields present in patch are changed.",
+      "Update an existing v2 manufacturing-graph entity's fields in place (rebuild/06 Slice 8, rebuild/15 §4.3). kind=part: patch may include name, material_id, k_factor, thickness_mm, anchor (a whole-part move — v2's replacement for v1's translate_body). kind=bend: patch may include angle_deg, radius_mm, k_factor_override (number or null to clear), bottom_is_concave (boolean or null to clear), hinge_a, hinge_b ({x,y} — repositions the fold line in place; the bend keeps its own id and existing parent/child region panels, unlike delete_node+create_node), radius_measured (boolean), bend_process (unvalidated free string — the app client sends its own BendProcess enum name, e.g. airBend/bottoming/rollBend). Setting radius_mm implicitly sets radius_measured=true (an explicit edit is by definition no longer import_part's unmeasured placeholder) — pass radius_measured explicitly only to override that. kind=region_panel: patch may include label, k_factor_override (number or null). Only fields present in patch are changed.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -692,6 +674,7 @@ function handleCreateNode(
   const radiusMm = optNumber(args, 'radius_mm');
   const kFactor = optNumber(args, 'k_factor');
   const label = optString(args, 'label');
+  const bendProcess = optString(args, 'bend_process');
 
   try {
     const { bend, childRegionPanel } = store.createBendNode({
@@ -703,6 +686,7 @@ function handleCreateNode(
       radiusMm,
       kFactor,
       label,
+      bendProcess,
     });
     return { bend_id: bend.bendId, child_region_panel_id: childRegionPanel.regionPanelId };
   } catch (err) {
@@ -719,9 +703,6 @@ function handleMergeBodiesWithBend(
 ): { part_id: string; bend_id: string; child_region_panel_id: string } {
   const partAId = requireString(args, 'part_a_id');
   const partBId = requireString(args, 'part_b_id');
-  const edgeA = requireEdgeRef(args, 'edge_a');
-  const edgeB = requireEdgeRef(args, 'edge_b');
-  const angleDeg = requireNumber(args, 'angle_deg');
   const radiusMm = optNumber(args, 'radius_mm');
   const kFactor = optNumber(args, 'k_factor');
   const bottomIsConcave = optBoolean(args, 'bottom_is_concave');
@@ -730,9 +711,6 @@ function handleMergeBodiesWithBend(
     const { bend, childRegionPanel } = mergePartsWithBend(store, {
       partAId,
       partBId,
-      edgeA,
-      edgeB,
-      angleDeg,
       radiusMm,
       kFactor,
       bottomIsConcave,
@@ -895,6 +873,7 @@ function handleUpdateNode(
           name: optString(patch, 'name'),
           materialId: optString(patch, 'material_id'),
           kFactor: optNumber(patch, 'k_factor'),
+          thicknessMm: optNumber(patch, 'thickness_mm'),
           anchor: optTransform(patch, 'anchor'),
         });
         return { part_id: part.partId };
@@ -909,6 +888,7 @@ function handleUpdateNode(
           hingeA: optPoint2(patch, 'hinge_a'),
           hingeB: optPoint2(patch, 'hinge_b'),
           radiusMeasured: optBoolean(patch, 'radius_measured'),
+          bendProcess: optString(patch, 'bend_process'),
         });
         return { bend_id: bend.bendId };
       }
@@ -1387,7 +1367,31 @@ async function handleSimulateNesting(
     const sheetArea = sheetW * sheetH;
     result.utilisationPct = totalArea / (sheetArea * result.sheetsRequired) * 100;
 
-    return result;
+    // Wire convention (every other v2 tool response is hand-converted the
+    // same way, e.g. handleCreatePart's { part_id, root_region_panel_id }):
+    // tool call requests/responses use snake_case, but `NestingResult`
+    // (jobs/queue.ts) is an internal TS interface, deliberately camelCase
+    // like every other in-process model in this store. `get_job` forwards
+    // `job.result` to the client completely opaquely (`result?: unknown` —
+    // V2Job's own doc comment), so nothing upstream converts this for us;
+    // omitting this step left the Dart client's `SimulateNestingResult.
+    // fromJson`/`NestPlacement.fromJson` reading `part_id`/`rotation_deg`/
+    // `utilisation_pct`/`sheets_required` that were never actually present,
+    // silently defaulting every placement's part id to '' and its
+    // width/height to 0 — the Sheet Nesting view's own painter skips any
+    // placement with zero width/height, so the sheet rendered with nothing
+    // on it even though a real, non-empty result had come back.
+    return {
+      placements: result.placements.map((p) => ({
+        part_id: p.partId,
+        sheet_index: p.sheetIndex,
+        x: p.x,
+        y: p.y,
+        rotation_deg: p.rotationDeg,
+      })),
+      utilisation_pct: result.utilisationPct,
+      sheets_required: result.sheetsRequired,
+    };
   });
 
   return { job_id: jobId };

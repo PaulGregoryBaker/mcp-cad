@@ -186,9 +186,6 @@ function resolveFreeEdge(
 export interface MergePartsWithBendInput {
   partAId: string;
   partBId: string;
-  edgeA: EdgeRef;
-  edgeB: EdgeRef;
-  angleDeg: number;
   radiusMm?: number;
   kFactor?: number;
   /** See BendRow.bottomIsConcave's own doc comment (manufacturing_graph_
@@ -201,14 +198,17 @@ export interface MergePartsWithBendInput {
 }
 
 /**
- * merge_bodies_with_bend (14 §2.1.2): resolves each caller-given edge_ref to
- * its live 2D endpoints (via evaluatePartGraph — never re-derived), calls the
- * ONE place this reconciliation is computed (part_merge.hpp's
- * reconcileOutlines, pure C++), and — only on success — applies the result as
- * an ordinary GraphStore mutation (re-parent B's rows, alias B, create the
- * connecting bend via the existing createBendNode path). A reconciliation
- * failure (mismatched edge lengths, a self-intersecting splice) is a normal,
- * typed outcome, not a bad-graph exception — thrown with the addon's own
+ * merge_bodies_with_bend (docs/TASK_SPEC.md — anchor-driven, single-path
+ * reconciliation, superseding 14 §2.1.2's original caller-edge-ref design):
+ * finds the real contact seam from A's and B's own stored anchors (never a
+ * caller-supplied edge_ref, never angle_deg as an input — both are derived),
+ * splices the two flat outlines at that seam (part_merge.hpp's
+ * reconcileOutlines, pure C++, unchanged since before), and — only on
+ * success — applies the result as an ordinary GraphStore mutation (re-parent
+ * B's rows, alias B, create the connecting bend via the existing
+ * createBendNode path). A reconciliation failure (no real contact, a
+ * genuinely coplanar seam, a self-intersecting splice) is a normal, typed
+ * outcome, not a bad-graph exception — thrown with the addon's own
  * errorCode, same convention as constructPart's addon-failure path above.
  */
 export function mergePartsWithBend(
@@ -241,16 +241,22 @@ export function mergePartsWithBend(
     );
   }
 
-  const edgeA = resolveFreeEdge(input.partAId, layoutA, input.edgeA);
-  const edgeB = resolveFreeEdge(input.partBId, layoutB, input.edgeB);
+  const contact = geometryBinding.detectContact(partA.outline, partA.anchor, partB.outline, partB.anchor);
+  if (!contact.ok) {
+    throwError(
+      (contact.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
+      contact.message || 'detectContact failed',
+      true,
+    );
+  }
 
   const reconciled = geometryBinding.reconcileOutlines(
     partA.outline,
-    edgeA.p0,
-    edgeA.p1,
+    contact.aRunStart,
+    contact.aRunEnd,
     partB.outline,
-    edgeB.p0,
-    edgeB.p1,
+    contact.bRunStart,
+    contact.bRunEnd,
   );
   if (!reconciled.ok) {
     throwError(
@@ -260,14 +266,33 @@ export function mergePartsWithBend(
     );
   }
 
+  // Which of A's own LIVE region panels the detected seam belongs to — a
+  // membership lookup via the one existing primitive that already answers
+  // "which region panel owns this flat-frame point" (regionOf, wrapped by
+  // mapPointToWorld), never re-derived here (constitution principle IV): the
+  // interval's own midpoint is a point ON the seam, on the SAME free edge
+  // whichever region panel it belongs to.
+  const seamMidpoint: Point2 = {
+    x: (contact.aRunStart.x + contact.aRunEnd.x) / 2,
+    y: (contact.aRunStart.y + contact.aRunEnd.y) / 2,
+  };
+  const seamOwner = mapPointToWorld(store, input.partAId, seamMidpoint, 0);
+  if (!seamOwner.ok || !seamOwner.regionPanelId) {
+    throwError(
+      ErrorCodes.GE_MERGE_INTERNAL_INCONSISTENCY,
+      seamOwner.message || 'detected seam does not resolve to a live region panel on part A',
+      false,
+    );
+  }
+
   return store.mergePartsWithBend({
     partAId: input.partAId,
     partBId: input.partBId,
     combinedOutlineA: reconciled.combinedOutline,
     hingeA: reconciled.hingeA,
     hingeB: reconciled.hingeB,
-    parentRegionPanelIdOnA: input.edgeA.regionPanelId,
-    angleDeg: input.angleDeg,
+    parentRegionPanelIdOnA: seamOwner.regionPanelId,
+    angleDeg: contact.angleDeg,
     radiusMm: input.radiusMm,
     kFactor: input.kFactor,
     bottomIsConcave: input.bottomIsConcave,

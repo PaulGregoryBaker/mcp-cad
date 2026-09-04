@@ -57,9 +57,11 @@ function unionBbox(a: BoundingBoxResult, b: BoundingBoxResult): BoundingBoxResul
   };
 }
 
-/** A: 10x5 rectangle. B: 5-wide x 8-tall rectangle — B's 5-length edge is the
- * seam, matching A's right edge exactly. Copied from merge_bodies_with_bend
- * .integration.test.ts's own authorTwoParts. */
+/** A: 10x5 rectangle. B: 5-wide x 8-tall rectangle, anchored so its own local
+ * edge0 (0,0)-(5,0) folds 90deg onto A's right edge (10,0)-(10,5) — same
+ * hand-verified anchor as merge_bodies_with_bend.integration.test.ts's own
+ * authorTwoParts (see that file's header comment for the derivation).
+ * docs/TASK_SPEC.md: no edge_a/edge_b/angle_deg. */
 function authorBracket(store: GraphStore): { partAId: string; rootPanelAId: string } {
   const thicknessMm = 1.0;
   const partA = dispatchGraphTool(store, 'create_part', {
@@ -82,14 +84,15 @@ function authorBracket(store: GraphStore): { partAId: string; rootPanelAId: stri
       { x: 0, y: 8 },
     ],
     thickness_mm: thicknessMm,
+    anchor: {
+      r: [0, 0, -1, -1, 0, 0, 0, 1, 0],
+      t: [10, 5, 0],
+    },
   }) as CreatePartResult;
 
   dispatchGraphTool(store, 'merge_bodies_with_bend', {
     part_a_id: partA.part_id,
     part_b_id: partB.part_id,
-    edge_a: { region_panel_id: partA.root_region_panel_id, edge_index: 1 },
-    edge_b: { region_panel_id: partB.root_region_panel_id, edge_index: 0 },
-    angle_deg: 90,
     radius_mm: 2.0,
     k_factor: 0.4,
   });

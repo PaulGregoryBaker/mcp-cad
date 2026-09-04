@@ -109,11 +109,20 @@ d('[v2] cauldron adjacent-pair merge coverage (Phase 5 Slice 5C)', () => {
   it('merge_bodies_with_bend succeeds on more than 100 genuinely adjacent panel pairs', () => {
     const { pieces, thicknessMm } = decomposeCauldron();
 
-    // Adjacency + angle + edge-index detection: reuse reconcilePieces's own
-    // n=2 pairwise case (already proven correct) rather than a second
-    // algorithm. Each candidate pair gets fresh, independently-created
-    // single-panel Parts (store.mergePartsWithBend aliases part B into part
-    // A on success, consuming it — parts can't be reused across pairs).
+    // Adjacency detection: reuse reconcilePieces's own n=2 pairwise case
+    // (already proven correct) purely as the "are these two genuinely
+    // adjacent" oracle for which pairs to attempt — NOT for angle/edge-index
+    // (docs/TASK_SPEC.md: merge_bodies_with_bend no longer takes either; it
+    // derives its own seam from each part's real anchor). Each piece's own
+    // real anchor is precomputed ONCE via reconcilePieces' single-piece
+    // (n=1) case — same pattern unequal_leg_bracket_merge_orientation
+    // .integration.test.ts already established — so every part created below
+    // sits at its true measured 3D position, not the default identity.
+    const soloAnchors = pieces.map((p) => {
+      const solo = geometryBinding.reconcilePieces([p], thicknessMm);
+      return solo.ok ? solo.graph.anchor?.transform : undefined;
+    });
+
     let mergeOkCount = 0;
     let mergeFailCount = 0;
     const reconcileFailByCode = new Map<string, number>();
@@ -129,46 +138,26 @@ d('[v2] cauldron adjacent-pair merge coverage (Phase 5 Slice 5C)', () => {
           );
           continue;
         }
-
-        const match = reconciled.pieceEdgeMatches[0];
-        const bend = reconciled.graph.bends[0];
-        // reconcilePieces picks whichever input piece has the larger area as
-        // "piece0" (root) — not necessarily pieces[i] — and
-        // parentEdgeIndex/childEdgeIndex are relative to THAT choice, not to
-        // input order. Must resolve which of pieces[i]/pieces[j] is actually
-        // the parent before building the two fresh Parts, or edge_index gets
-        // applied to the wrong panel's ring (silently in-range-but-wrong
-        // when both rings happen to share a size, or out-of-range when they
-        // don't — confirmed both failure shapes on this real fixture).
-        const iIsParent = reconciled.graph.rootRegionPanelId === 'piece0';
-        const parentPiece = iIsParent ? pieces[i] : pieces[j];
-        const childPiece = iIsParent ? pieces[j] : pieces[i];
+        if (!soloAnchors[i] || !soloAnchors[j]) continue;
 
         const store = new GraphStore();
         try {
-          const partParent = dispatchGraphTool(store, 'create_part', {
-            name: `pair-${i}-${j}-parent`,
-            outline: parentPiece.ringLocal,
-            thickness_mm: parentPiece.thicknessMm,
-          }) as { part_id: string; root_region_panel_id: string };
-          const partChild = dispatchGraphTool(store, 'create_part', {
-            name: `pair-${i}-${j}-child`,
-            outline: childPiece.ringLocal,
-            thickness_mm: childPiece.thicknessMm,
-          }) as { part_id: string; root_region_panel_id: string };
+          const partI = dispatchGraphTool(store, 'create_part', {
+            name: `pair-${i}-${j}-i`,
+            outline: pieces[i].ringLocal,
+            thickness_mm: pieces[i].thicknessMm,
+            anchor: soloAnchors[i],
+          }) as { part_id: string };
+          const partJ = dispatchGraphTool(store, 'create_part', {
+            name: `pair-${i}-${j}-j`,
+            outline: pieces[j].ringLocal,
+            thickness_mm: pieces[j].thicknessMm,
+            anchor: soloAnchors[j],
+          }) as { part_id: string };
 
           dispatchGraphTool(store, 'merge_bodies_with_bend', {
-            part_a_id: partParent.part_id,
-            part_b_id: partChild.part_id,
-            edge_a: {
-              region_panel_id: partParent.root_region_panel_id,
-              edge_index: match.parentEdgeIndex,
-            },
-            edge_b: {
-              region_panel_id: partChild.root_region_panel_id,
-              edge_index: match.childEdgeIndex,
-            },
-            angle_deg: bend.angleDeg,
+            part_a_id: partI.part_id,
+            part_b_id: partJ.part_id,
           });
           mergeOkCount++;
         } catch (err) {
@@ -177,8 +166,7 @@ d('[v2] cauldron adjacent-pair merge coverage (Phase 5 Slice 5C)', () => {
           mergeFailByCode.set(structured.code, (mergeFailByCode.get(structured.code) ?? 0) + 1);
           if (process.env.CAULDRON_DEBUG === '1') {
             console.log(
-              `  FAIL (${i},${j}) ringParent=${parentPiece.ringLocal.length} ringChild=${childPiece.ringLocal.length} ` +
-                `edgeParent=${match.parentEdgeIndex} edgeChild=${match.childEdgeIndex} angle=${bend.angleDeg.toFixed(2)} ` +
+              `  FAIL (${i},${j}) ringI=${pieces[i].ringLocal.length} ringJ=${pieces[j].ringLocal.length} ` +
                 `code=${structured.code} msg=${structured.message}`,
             );
           }

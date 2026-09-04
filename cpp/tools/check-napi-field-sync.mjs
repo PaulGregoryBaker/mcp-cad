@@ -55,6 +55,7 @@ const REGISTRY = [
   { cppStruct: 'EvaluateResult', cppHeader: H('translation', 'manufacturing_graph_evaluator.hpp'), tsInterface: 'EvaluatePartGraphResult', writeFn: 'WriteEvaluateResult', readFn: 'ReadEvaluateResult', skipRead: ['errorCode'] },
   { cppStruct: 'MapToWorldResult', cppHeader: H('translation', 'point_mapping.hpp'), tsInterface: 'MapToWorldResult', writeFn: 'WriteMapToWorldResult', readFn: null },
   { cppStruct: 'MapToFlatResult', cppHeader: H('translation', 'point_mapping.hpp'), tsInterface: 'MapToFlatResult', writeFn: 'WriteMapToFlatResult', readFn: null },
+  { cppStruct: 'DetectContactResult', cppHeader: H('translation', 'part_merge.hpp'), tsInterface: 'DetectContactResult', writeFn: 'WriteDetectContactResult', readFn: null },
   { cppStruct: 'ReconcileOutlinesResult', cppHeader: H('translation', 'part_merge.hpp'), tsInterface: 'ReconcileOutlinesResult', writeFn: 'WriteReconcileOutlinesResult', readFn: null },
   { cppStruct: 'SplitAtBendResult', cppHeader: H('translation', 'part_split.hpp'), tsInterface: 'SplitPartAtBendResult', writeFn: 'WriteSplitAtBendResult', readFn: null },
   { cppStruct: 'ReconcilePiecesResult', cppHeader: H('translation', 'step_reconciliation.hpp'), tsInterface: 'ReconcilePiecesResult', writeFn: 'WriteReconcilePiecesResult', readFn: null },

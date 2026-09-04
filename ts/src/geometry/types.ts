@@ -754,15 +754,32 @@ export interface MapToFlatResult {
   residualMm: number;
 }
 
+// docs/TASK_SPEC.md §9 step 1 / part_merge.hpp's DetectContact — anchor-driven
+// seam detection for merge_bodies_with_bend: given each part's own real
+// anchor (never a caller-supplied edge), finds the one real contact interval
+// between them, in each side's own local 2D frame, plus the real dihedral
+// angle there. Feed straight into reconcileOutlines below.
+export interface DetectContactResult {
+  ok: boolean;
+  errorCode: string; // "" | "GE_MERGE_NO_CONTACT" | "GE_MERGE_COPLANAR_SEAM" | "GE_MERGE_SELF_INTERSECTION" | "GE_MERGE_INTERNAL_INCONSISTENCY"
+  message: string;
+  aRunStart: NapiPoint2;
+  aRunEnd: NapiPoint2;
+  bRunStart: NapiPoint2;
+  bRunEnd: NapiPoint2;
+  angleDeg: number;
+  contactRegionCount: number;
+}
+
 // rebuild/14-graph-schema.md §2.1.2 / part_merge.hpp — Phase 5 Slice 4. Pure
-// 2D outline reconciliation for merge_bodies_with_bend: given a free edge on
-// each of two parts' outlines, returns the spliced combined outline plus the
-// shared hinge segment (in A's frame). No graph bookkeeping (region panels,
-// bends, re-parenting) happens here — that's GraphStore.mergePartsWithBend's
-// job, reusing this purely-geometric result.
+// 2D outline reconciliation for merge_bodies_with_bend: given DetectContact's
+// own interval on each of two parts' outlines, returns the spliced combined
+// outline plus the shared hinge segment (in A's frame). No graph bookkeeping
+// (region panels, bends, re-parenting) happens here — that's
+// GraphStore.mergePartsWithBend's job, reusing this purely-geometric result.
 export interface ReconcileOutlinesResult {
   ok: boolean;
-  errorCode: string; // "" | "GE_INVALID_EDGE_REF" | "GE_MERGE_EDGE_MISMATCH" | "GE_MERGE_SELF_INTERSECTION"
+  errorCode: string; // "" | "GE_MERGE_SELF_INTERSECTION" | "GE_MERGE_INTERNAL_INCONSISTENCY"
   message: string;
   combinedOutline: NapiPoint2[];
   hingeA: NapiPoint2;

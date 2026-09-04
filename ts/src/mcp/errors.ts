@@ -204,10 +204,16 @@ export const ErrorCodes = {
   // GE_MERGE_EDGE_MISALIGNED/GE_POINT_NOT_ON_PANEL above — same precedent as
   // Slice 3's GE_POINT_NOT_ON_PART: a new module gets its own code rather
   // than reusing a v1 code whose exact semantics/threshold belong to a
-  // different implementation.
+  // different implementation. GE_INVALID_EDGE_REF is still used by
+  // resolveFreeEdge (close_gap, split_part_at_bend) — those tools still take
+  // caller-supplied edge refs; only merge_bodies_with_bend moved off them
+  // (docs/TASK_SPEC.md). GE_MERGE_EDGE_MISMATCH is retired — an unequal-length
+  // seam is a supported case now (TASK_SPEC.md F3), not a rejection.
   GE_INVALID_EDGE_REF: 'GE_INVALID_EDGE_REF',
-  GE_MERGE_EDGE_MISMATCH: 'GE_MERGE_EDGE_MISMATCH',
+  GE_MERGE_NO_CONTACT: 'GE_MERGE_NO_CONTACT',
+  GE_MERGE_COPLANAR_SEAM: 'GE_MERGE_COPLANAR_SEAM',
   GE_MERGE_SELF_INTERSECTION: 'GE_MERGE_SELF_INTERSECTION',
+  GE_MERGE_INTERNAL_INCONSISTENCY: 'GE_MERGE_INTERNAL_INCONSISTENCY',
 
   // split_part_at_bend — the graph-level inverse of merge_bodies_with_bend,
   // within one part (part_split.hpp). Verbatim string matches for
