@@ -415,7 +415,7 @@ export const graphToolDefinitions = [
   {
     name: 'split_body_by_plane',
     description:
-      'Split a part by a 3D plane, producing one or more new parts (rebuild/15 §4.2, Phase 5 Slice 9b). Graph-first: projects the plane to per-panel 2D cut lines, clips region polygons, groups fragments by bend connectivity, unions outlines, reassigns bends and holes, and creates new PartRows. The original part is unchanged.',
+      "Split a part by a 3D plane (in world coordinates), producing one or more new parts (rebuild/15 §4.2, Phase 5 Slice 9b). Graph-first: projects the plane to per-panel 2D cut lines via the part's own real anchor, clips region polygons, groups fragments by bend connectivity, unions outlines, reassigns bends and holes, and creates new PartRows — each keeping the original part's own anchor, since fragment coordinates stay in that same flat frame. The original part is unchanged. Fails with GE_SPLIT_BY_PLANE_NO_INTERSECTION if the plane doesn't touch the part at all (every region panel landed entirely on one side) — it does not silently return the whole part as a redundant copy.",
     inputSchema: {
       type: 'object',
       properties: {

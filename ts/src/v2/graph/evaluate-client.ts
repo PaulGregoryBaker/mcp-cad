@@ -1304,6 +1304,19 @@ export function splitBodyByPlane(
     }
   }
 
+  // Reject a plane that doesn't touch the part at all — every panel landed
+  // entirely on one side, so there is nothing to split (not a silent no-op
+  // producing a redundant, whole-part "copy" — the caller asked to split,
+  // and no split occurred).
+  if (posComponents.size === 0 || negComponents.size === 0) {
+    throwError(
+      ErrorCodes.GE_SPLIT_BY_PLANE_NO_INTERSECTION,
+      `the given plane does not intersect part ${input.partId} — every region panel landed ` +
+        'entirely on one side, so there is nothing to split',
+      false,
+    );
+  }
+
   // Step 3: For each component, union fragment polygons into one outline
   const newPartIds: string[] = [];
 
@@ -1331,13 +1344,19 @@ export function splitBodyByPlane(
       (b) => panelIds.has(b.parentRegionPanelId) && panelIds.has(b.childRegionPanelId),
     );
 
-    // Create the new part
+    // Create the new part — same real anchor as the original part: the
+    // fragment outline is still expressed in that SAME flat frame F (clipped
+    // sub-polygons of the original, never re-based), so reusing it is the
+    // only correct placement, not a default. Omitting this silently
+    // teleported every split result to identity (confirmed live — the
+    // original bug this fixes).
     const newPart = store.createPart({
       name: `${snapshot.part.name}#split`,
       outline,
       thicknessMm: snapshot.part.thicknessMm,
       materialId: snapshot.part.materialId,
       kFactor: snapshot.part.kFactor,
+      anchor: snapshot.part.anchor,
     });
 
     // Map old panel IDs to new ones (root panel is the first one)

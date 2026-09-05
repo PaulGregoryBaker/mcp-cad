@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { GraphStore } from '../../src/v2/graph/store';
 import { dispatchGraphTool } from '../../src/v2/tools/graph';
 import { evaluatePart } from '../../src/v2/graph/evaluate-client';
+import { McpToolError } from '../../src/mcp/errors';
 
 const ENABLED = process.env.SUITE_V2_DRIVER === '1';
 const d = ENABLED ? describe : describe.skip;
@@ -291,18 +292,59 @@ d('[v2] Slice 9b: split_body_by_plane', () => {
     }
   });
 
-  it('split_body_by_plane with plane outside the part still produces at least one part', () => {
+  it('rejects a plane that does not intersect the part with a typed error', () => {
     const store = new GraphStore();
     const part = createRect(store, 100, 50);
 
+    let caught: unknown;
+    try {
+      dispatchGraphTool(store, 'split_body_by_plane', {
+        part_id: part.part_id,
+        plane: {
+          normal: { x: 1, y: 0, z: 0 },
+          origin: { x: 200, y: 0, z: 0 },
+        },
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(McpToolError);
+    expect((caught as McpToolError).structured.code).toBe('GE_SPLIT_BY_PLANE_NO_INTERSECTION');
+
+    // The original part must survive untouched — a rejected split is not a
+    // partial mutation.
+    const snap = store.snapshotPart(part.part_id);
+    expect(snap.part.outline).toHaveLength(4);
+  });
+
+  it('preserves the original part\'s real anchor on both split results (regression: used to silently teleport to identity)', () => {
+    const store = new GraphStore();
+    const anchor = { r: [1, 0, 0, 0, 1, 0, 0, 0, 1] as [number, number, number, number, number, number, number, number, number], t: [500, -250, 75] as [number, number, number] };
+    const part = dispatchGraphTool(store, 'create_part', {
+      name: 'anchored-rect',
+      outline: [
+        { x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 50 }, { x: 0, y: 50 },
+      ],
+      thickness_mm: 1.0,
+      anchor,
+    }) as CreatePartResult;
+
+    // Plane is in WORLD coordinates (ComputeSplitByPlane projects it into
+    // each panel's own local frame via its pose) — with anchor.t.x=500, the
+    // part's real world footprint is x in [500,600], so the cut plane must
+    // sit at world x=550 (local x=50) to actually intersect it.
     const result = dispatchGraphTool(store, 'split_body_by_plane', {
       part_id: part.part_id,
       plane: {
         normal: { x: 1, y: 0, z: 0 },
-        origin: { x: 200, y: 0, z: 0 },
+        origin: { x: 550, y: 0, z: 0 },
       },
     }) as { new_part_ids: string[] };
 
     expect(result.new_part_ids.length).toBeGreaterThanOrEqual(1);
+    for (const id of result.new_part_ids) {
+      const snap = store.snapshotPart(id);
+      expect(snap.part.anchor).toEqual(anchor);
+    }
   });
 });

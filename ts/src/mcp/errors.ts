@@ -221,6 +221,14 @@ export const ErrorCodes = {
   GE_SPLIT_HINGE_NOT_GROUNDED: 'GE_SPLIT_HINGE_NOT_GROUNDED',
   GE_SPLIT_CORNER_ZONE_NOT_GROUNDED: 'GE_SPLIT_CORNER_ZONE_NOT_GROUNDED',
 
+  // split_body_by_plane (Phase 5 Slice 9b) — a distinct tool from
+  // split_part_at_bend above; own code rather than reusing GE_SPLIT_FAILED
+  // or either GE_SPLIT_* code above, which belong to that different
+  // implementation (same discipline as GE_INVALID_EDGE_REF's own doc
+  // comment). Thrown when the plane doesn't touch the part at all — every
+  // panel landed entirely on one side, so there is nothing to split.
+  GE_SPLIT_BY_PLANE_NO_INTERSECTION: 'GE_SPLIT_BY_PLANE_NO_INTERSECTION',
+
   // Phase 5 Slice 5 — ingest STEP -> graph (rebuild/13-translation-module-
   // design.md §6). Verbatim string matches for translation::ReconcileErrorCode
   // (step_reconciliation.hpp).
