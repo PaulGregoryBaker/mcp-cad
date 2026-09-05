@@ -26,6 +26,7 @@
  * drivers.
  */
 import { describe, expect, it } from 'vitest';
+import * as path from 'node:path';
 
 import { GraphStore } from '../../src/v2/graph/store';
 import { dispatchGraphTool } from '../../src/v2/tools/graph';
@@ -34,6 +35,8 @@ import type { PartRow, Transform3Row } from '../../src/v2/graph/types';
 
 const ENABLED = process.env.SUITE_V2_DRIVER === '1';
 const d = ENABLED ? describe : describe.skip;
+
+const FIXTURES_DIR = path.resolve(__dirname, '../../../cpp/tests/fixtures');
 
 interface CreatePartResult {
   part_id: string;
@@ -270,5 +273,151 @@ d('[v2] fuse_bodies (Phase 5 Slice 6) — rejection cases', () => {
     // geometrically touches) must be rejected, not silently no-op or
     // double-count its material.
     expectFuseError(store, partC.part_id, partB.part_id, 'GRAPH_PART_ALIASED');
+  });
+});
+
+/**
+ * Live-app regression (2026-09): reported as "Tool error: boolean result
+ * has 2 faces (expected exactly 1) — disjoint or empty result" (later:
+ * "closest in-plane XY gap: 0.000000mm" yet still 2 faces) when fusing a
+ * real testcube.step protrusion onto a split_part_at_bend panel, after a
+ * manual "Translate Body" edit in the app.
+ *
+ * TRUE root cause, found by isolating the exact live ring pair down to a
+ * bare `PolygonUnion(a, b)` call (no anchors, no projection): A's outline
+ * is wound CCW; FuseCoplanarParts' own anchor-relative projection of B into
+ * A's local frame produces a CW-wound ring whenever that projection's
+ * in-plane rotation has determinant -1 — a REAL, correct fact about two
+ * independently-chosen local frames (confirmed live: two testcube
+ * protrusions sit on walls whose outward normals point in opposite
+ * directions along the same axis), not an error. `PolygonUnion` built
+ * OCCT faces directly from each input ring's own winding without ever
+ * canonicalizing it, so two faces with opposite windings — even a
+ * perfectly clean, verified-by-hand 0.05mm overlap, not a gap — could fail
+ * `BRepAlgoAPI_Fuse` outright. Confirmed independent of `kBooleanFuzzMm`
+ * (still failed at a 10,000x looser fuzz value): this was a winding/
+ * orientation defect, not a numerical-tolerance one.
+ *
+ * Two earlier fix attempts this session were wrong:
+ * 1. "Correct" the mirror by reinterpreting B's local (x,y) through a
+ *    different rotation before projecting — silently substituted a
+ *    different SHAPE for B while leaving its anchor translation untouched,
+ *    producing a wrong (invisible, overlapping-with-A) result instead of a
+ *    typed error. Reverted.
+ * 2. Theorize the mirror traces back to `getPanelFrame`'s own axis
+ *    convention and needs an upstream fix there — wrong per the user's own
+ *    correction: the 2D↔3D round trip via each part's own anchor is
+ *    self-consistent BY CONSTRUCTION regardless of which convention chose
+ *    either anchor; a determinant -1 composed rotation is not an error to
+ *    fix, just an accurate fact. Never implemented.
+ *
+ * The actual fix (`PolygonUnion`, `polygon_boolean.cc`): canonicalize BOTH
+ * input rings to the same (CCW) winding before building OCCT faces — pure
+ * vertex re-ordering, changes no position or shape, so neither of the two
+ * traps above applies.
+ */
+d('[v2] fuse_bodies live regression: a real testcube.step protrusion, translated by the exact '
+  + 'live recipe onto a split_part_at_bend panel, fuses correctly (root cause was PolygonUnion '
+  + 'never canonicalizing input winding, not a shape/position/mirror defect)',
+  () => {
+  function bbox(outline: Array<{ x: number; y: number }>) {
+    let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
+    for (const p of outline) {
+      xMin = Math.min(xMin, p.x); xMax = Math.max(xMax, p.x);
+      yMin = Math.min(yMin, p.y); yMax = Math.max(yMax, p.y);
+    }
+    return { xMin, xMax, yMin, yMax };
+  }
+
+  it('import testcube.step, split Component 1 on every bend (keep_corner_on=parent, worklist '
+    + 'across every resulting part), translate Protrusion1 by -76.6mm along a world axis, fuse '
+    + 'onto whichever resulting panel it reaches — at least one pairing must succeed and '
+    + "genuinely grow that panel's area", () => {
+    const store = new GraphStore();
+    const imported = dispatchGraphTool(store, 'import_part', {
+      file: path.join(FIXTURES_DIR, 'testcube.step'),
+    }) as { part_id: string; protrusion_part_ids: string[]; component_part_ids: string[] };
+
+    // "Component 1" — the 3-bend inner-cube component, found from the
+    // actual import, not assumed by index.
+    let component1 = imported.component_part_ids[0];
+    let maxBends = -1;
+    for (const cid of imported.component_part_ids) {
+      const n = store.snapshotPart(cid).bends.length;
+      if (n > maxBends) { maxBends = n; component1 = cid; }
+    }
+    expect(maxBends).toBe(3);
+
+    // Split by bend for ALL bends, keep edges on parent — a WORKLIST across
+    // every resulting part (not just component1 itself), since a split-off
+    // piece can carry its own remaining bend that component1's own bend
+    // list would never re-visit.
+    const worklist: string[] = [component1];
+    const allSplitParts = new Set<string>([component1]);
+    while (worklist.length > 0) {
+      const pid = worklist.pop()!;
+      const bends = store.snapshotPart(pid).bends;
+      if (bends.length === 0) continue;
+      const bendId = bends[0].bendId;
+      const result = dispatchGraphTool(store, 'split_part_at_bend', {
+        part_id: pid,
+        bend_id: bendId,
+        keep_corner_on: 'parent',
+      }) as { new_part_ids: string[] };
+      for (const npid of result.new_part_ids) {
+        allSplitParts.add(npid);
+        worklist.push(npid);
+      }
+      worklist.push(pid);
+    }
+    expect(allSplitParts.size).toBeGreaterThan(1);
+
+    // Protrusion1 — the first protrusion in import order (sidebar order in
+    // the live app).
+    const protrusion1 = imported.protrusion_part_ids[0];
+
+    let anySucceeded = false;
+    for (const axis of ['x', 'y'] as const) {
+      for (const targetPanel of allSplitParts) {
+        const before = store.snapshotAll();
+        const protrusion = store.getPart(protrusion1)!;
+        const t = protrusion.anchor.t as [number, number, number];
+        const newT: [number, number, number] =
+          axis === 'x' ? [t[0] - 76.6, t[1], t[2]] : [t[0], t[1] - 76.6, t[2]];
+        dispatchGraphTool(store, 'update_node', {
+          kind: 'part',
+          id: protrusion1,
+          patch: { anchor: { r: protrusion.anchor.r, t: newT } },
+        });
+
+        const panelBefore = bbox(store.getPart(targetPanel)!.outline);
+        const areaBefore = shoelaceArea(store.getPart(targetPanel)!.outline);
+        try {
+          const result = dispatchGraphTool(store, 'fuse_bodies', {
+            part_a_id: targetPanel,
+            part_b_id: protrusion1,
+          }) as { part_id: string };
+          const areaAfter = shoelaceArea(requirePart(store, result.part_id).outline);
+          // A real success must genuinely grow the panel's area, not just
+          // report ok — this is the silent-wrong-fuse check the earlier
+          // (reverted) mirror-fix regression needed and lacked.
+          expect(areaAfter, `axis=${axis} target=${targetPanel} panelBefore=${JSON.stringify(panelBefore)}`)
+            .toBeGreaterThan(areaBefore + 1.0);
+          anySucceeded = true;
+        } catch {
+          // A genuinely unrelated/out-of-plane (panel, axis) pairing is
+          // expected to fail — only inspected via anySucceeded below.
+        } finally {
+          store.restoreAll(before);
+        }
+      }
+    }
+
+    expect(
+      anySucceeded,
+      'at least one (axis, panel) pairing matching the live recipe (-76.6mm translate of '
+        + 'Protrusion1) must fuse successfully and grow the target panel\'s real area — '
+        + 'reproduces and confirms the fix for the live "2 faces despite 0mm gap" report',
+    ).toBe(true);
   });
 });

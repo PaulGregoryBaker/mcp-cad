@@ -39,6 +39,44 @@ std::vector<Point2> Rect(double x0, double y0, double x1, double y1) {
 
 }  // namespace
 
+TEST_CASE("PolygonUnion: a real testcube.step ring pair with OPPOSITE (CW vs CCW) winding — a "
+          "clean 0.05mm overlap, not a gap — unions correctly (live fuse_bodies failure, "
+          "2026-09; root cause was PolygonUnion never canonicalizing its input rings' winding "
+          "before building faces, NOT a position/shape/mirror defect)",
+          "[translation][polygon_boolean]") {
+  // A: a real split_part_at_bend panel's local outline (CCW), exactly as
+  // measured live against testcube.step.
+  std::vector<Point2> a = {
+      {300.0, 0.0},
+      {450.0, 0.0},
+      {450.0, 150.0},
+      {300.0, 150.0},
+  };
+  // B: a real protrusion's outline, already projected into A's local frame
+  // via FuseCoplanarParts' own anchorA.Inverse().Compose(anchorB) math
+  // (computed by hand from the live anchors) — CW, the OPPOSITE winding
+  // from A, because that projection's in-plane rotation has determinant -1
+  // (a real, correct fact about two independently-chosen local frames, not
+  // an error — see this session's own reverted "mirror correction" attempt,
+  // which wrongly tried to fix this one level up by moving vertices instead
+  // of just re-ordering them). A clean, uniform 0.05mm overlap into A along
+  // a perfectly vertical edge spanning A's own full height — nothing wrong
+  // with the position or shape, only the winding disagrees with A's.
+  std::vector<Point2> b = {
+      {300.05, 0.0},
+      {276.0, 0.0},
+      {275.95, 150.05},
+      {300.05, 150.0},
+  };
+  CHECK(SignedArea(a) > 0.0);   // A is CCW
+  CHECK(SignedArea(b) < 0.0);   // B is CW — opposite winding, as found live
+
+  auto result = PolygonUnion(a, b);
+  INFO("errorCode=" << (result.ok ? "ok" : result.message));
+  REQUIRE(result.ok);
+  CHECK(PolygonArea(result.outer) == Approx(22500.0 + 3611.85).epsilon(0.01));
+}
+
 TEST_CASE("PolygonUnion: two edge-touching rectangles combine into one larger rectangle",
           "[translation][polygon_boolean]") {
   auto a = Rect(0, 0, 10, 5);   // 10x5, right edge at x=10
@@ -140,6 +178,15 @@ TEST_CASE("FuseCoplanarParts: B's own-frame outline, translated into A's world-c
   CHECK(PolygonArea(result.outer) == Approx(100.0));
 }
 
+// NOTE (2026-09): a TEST_CASE previously lived here asserting that B
+// anchored with a discrete in-plane mirror (local Y and Z both flip)
+// fuses flush after a "mirror correction." That correction was reverted —
+// see FuseCoplanarParts' own comment — because it silently substituted a
+// different-shaped B into the union while leaving B's real anchor
+// translation untouched, producing a wrong (overlapping, visually
+// vanishing) result on a real live case instead of the old typed
+// rejection. Removed rather than left asserting since-reverted behavior.
+
 TEST_CASE("FuseCoplanarParts: a part anchored on a different plane is a typed coplanarity error",
           "[translation][polygon_boolean]") {
   Transform3 anchorA = Transform3::Identity();
@@ -229,4 +276,61 @@ TEST_CASE("FuseCoplanarParts: a small real XY gap between B's own edge and A's i
   auto farResult = FuseCoplanarParts(outlineA, anchorA, outlineB, anchorFar, 0.9);
   REQUIRE_FALSE(farResult.ok);
   CHECK(farResult.errorCode == PolygonBooleanErrorCode::kMultipleLoops);
+}
+
+TEST_CASE("FuseCoplanarParts: a per-vertex-skewed touching edge (real STEP-import noise, NOT a "
+          "rigid offset) is closed vertex-by-vertex, not by one shared delta",
+          "[translation][polygon_boolean]") {
+  // A sits at the world origin, identity anchor, a TALL 10x10 rectangle:
+  // x=[0,10], y=[0,10] — the touching region below is kept well away from
+  // A's own corners (y=[3,7]) so this test isolates the skewed-edge case
+  // from any corner-adjacency ambiguity.
+  Transform3 anchorA = Transform3::Identity();
+  auto outlineA = Rect(0, 0, 10, 10);
+
+  // B's own LOCAL outline is a quad whose "left" edge is meant to sit flush
+  // against A's right edge (x=10) but is skewed: the bottom corner falls
+  // 0.02mm short, the top corner falls 0.05mm short — two DIFFERENT gap
+  // magnitudes on the same touching edge, matching the real testcube.step
+  // protrusion dump (each ring's own vertices carry independent noise, not a
+  // rigid translate/rotate of the whole outline). A single shared-delta snap
+  // can zero out only ONE of these two gaps; the other remains a real,
+  // unbridgeable gap (B's edge stays strictly past A's edge, x>10, along
+  // that whole remaining span) that BRepAlgoAPI_Fuse's tight fuzzy value
+  // cannot merge, so PolygonUnion still reports 2 disjoint faces.
+  Transform3 anchorB = Transform3::Translation(10.0, 0.0, 0.0);
+  std::vector<Point2> outlineB = {{0.02, 3.0}, {5.0, 3.0}, {5.0, 7.0}, {0.05, 7.0}};
+
+  auto result = FuseCoplanarParts(outlineA, anchorA, outlineB, anchorB, 0.9);
+  REQUIRE(result.ok);
+  // Both near corners snap onto A's edge, so B effectively becomes close to
+  // a flush 5x4 rectangle against A: total area close to 10*10 + 5*4. Not
+  // exact — the rigid pre-shift stage (needed to keep the OTHER, genuinely-
+  // rigid misalignment case correct) nudges the far side by the same small
+  // delta as a side effect, which is expected collateral at this noise
+  // scale, not a defect: the actual requirement this test guards is that
+  // the fuse SUCCEEDS despite per-vertex noise, not exact area
+  // reconstruction from noisy input.
+  CHECK(PolygonArea(result.outer) == Approx(120.0).margin(0.2));
+}
+
+TEST_CASE("FuseCoplanarParts: a rejected (too-large) gap reports the actual measured distance in "
+          "its error message, not just a generic 'disjoint' — this is what made a real live "
+          "'2 faces' failure (2026-08) unguessable without instrumenting the function by hand",
+          "[translation][polygon_boolean]") {
+  Transform3 anchorA = Transform3::Identity();
+  auto outlineA = Rect(0, 0, 10, 5);
+
+  // B sits exactly 35mm past A's right edge (x=45..50) — real, unrelated
+  // parts, not import noise. This must still fail (the gap-close snap only
+  // applies within coplanarToleranceMm), but the message must now say HOW
+  // FAR apart they actually are, not just "2 faces."
+  Transform3 anchorB = Transform3::Translation(45.0, 0.0, 0.0);
+  auto outlineB = Rect(0, 0, 5, 5);
+
+  auto result = FuseCoplanarParts(outlineA, anchorA, outlineB, anchorB, 0.9);
+  REQUIRE_FALSE(result.ok);
+  CHECK(result.errorCode == PolygonBooleanErrorCode::kMultipleLoops);
+  CHECK(result.message.find("35.000000mm") != std::string::npos);
+  CHECK(result.message.find("gap-close tolerance") != std::string::npos);
 }

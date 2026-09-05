@@ -128,4 +128,11 @@ export interface BendRow {
    * check interprets radiusMm (see BendSpec::radiusMeasured's own doc
    * comment, manufacturing_graph_evaluator.hpp). */
   radiusMeasured: boolean;
+  /** Which manufacturing process forms this bend — the app client sends its
+   * own BendProcess enum name verbatim (e.g. "airBend", "bottoming",
+   * "coining", "hemming", "rollBend", "grooving" — spec 007/bend_type.dart);
+   * a free string, not validated here (same discipline as
+   * PartRow.materialId). null: not yet chosen — never fabricated, disclosed
+   * as "not tracked" by callers. */
+  bendProcess: string | null;
 }

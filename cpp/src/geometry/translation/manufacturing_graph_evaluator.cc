@@ -706,6 +706,62 @@ Loop TraceLoopFrom(const std::vector<TaggedEdge>& edges, size_t startEdge) {
   return loop;
 }
 
+// Removes a vertex wherever the traced loop folds back on itself — either a
+// zero-length edge (two consecutive points coincide) or a 180-degree spike
+// (incoming and outgoing edges collinear but pointing in OPPOSITE
+// directions). This is not about ambiguous cut geometry — BuildCutEdges'
+// own isA/isB miter branch already resolves every case where two LIVE
+// bends genuinely share a corner. It's cleanup for a corner that USED TO
+// be shared by two bends but no longer is: one of them has since been
+// split off into its own separate part (split_part_at_bend), and that
+// split's own local notch (part_split.cc) leaves a real, permanent vertex
+// behind at the old corner. With no live bend left to redirect through it,
+// BuildCutEdges' own default ("just continue along the ring," its header
+// comment's own words) walks straight from that dead corner into whatever
+// the departed bend's notch left sitting right next to it — the same fold
+// this function also cleans up in part_split.cc's own output, just
+// surfacing one step later, here, once a DIFFERENT bend's zero-offset trace
+// walks through the same point. Runs to a fixed point: removing one spike
+// can expose another right behind it. The two collapsing edges' own tags
+// are reconciled by keeping whichever one was non-empty — a genuine clash
+// between two DIFFERENT live tags never reaches here, since that's exactly
+// what BuildCutEdges' own miter branch already resolves before tracing.
+Loop SimplifyLoop(Loop loop) {
+  bool changed = true;
+  while (changed && loop.points.size() >= 3) {
+    changed = false;
+    size_t n = loop.points.size();
+    for (size_t i = 0; i < n; ++i) {
+      size_t prev = (i + n - 1) % n;
+      size_t next = (i + 1) % n;
+      bool remove = false;
+      if (NearlyEqual2Local(loop.points[i], loop.points[prev])) {
+        remove = true;
+      } else {
+        Point2 inDir = Sub2(loop.points[i], loop.points[prev]);
+        Point2 outDir = Sub2(loop.points[next], loop.points[i]);
+        double inLen = Length2(inDir);
+        double outLen = Length2(outDir);
+        if (inLen >= kGeometricEpsilon && outLen >= kGeometricEpsilon) {
+          double sinAngle = Cross2(inDir, outDir) / (inLen * outLen);
+          double dotSign = inDir.x * outDir.x + inDir.y * outDir.y;
+          if (std::fabs(sinAngle) < 1e-6 && dotSign < 0.0) remove = true;
+        }
+      }
+      if (!remove) continue;
+      std::string mergedTag =
+          !loop.edgeBendId[prev].empty() ? loop.edgeBendId[prev] : loop.edgeBendId[i];
+      loop.points.erase(loop.points.begin() + static_cast<long>(i));
+      loop.edgeBendId.erase(loop.edgeBendId.begin() + static_cast<long>(i));
+      size_t newPrev = (prev > i) ? prev - 1 : prev;
+      loop.edgeBendId[newPrev] = mergedTag;
+      changed = true;
+      break;
+    }
+  }
+  return loop;
+}
+
 struct RegionOfResult {
   // The panel's region trimmed to its own true tangent line at every
   // touching bend (this bend's own real, signed setbackMm) — what
@@ -804,6 +860,9 @@ std::optional<RegionOfResult> RegionOf(const PartGraphSpec& graph,
   std::optional<Loop> loop = ExtractLoop(graph, regionPanelId, ring, cuts);
   std::optional<Loop> loopZero = ExtractLoop(graph, regionPanelId, ring, cutsZero);
   if (!loop.has_value() || !loopZero.has_value()) return std::nullopt;
+  loop = SimplifyLoop(std::move(*loop));
+  loopZero = SimplifyLoop(std::move(*loopZero));
+  if (loop->points.size() < 3 || loopZero->points.size() < 3) return std::nullopt;
 
   RegionOfResult out;
   out.outer = loop->points;

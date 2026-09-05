@@ -26,6 +26,7 @@ import { dispatchGraphTool } from '../../src/v2/tools/graph';
 import { McpToolError } from '../../src/mcp/errors';
 import { geometryBinding } from '../../src/geometry/binding';
 import type { BoundingBoxResult } from '../../src/geometry/types';
+import { evaluatePart, toNapiPartGraphSpec } from '../../src/v2/graph/evaluate-client';
 
 const ENABLED = process.env.SUITE_V2_DRIVER === '1';
 const d = ENABLED ? describe : describe.skip;
@@ -102,6 +103,23 @@ d('[v2] update_node (Phase 5 Slice 8)', () => {
     expect(row?.anchor).toEqual(anchor);
   });
 
+  it('kind=part: patches thickness_mm, leaving other fields untouched', () => {
+    const store = new GraphStore();
+    const part = createRectPart(store, 'update-part-thickness');
+    expect(store.getPart(part.part_id)?.thicknessMm).toBe(1.0);
+
+    const result = dispatchGraphTool(store, 'update_node', {
+      kind: 'part',
+      id: part.part_id,
+      patch: { thickness_mm: 2.5 },
+    }) as { part_id: string };
+    expect(result.part_id).toBe(part.part_id);
+
+    const row = store.getPart(part.part_id);
+    expect(row?.thicknessMm).toBe(2.5);
+    expect(row?.name).toBe('update-part-thickness');
+  });
+
   it('kind=bend: patches angle/radius/k_factor_override/bottom_is_concave, and clears via null', () => {
     const store = new GraphStore();
     const part = createRectPart(store, 'update-bend');
@@ -173,6 +191,41 @@ d('[v2] update_node (Phase 5 Slice 8)', () => {
     bend = store.getBend(created.bend_id);
     expect(bend?.hingeA).toEqual({ x: 6, y: 0 });
     expect(bend?.angleDeg).toBe(30);
+  });
+
+  it('kind=bend: create_node accepts bend_process, and update_node patches it, leaving other fields untouched', () => {
+    const store = new GraphStore();
+    const part = createRectPart(store, 'update-bend-process');
+    const created = createBend(store, part.part_id, part.root_region_panel_id, 5);
+    expect(store.getBend(created.bend_id)?.bendProcess).toBeNull();
+
+    const withProcess = dispatchGraphTool(store, 'create_node', {
+      kind: 'bend',
+      part_id: part.part_id,
+      parent_region_panel_id: part.root_region_panel_id,
+      hinge_a: { x: 7, y: 0 },
+      hinge_b: { x: 7, y: 5 },
+      angle_deg: 90,
+      bend_process: 'air_bend',
+    }) as CreateNodeResult;
+    expect(store.getBend(withProcess.bend_id)?.bendProcess).toBe('air_bend');
+
+    dispatchGraphTool(store, 'update_node', {
+      kind: 'bend',
+      id: created.bend_id,
+      patch: { bend_process: 'bottoming' },
+    });
+    let bend = store.getBend(created.bend_id);
+    expect(bend?.bendProcess).toBe('bottoming');
+    expect(bend?.angleDeg).toBe(90);
+
+    dispatchGraphTool(store, 'update_node', {
+      kind: 'bend',
+      id: created.bend_id,
+      patch: { bend_process: 'rollBend' },
+    });
+    bend = store.getBend(created.bend_id);
+    expect(bend?.bendProcess).toBe('rollBend');
   });
 
   it('kind=region_panel: patches label and k_factor_override', () => {
@@ -513,4 +566,208 @@ d('[v2] split_body_by_bends (standalone tool, Phase 5 Slice 8)', () => {
       expect(wall.thickness_mm).toBeCloseTo(1, 6);
     }
   });
+});
+
+/**
+ * split_part_at_bend against a REAL reconciled part (import_part on
+ * testcube.step: a 6-face cube net, base + 4 walls + lid, 5 live bends on
+ * one part). Every other split_part_at_bend test in this suite/part_split_
+ * test.cc uses a hand-authored BendSpec with angleDeg>=0 and default
+ * bottomIsConcave — this is deliberately the opposite: whatever
+ * ReconcilePieces actually stamps on a live import, unedited. Three real
+ * bugs were found live against exactly this fixture (a UI split on a
+ * testcube import failed with kCornerZoneNotGrounded even though the split
+ * should succeed) that no hand-authored fixture caught:
+ *   1. radiusMm=0 (the as-imported default, before a user sets a real
+ *      radius) spuriously failed at a branching hinge, because the fix's
+ *      local-edge search ran even when there was no real offset to search
+ *      for.
+ *   2. ReconcilePieces can stamp a negative angleDeg with an explicit
+ *      bottomIsConcave, both real for reconciled bends — together they flip
+ *      the SIGN of the raw childShift/parentShift formula. An early fix
+ *      derived which side gets trimmed from that raw sign, which made
+ *      keepCornerOn's OWN meaning flip with fold direction — so the exact
+ *      same "keep it on the trunk" request that worked on one wall would
+ *      silently need the opposite enum value on another. keepCornerOn is a
+ *      fabrication choice, not a function of which way the part happened to
+ *      fold — parent-side tests below lock in that keepCornerOn='parent'
+ *      always means "parent keeps the corner," regardless of sign.
+ */
+d('[v2] split_part_at_bend on a real reconciled part (testcube.step)', () => {
+  function importTestcube(): { store: GraphStore; partId: string; bendIds: string[] } {
+    const store = new GraphStore();
+    const imported = dispatchGraphTool(store, 'import_part', {
+      file: path.join(FIXTURES_DIR, 'testcube.step'),
+    }) as { part_id: string };
+    const snapshot = store.snapshotPart(imported.part_id);
+    expect(snapshot.bends.length).toBe(5);
+    return { store, partId: imported.part_id, bendIds: snapshot.bends.map((b) => b.bendId) };
+  }
+
+  it('radiusMm=0 (as imported, before any user edit): every bend splits cleanly on BOTH corner sides', () => {
+    const { store, partId, bendIds } = importTestcube();
+    for (const bendId of bendIds) {
+      for (const keepCornerOn of ['parent', 'child'] as const) {
+        // Each attempt is independent — splitting consumes the bend, so a
+        // real (non-snapshotted) second attempt on the same bendId would
+        // fail with "no bend with id" regardless of keepCornerOn.
+        const before = store.snapshotAll();
+        try {
+          const result = dispatchGraphTool(store, 'split_part_at_bend', {
+            part_id: partId,
+            bend_id: bendId,
+            keep_corner_on: keepCornerOn,
+          }) as { new_part_ids: string[] };
+          expect(result.new_part_ids).toHaveLength(1);
+        } finally {
+          store.restoreAll(before);
+        }
+      }
+    }
+  });
+
+  it("a real (nonzero) bend radius: keepCornerOn='parent' splits EVERY bend off cleanly — the "
+    + 'exact request from the live bug report ("keep the corner on the trunk") — producing a small '
+    + 'local panel, never a sliver spanning the whole net',
+    () => {
+      const { store, partId, bendIds } = importTestcube();
+      for (const bendId of bendIds) {
+        dispatchGraphTool(store, 'update_node', {
+          kind: 'bend',
+          id: bendId,
+          patch: { radius_mm: 2.0 },
+        });
+      }
+
+      const netOutline = store.getPart(partId)!.outline;
+      const netBbox = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity };
+      for (const p of netOutline) {
+        netBbox.minX = Math.min(netBbox.minX, p.x);
+        netBbox.maxX = Math.max(netBbox.maxX, p.x);
+        netBbox.minY = Math.min(netBbox.minY, p.y);
+        netBbox.maxY = Math.max(netBbox.maxY, p.y);
+      }
+      const netSpan = Math.max(netBbox.maxX - netBbox.minX, netBbox.maxY - netBbox.minY);
+
+      for (const bendId of bendIds) {
+        const before = store.snapshotAll();
+        try {
+          const result = dispatchGraphTool(store, 'split_part_at_bend', {
+            part_id: partId,
+            bend_id: bendId,
+            keep_corner_on: 'parent',
+          }) as { new_part_ids: string[] };
+          const child = store.getPart(result.new_part_ids[0])!;
+          let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+          for (const p of child.outline) {
+            minX = Math.min(minX, p.x);
+            maxX = Math.max(maxX, p.x);
+            minY = Math.min(minY, p.y);
+            maxY = Math.max(maxY, p.y);
+          }
+          // A single split-off wall/lid is one 200mm face plus at most a
+          // couple mm of setback — nowhere near the whole net's own span.
+          // This is the exact shape of the original reported bug: a
+          // "sliver" child stretching the length of the whole net.
+          expect(Math.max(maxX - minX, maxY - minY)).toBeLessThan(netSpan * 0.6);
+        } finally {
+          store.restoreAll(before);
+        }
+      }
+    },
+  );
+
+  it("keepCornerOn='child' ALSO splits every bend off cleanly, including the 4 hub bends — a corner "
+    + 'shared with another live bend is a local notch, not an unrepresentable cut',
+    () => {
+      const { store, partId, bendIds } = importTestcube();
+      for (const bendId of bendIds) {
+        dispatchGraphTool(store, 'update_node', {
+          kind: 'bend',
+          id: bendId,
+          patch: { radius_mm: 2.0 },
+        });
+      }
+
+      const netOutline = store.getPart(partId)!.outline;
+      const netBbox = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity };
+      for (const p of netOutline) {
+        netBbox.minX = Math.min(netBbox.minX, p.x);
+        netBbox.maxX = Math.max(netBbox.maxX, p.x);
+        netBbox.minY = Math.min(netBbox.minY, p.y);
+        netBbox.maxY = Math.max(netBbox.maxY, p.y);
+      }
+      const netSpan = Math.max(netBbox.maxX - netBbox.minX, netBbox.maxY - netBbox.minY);
+
+      for (const bendId of bendIds) {
+        const before = store.snapshotAll();
+        try {
+          const result = dispatchGraphTool(store, 'split_part_at_bend', {
+            part_id: partId,
+            bend_id: bendId,
+            keep_corner_on: 'child',
+          }) as { new_part_ids: string[] };
+          const child = store.getPart(result.new_part_ids[0])!;
+          let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+          for (const p of child.outline) {
+            minX = Math.min(minX, p.x);
+            maxX = Math.max(maxX, p.x);
+            minY = Math.min(minY, p.y);
+            maxY = Math.max(maxY, p.y);
+          }
+          expect(Math.max(maxX - minX, maxY - minY)).toBeLessThan(netSpan * 0.6);
+        } finally {
+          store.restoreAll(before);
+        }
+      }
+    },
+  );
+
+  /**
+   * Splitting off ONE bend at a time and checking that split's own result
+   * (every test above) is not the same claim as "the PART is still usable
+   * afterward." This is exactly the gap that let the real bug through:
+   * two SEPARATE, individually-valid splits — each locally correct on its
+   * own — can still leave the remaining part's stored outline internally
+   * self-intersecting (two independent local edits crossing each other's
+   * own boundary), which only shows up later, when something ELSE
+   * evaluates the whole part (here: building its flat pattern). Every
+   * bend split off in sequence, re-evaluating and re-building the flat
+   * pattern after EACH step — not just after the whole sequence — is what
+   * actually exercises that interaction.
+   */
+  for (const keepCornerOn of ['parent', 'child'] as const) {
+    it(`splitting off every one of testcube's bends in sequence with keepCornerOn='${keepCornerOn}' `
+      + 'leaves a part that still evaluates and builds a flat pattern after EVERY step, not just '
+      + 'each individual split',
+      () => {
+        const { store, partId } = importTestcube();
+        for (const b of store.snapshotPart(partId).bends) {
+          dispatchGraphTool(store, 'update_node', {
+            kind: 'bend',
+            id: b.bendId,
+            patch: { radius_mm: 2.0 },
+          });
+        }
+
+        let remaining = store.snapshotPart(partId).bends;
+        while (remaining.length > 0) {
+          const bendId = remaining[0].bendId;
+          dispatchGraphTool(store, 'split_part_at_bend', {
+            part_id: partId,
+            bend_id: bendId,
+            keep_corner_on: keepCornerOn,
+          });
+
+          const snapshot = store.snapshotPart(partId);
+          const evaluated = evaluatePart(store, partId);
+          expect(evaluated.ok).toBe(true);
+          const flat = geometryBinding.buildFlatOutline(toNapiPartGraphSpec(snapshot), evaluated);
+          expect(flat.ok).toBe(true);
+
+          remaining = store.snapshotPart(partId).bends;
+        }
+      },
+    );
+  }
 });

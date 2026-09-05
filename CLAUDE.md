@@ -1,28 +1,4 @@
 
-## 🛑 AUTONOMY VS. OVERSIGHT PROTOCOL (Pair Programming Rules)
-
-You are acting as a continuous pair programmer. You have permission to write code and use tools autonomously, but you MUST evaluate the "blast radius" of your intended approach before executing it.
-
-### Type 2 Decisions: Proceed Autonomously (DO NOT ASK)
-If your proposed solution is a "Two-Way Door" (local, easily reversible, low blast radius), execute the tool calls and write the code immediately without asking for permission. Examples include:
-- Writing internal logic or algorithms inside an existing function.
-- Writing unit tests for existing features.
-- Creating isolated UI components based on existing design patterns.
-- Fixing localized syntax or linting errors.
-
-### Type 1 Decisions: Halt and Propose (MUST ASK)
-If your proposed solution is a "One-Way Door" (high blast radius, difficult to reverse), you MUST NOT write the code or use the `Edit` / `Write` / `Bash` tools immediately. 
-Instead, you must:
-1. State your proposed architectural approach in 1-2 sentences.
-2. Ask the user explicitly: "Do you agree with this approach, or should we adjust?"
-3. WAIT for the user's confirmation before proceeding.
-
-**Always treat the following as Type 1 Decisions:**
-- Modifying a database schema or data model.
-- Adding a new external dependency via npm/yarn/pnpm (Bash tool).
-- Altering external API payloads or contracts.
-- Establishing a brand new design pattern or directory structure.
-- Modifying authentication, routing, or security boundaries.
 
 ## 🛑 MENTAL MODEL ALIGNMENT PROTOCOL
 
@@ -44,6 +20,22 @@ When you hit an Alignment Trigger, you must use this exact terse format and wait
 - **CONTEXT:** [1 sentence on the problem being solved]
 - **PROPOSAL:** [1-2 sentences detailing the exact file placement, algorithm, or pattern you want to use]
 - **ASK:** Do you agree with this approach?
+
+## 🚫 NO FALLBACK RULE
+
+When an operation cannot be completed correctly, it MUST fail with a typed, actionable error. It must NEVER silently fall back to a guess, a default, a partial result, or an alternate code path chosen on the operation's behalf.
+
+**Prohibited:**
+- Guessing a value, position, or interpretation when the correct one is ambiguous, missing, or unverified.
+- Silently skipping a step, swallowing an exception, or catching-and-continuing as if the operation succeeded.
+- Returning a plausible-looking result that hasn't actually been validated against the real constraint.
+- Widening a tolerance, retrying with different inputs, or picking "whichever path doesn't error" to make a failure go away, instead of surfacing why it failed.
+
+**Required:**
+- Fail with a typed error code, not a bare exception or a generic message.
+- The error must be actionable: state what specifically failed (which value, which constraint, which input) and, where known, what the caller can check or change — not just "operation failed."
+- If a genuine ambiguity means more than one fallback COULD apply, that is a decision, not a default — treat it as an Alignment Trigger (see above): halt and ask, don't silently pick one.
+- This applies to code you write (production error handling) exactly as much as it applies to your own actions in this session.
 
 ## 🗣️ COMMUNICATION PROTOCOL: TERSE ENGINEERING TONE
 

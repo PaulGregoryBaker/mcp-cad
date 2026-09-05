@@ -40,6 +40,8 @@ export interface CreateBendNodeInput {
   /** See BendRow.radiusMeasured's own doc comment. Omitted: defaults true
    * (every caller here is an explicit, authored bend). */
   radiusMeasured?: boolean;
+  /** See BendRow.bendProcess's own doc comment. Omitted: null (not tracked). */
+  bendProcess?: string;
 }
 
 /**
@@ -109,12 +111,17 @@ export interface FuseBodiesInput {
 
 /** update_node(kind=part) (15 §4.3) — a plain field patch, no re-derivation:
  * only fields actually present (`!== undefined`) are applied, so a patch can
- * still explicitly clear a nullable field without touching the others. */
+ * still explicitly clear a nullable field without touching the others.
+ * `thicknessMm`: like every other field here, a plain stored value — region
+ * panel/flat-pattern shape is derived lazily by evaluatePart, never cached,
+ * so editing an existing part's thickness needs no special recompute step at
+ * mutation time (same reasoning as `hingeA`/`hingeB` on UpdateBendInput). */
 export interface UpdatePartInput {
   partId: string;
   name?: string;
   materialId?: string;
   kFactor?: number;
+  thicknessMm?: number;
   anchor?: Transform3Row;
 }
 
@@ -143,6 +150,8 @@ export interface UpdateBendInput {
    * true automatically — an explicit radius edit is by definition no longer
    * reconciliation's unmeasured placeholder. */
   radiusMeasured?: boolean;
+  /** See BendRow.bendProcess's own doc comment — a plain field patch. */
+  bendProcess?: string;
 }
 
 /** update_node(kind=region_panel) (15 §4.3) — label/k-factor-override edits. */
@@ -281,6 +290,7 @@ export class GraphStore {
       kFactorOverride: input.kFactor ?? null,
       bottomIsConcave: input.bottomIsConcave ?? null,
       radiusMeasured: input.radiusMeasured ?? true,
+      bendProcess: input.bendProcess ?? null,
     };
     const child: RegionPanelRow = {
       regionPanelId: childRegionPanelId,
@@ -449,6 +459,7 @@ export class GraphStore {
     if (input.name !== undefined) part.name = input.name;
     if (input.materialId !== undefined) part.materialId = input.materialId;
     if (input.kFactor !== undefined) part.kFactor = input.kFactor;
+    if (input.thicknessMm !== undefined) part.thicknessMm = input.thicknessMm;
     if (input.anchor !== undefined) part.anchor = input.anchor;
     return part;
   }
@@ -471,6 +482,7 @@ export class GraphStore {
     if (input.hingeA !== undefined) bend.hingeA = input.hingeA;
     if (input.hingeB !== undefined) bend.hingeB = input.hingeB;
     if (input.radiusMeasured !== undefined) bend.radiusMeasured = input.radiusMeasured;
+    if (input.bendProcess !== undefined) bend.bendProcess = input.bendProcess;
     return bend;
   }
 
