@@ -428,6 +428,22 @@ struct TaggedEdge {
   // which one structurally follows which — recorded here instead of
   // re-discovered.
   size_t next = 0;
+  // True for a short connecting segment this function inserts to bridge a
+  // free edge's own raw endpoint to its tangent-line point (isB&&!isA /
+  // isA&&!isB), or two DIFFERENT bends' own near-corner points to each
+  // other (isA&&isB, collinear hinge lines, different setbacks) — flat,
+  // non-folding transitional material, never a genuine curved-zone
+  // boundary. Set explicitly, once, at the single place that creates each
+  // such edge — a downstream consumer (ConstructPartSolid's revolve
+  // construction) must never infer this from the edge's own direction or
+  // length after the fact: a transition step can legitimately point in any
+  // direction depending on the two bends' own angles, so no geometric
+  // heuristic on the RESULT reliably tells it apart from a real, mitered
+  // wall-zone edge (confirmed live: a direction-based heuristic correctly
+  // excluded the single-bend free-edge case but wrongly KEPT a real
+  // testcube.step corner's own cross-bend connector, since its direction
+  // isn't purely along either bend's own nLeft).
+  bool isTransitionStep = false;
 };
 
 // Builds the directed-edge set representing the WHOLE outline with every
@@ -614,30 +630,94 @@ CutEdgesResult BuildCutEdges(const std::vector<Point2>& ring, std::vector<BendCu
     }
 
     if (isB && !isA) {
-      edges[prev].to = cuts[outerB].parentShiftB;
-      edges[prev].next = parentBridgeIdx[outerB];
+      // The edge immediately preceding a simple hingeB is usually an
+      // ordinary corner (approaches the hinge from a different direction),
+      // for which pulling its endpoint straight to parentShiftB is correct.
+      // But for a PARTIAL-WIDTH seam, that preceding edge can instead be a
+      // FREE edge collinear with the hinge line itself — the parent's own
+      // boundary continuing past where the seam actually ends (e.g. a
+      // fuse_bodies composite wider than the panel it's bending against).
+      // Yanking a free edge's endpoint to the setback point produces a
+      // visible flat wedge/protrusion on the bend line instead of letting
+      // the wall terminate at its own true corner for the bridge to round
+      // off (confirmed live, merge_bodies_with_bend on testcube.step). Only
+      // in that collinear case, leave this edge's own endpoint at the raw
+      // hinge vertex and insert a separate short step edge to parentShiftB.
+      Point2 hDirB = Sub2(cuts[outerB].hingeA, cuts[outerB].hingeB);
+      double crossPrev = Cross2(hDirB, Sub2(ring[prev], cuts[outerB].hingeB));
+      if (std::fabs(crossPrev) < kGeometricEpsilon) {
+        size_t stepIdx = edges.size();
+        edges.push_back({ring[v], cuts[outerB].parentShiftB, cuts[outerB].bendId,
+                          parentBridgeIdx[outerB]});
+        edges[stepIdx].isTransitionStep = true;
+        edges[prev].next = stepIdx;
+      } else {
+        edges[prev].to = cuts[outerB].parentShiftB;
+        edges[prev].next = parentBridgeIdx[outerB];
+      }
     } else if (isA && !isB) {
-      edges[v].from = cuts[outerA].parentShiftA;
-      edges[parentBridgeIdx[outerA]].next = v;
+      // Mirror of the isB branch above: the edge immediately following a
+      // simple hingeA can likewise be a free edge collinear with the hinge
+      // line for a partial-width seam, and must keep its own true endpoint
+      // at the raw hinge vertex rather than being yanked to parentShiftA.
+      size_t next = (v + 1) % n;
+      Point2 hDirA = Sub2(cuts[outerA].hingeB, cuts[outerA].hingeA);
+      double crossNext = Cross2(hDirA, Sub2(ring[next], cuts[outerA].hingeA));
+      if (std::fabs(crossNext) < kGeometricEpsilon) {
+        size_t stepIdx = edges.size();
+        edges.push_back({cuts[outerA].parentShiftA, ring[v], cuts[outerA].bendId, v});
+        edges[stepIdx].isTransitionStep = true;
+        edges[parentBridgeIdx[outerA]].next = stepIdx;
+      } else {
+        edges[v].from = cuts[outerA].parentShiftA;
+        edges[parentBridgeIdx[outerA]].next = v;
+      }
     } else if (isA && isB) {
-      // The true, pre-offset corner (ring[v]) is shared by both bends, so
-      // their own offset parent lines meet at one corresponding point too —
-      // a single miter corner, not two separate points joined by a bevel
-      // diagonal (which runs each line all the way out to its own untrimmed
-      // hinge endpoint instead of stopping at the real inset corner —
-      // confirmed on testcube.step's own 4-sided base panel, where a bevel
-      // produced a self-intersecting outline). One formula for every
-      // corner, degenerate case included: when the two lines don't
-      // converge (an exact 180deg straight pass-through — no real corner to
-      // miter), both offset points already sit at essentially the same
-      // place, so either one stands in for the corner.
+      // The true, pre-offset corner (ring[v]) is shared by both bends. When
+      // their hinge lines actually converge at an angle, their own offset
+      // parent lines meet at one corresponding point too — a single miter
+      // corner, not two separate points joined by a bevel diagonal (which
+      // runs each line all the way out to its own untrimmed hinge endpoint
+      // instead of stopping at the real inset corner — confirmed on
+      // testcube.step's own 4-sided base panel, where a bevel produced a
+      // self-intersecting outline).
+      //
+      // But when the two hinge lines are COLLINEAR — a fuse_bodies seam
+      // landing exactly on an existing straight fold line, splitting one
+      // physical edge into two separate BendSpecs either side of the seam —
+      // there is no real intersection to find, and if the two bends have
+      // DIFFERENT angle/radius (hence different in-plane setbacks), their
+      // own near-corner offset points (cuts[outerA].parentShiftA and
+      // cuts[outerB].parentShiftB — each bridge edge's own correct default
+      // `to`/`from`, set when parentBridgeIdx was built above) are genuinely
+      // DIFFERENT points, not one. Substituting one bend's point for the
+      // other's (this branch's own prior behavior: `.value_or(cuts[outerA]
+      // .parentShiftA)`) silently discarded whichever bend lost the
+      // substitution, producing a visible jog/protrusion right at the seam
+      // — confirmed live (testcube.step: Protrusion 1 fused onto Component
+      // 1 Part 1, then merged with Component 2) and reproduced directly at
+      // this function's own level by this file's own regression test above.
+      // Only when the two points already coincide (identical angle/radius
+      // either side — the ordinary, symmetric case) does a single point
+      // suffice; otherwise keep both, joined by a short step edge — the
+      // same pattern already used for the isB&&!isA / isA&&!isB free-edge
+      // case above.
       Point2 dirA = Sub2(cuts[outerA].hingeB, cuts[outerA].hingeA);
       Point2 dirB = Sub2(cuts[outerB].hingeB, cuts[outerB].hingeA);
-      Point2 miter = LineIntersect2(cuts[outerA].parentShiftA, dirA, cuts[outerB].parentShiftB, dirB)
-                         .value_or(cuts[outerA].parentShiftA);
-      edges[parentBridgeIdx[outerA]].to = miter;
-      edges[parentBridgeIdx[outerB]].from = miter;
-      edges[parentBridgeIdx[outerA]].next = parentBridgeIdx[outerB];
+      auto intersection = LineIntersect2(cuts[outerA].parentShiftA, dirA, cuts[outerB].parentShiftB, dirB);
+      if (intersection.has_value()) {
+        edges[parentBridgeIdx[outerA]].to = *intersection;
+        edges[parentBridgeIdx[outerB]].from = *intersection;
+        edges[parentBridgeIdx[outerA]].next = parentBridgeIdx[outerB];
+      } else if (Length2(Sub2(cuts[outerA].parentShiftA, cuts[outerB].parentShiftB)) < kGeometricEpsilon) {
+        edges[parentBridgeIdx[outerA]].next = parentBridgeIdx[outerB];
+      } else {
+        size_t stepIdx = edges.size();
+        edges.push_back({cuts[outerA].parentShiftA, cuts[outerB].parentShiftB, cuts[outerA].bendId,
+                          parentBridgeIdx[outerB]});
+        edges[stepIdx].isTransitionStep = true;
+        edges[parentBridgeIdx[outerA]].next = stepIdx;
+      }
     }
   }
 
@@ -684,6 +764,10 @@ struct Loop {
   // Parallel to `points`: edgeBendId[i] is the tag of edge (points[i],
   // points[(i+1)%n]).
   std::vector<std::string> edgeBendId;
+  // Parallel to `points`: true when edge i is a transition step (see
+  // TaggedEdge::isTransitionStep) — flat connector material, never a real
+  // curved-zone boundary.
+  std::vector<bool> edgeIsTransitionStep;
 };
 
 // Every edge built above has an explicit, unambiguous successor (see
@@ -701,6 +785,7 @@ Loop TraceLoopFrom(const std::vector<TaggedEdge>& edges, size_t startEdge) {
     visited[cur] = true;
     loop.points.push_back(edges[cur].from);
     loop.edgeBendId.push_back(edges[cur].bendId);
+    loop.edgeIsTransitionStep.push_back(edges[cur].isTransitionStep);
     cur = edges[cur].next;
   }
   return loop;
@@ -751,10 +836,23 @@ Loop SimplifyLoop(Loop loop) {
       if (!remove) continue;
       std::string mergedTag =
           !loop.edgeBendId[prev].empty() ? loop.edgeBendId[prev] : loop.edgeBendId[i];
+      // AND, not OR: at zero setback (a sharp bend, no allowance), a
+      // transition step's own endpoint exactly coincides with the real
+      // parentBridge edge's own start point (both collapse to the same raw
+      // hinge point), so this exact merge is what removes it — the
+      // SURVIVING edge is the real wall-zone edge, not the step, so it must
+      // NOT inherit "transitional" from the degenerate step it absorbed.
+      // Only a merge of two ALREADY-transitional edges should stay
+      // transitional (confirmed live: OR here made a real, 100mm hinge-
+      // parallel wall edge wrongly excluded from ConstructPartSolid's own
+      // revolve scan, "no zone-boundary edge tagged for bend").
+      bool mergedIsStep = loop.edgeIsTransitionStep[prev] && loop.edgeIsTransitionStep[i];
       loop.points.erase(loop.points.begin() + static_cast<long>(i));
       loop.edgeBendId.erase(loop.edgeBendId.begin() + static_cast<long>(i));
+      loop.edgeIsTransitionStep.erase(loop.edgeIsTransitionStep.begin() + static_cast<long>(i));
       size_t newPrev = (prev > i) ? prev - 1 : prev;
       loop.edgeBendId[newPrev] = mergedTag;
+      loop.edgeIsTransitionStep[newPrev] = mergedIsStep;
       changed = true;
       break;
     }
@@ -772,6 +870,8 @@ struct RegionOfResult {
   // outer[(i+1)%n]) — see the field's doc comment on RegionPanelLayout for why this
   // is computed here (where the bend cuts already exist) and nowhere else.
   std::vector<std::string> edgeBendId;
+  // Parallel to `outer` — see RegionPanelLayout::wallEdgeIsTransitionStep.
+  std::vector<bool> edgeIsTransitionStep;
   // The SAME panel's region cut with zero margin, exactly at each bend's raw
   // hinge line — the flat-pattern/DXF-facing shape (RegionPanelLayout::
   // regionOuter, after Evaluate()'s own cumulativeShift translation); this is
@@ -837,6 +937,7 @@ std::optional<RegionOfResult> RegionOf(const PartGraphSpec& graph,
     out.outer = graph.outline.outer;
     out.outerZeroOffset = graph.outline.outer;
     out.edgeBendId.assign(out.outer.size(), std::string());
+    out.edgeIsTransitionStep.assign(out.outer.size(), false);
     out.zeroOffsetEdgeBendId.assign(out.outerZeroOffset.size(), std::string());
     for (const auto& hole : graph.outline.polygonHoles) {
       if (RingFullyInsidePolygon(hole, out.outer)) {
@@ -867,6 +968,7 @@ std::optional<RegionOfResult> RegionOf(const PartGraphSpec& graph,
   RegionOfResult out;
   out.outer = loop->points;
   out.edgeBendId = loop->edgeBendId;
+  out.edgeIsTransitionStep = loop->edgeIsTransitionStep;
   out.outerZeroOffset = loopZero->points;
   out.zeroOffsetEdgeBendId = loopZero->edgeBendId;
   for (const auto& hole : graph.outline.polygonHoles) {
@@ -1215,6 +1317,8 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
     layout.regionOuter = regionOuter;
     layout.rawOuter = rawOuter;
     layout.wallOuter = regionResult->outer;
+    layout.wallEdgeBendId = regionResult->edgeBendId;
+    layout.wallEdgeIsTransitionStep = regionResult->edgeIsTransitionStep;
     layout.wallPolygonHoles = regionResult->polygonHoles;
     layout.wallCircleHoles = regionResult->circleHoles;
     layout.pose = pose;
@@ -1231,6 +1335,12 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
       // transformed normal after pose since Pose is rigid (13 §3.3).
       layout.bottomFace.push_back(pose.Apply({v.x, v.y, 0.0}));
       layout.topFace.push_back(pose.Apply({v.x, v.y, graph.thicknessMm}));
+    }
+    layout.wallBottomFace.reserve(layout.wallOuter.size());
+    layout.wallTopFace.reserve(layout.wallOuter.size());
+    for (const auto& v : layout.wallOuter) {
+      layout.wallBottomFace.push_back(pose.Apply({v.x, v.y, 0.0}));
+      layout.wallTopFace.push_back(pose.Apply({v.x, v.y, graph.thicknessMm}));
     }
     result.panels.push_back(std::move(layout));
   }

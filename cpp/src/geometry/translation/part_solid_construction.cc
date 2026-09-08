@@ -45,6 +45,70 @@ namespace {
 constexpr double kBooleanFuzzMm = 1e-5;
 constexpr double kPi = 3.14159265358979323846;
 
+// kJoinRetryFuzzMm: fallback fuzzy value tried only when the tight
+// kBooleanFuzzMm leaves a join's fuse result invalid. Root cause (verified
+// on real cauldron.step data): sub-micron floating-point noise (~2e-4mm at
+// this model's ~3000mm scale) accumulated through a long chained-bend pose
+// walk, not a real geometric feature — ShapeFix_Shape post-hoc healing was
+// tried and empirically does not touch this defect (the shape is already
+// one connected solid, not the free/disconnected sub-shapes it targets).
+// Sheet-metal fabrication can't hold better than ~0.1mm in practice, so
+// 1e-3mm stays ~100x under any achievable real tolerance, and ~150x below
+// the previously-documented 0.15mm value that discarded real kerf-notch
+// detail — retried once, only for the specific join that failed, so every
+// other join keeps the tight kBooleanFuzzMm untouched. Also used below by
+// HasDegenerateFace as the pipeline's own documented noise floor.
+constexpr double kJoinRetryFuzzMm = 1e-3;
+
+// A boolean-fuse sliver face is the fuse operator's OWN artifact: when two
+// operands meet at near-but-not-exactly-coincident geometry (e.g. a child
+// panel's own corner landing 0.001mm off the bend's own tangent line — real
+// numerical drift from the live fuse_bodies/merge_bodies_with_bend pipeline,
+// not something a synthetic round-number test ever reproduces),
+// BRepAlgoAPI_Fuse's fuzzy tolerance can carve out a face with an edge no
+// longer than that same tolerance, instead of welding the near-coincident
+// vertices together. BRepCheck_Analyzer still reports the result "valid" (a
+// sliver face is legal topology, just not real geometry), so neither
+// fuseJoin's nor acceptNaryResult's own existing checks (validity,
+// single-solid, union-volume) ever catch it.
+//
+// A pure area threshold can't tell this apart from a genuinely small but
+// real face (confirmed live: an area-based constant rejected a legitimate
+// ~0.004mm² bend-corner face in the N=5 pentagon tube test, whose area sits
+// BETWEEN the two live-bug sliver areas actually observed — proving area
+// alone isn't a valid signature at any threshold). The sliver is instead
+// identified by what created it: an edge whose length is on the order of
+// kJoinRetryFuzzMm, the pipeline's own already-documented noise floor for
+// real live-app coordinate drift — NOT scaled to whichever fuzzMm the
+// CURRENT fuse attempt happens to be using: a first attempt tried that
+// (fuzzMm-relative) scaling and it silently failed, because at the tight
+// kBooleanFuzzMm=1e-5 tier the scaled threshold (1e-4mm) fell BELOW the
+// live sliver's own edge length (0.000626mm) — the tight-tolerance result
+// then passed the check and got accepted immediately, and the retry tier
+// that would actually weld the sliver away never ran. A threshold fixed to
+// the pipeline's known noise floor regardless of tier avoids that: measured
+// on the live reproduction (part_solid_construction_test.cc's own "EXACT
+// live testcube.step corner geometry" test) the sliver's shortest edge was
+// 0.000626mm (0.06x kJoinRetryFuzzMm); measured on the pentagon test, the
+// legitimate face's shortest edge was 0.0305mm (30x) — a clean separation
+// at any tier. Checking for this explicitly, as another tier of the SAME
+// existing tight->loose->glue retry ladder, means a looser tolerance gets a
+// chance to weld the near-coincident vertices properly instead of leaving a
+// sliver.
+constexpr double kDegenerateEdgeLenNoiseFloorMultiple = 10.0;
+
+bool HasDegenerateFace(const TopoDS_Shape& shape) {
+  const double minAllowedEdgeLen = kDegenerateEdgeLenNoiseFloorMultiple * kJoinRetryFuzzMm;
+  for (TopExp_Explorer ex(shape, TopAbs_FACE); ex.More(); ex.Next()) {
+    for (TopExp_Explorer ee(ex.Current(), TopAbs_EDGE); ee.More(); ee.Next()) {
+      GProp_GProps edgeProps;
+      BRepGProp::LinearProperties(TopoDS::Edge(ee.Current()), edgeProps);
+      if (edgeProps.Mass() < minAllowedEdgeLen) return true;
+    }
+  }
+  return false;
+}
+
 gp_Trsf ToGpTrsf(const Transform3& t) {
   gp_Trsf trsf;
   trsf.SetValues(t.r[0], t.r[1], t.r[2], t.t[0], t.r[3], t.r[4], t.r[5], t.t[1], t.r[6], t.r[7],
@@ -58,24 +122,52 @@ gp_Trsf ToGpTrsf(const Transform3& t) {
 // manufacturing_graph_evaluator.cc's own version of the same idea).
 constexpr double kClipEpsilon = 1e-9;
 
-// Locates every rawOuter edge of `panel` whose edgeBendId matches `bendId` —
-// the parent panel's own zone-boundary quads, which the bridge's revolve
-// profiles are built from (one quad per edge; RegionOf's own tagging pass
-// already established that a bend's true zone can legitimately span several
-// edges — a faceted ring touching another faceted ring along more than one
-// facet — not just the single straight edge a simple rectangular clip
-// happens to yield). Zero-length edges (RegionOf's clip can leave a
-// duplicate-point, zero-length edge tagged at a seam between two other
-// bends) are skipped — they carry no real material, and a quad built from a
-// zero-length edge would be degenerate. Returned in `panel.rawOuter`'s own
+// Locates every wallOuter edge of `panel` whose wallEdgeBendId matches
+// `bendId` — the parent panel's own zone-boundary quads, which the bridge's
+// revolve profiles are built from (one quad per edge; RegionOf's own tagging
+// pass already established that a bend's true zone can legitimately span
+// several edges — a faceted ring touching another faceted ring along more
+// than one facet — not just the single straight edge a simple rectangular
+// clip happens to yield). Deliberately wallOuter/wallEdgeBendId, NOT
+// rawOuter/edgeBendId: wallOuter is where RegionOf's own corner-miter
+// computation (a genuine two-line intersection at a vertex shared by two
+// bends) already lives — rawOuter's own vertices there are the raw,
+// zero-offset hinge point with no such correction. Reading tangent points
+// from rawOuter and re-deriving a per-bend setback offset independently
+// (this function's own prior behavior) silently ignored the OTHER bend's
+// contribution at a shared corner, producing a visible flat protrusion
+// instead of a shared rounded fold — confirmed live (testcube.step) and
+// root-caused directly at this level; see this function's own regression
+// test in manufacturing_graph_evaluator_test.cc.
+//
+// Transition-step edges (wallEdgeIsTransitionStep, RegionPanelLayout's own
+// doc comment) are also excluded here: flat connector material BuildCutEdges
+// inserts to bridge a free edge's own raw endpoint to its tangent-line
+// point, or two different bends' own near-corner points to each other --
+// never a genuine curved-zone boundary. Also revolving one produces a
+// degenerate sliver that can fail to fuse with the bend's real curved
+// surface (confirmed live: "fuse produced 2 disconnected solids" on a
+// partial-width seam, once this function started reading wallOuter instead
+// of the zero-offset rawOuter, where the SAME step trivially collapses to
+// zero length and was never picked up in the first place -- an earlier fix
+// attempt tried inferring this from the edge's own direction/length instead
+// of reading the explicit flag, and wrongly kept a real testcube.step
+// corner's own cross-bend connector, whose direction isn't purely along
+// either bend's own nLeft).
+//
+// Zero-length edges (RegionOf's clip can leave a duplicate-point,
+// zero-length edge tagged at a seam between two other bends) are also
+// skipped — they carry no real material, and a quad built from a
+// zero-length edge would be degenerate. Returned in `panel.wallOuter`'s own
 // winding order.
 std::vector<size_t> FindZoneEdges(const RegionPanelLayout& panel, const std::string& bendId) {
   std::vector<size_t> found;
-  size_t n = panel.rawOuter.size();
-  for (size_t i = 0; i < panel.edgeBendId.size(); ++i) {
-    if (panel.edgeBendId[i] != bendId) continue;
-    const Point2& a = panel.rawOuter[i];
-    const Point2& b = panel.rawOuter[(i + 1) % n];
+  size_t n = panel.wallOuter.size();
+  for (size_t i = 0; i < panel.wallEdgeBendId.size(); ++i) {
+    if (panel.wallEdgeBendId[i] != bendId) continue;
+    if (panel.wallEdgeIsTransitionStep[i]) continue;
+    const Point2& a = panel.wallOuter[i];
+    const Point2& b = panel.wallOuter[(i + 1) % n];
     double dx = b.x - a.x, dy = b.y - a.y;
     if (dx * dx + dy * dy < kClipEpsilon * kClipEpsilon) continue;  // zero-length, skip
     found.push_back(i);
@@ -295,24 +387,19 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
       TopoDS_Shape bridgeSolid;
       bool bridgeSolidSet = false;
       for (size_t i0 : parentEdges) {
-        size_t i1 = (i0 + 1) % parent.rawOuter.size();
-        Point3 b0 = parent.bottomFace[i0];
-        Point3 b1 = parent.bottomFace[i1];
-        Point3 t1 = parent.topFace[i1];
-        Point3 t0 = parent.topFace[i0];
+        size_t i1 = (i0 + 1) % parent.wallOuter.size();
 
-        // This edge's own tangent points, derived directly from its own
-        // REAL (RegionOf-clipped) edge corners — see BridgeLayout's own
-        // header comment on why hingeA/hingeB-based absolute positions
-        // can't be used here (exaggerated half-span, doesn't match a real
-        // edge).
-        auto plus = [](const Point3& p, const Point3& v, double s) -> Point3 {
-          return {p.x + s * v.x, p.y + s * v.y, p.z + s * v.z};
-        };
-        Point3 parentTanB0 = plus(b0, bridge.nLeftWorld, bridge.setbackMm);
-        Point3 parentTanB1 = plus(b1, bridge.nLeftWorld, bridge.setbackMm);
-        Point3 parentTanT0 = plus(t0, bridge.nLeftWorld, bridge.setbackMm);
-        Point3 parentTanT1 = plus(t1, bridge.nLeftWorld, bridge.setbackMm);
+        // This edge's own tangent points, read directly from wallOuter's own
+        // already-correct posed geometry (RegionOf's own corner-miter
+        // computation, wherever this edge sits next to another bend's own
+        // zone, is already baked in here) — NOT re-derived via this bend's
+        // own setbackMm/nLeftWorld applied to the raw hinge corner, which is
+        // only correct away from a shared corner (see FindZoneEdges' own
+        // header comment).
+        Point3 parentTanB0 = parent.wallBottomFace[i0];
+        Point3 parentTanB1 = parent.wallBottomFace[i1];
+        Point3 parentTanT0 = parent.wallTopFace[i0];
+        Point3 parentTanT1 = parent.wallTopFace[i1];
 
         // Tangent-preserving revolve of this edge's own quad —
         // BRepPrimAPI_MakeRevol requires a non-negative angle in
@@ -379,20 +466,6 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
       orderedPieces.push_back(panelSolidById.at(bridge.childRegionPanelId));
     }
 
-    // kJoinRetryFuzzMm: fallback fuzzy value tried only when the tight
-    // kBooleanFuzzMm leaves a join's fuse result invalid. Root cause (verified
-    // on real cauldron.step data): sub-micron floating-point noise (~2e-4mm at
-    // this model's ~3000mm scale) accumulated through a long chained-bend pose
-    // walk, not a real geometric feature — ShapeFix_Shape post-hoc healing was
-    // tried and empirically does not touch this defect (the shape is already
-    // one connected solid, not the free/disconnected sub-shapes it targets).
-    // Sheet-metal fabrication can't hold better than ~0.1mm in practice, so
-    // 1e-3mm stays ~100x under any achievable real tolerance, and ~150x below
-    // the previously-documented 0.15mm value that discarded real kerf-notch
-    // detail — retried once, only for the specific join that failed, so every
-    // other join keeps the tight kBooleanFuzzMm untouched.
-    constexpr double kJoinRetryFuzzMm = 1e-3;
-
     auto solidVolume = [](const TopoDS_Shape& shape) {
       GProp_GProps props;
       BRepGProp::VolumeProperties(shape, props);
@@ -409,6 +482,7 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
       if (!*built) return false;
       *outShape = f.Shape();
       if (!BRepCheck_Analyzer(*outShape).IsValid()) return false;
+      if (HasDegenerateFace(*outShape)) return false;
       // A fuse computes a set union, A∪B — its volume can never be LESS than
       // either operand's own volume (a property of union, not a tolerance).
       // BRepAlgoAPI_Fuse can still report IsDone()+valid while silently
@@ -477,6 +551,7 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
       // defect fuseJoin's own comment documents.
       auto acceptNaryResult = [&](const TopoDS_Shape& shape) -> bool {
         if (shape.IsNull() || !BRepCheck_Analyzer(shape).IsValid()) return false;
+        if (HasDegenerateFace(shape)) return false;
         int n = shape.ShapeType() == TopAbs_SOLID ? 1 : countSolids(shape);
         if (n != 1) return false;
         constexpr double kVolumeRelTol = 1e-6;

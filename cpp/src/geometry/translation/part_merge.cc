@@ -553,17 +553,29 @@ ReconcileOutlinesResult ReconcileOutlines(const std::vector<Point2>& outlineAIn,
   const int jFinal = LocateOrInsertVertex(outlineB, edgeB0, kExactMatchEpsilonMm, kMergeContactToleranceMm);
   const int b1Idx = LocateOrInsertVertex(outlineB, edgeB1, kExactMatchEpsilonMm, kMergeContactToleranceMm);
 
-  if ((static_cast<size_t>(kFinal) + 1) % n != static_cast<size_t>(a1Idx)) {
-    result.errorCode = MergeErrorCode::kInternalInconsistency;
-    result.message = "edgeA0/edgeA1 are not a consecutive pair after vertex resolution";
-    return result;
-  }
-  if ((static_cast<size_t>(jFinal) + 1) % m != static_cast<size_t>(b1Idx)) {
-    result.errorCode = MergeErrorCode::kInternalInconsistency;
-    result.message = "edgeB0/edgeB1 are not a consecutive pair after vertex resolution";
-    return result;
-  }
-
+  // edgeA0/edgeA1 (and edgeB0/edgeB1) need not be literally adjacent: a real
+  // outline can carry extra vertices strictly between them — a collinear
+  // subdivision point (e.g. a relief-cut midpoint) or a genuine small corner
+  // (e.g. a staggered-seam step left over from an earlier fuse_bodies union)
+  // — and both are equally real material sitting exactly on the interval
+  // DetectContact identified as the shared seam. Whatever lies strictly
+  // between the two resolved indices is, by construction, part of that
+  // vanishing seam (about to be replaced by the fold), not a reason to
+  // reject the merge. See the combining-loop split below (kFinal/a1Idx
+  // ordering) and inSeamArc, which every downstream use of
+  // kFinal/a1Idx/jFinal/b1Idx must respect instead of assuming a fixed +1
+  // offset — an earlier attempt at this generalization used a single
+  // `for (i = a1Idx; i < n; ++i)` loop that assumed a1Idx always comes AFTER
+  // kFinal in array order; when the seam instead wraps across the outline's
+  // own physical start/end boundary (kFinal resolves near n-1, a1Idx
+  // resolves near 0 — exactly what LocateOrInsertVertex's own
+  // insertAt==0 -> push_back branch produces), that assumption is false and
+  // the loop re-walks part of A's outline a second time, corrupting the
+  // result with duplicate vertices (confirmed live: reproduced a 17-vertex
+  // outline that was literally A's 5 vertices emitted twice, which the
+  // downstream region-panel evaluator turned into a visible extra panel).
+  // The two-branch split below handles both orderings explicitly instead of
+  // assuming one.
   const Point2 dA = Sub2(edgeA1, edgeA0);
   const Point2 dB = Sub2(edgeB1, edgeB0);
   const double lenA = Length2(dA);
@@ -602,27 +614,61 @@ ReconcileOutlinesResult ReconcileOutlines(const std::vector<Point2>& outlineAIn,
   transformedB.reserve(m);
   for (const auto& v : outlineB) transformedB.push_back(xform.Apply(v));
 
+  const size_t kFinalU = static_cast<size_t>(kFinal);
+  const size_t a1IdxU = static_cast<size_t>(a1Idx);
+  const size_t jFinalU = static_cast<size_t>(jFinal);
+  const size_t b1IdxU = static_cast<size_t>(b1Idx);
+
+  // True if walking forward (cyclically, mod `count`) from `start`, index i
+  // is reached strictly before `end` — i.e. i is one of the (possibly zero)
+  // vertices consumed by the vanishing seam between a resolved contact pair.
+  auto inSeamArc = [](size_t i, size_t start, size_t end, size_t count) {
+    return ((i + count - start) % count) < ((end + count - start) % count);
+  };
+
   std::vector<Point2> combined;
   combined.reserve(n + m - 2);
-  for (size_t i = 0; i <= static_cast<size_t>(kFinal); ++i) combined.push_back(outlineA[i]);
-  for (size_t t = 1; t + 1 < m; ++t) {
-    size_t idx = (static_cast<size_t>(jFinal) + 1 + t) % m;
-    combined.push_back(transformedB[idx]);
+  // Which side of the (kFinal, a1Idx) pair wraps depends on array order, not
+  // just adjacency: whenever a1Idx > kFinal, the vanishing seam is the
+  // simple range (kFinal, a1Idx) and A's KEPT material wraps around the
+  // array's own start/end boundary — copy it in the same two pieces the
+  // original (adjacency-only) code always used. Whenever a1Idx <= kFinal
+  // instead (the seam itself wraps across that boundary — e.g.
+  // LocateOrInsertVertex's insertAt==0 -> push_back path landed edgeA0 at
+  // the very end while edgeA1 resolved near the start), A's KEPT material is
+  // the single simple range [a1Idx, kFinal] and does NOT wrap — copying it
+  // as two separate pieces here would re-walk part of A's outline a second
+  // time (confirmed live: this exact bug produced a duplicate-vertex,
+  // corrupted outline that a downstream evaluator turned into a visible
+  // extra panel).
+  if (a1IdxU > kFinalU) {
+    for (size_t i = 0; i <= kFinalU; ++i) combined.push_back(outlineA[i]);
+    for (size_t idx = (b1IdxU + 1) % m; idx != jFinalU; idx = (idx + 1) % m) {
+      combined.push_back(transformedB[idx]);
+    }
+    for (size_t i = a1IdxU; i < n; ++i) combined.push_back(outlineA[i]);
+  } else {
+    for (size_t i = a1IdxU; i <= kFinalU; ++i) combined.push_back(outlineA[i]);
+    for (size_t idx = (b1IdxU + 1) % m; idx != jFinalU; idx = (idx + 1) % m) {
+      combined.push_back(transformedB[idx]);
+    }
   }
-  for (size_t i = static_cast<size_t>(kFinal) + 1; i < n; ++i) combined.push_back(outlineA[i]);
 
-  // Self-intersection guard: A's edges (excluding the now-shared one) against
-  // B's transformed edges (excluding the now-shared one). The only geometry
-  // allowed to touch is exactly the two splice vertices (edgeA0/edgeA1),
-  // and only as a single point — anything else (a proper crossing, or a
-  // collinear run of positive length even if it also touches a splice
-  // vertex) means the detected contact interval was wrong.
+  // Self-intersection guard: A's edges (excluding every edge inside the
+  // vanishing [kFinal, a1Idx) arc) against B's transformed edges (excluding
+  // every edge inside the vanishing [jFinal, b1Idx) arc) — none of those
+  // edges survive into `combined` (see above), so checking them against the
+  // other side is meaningless. The only geometry allowed to touch is exactly
+  // the two splice vertices (edgeA0/edgeA1), and only as a single point —
+  // anything else (a proper crossing, or a collinear run of positive length
+  // even if it also touches a splice vertex) means the detected contact
+  // interval was wrong.
   for (size_t i = 0; i < n; ++i) {
-    if (i == static_cast<size_t>(kFinal)) continue;
+    if (inSeamArc(i, kFinalU, a1IdxU, n)) continue;
     const Point2& a1 = outlineA[i];
     const Point2& a2 = outlineA[(i + 1) % n];
     for (size_t b = 0; b < m; ++b) {
-      if (b == static_cast<size_t>(jFinal)) continue;
+      if (inSeamArc(b, jFinalU, b1IdxU, m)) continue;
       const Point2& b1 = transformedB[b];
       const Point2& b2 = transformedB[(b + 1) % m];
       if (SegmentsBadOverlap(a1, a2, b1, b2, edgeA0, edgeA1)) {

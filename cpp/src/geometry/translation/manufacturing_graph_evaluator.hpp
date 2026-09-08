@@ -240,6 +240,50 @@ struct RegionPanelLayout {
   // (never rawOuter, which must stay raw for its own, separate consumers —
   // see rawOuter's own comment above).
   std::vector<Point2> wallOuter;
+  // wallOuter's own edge tags (parallel to wallOuter, one bend id per edge
+  // (wallOuter[i], wallOuter[(i+1)%n]), or "" for a true outer boundary) --
+  // and wallOuter's own points, posed into 3D at bottom/top thickness,
+  // index-correlated with wallOuter and wallEdgeBendId the same way
+  // bottomFace/topFace are with rawOuter/edgeBendId below.
+  //
+  // ConstructPartSolid's bridge/revolve construction MUST read its own
+  // tangent quad corners from wallBottomFace/wallTopFace (via wallEdgeBendId),
+  // never by re-deriving `bottomFace[i] + setbackMm*nLeftWorld` itself: that
+  // formula is only correct for an ORDINARY edge (matches wallOuter's own
+  // value there exactly, by construction), but at a vertex shared by two
+  // bends it silently applies only ONE bend's own setback/normal, ignoring
+  // the other's -- wallOuter's own corner-miter computation (BuildCutEdges'
+  // isA&&isB branch, a genuine two-line intersection) already gets this
+  // right, in exactly one place; re-deriving a second, incomplete formula
+  // downstream reintroduces the disagreement RegionPanelLayout's own header
+  // note above (rawOuter vs wallOuter) already had to fix once for the flat
+  // wall panel itself (confirmed live: testcube.step, Protrusion 1 fused
+  // onto Component 1 Part 1 then merged with Component 2 -- the corner
+  // rendered as two flat 90-degree tabs instead of one shared rounded fold,
+  // root-caused directly at this level: see this file's own regression
+  // test).
+  std::vector<std::string> wallEdgeBendId;
+  // Parallel to wallOuter/wallEdgeBendId: true when this edge is a
+  // transition step (BuildCutEdges' own isB&&!isA / isA&&!isB / isA&&isB
+  // branches insert these to bridge a free edge's own raw endpoint to its
+  // tangent-line point, or two different bends' own near-corner points to
+  // each other) -- flat, non-folding connector material, never a genuine
+  // curved-zone boundary. ConstructPartSolid's own FindZoneEdges MUST skip
+  // these when building a bend's revolve profile: they're already part of
+  // wallOuter's own polygon (the flat wall panel handles them fine), but
+  // revolving them too produces a degenerate sliver that can fail to fuse
+  // cleanly with the bend's real curved surface (confirmed live: a
+  // partial-width seam's own step produced "fuse produced 2 disconnected
+  // solids"). This is checked via an explicit flag, set once at the source,
+  // rather than inferred downstream from the edge's own direction or length
+  // -- a transition step can point in any direction depending on the
+  // bends' own angles, so no purely geometric heuristic on the RESULT
+  // reliably tells it apart from a real, mitered wall-zone edge (confirmed
+  // live: a direction-based heuristic wrongly kept a real testcube.step
+  // corner's own cross-bend connector).
+  std::vector<bool> wallEdgeIsTransitionStep;
+  std::vector<Point3> wallBottomFace;
+  std::vector<Point3> wallTopFace;
   // Index-correlated with regionOuter and with each other (13 §3.3's closing
   // paragraph: side-wall quad i is bottomFace[i],bottomFace[i+1],topFace[i+1],topFace[i]).
   // Built from rawOuter (not regionOuter) — see header comment.

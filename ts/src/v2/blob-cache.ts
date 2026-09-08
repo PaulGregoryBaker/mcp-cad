@@ -41,6 +41,18 @@ export class V2BlobCache {
     return existing;
   }
 
+  /** Debug introspection only (blob-server.ts's `/v2-blob/_debug/keys` route)
+   * — every currently-live key, so a caller outside the process can find a
+   * part's current blob without already knowing its id (the session's own
+   * part ids change on every mutation, with no other way to enumerate them
+   * from outside the running server). */
+  keys(): string[] {
+    const now = Date.now();
+    return [...this.entries.entries()]
+      .filter(([, entry]) => entry.expiresAt > now)
+      .map(([key]) => key);
+  }
+
   /** Rebuilds ONLY when no entry exists yet, or the stored hash no longer
    * matches `currentContentHash` — otherwise returns the existing entry
    * untouched (same key, same bytes, TTL not renewed just by reading it). */

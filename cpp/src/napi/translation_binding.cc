@@ -376,6 +376,12 @@ Napi::Array WriteStringArray(Napi::Env env, const std::vector<std::string>& strs
   return arr;
 }
 
+Napi::Array WriteBoolArray(Napi::Env env, const std::vector<bool>& vals) {
+  Napi::Array arr = Napi::Array::New(env, vals.size());
+  for (size_t i = 0; i < vals.size(); ++i) arr.Set(i, Napi::Boolean::New(env, vals[i]));
+  return arr;
+}
+
 Napi::Object WriteCircleHoleSpec(Napi::Env env, const CircleHoleSpec& circle) {
   Napi::Object obj = Napi::Object::New(env);
   obj.Set("center", WritePoint2(env, circle.center));
@@ -401,6 +407,20 @@ Napi::Object WriteRegionPanelLayout(Napi::Env env, const RegionPanelLayout& pane
   obj.Set("regionOuter", WritePoint2Array(env, panel.regionOuter));
   obj.Set("rawOuter", WritePoint2Array(env, panel.rawOuter));
   obj.Set("wallOuter", WritePoint2Array(env, panel.wallOuter));
+  // wallEdgeBendId/wallEdgeIsTransitionStep/wallBottomFace/wallTopFace:
+  // ConstructPartSolid's bridge/revolve construction reads these directly
+  // (RegionPanelLayout's own doc comment on why) — evaluatePartGraph's JS
+  // result is passed straight back in as constructPartSolid's own input
+  // (see ReadEvaluateResult's own comment), so omitting these here would
+  // silently leave FindZoneEdges scanning an empty array on every live call
+  // through the NAPI boundary, even though an in-process C++ caller (never
+  // round-tripping through JS) would never see the gap — confirmed live
+  // (testcube.step, GE_BRIDGE_EDGE_NOT_FOUND on a plain import with no
+  // merge involved at all).
+  obj.Set("wallEdgeBendId", WriteStringArray(env, panel.wallEdgeBendId));
+  obj.Set("wallEdgeIsTransitionStep", WriteBoolArray(env, panel.wallEdgeIsTransitionStep));
+  obj.Set("wallBottomFace", WritePoint3Array(env, panel.wallBottomFace));
+  obj.Set("wallTopFace", WritePoint3Array(env, panel.wallTopFace));
   obj.Set("bottomFace", WritePoint3Array(env, panel.bottomFace));
   obj.Set("topFace", WritePoint3Array(env, panel.topFace));
   obj.Set("pose", WriteTransform3(env, panel.pose));
@@ -494,6 +514,37 @@ EvaluateResult ReadEvaluateResult(const Napi::Object& obj) {
       Napi::Array wallOuterArr = wallOuterV.As<Napi::Array>();
       for (uint32_t j = 0; j < wallOuterArr.Length(); ++j) {
         panel.wallOuter.push_back(ReadPoint2(wallOuterArr.Get(j).As<Napi::Object>()));
+      }
+    }
+    // wallEdgeBendId/wallEdgeIsTransitionStep/wallBottomFace/wallTopFace —
+    // see WriteRegionPanelLayout's own comment on why these must round-trip.
+    // Default empty if absent (pre-this-fix callers/fixtures).
+    Napi::Value wallEdgeBendIdV = panelObj.Get("wallEdgeBendId");
+    if (wallEdgeBendIdV.IsArray()) {
+      Napi::Array wallEdgeBendIdArr = wallEdgeBendIdV.As<Napi::Array>();
+      for (uint32_t j = 0; j < wallEdgeBendIdArr.Length(); ++j) {
+        panel.wallEdgeBendId.push_back(wallEdgeBendIdArr.Get(j).As<Napi::String>().Utf8Value());
+      }
+    }
+    Napi::Value wallEdgeIsTransitionStepV = panelObj.Get("wallEdgeIsTransitionStep");
+    if (wallEdgeIsTransitionStepV.IsArray()) {
+      Napi::Array arr = wallEdgeIsTransitionStepV.As<Napi::Array>();
+      for (uint32_t j = 0; j < arr.Length(); ++j) {
+        panel.wallEdgeIsTransitionStep.push_back(arr.Get(j).As<Napi::Boolean>().Value());
+      }
+    }
+    Napi::Value wallBottomFaceV = panelObj.Get("wallBottomFace");
+    if (wallBottomFaceV.IsArray()) {
+      Napi::Array arr = wallBottomFaceV.As<Napi::Array>();
+      for (uint32_t j = 0; j < arr.Length(); ++j) {
+        panel.wallBottomFace.push_back(ReadPoint3(arr.Get(j).As<Napi::Object>()));
+      }
+    }
+    Napi::Value wallTopFaceV = panelObj.Get("wallTopFace");
+    if (wallTopFaceV.IsArray()) {
+      Napi::Array arr = wallTopFaceV.As<Napi::Array>();
+      for (uint32_t j = 0; j < arr.Length(); ++j) {
+        panel.wallTopFace.push_back(ReadPoint3(arr.Get(j).As<Napi::Object>()));
       }
     }
     Napi::Array bottomFaceArr = panelObj.Get("bottomFace").As<Napi::Array>();

@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cmath>
+#include <sstream>
 #include <unordered_set>
 
 using namespace mcp_cad::translation;
@@ -1493,6 +1494,505 @@ TEST_CASE("GraphEvaluator: bend geometry measured directly off the two "
     CHECK(distToAxis(seg1->bottomFace[childForI0]) == Approx(expectedBottom).margin(1e-6));
     CHECK(distToAxis(seg1->topFace[childForI0]) == Approx(expectedTop).margin(1e-6));
   }
+  }
+}
+
+// Investigated 2026-09 after a live-app report of unexpected extra material
+// in merge_bodies_with_bend at a real radius (0.95mm) on a PARTIAL-WIDTH
+// (T-shaped, asymmetric) seam -- the flange's own seam is narrower than the
+// full straight run of the parent edge it sits on. This test found the
+// evaluator's own tangent-point math correct for exactly this combination;
+// the live report's actual cause turned out to be a flaw in an ad hoc
+// TS-level diagnostic (it compared a source part's own PRE-bend-allowance
+// anchor against the post-shift child pose real bends legitimately apply --
+// see "GraphEvaluator: bend allowance shifts the child's subtree" above --
+// not a defect in this evaluator). Kept as permanent regression coverage:
+// this exact combined outline (8 vertices) is bit-for-bit what
+// merge_partial_seam_tab_bracket.integration.test.ts's own ReconcileOutlines
+// call produces for a 100x200 plate + a 100x100 flange attached to the
+// plate's middle 100mm (y=[50,150]) of its 200mm right edge -- hand-derived
+// here from that same authored scenario (plate CCW, flange anchor r=[0,0,-1,
+// -1,0,0,0,1,0] t=[100,150,0]) so this test needs no TS/merge_bodies_with_bend
+// call at all, only Evaluate() on the resulting graph.
+//
+// That TS test only ever runs this exact T-shape at radius_mm=0 (the tool's
+// default) -- it had never been checked with a real nonzero radius before.
+// The OTHER existing invariant checks above (the "parent AND child wall
+// edges sit exactly sqrt(setback^2+radius^2) from the pivot axis" probe, and
+// this test's own sibling immediately above) only ever use MakeStrip's
+// full-width, symmetric seam. This is the first test to combine a REAL
+// partial-width seam with a REAL nonzero radius.
+TEST_CASE("GraphEvaluator: partial-width (T-shaped) seam wall edges sit exactly "
+          "sqrt(setback^2 + radius^2) from the bend's own pivot axis, real nonzero radius",
+          "[translation][probe][regression]") {
+  double thicknessMm = 1.5;
+  for (double angleDeg : {90.0, -90.0}) {
+  for (double radiusMm : {0.0, 0.95, 2.0}) {
+    double kFactor = radiusMm > 0 ? 0.4 : 0.0;
+    INFO("angleDeg=" << angleDeg << " radiusMm=" << radiusMm);
+
+    PartGraphSpec graph;
+    graph.partId = "tshape";
+    graph.rootRegionPanelId = "parent";
+    graph.thicknessMm = thicknessMm;
+    graph.anchor.transform = Transform3::Identity();
+    // Plate (100x200) + flange (100x100) attached to the plate's middle
+    // 100mm of its 200mm right edge -- exactly ReconcileOutlines' own
+    // combined outline for merge_partial_seam_tab_bracket's authored
+    // plate/flange pair (hand-derived, see this TEST_CASE's own comment
+    // above).
+    graph.outline.outer = {
+        {0, 0}, {100, 0}, {100, 50}, {200, 50}, {200, 150}, {100, 150}, {100, 200}, {0, 200},
+    };
+
+    BendSpec bend;
+    bend.id = "bend0";
+    bend.parentRegionPanelId = "parent";
+    bend.childRegionPanelId = "child";
+    bend.hingeA = {100, 150};
+    bend.hingeB = {100, 50};
+    bend.angleDeg = angleDeg;
+    bend.radiusMm = radiusMm;
+    bend.kFactor = kFactor;
+    graph.bends.push_back(bend);
+
+    EvaluateResult result = Evaluate(graph);
+    REQUIRE(result.ok);
+    REQUIRE(result.bridges.size() == 1);
+    const BridgeLayout& bridge = result.bridges[0];
+
+    const RegionPanelLayout* parent = nullptr;
+    const RegionPanelLayout* child = nullptr;
+    for (auto& p : result.panels) {
+      if (p.regionPanelId == "parent") parent = &p;
+      if (p.regionPanelId == "child") child = &p;
+    }
+    REQUIRE(parent != nullptr);
+    REQUIRE(child != nullptr);
+
+    bool concave = angleDeg >= 0.0;
+    double rBottom = concave ? radiusMm : radiusMm + thicknessMm;
+    double rTop = concave ? radiusMm + thicknessMm : radiusMm;
+    double setbackMm = radiusMm * std::tan(std::fabs(angleDeg) * kTestPi / 180.0 / 2.0);
+    double expectedBottom = std::sqrt(setbackMm * setbackMm + rBottom * rBottom);
+    double expectedTop = std::sqrt(setbackMm * setbackMm + rTop * rTop);
+
+    auto distToAxis = [&](const Point3& p) -> double {
+      Point3 v{p.x - bridge.pivotOriginWorld.x, p.y - bridge.pivotOriginWorld.y,
+                p.z - bridge.pivotOriginWorld.z};
+      const Point3& a = bridge.pivotAxisWorld;
+      double dot = v.x * a.x + v.y * a.y + v.z * a.z;
+      Point3 proj{a.x * dot, a.y * dot, a.z * dot};
+      Point3 perp{v.x - proj.x, v.y - proj.y, v.z - proj.z};
+      return std::sqrt(perp.x * perp.x + perp.y * perp.y + perp.z * perp.z);
+    };
+
+    auto checkPanel = [&](const char* label, const RegionPanelLayout& panel) {
+      int checked = 0;
+      for (size_t i = 0; i < panel.edgeBendId.size(); ++i) {
+        if (panel.edgeBendId[i] != bridge.bendId) continue;
+        double dBottom = distToAxis(panel.bottomFace[i]);
+        double dTop = distToAxis(panel.topFace[i]);
+        INFO(label << " edge index " << i << " dBottom=" << dBottom << " expected="
+                    << expectedBottom << " dTop=" << dTop << " expected=" << expectedTop);
+        CHECK(dBottom == Approx(expectedBottom).margin(1e-6));
+        CHECK(dTop == Approx(expectedTop).margin(1e-6));
+        ++checked;
+      }
+      CHECK(checked > 0);
+    };
+    checkPanel("parent", *parent);
+    checkPanel("child", *child);
+  }
+  }
+}
+
+// Live-app regression (2026-09): ConstructPartSolid's own FindZoneEdges
+// (part_solid_construction.cc) reads wallEdgeIsTransitionStep to exclude
+// flat connector material from its revolve scan -- but at radiusMm=0 (a
+// sharp bend, no allowance), a transition step's own endpoint exactly
+// coincides with the real parentBridge edge's own start point (both
+// collapse to the same raw hinge point, since setbackMm=0), so SimplifyLoop
+// merges them. An earlier fix attempt merged the flag with OR, so the
+// SURVIVING edge -- the real, 100mm hinge-parallel wall-zone edge -- wrongly
+// inherited "transitional" from the degenerate step it absorbed, making
+// FindZoneEdges find NOTHING for this bend at all ("no zone-boundary edge
+// tagged for bend"), confirmed live on testcube.step and on this exact
+// T-shape via merge_bodies_with_bend at its own tool default (radius_mm=0).
+// Fixed by merging with AND instead (prefer "real" whenever either side
+// is real). This is the first test checking wallEdgeIsTransitionStep
+// directly, at exactly the radius that broke it.
+TEST_CASE("GraphEvaluator: a partial-width seam's real wall-zone edge is never "
+          "marked a transition step, even at radiusMm=0 where SimplifyLoop merges "
+          "it with the (degenerate) step",
+          "[translation][regression]") {
+  double thicknessMm = 1.5;
+  double radiusMm = 0.0;
+  double kFactor = 0.0;
+  double angleDeg = 90.0;
+
+  PartGraphSpec graph;
+  graph.partId = "tshape";
+  graph.rootRegionPanelId = "parent";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = Transform3::Identity();
+  graph.outline.outer = {
+      {0, 0}, {100, 0}, {100, 50}, {200, 50}, {200, 150}, {100, 150}, {100, 200}, {0, 200},
+  };
+
+  BendSpec bend;
+  bend.id = "bend0";
+  bend.parentRegionPanelId = "parent";
+  bend.childRegionPanelId = "child";
+  bend.hingeA = {100, 150};
+  bend.hingeB = {100, 50};
+  bend.angleDeg = angleDeg;
+  bend.radiusMm = radiusMm;
+  bend.kFactor = kFactor;
+  graph.bends.push_back(bend);
+
+  EvaluateResult result = Evaluate(graph);
+  REQUIRE(result.ok);
+
+  const RegionPanelLayout* parent = nullptr;
+  for (auto& p : result.panels) {
+    if (p.regionPanelId == "parent") parent = &p;
+  }
+  REQUIRE(parent != nullptr);
+  REQUIRE(parent->wallEdgeIsTransitionStep.size() == parent->wallEdgeBendId.size());
+
+  int realZoneEdges = 0;
+  for (size_t i = 0; i < parent->wallEdgeBendId.size(); ++i) {
+    if (parent->wallEdgeBendId[i] != "bend0") continue;
+    INFO("edge index " << i << " isTransitionStep=" << parent->wallEdgeIsTransitionStep[i]);
+    CHECK_FALSE(parent->wallEdgeIsTransitionStep[i]);
+    ++realZoneEdges;
+  }
+  // At least one real (non-transitional) tagged edge must survive -- this
+  // is what ConstructPartSolid's FindZoneEdges needs to find anything at
+  // all for this bend.
+  CHECK(realZoneEdges > 0);
+}
+
+// Live-app regression: a partial-width seam produces a visible flat
+// protrusion on the bend line instead of a smooth radius. Root cause: in
+// BuildCutEdges (this file), the `isB && !isA` branch unconditionally
+// redirects the edge immediately preceding a simple hingeB to end at
+// `parentShiftB` (the setback-shifted point) -- correct when that preceding
+// edge is an ordinary corner (approaches the hinge from a different
+// direction), but wrong when it's a FREE edge collinear with the hinge line
+// itself (the partial-width case: the parent's own edge continues past
+// where the seam ends, e.g. reused testcube.step geometry via
+// merge_bodies_with_bend). The free edge's endpoint gets yanked from the
+// raw hinge point to the setback point, producing a diagonal wedge instead
+// of the wall cleanly terminating at the true corner for the bridge to
+// round off. This test uses the SAME T-shaped outline as the test above
+// (whose own hinge is collinear with two of parent's own free edges) but
+// checks the FREE edge's own endpoint in `wallOuter`, which that test never
+// inspected (it only checks edges tagged to the bend).
+TEST_CASE("GraphEvaluator: a free edge collinear with the hinge line keeps its own "
+          "true endpoint in wallOuter, not the bend's setback-shifted point",
+          "[translation][regression]") {
+  double thicknessMm = 1.5;
+  double radiusMm = 0.95;
+  double kFactor = 0.4;
+  double angleDeg = 90.0;
+
+  PartGraphSpec graph;
+  graph.partId = "tshape";
+  graph.rootRegionPanelId = "parent";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = Transform3::Identity();
+  // Same plate+flange outline as the test above: the flange (child) attaches
+  // to only the MIDDLE 100mm of the plate's 200mm right edge, so the plate's
+  // own edges (100,0)-(100,50) and (100,150)-(100,200) are FREE — collinear
+  // with the hinge line (x=100) but not part of the bend zone at all.
+  graph.outline.outer = {
+      {0, 0}, {100, 0}, {100, 50}, {200, 50}, {200, 150}, {100, 150}, {100, 200}, {0, 200},
+  };
+
+  BendSpec bend;
+  bend.id = "bend0";
+  bend.parentRegionPanelId = "parent";
+  bend.childRegionPanelId = "child";
+  bend.hingeA = {100, 150};
+  bend.hingeB = {100, 50};
+  bend.angleDeg = angleDeg;
+  bend.radiusMm = radiusMm;
+  bend.kFactor = kFactor;
+  graph.bends.push_back(bend);
+
+  EvaluateResult result = Evaluate(graph);
+  REQUIRE(result.ok);
+  REQUIRE(result.bridges.size() == 1);
+
+  const RegionPanelLayout* parent = nullptr;
+  for (auto& p : result.panels) {
+    if (p.regionPanelId == "parent") parent = &p;
+  }
+  REQUIRE(parent != nullptr);
+
+  // The free edge (100,0)-(100,50) must survive into wallOuter with its own
+  // true endpoint intact -- some vertex at (100,50) within numerical
+  // tolerance, NOT silently replaced by a point 0.95mm away (the setback
+  // amount) with no vertex left at the true corner at all.
+  bool foundTrueHingeB = false;
+  double closestDist = 1e18;
+  for (const auto& v : parent->wallOuter) {
+    double dist = std::hypot(v.x - bend.hingeB.x, v.y - bend.hingeB.y);
+    closestDist = std::min(closestDist, dist);
+    if (dist < 1e-6) foundTrueHingeB = true;
+  }
+  INFO("closest wallOuter vertex to raw hingeB (100,50) is " << closestDist << "mm away");
+  CHECK(foundTrueHingeB);
+}
+
+// Live-app report (2026-09, testcube.step: Protrusion 1 fused onto "Component
+// 1 Part 1", then merge_bodies_with_bend against Component 2): the corner
+// where the fold meets a fuse_bodies seam renders as a cross with two
+// protrusions in line with the panels, instead of a clean rounded fold.
+//
+// Hypothesis, tested here directly at the GraphEvaluator level: the isA&&isB
+// branch in BuildCutEdges (this file) assumes two bends sharing a ring vertex
+// always have hinge lines that truly converge to one miter point. But a
+// fuse_bodies seam landing exactly on an existing straight fold line produces
+// TWO BendSpecs whose hinge lines are COLLINEAR (not converging at an angle)
+// -- e.g. one long top edge, folded in two pieces at different angles either
+// side of the seam. LineIntersect2 on two parallel lines returns nullopt, so
+// the code falls back to `cuts[outerA].parentShiftA` alone for BOTH
+// `edges[parentBridgeIdx[outerA]].to` and `edges[parentBridgeIdx[outerB]]
+// .from` -- silently ignoring bend B's own, DIFFERENT setback whenever its
+// angle/radius differ from bend A's. That leaves bend B's own parent-side
+// wall edge starting from the WRONG point (bend A's setback, not its own),
+// producing exactly the small in-line jog/tab the live report describes.
+TEST_CASE("GraphEvaluator: two bends sharing a corner vertex on a COLLINEAR "
+          "hinge line (a fuse seam landing on an existing fold line) each "
+          "keep their own true setback distance, not each other's",
+          "[translation][regression]") {
+  double thicknessMm = 1.5;
+  double radiusMm = 1.0;
+  double kFactor = 0.4;
+
+  PartGraphSpec graph;
+  graph.partId = "collinear_corner";
+  graph.rootRegionPanelId = "base";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = Transform3::Identity();
+  // One straight top edge (y=100, x in [0,300]) subdivided at x=150 into two
+  // separate bends -- exactly what a fuse_bodies seam landing on an existing
+  // fold line produces. The two bends fold in the SAME direction (both
+  // toward +y) but at DIFFERENT angles, so their in-plane setbacks differ.
+  graph.outline.outer = {
+      {0, 0}, {300, 0}, {300, 100}, {150, 100}, {0, 100},
+  };
+
+  BendSpec bendLeft;
+  bendLeft.id = "bendLeft";
+  bendLeft.parentRegionPanelId = "base";
+  bendLeft.childRegionPanelId = "childLeft";
+  bendLeft.hingeA = {150, 100};
+  bendLeft.hingeB = {0, 100};
+  bendLeft.angleDeg = 90.0;
+  bendLeft.radiusMm = radiusMm;
+  bendLeft.kFactor = kFactor;
+  graph.bends.push_back(bendLeft);
+
+  BendSpec bendRight;
+  bendRight.id = "bendRight";
+  bendRight.parentRegionPanelId = "base";
+  bendRight.childRegionPanelId = "childRight";
+  bendRight.hingeA = {300, 100};
+  bendRight.hingeB = {150, 100};
+  bendRight.angleDeg = 45.0;  // deliberately different from bendLeft's 90deg
+  bendRight.radiusMm = radiusMm;
+  bendRight.kFactor = kFactor;
+  graph.bends.push_back(bendRight);
+
+  EvaluateResult result = Evaluate(graph);
+  REQUIRE(result.ok);
+  REQUIRE(result.bridges.size() == 2);
+
+  const RegionPanelLayout* base = nullptr;
+  for (auto& p : result.panels) {
+    if (p.regionPanelId == "base") base = &p;
+  }
+  REQUIRE(base != nullptr);
+
+  // wallOuter (RegionOf's non-zero-setback pass, via BuildBendCuts) is where
+  // this shows up -- NOT bottomFace/topFace (the zeroOffset=true pass, where
+  // every bend's shift collapses to the raw hinge point regardless of angle,
+  // so the two bends' setbacks can never disagree there). Both bends share
+  // nLeft=(0,-1) (identical hinge direction, hence identical normal), so
+  // bendLeft's own near-corner point is exactly hingeA + radius*tan(45deg)
+  // along nLeft = (150, 100-1.0) = (150, 99.0), and bendRight's own is
+  // hingeB + radius*tan(22.5deg) along nLeft = (150, 100-0.41421356...) =
+  // (150, 99.58578644). These are genuinely different points -- a correct
+  // corner must keep both distinct (joined by a short connecting edge, the
+  // same pattern already used for the isB&&!isA / isA&&!isB free-edge case
+  // above), not collapse to one.
+  double sbLeft = radiusMm * std::tan(90.0 * kTestPi / 180.0 / 2.0);
+  double sbRight = radiusMm * std::tan(45.0 * kTestPi / 180.0 / 2.0);
+  Point2 expectedLeftPoint{150.0, 100.0 - sbLeft};
+  Point2 expectedRightPoint{150.0, 100.0 - sbRight};
+
+  auto closestDistTo = [&](const Point2& target) {
+    double best = 1e18;
+    for (const auto& v : base->wallOuter) {
+      best = std::min(best, std::hypot(v.x - target.x, v.y - target.y));
+    }
+    return best;
+  };
+
+  double distToLeftPoint = closestDistTo(expectedLeftPoint);
+  double distToRightPoint = closestDistTo(expectedRightPoint);
+  INFO("bendLeft's own near-corner point (150, " << expectedLeftPoint.y
+       << ") -- closest wallOuter vertex is " << distToLeftPoint << "mm away");
+  INFO("bendRight's own near-corner point (150, " << expectedRightPoint.y
+       << ") -- closest wallOuter vertex is " << distToRightPoint << "mm away");
+  CHECK(distToLeftPoint < 1e-6);
+  CHECK(distToRightPoint < 1e-6);
+}
+
+// Live-app case, more precisely: the bend's own EDGE is longer than its
+// HINGE (a partial-width seam -- Protrusion 1 widens the fused composite
+// past where it actually contacts Component 2, so merge_bodies_with_bend's
+// new hinge is shorter than the composite's own edge there), and the
+// hinge's OTHER (grounded, non-free) end lands exactly at a real
+// PERPENDICULAR corner with a second, pre-existing bend (Component 1 Part
+// 1's own fold from the original decompose_volume). This directly checks
+// whether ConstructPartSolid's OWN bridge-tangent-point formula
+// (`bottomFace[i] + setbackMm*nLeftWorld`, part_solid_construction.cc) at
+// that shared corner agrees with RegionOf's own corner-miter computation
+// (BuildCutEdges' isA&&isB branch, which computes a genuine line
+// intersection -- the value wallOuter uses and the wall SOLID is built
+// from). Both consumers read the SAME `parent.bottomFace`/`edgeBendId`
+// arrays this file's own header comment claims are already correct at a
+// bend's real corners -- this test checks whether the REVOLVE's own
+// re-derived tangent point (not just wallOuter) actually lands there too.
+TEST_CASE("GraphEvaluator: a bend whose hinge is shorter than its own panel "
+          "edge, grounded at a real perpendicular corner with a second bend "
+          "-- ConstructPartSolid's own tangent-point formula vs the true "
+          "corner miter",
+          "[translation][regression]") {
+  double thicknessMm = 1.5;
+  double radiusMm = 1.0;
+  double kFactor = 0.4;
+
+  PartGraphSpec graph;
+  graph.partId = "long_edge_short_hinge_corner";
+  graph.rootRegionPanelId = "base";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = Transform3::Identity();
+  // Top edge (y=100) runs the full x=[0,200], but bendTop's own hinge only
+  // covers x=[0,150] -- the composite's own edge (0-200) is LONGER than the
+  // hinge (0-150), leaving a FREE edge from (200,100) to (150,100),
+  // collinear with the hinge line, exactly the "edge longer than hinge"
+  // case. bendTop's OTHER, grounded end (0,100) lands exactly on bendLeft's
+  // own hingeA -- a genuine PERPENDICULAR (non-collinear) two-bend corner,
+  // the ordinary box-corner case, not the parallel-hinge case above.
+  graph.outline.outer = {
+      {0, 0}, {200, 0}, {200, 100}, {150, 100}, {0, 100},
+  };
+
+  BendSpec bendTop;
+  bendTop.id = "bendTop";
+  bendTop.parentRegionPanelId = "base";
+  bendTop.childRegionPanelId = "childTop";
+  bendTop.hingeA = {150, 100};
+  bendTop.hingeB = {0, 100};
+  bendTop.angleDeg = 90.0;
+  bendTop.radiusMm = radiusMm;
+  bendTop.kFactor = kFactor;
+  graph.bends.push_back(bendTop);
+
+  BendSpec bendLeft;
+  bendLeft.id = "bendLeft";
+  bendLeft.parentRegionPanelId = "base";
+  bendLeft.childRegionPanelId = "childLeft";
+  bendLeft.hingeA = {0, 100};
+  bendLeft.hingeB = {0, 0};
+  bendLeft.angleDeg = 90.0;
+  bendLeft.radiusMm = radiusMm;
+  bendLeft.kFactor = kFactor;
+  graph.bends.push_back(bendLeft);
+
+  EvaluateResult result = Evaluate(graph);
+  REQUIRE(result.ok);
+  REQUIRE(result.bridges.size() == 2);
+
+  const RegionPanelLayout* base = nullptr;
+  for (auto& p : result.panels) {
+    if (p.regionPanelId == "base") base = &p;
+  }
+  REQUIRE(base != nullptr);
+
+  const BridgeLayout* bridgeTop = nullptr;
+  const BridgeLayout* bridgeLeft = nullptr;
+  for (auto& b : result.bridges) {
+    if (b.bendId == "bendTop") bridgeTop = &b;
+    if (b.bendId == "bendLeft") bridgeLeft = &b;
+  }
+  REQUIRE(bridgeTop != nullptr);
+  REQUIRE(bridgeLeft != nullptr);
+
+  // The TRUE corner miter: the two bends' own parent-side offset LINES
+  // (point + direction, exactly BuildBendCuts' own parentShiftA/B + hinge
+  // direction) actually intersect at an angle here (a genuine converging
+  // corner, not the parallel/collinear case the earlier test covers) --
+  // computed independently by hand, from the same raw hinge points and
+  // nLeftWorld/setbackMm this test already confirmed match the production
+  // bridge data, NOT by guessing which wallOuter vertex is "closest" to the
+  // raw corner (a child-side point can be numerically closer than the true
+  // parent-side miter, as this test's own earlier revision discovered the
+  // hard way).
+  auto parentShift = [](const Point2& hinge, const Point3& nLeftWorld, double setbackMm) {
+    return Point2{hinge.x + setbackMm * nLeftWorld.x, hinge.y + setbackMm * nLeftWorld.y};
+  };
+  // bendLeft's own parent-side line: point=parentShiftA(hingeA=(0,100)), direction=hingeB-hingeA.
+  Point2 pA = parentShift({0.0, 100.0}, bridgeLeft->nLeftWorld, bridgeLeft->setbackMm);
+  Point2 dA{0.0 - 0.0, 0.0 - 100.0};  // bendLeft.hingeB - bendLeft.hingeA
+  // bendTop's own parent-side line: point=parentShiftB(hingeB=(0,100)), direction=hingeB-hingeA.
+  Point2 pB = parentShift({0.0, 100.0}, bridgeTop->nLeftWorld, bridgeTop->setbackMm);
+  Point2 dB{0.0 - 150.0, 100.0 - 100.0};  // bendTop.hingeB - bendTop.hingeA
+  double denom = dA.x * dB.y - dA.y * dB.x;
+  REQUIRE(std::fabs(denom) > 1e-9);  // must be a genuine converging (non-parallel) corner
+  double t = ((pB.x - pA.x) * dB.y - (pB.y - pA.y) * dB.x) / denom;
+  Point2 trueMiter{pA.x + dA.x * t, pA.y + dA.y * t};
+  INFO("true corner miter (hand-computed intersection) = (" << trueMiter.x << ", " << trueMiter.y << ")");
+
+  // ConstructPartSolid's ACTUAL mechanism after the fix: FindZoneEdges reads
+  // wallOuter/wallEdgeBendId directly (part_solid_construction.cc), and the
+  // revolve's own tangent points ARE wallBottomFace/wallTopFace at those
+  // same indices -- no separate re-derivation.
+  REQUIRE(base->wallBottomFace.size() == base->wallOuter.size());
+  auto findWallZoneEdges = [&](const std::string& bendId) {
+    std::vector<size_t> found;
+    for (size_t i = 0; i < base->wallEdgeBendId.size(); ++i) {
+      if (base->wallEdgeBendId[i] == bendId) found.push_back(i);
+    }
+    return found;
+  };
+
+  // Each bend's own revolve construction must include, among its own
+  // wall-tagged edges' endpoints, this EXACT shared miter point -- not
+  // "some point near the corner" (both bends also have unrelated
+  // child-side/far-end points nearby), the literal same coordinate both
+  // bends fold around.
+  for (const auto* bridge : {bridgeTop, bridgeLeft}) {
+    bool found = false;
+    double bestDist = 1e18;
+    for (size_t i0 : findWallZoneEdges(bridge->bendId)) {
+      size_t i1 = (i0 + 1) % base->wallOuter.size();
+      for (size_t idx : {i0, i1}) {
+        Point3 b = base->wallBottomFace[idx];
+        double d = std::hypot(b.x - trueMiter.x, b.y - trueMiter.y);
+        bestDist = std::min(bestDist, d);
+        if (d < 1e-6) found = true;
+      }
+    }
+    INFO(bridge->bendId << "'s own closest wall-tagged point to the true miter ("
+         << trueMiter.x << ", " << trueMiter.y << ") is " << bestDist << "mm away");
+    CHECK(found);
   }
 }
 

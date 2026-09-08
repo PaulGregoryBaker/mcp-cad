@@ -218,3 +218,141 @@ TEST_CASE("DetectContact: two disjoint contact regions — the longer one is cho
   CHECK(Dist2(contact.bRunStart, {3, 0}) < 1e-6);
   CHECK(Dist2(contact.bRunEnd, {7, 0}) < 1e-6);
 }
+
+// STEP 2 (structured repro, live-app regression 2026-09): the EXACT real
+// outlines/anchors captured from
+// merge_bodies_with_bend.integration.test.ts's "STEP 1" repro (a real
+// testcube.step import, split_part_at_bend on every bend with
+// keep_corner_on='parent', Protrusion1 translated -76.6mm on Y, fuse_bodies
+// onto the resulting panel, then merge_bodies_with_bend against another
+// imported component) — originally reproduced "edgeB0/edgeB1 are not a
+// consecutive pair after vertex resolution" with NO STEP import, NO TS
+// layer, isolating the failure to this module alone. Values are bit-for-bit
+// what the TS repro dumped (not hand-derived or rounded). Now asserts the
+// FIXED behavior: the real relief-cut midpoint (74.95, 0) sitting between
+// edgeB0/edgeB1 is dropped as part of the vanishing seam, not rejected.
+TEST_CASE("ReconcileOutlines: live-app regression — B's outline carries a real vertex strictly "
+          "between edgeB0 and edgeB1 (a relief-cut midpoint), absorbed into the seam",
+          "[part_merge]") {
+  std::vector<Point2> outlineA = {
+      {450, 5.684341886080802e-14},
+      {450, 150.00000000000006},
+      {300.04999999999995, 150},
+      {275.94999999999993, 150.05},
+      {275.99999999999994, 0},
+  };
+  Transform3 anchorA;
+  anchorA.r[0] = -1; anchorA.r[1] = 0; anchorA.r[2] = -3.2162452993532727e-16;
+  anchorA.r[3] = 3.2162452993532727e-16; anchorA.r[4] = 0; anchorA.r[5] = -1;
+  anchorA.r[6] = 0; anchorA.r[7] = -1; anchorA.r[8] = 0;
+  anchorA.t[0] = 375; anchorA.t[1] = -75.7250000000001; anchorA.t[2] = 75;
+
+  std::vector<Point2> outlineB = {
+      {149.95, 74.95000000000002},
+      {150, 150},
+      {76.05, 150},
+      {0, 150},
+      {0, 76.05000000000001},
+      {0, 1.4210854715202004e-14},
+      {74.95, 0},
+      {150, 1.4210854715202004e-14},
+  };
+  Transform3 anchorB = Transform3::Identity();
+  anchorB.t[0] = -75; anchorB.t[1] = -75.00000000000001; anchorB.t[2] = 74.25;
+
+  auto contact = DetectContact(outlineA, anchorA, outlineB, anchorB);
+  REQUIRE(contact.ok);
+  // DetectContact itself succeeds — the bad B outline vertex (74.95, 0)
+  // sitting between bRunStart and bRunEnd is real, in-tolerance seam
+  // material; DetectContact's own interval (longest-region) selection is
+  // not what's rejecting this case.
+  CHECK(Dist2(contact.bRunStart, {0, 0}) < 1e-6);
+  CHECK(Dist2(contact.bRunEnd, {150, 0}) < 1e-6);
+
+  auto result = ReconcileOutlines(outlineA, contact.aRunStart, contact.aRunEnd, outlineB, contact.bRunStart,
+                                   contact.bRunEnd);
+  // FIXED behavior: B's real vertex (74.95, 0), sitting strictly between
+  // edgeB0=(0,0) and edgeB1=(150,0) in outlineB's own array order, is
+  // absorbed into the vanishing seam instead of causing a rejection.
+  REQUIRE(result.ok);
+  CHECK(result.combinedOutline.size() == 11);
+  double areaA = std::fabs(ShoelaceArea(outlineA));
+  double areaB = std::fabs(ShoelaceArea(outlineB));
+  double areaCombined = ShoelaceArea(result.combinedOutline);
+  CHECK(areaCombined == Approx(areaA + areaB).margin(1e-3));
+  CHECK(areaCombined > 0.0);  // still CCW
+}
+
+// STEP 4 (structured repro): minimal, hand-authored unit test targeting the
+// EXACT failing component step 3's root-cause analysis identified.
+//
+// Root cause (found by hand-replicating the earlier reverted fix's splice
+// logic against the real captured geometry above, with NO changes to
+// part_merge.cc itself): that fix's A-side combining loop assumed
+// `a1Idx > kFinal` always (`for (i = a1Idx; i < n; ++i)`), copied from the
+// simple case's `kFinal + 1`. That assumption breaks whenever the seam wraps
+// across the outline array's own physical start/end boundary — i.e.
+// edgeA0 resolves near the END of the array (kFinal close to n-1) while
+// edgeA1 resolves near the START (a1Idx close to 0), which is exactly what
+// happens whenever LocateOrInsertVertex's "insert after the last edge"
+// case (part_merge.cc's own `insertAt == 0 -> push_back` branch) fires for
+// edgeA0. In that case `a1Idx <= kFinal`, and `for (i = a1Idx; i < n; ++i)`
+// re-walks a chunk of A's own outline a SECOND time into `combined`,
+// producing a self-intersecting, duplicate-vertex polygon — confirmed live:
+// hand-replicating the exact reverted splice logic against the real
+// captured geometry from the live-app regression produced a 17-vertex
+// outline that was literally A's 5 vertices emitted twice. That corrupted
+// 2D outline is what the downstream region-panel evaluator turned into the
+// visible extra panel/fin.
+//
+// This test is a minimal repro of the SAME index-arithmetic shape (kFinal
+// near n-1, a1Idx = 0, with one genuine interior vertex that must be
+// dropped) — small enough to hand-verify the correct combinedOutline
+// exactly. It is the correctness spec the fix must satisfy: it must handle
+// the wrap-around case WITHOUT duplicating any vertex.
+TEST_CASE("ReconcileOutlines: a real interior vertex on a seam that wraps across the outline "
+          "array's own start/end boundary — the fix must not duplicate A's outline",
+          "[part_merge]") {
+  // A: a 10x5 rectangle with one genuine extra vertex (0,1) already sitting
+  // on its own left edge (a "relief-cut midpoint," same real-world shape as
+  // the live-app regression above) — so the left edge is really two
+  // sub-edges, (0,5)->(0,1) and (0,1)->(0,0), CCW.
+  std::vector<Point2> outlineA = {{0, 0}, {10, 0}, {10, 5}, {0, 5}, {0, 1}};
+  // The seam is A's ENTIRE left edge, (0,5) to (0,0) — both endpoints are
+  // ALREADY exact outline vertices (kFinal=3, a1Idx=0): no insertion needed,
+  // yet a1Idx <= kFinal, the exact wrap-around shape that broke the earlier
+  // fix attempt (that attempt's bug fires whenever a1Idx <= kFinal, whether
+  // or not either point required insertion).
+  const Point2 edgeA0{0, 5};
+  const Point2 edgeA1{0, 0};
+
+  // B: a 5-wide x 3-tall rectangle whose own edge0 (length 5) exactly
+  // matches A's seam length.
+  std::vector<Point2> outlineB = {{0, 0}, {5, 0}, {5, 3}, {0, 3}};
+  const Point2 edgeB0{0, 0};
+  const Point2 edgeB1{5, 0};
+
+  auto result = ReconcileOutlines(outlineA, edgeA0, edgeA1, outlineB, edgeB0, edgeB1);
+
+  // FIXED behavior: kFinal=3, a1Idx=0 (a1Idx <= kFinal, the wrap-around
+  // shape) — the interior vertex (0,1) is absorbed into the vanishing seam
+  // instead of causing a rejection.
+  REQUIRE(result.ok);
+
+  // Hand-derived expected result: A's own material, walked from a1Idx(0)
+  // forward to kFinal(3) INCLUSIVE — (0,0),(10,0),(10,5),(0,5) — correctly
+  // dropping the interior vertex (0,1), which belongs to the vanishing seam
+  // — plus B's own material (excluding its shared edge0), rotated/placed by
+  // T(edgeB0)=edgeA1, T(edgeB1)=edgeA0: (5,3)->(-3,5), (0,3)->(-3,0).
+  // Combined: a 10x5 rectangle with a 3x5 flap glued flush onto its whole
+  // left edge — EXACTLY this (6 vertices, no duplicates), NOT the
+  // 9-raw-point, overlapping mess the earlier (reverted) fix attempt's
+  // `for (i = a1Idx; i < n; ++i)` loop would have produced by re-emitting
+  // indices [0,1,2,3] a second time.
+  std::vector<Point2> expected = {{0, 0}, {10, 0}, {10, 5}, {0, 5}, {-3, 5}, {-3, 0}};
+  REQUIRE(result.combinedOutline.size() == expected.size());
+  for (size_t i = 0; i < expected.size(); ++i) {
+    CHECK(Dist2(result.combinedOutline[i], expected[i]) < 1e-9);
+  }
+  CHECK(ShoelaceArea(result.combinedOutline) == Approx(65.0).margin(1e-6));
+}

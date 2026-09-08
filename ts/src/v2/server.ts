@@ -221,8 +221,9 @@ function installCrashGuards(): void {
 
 async function main(): Promise<void> {
   installCrashGuards();
-  startV2BlobServer(resolveV2BlobPort());
-  const server = createV2Server();
+  const store = new GraphStore();
+  startV2BlobServer(resolveV2BlobPort(), store);
+  const server = createV2Server(store);
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

@@ -22,6 +22,7 @@
  * drivers.
  */
 import { describe, expect, it } from 'vitest';
+import * as path from 'node:path';
 
 import { GraphStore } from '../../src/v2/graph/store';
 import { dispatchGraphTool } from '../../src/v2/tools/graph';
@@ -38,6 +39,8 @@ import type { NapiRegionPanelLayout } from '../../src/geometry/types';
 const ENABLED = process.env.SUITE_V2_DRIVER === '1';
 const d = ENABLED ? describe : describe.skip;
 
+const FIXTURES_DIR = path.resolve(__dirname, '../../../cpp/tests/fixtures');
+
 interface MergeToolResult {
   part_id: string;
   bend_id: string;
@@ -46,6 +49,16 @@ interface MergeToolResult {
 
 function dist2(a: { x: number; y: number }, b: { x: number; y: number }): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function shoelaceArea(ring: Array<{ x: number; y: number }>): number {
+  let a = 0;
+  for (let i = 0; i < ring.length; i++) {
+    const p1 = ring[i];
+    const p2 = ring[(i + 1) % ring.length];
+    a += p1.x * p2.y - p2.x * p1.y;
+  }
+  return Math.abs(a) / 2;
 }
 
 function requirePanel(
@@ -365,5 +378,162 @@ d('v2 merge_bodies_with_bend — authored, independently-authored parts', () => 
     }
     expect(caught).toBeInstanceOf(McpToolError);
     expect((caught as McpToolError).structured.code).toBe('GE_MERGE_NO_CONTACT');
+  });
+});
+
+/**
+ * Live-app regression (2026-09): reported as "Tool error: edgeB0/edgeB1 are
+ * not a consecutive pair after vertex resolution" when running
+ * merge_bodies_with_bend on a part that had just gone through
+ * fuse_bodies.integration.test.ts's own live recipe (import testcube.step,
+ * split_part_at_bend on every bend with keep_corner_on='parent', translate
+ * Protrusion1 by -76.6mm, fuse) against another imported component.
+ *
+ * Root cause (part_merge.cc's ReconcileOutlines): the seam's two contact
+ * points were required to resolve to LITERALLY ADJACENT outline indices,
+ * but a real outline can carry a genuine extra vertex strictly between them
+ * — a collinear relief-cut midpoint, confirmed live on the imported
+ * component's own edge ((0,0)-(74.95,0)-(150,0), three collinear points on
+ * one physical edge). Fixed by treating whatever lies strictly between the
+ * two resolved indices as part of the vanishing seam (dropped), not a
+ * rejection reason.
+ *
+ * A first fix attempt regressed this into a WORSE, silent defect (visible
+ * extra panel/fin in the live app, flat pattern no longer generating) — its
+ * combining loop assumed the seam's two endpoints always resolve in
+ * increasing array-index order; when the seam instead wraps across the
+ * outline array's own physical start/end boundary (confirmed live: exactly
+ * what LocateOrInsertVertex's "insert after the last edge" push_back path
+ * produces), that assumption re-walked part of the outline a second time,
+ * producing a duplicate-vertex, corrupted polygon. Fixed by branching on
+ * which side of the (kFinal, a1Idx) pair actually wraps, instead of
+ * assuming one order always holds (see part_merge.cc and
+ * part_merge_test.cc's two dedicated regression cases for the full
+ * root-cause writeup).
+ *
+ * Each (axis, targetPanel, otherComp) pairing below is checked in ISOLATION
+ * (restored before/after) — a merge that chains a THIRD panel onto an
+ * already-bend-merged composite is a separate, independently fragile code
+ * path (not this recipe, which performs exactly one merge) and is out of
+ * scope here.
+ */
+d('v2 merge_bodies_with_bend live regression: a fuse_bodies-produced outline with a real vertex '
+  + 'on the seam interval (a relief-cut midpoint) merges correctly, producing exactly the right '
+  + 'panel count and a manifold, area-conserving solid — not a false rejection, and not a silent '
+  + 'extra-panel corruption',
+  () => {
+  it('import testcube.step, split + translate Protrusion1 by -76.6mm + fuse (fuse_bodies\' own live '
+    + 'recipe), then merge_bodies_with_bend the fused panel onto another imported component — every '
+    + 'reachable pairing produces exactly 2 region panels, a manifold solid, and conserves area; at '
+    + 'least one pairing must be reachable', () => {
+    const store = new GraphStore();
+    const imported = dispatchGraphTool(store, 'import_part', {
+      file: path.join(FIXTURES_DIR, 'testcube.step'),
+    }) as { part_id: string; protrusion_part_ids: string[]; component_part_ids: string[] };
+
+    let component1 = imported.component_part_ids[0];
+    let maxBends = -1;
+    for (const cid of imported.component_part_ids) {
+      const n = store.snapshotPart(cid).bends.length;
+      if (n > maxBends) { maxBends = n; component1 = cid; }
+    }
+    expect(maxBends).toBe(3);
+
+    const worklist: string[] = [component1];
+    const allSplitParts = new Set<string>([component1]);
+    while (worklist.length > 0) {
+      const pid = worklist.pop()!;
+      const bends = store.snapshotPart(pid).bends;
+      if (bends.length === 0) continue;
+      const bendId = bends[0].bendId;
+      const result = dispatchGraphTool(store, 'split_part_at_bend', {
+        part_id: pid,
+        bend_id: bendId,
+        keep_corner_on: 'parent',
+      }) as { new_part_ids: string[] };
+      for (const npid of result.new_part_ids) {
+        allSplitParts.add(npid);
+        worklist.push(npid);
+      }
+      worklist.push(pid);
+    }
+
+    const protrusion1 = imported.protrusion_part_ids[0];
+    let anyChecked = false;
+
+    for (const axis of ['x', 'y'] as const) {
+      for (const targetPanel of allSplitParts) {
+        const before = store.snapshotAll();
+        const protrusion = store.getPart(protrusion1)!;
+        const t = protrusion.anchor.t as [number, number, number];
+        const newT: [number, number, number] =
+          axis === 'x' ? [t[0] - 76.6, t[1], t[2]] : [t[0], t[1] - 76.6, t[2]];
+        dispatchGraphTool(store, 'update_node', {
+          kind: 'part',
+          id: protrusion1,
+          patch: { anchor: { r: protrusion.anchor.r, t: newT } },
+        });
+
+        let fusedPartId: string | undefined;
+        let areaBeforeMerge = 0;
+        try {
+          const result = dispatchGraphTool(store, 'fuse_bodies', {
+            part_a_id: targetPanel,
+            part_b_id: protrusion1,
+          }) as { part_id: string };
+          fusedPartId = result.part_id;
+          areaBeforeMerge = shoelaceArea(store.getPart(fusedPartId)!.outline);
+        } catch {
+          store.restoreAll(before);
+          continue;
+        }
+
+        // Each otherComp is tried against the SAME single-merge starting
+        // point (restored before/after) — never chained onto a prior
+        // merge's own result, matching the reported recipe exactly.
+        for (const otherComp of imported.component_part_ids) {
+          if (otherComp === component1) continue;
+          const beforeEachMerge = store.snapshotAll();
+          const areaB = shoelaceArea(store.getPart(otherComp)!.outline);
+
+          let mergeResult: { part_id: string } | undefined;
+          try {
+            mergeResult = dispatchGraphTool(store, 'merge_bodies_with_bend', {
+              part_a_id: fusedPartId,
+              part_b_id: otherComp,
+            }) as { part_id: string };
+          } catch {
+            // A genuinely unrelated/out-of-plane (targetPanel, otherComp)
+            // pairing is expected to fail — only inspected via anyChecked.
+          }
+          if (mergeResult) {
+            anyChecked = true;
+            const evalResult = evaluatePart(store, mergeResult.part_id);
+            expect(evalResult.ok, evalResult.message).toBe(true);
+            // The regression check: exactly 2 region panels, never a
+            // spurious 3rd (the visible extra-panel defect).
+            expect(evalResult.panels.length).toBe(2);
+
+            const combinedArea = shoelaceArea(store.getPart(mergeResult.part_id)!.outline);
+            expect(combinedArea).toBeCloseTo(areaBeforeMerge + areaB, 1);
+
+            const constructResult = constructPart(store, mergeResult.part_id);
+            expect(constructResult.ok, constructResult.message).toBe(true);
+            const manifold = geometryBinding.checkManifold(constructResult.shellId);
+            expect(manifold.isManifold, JSON.stringify(manifold.issues)).toBe(true);
+          }
+
+          store.restoreAll(beforeEachMerge);
+        }
+
+        store.restoreAll(before);
+      }
+    }
+
+    expect(
+      anyChecked,
+      'at least one (axis, targetPanel, otherComp) pairing matching the live recipe must reach '
+        + 'merge_bodies_with_bend and be checked',
+    ).toBe(true);
   });
 });

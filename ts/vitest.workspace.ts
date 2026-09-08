@@ -39,6 +39,7 @@ export default defineWorkspace([
         'tests/integration/suite_driver_v2_import.integration.test.ts',
         'tests/integration/import_part_fixtures.integration.test.ts',
         'tests/integration/merge_bodies_with_bend.integration.test.ts',
+        'tests/integration/merge_bodies_with_bend_corner_integrity.integration.test.ts',
         'tests/integration/split_part_at_bend.integration.test.ts',
         'tests/integration/point_mapping_roundtrip.integration.test.ts',
         'tests/integration/replay_invariant.integration.test.ts',
