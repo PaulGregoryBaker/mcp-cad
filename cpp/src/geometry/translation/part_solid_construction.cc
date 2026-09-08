@@ -384,6 +384,33 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
       }
       gp_Ax1 axis(axisOrigin, axisDir0);
 
+      auto solidVolume = [](const TopoDS_Shape& shape) {
+        GProp_GProps props;
+        BRepGProp::VolumeProperties(shape, props);
+        return props.Mass();
+      };
+      auto tryFuseBridgeSegments = [&](const TopoDS_Shape& a, const TopoDS_Shape& b)
+          -> TopoDS_Shape {
+        for (double fuzzMm : {kBooleanFuzzMm, kJoinRetryFuzzMm}) {
+          for (bool glue : {false, true}) {
+            BRepAlgoAPI_Fuse segFuser(a, b);
+            segFuser.SetFuzzyValue(fuzzMm);
+            if (glue) segFuser.SetGlue(BOPAlgo_GlueShift);
+            segFuser.Build();
+            if (!segFuser.IsDone()) continue;
+
+            TopoDS_Shape fused = segFuser.Shape();
+            if (fused.IsNull() || !BRepCheck_Analyzer(fused).IsValid()) continue;
+            if (HasDegenerateFace(fused)) continue;
+
+            constexpr double kVolumeRelTol = 1e-6;
+            double maxInVolume = std::max(solidVolume(a), solidVolume(b));
+            if (solidVolume(fused) >= maxInVolume * (1.0 - kVolumeRelTol)) return fused;
+          }
+        }
+        return TopoDS_Shape();
+      };
+
       TopoDS_Shape bridgeSolid;
       bool bridgeSolidSet = false;
       for (size_t i0 : parentEdges) {
@@ -436,15 +463,18 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
           bridgeSolidSet = true;
           continue;
         }
-        BRepAlgoAPI_Fuse segFuser(bridgeSolid, revol.Shape());
-        segFuser.SetFuzzyValue(kBooleanFuzzMm);
-        segFuser.Build();
-        if (!segFuser.IsDone()) {
+        // Policy: a bend bridge is either fully assembled from its real zone
+        // segments or it is not accepted. This path retries the same
+        // tight->loose->glue tolerance ladder used elsewhere in this file for
+        // the real-world near-coincident-vertex case; a failed final join is
+        // still hard-failed, never silently accepted as a degraded result.
+        TopoDS_Shape fused = tryFuseBridgeSegments(bridgeSolid, revol.Shape());
+        if (fused.IsNull()) {
           result.errorCode = "GE_BRIDGE_BUILD_FAILED";
           result.message = "failed to fuse bridge segments together for bend " + bridge.bendId;
           return result;
         }
-        bridgeSolid = segFuser.Shape();
+        bridgeSolid = fused;
       }
       bridgeSolidByBendId[bridge.bendId] = bridgeSolid;
     }
@@ -544,6 +574,17 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
         if (!fuser.IsDone()) return TopoDS_Shape();
         return fuser.Shape();
       };
+      auto tryNaryFuseNested = [&]() -> TopoDS_Shape {
+        for (double fuzzMm : {kBooleanFuzzMm, kJoinRetryFuzzMm}) {
+          for (bool glue : {false, true}) {
+            TopoDS_Shape candidate = tryNaryFuse(fuzzMm, glue);
+            if (candidate.IsNull()) continue;
+            if (!BRepCheck_Analyzer(candidate).IsValid()) continue;
+            return candidate;
+          }
+        }
+        return TopoDS_Shape();
+      };
       // Same union-volume invariant as fuseJoin's own contract above,
       // generalized to N pieces: the result can never be smaller than the
       // largest individual input piece (a property of union, not a
@@ -558,16 +599,8 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
         return solidVolume(shape) >= maxPieceVolume * (1.0 - kVolumeRelTol);
       };
 
-      currentShape = tryNaryFuse(kBooleanFuzzMm, /*glue=*/false);
+      currentShape = tryNaryFuseNested();
       naryOk = acceptNaryResult(currentShape);
-      if (!naryOk) {
-        currentShape = tryNaryFuse(kJoinRetryFuzzMm, /*glue=*/false);
-        naryOk = acceptNaryResult(currentShape);
-      }
-      if (!naryOk) {
-        currentShape = tryNaryFuse(kBooleanFuzzMm, /*glue=*/true);
-        naryOk = acceptNaryResult(currentShape);
-      }
       if (naryOk && currentShape.ShapeType() != TopAbs_SOLID) {
         TopoDS_Solid theSolid;
         for (TopExp_Explorer ex(currentShape, TopAbs_SOLID); ex.More(); ex.Next()) {
@@ -576,187 +609,121 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
         currentShape = theSolid;
       }
       if (naryOk) {
-        // Same tolerance discipline as the sequential fallback below — see
-        // that loop's own comment on why this cap exists at all.
         ShapeFix_ShapeTolerance toleranceFix;
         toleranceFix.LimitTolerance(currentShape, 0.0, kJoinRetryFuzzMm);
       }
     }
 
-    // ─── Fallback: balanced tree-contraction join order ────────────────────
-    // The sequential accumulator (fuse piece 1, then 2, then 3, ...) makes
-    // every later join carry the full tolerance creep of every join before
-    // it — on real cauldron.step data, a ~161-join sequential chain grows a
-    // vertex's own working tolerance ball until it's large enough to treat a
-    // REAL, physically-distant feature (two rim corners over a metre apart
-    // in Z) as coincident with an unrelated nearby one, producing a
-    // genuinely self-intersecting wire (BRepCheck_SelfIntersectingWire), not
-    // a tolerance-too-tight rejection. Capping tolerance after each join
-    // (below) helps but doesn't fix this on its own — most of the fix is
-    // cutting the *depth* any single tolerance value has to survive.
-    //
-    // Panels and bridges already form a tree (nodes = panels ∪ bridges,
-    // edges = each bridge's two known-touching relationships: bridge↔parent
-    // panel, bridge↔child panel — the exact same edges the old sequential
-    // BFS order walked one at a time). Reducing that tree via repeated
-    // matching-based contraction — each round, fuse every pair of nodes
-    // joined by a still-unmatched edge, in parallel, then treat each fused
-    // pair as one new node inheriting its two parents' other edges — only
-    // ever joins two pieces already known to touch (same guarantee as
-    // today, checked at every single join, never deferred), and collapses a
-    // long chain in ~log2(N) rounds instead of N-1: a maximal matching on a
-    // tree always covers at least half its edges, whether that tree is one
-    // long unbranched run or has branch points (a panel with several bend
-    // edges just costs a few extra rounds proportional to its own edge
-    // count, not a different algorithm).
+    // The whole-set Boolean is only an optimization. Real imported parts can
+    // contain long chains whose single OCCT interference pass returns no
+    // shape, even though each known panel/bridge contact is constructible.
+    // Reassemble that same graph through validated contact joins; this is not
+    // a degraded result or a partial fallback: every node must be consumed,
+    // every join must produce one solid, and the operation still fails closed.
     if (!naryOk) {
       struct FuseNode {
         TopoDS_Shape shape;
-        std::vector<std::string> ids;  // originating panel/bend ids, for error messages
+        std::vector<std::string> ids;
       };
 
       std::vector<FuseNode> nodes;
       std::unordered_map<std::string, int> panelNodeIndex;
       std::unordered_map<std::string, int> bridgeNodeIndex;
-      nodes.reserve(layout.panels.size() + layout.bridges.size());
       for (const auto& panel : layout.panels) {
         panelNodeIndex[panel.regionPanelId] = static_cast<int>(nodes.size());
-        nodes.push_back(FuseNode{panelSolidById.at(panel.regionPanelId), {panel.regionPanelId}});
+        nodes.push_back({panelSolidById.at(panel.regionPanelId), {panel.regionPanelId}});
       }
       for (const auto& bridge : layout.bridges) {
         bridgeNodeIndex[bridge.bendId] = static_cast<int>(nodes.size());
-        nodes.push_back(FuseNode{bridgeSolidByBendId.at(bridge.bendId), {"bend:" + bridge.bendId}});
+        nodes.push_back({bridgeSolidByBendId.at(bridge.bendId), {"bend:" + bridge.bendId}});
       }
 
       std::vector<std::pair<int, int>> edges;
-      edges.reserve(layout.bridges.size() * 2);
       for (const auto& bridge : layout.bridges) {
-        int b = bridgeNodeIndex.at(bridge.bendId);
-        edges.push_back({b, panelNodeIndex.at(bridge.parentRegionPanelId)});
-        edges.push_back({b, panelNodeIndex.at(bridge.childRegionPanelId)});
+        const int bridgeIndex = bridgeNodeIndex.at(bridge.bendId);
+        edges.push_back({bridgeIndex, panelNodeIndex.at(bridge.parentRegionPanelId)});
+        edges.push_back({bridgeIndex, panelNodeIndex.at(bridge.childRegionPanelId)});
       }
 
-      // Fuses two already-known-touching nodes using the same tight->loose
-      // ->glue retry ladder, validity check, and disconnected-solid check as
-      // every join has always used — this is the per-join contract, applied
-      // uniformly regardless of where in the tree the edge sits.
-      auto fuseNodes = [&](const FuseNode& a, const FuseNode& b, FuseNode* out) -> bool {
-        TopoDS_Shape nextShape;
+      auto joinNodes = [&](const FuseNode& a, const FuseNode& b, FuseNode* out) -> bool {
+        TopoDS_Shape joined;
         bool built = false;
-        bool valid = fuseJoin(kBooleanFuzzMm, /*glue=*/false, a.shape, b.shape, &nextShape, &built);
-        if (built && !valid) {
-          valid = fuseJoin(kJoinRetryFuzzMm, /*glue=*/false, a.shape, b.shape, &nextShape, &built);
-        }
-        if (!built) {
-          result.errorCode = "GE_CONSTRUCTION_FAILED";
-          result.message =
-              "boolean fuse failed joining " + DescribeIds(a.ids) + " with " + DescribeIds(b.ids);
-          return false;
-        }
-        int solidCount =
-            valid ? (nextShape.ShapeType() == TopAbs_SOLID ? 1 : countSolids(nextShape)) : 0;
-        if (!valid || solidCount != 1) {
-          // Glue mode: OCCT's own mechanism for two operands sharing coincident
-          // sub-shapes — covers every failure fuseJoin's own contract can still
-          // catch on a plain fuzzy boolean: a panel/bridge pair that genuinely
-          // touches but comes back as separate solids instead of merging (a
-          // real, near-flat bend's dihedral angle too close to 180deg for the
-          // classifier), and a huge accumulated shape fused with a tiny sliver
-          // that silently discards the sliver (caught by fuseJoin's own
-          // union-volume invariant). Retried once, only for the specific join
-          // that failed, so every other join keeps the tight kBooleanFuzzMm
-          // untouched.
-          bool glueBuilt = false;
-          TopoDS_Shape gluedShape;
-          bool glueValid =
-              fuseJoin(kBooleanFuzzMm, /*glue=*/true, a.shape, b.shape, &gluedShape, &glueBuilt);
-          if (glueBuilt && glueValid) {
-            nextShape = gluedShape;
-            valid = true;
-            solidCount = nextShape.ShapeType() == TopAbs_SOLID ? 1 : countSolids(nextShape);
+        bool valid = fuseJoin(kBooleanFuzzMm, false, a.shape, b.shape, &joined, &built);
+        if (!valid) valid = fuseJoin(kJoinRetryFuzzMm, false, a.shape, b.shape, &joined, &built);
+        if (!valid) valid = fuseJoin(kBooleanFuzzMm, true, a.shape, b.shape, &joined, &built);
+        if (!valid || joined.IsNull()) return false;
+        if (joined.ShapeType() != TopAbs_SOLID) {
+          TopoDS_Solid solid;
+          for (TopExp_Explorer ex(joined, TopAbs_SOLID); ex.More(); ex.Next()) {
+            solid = TopoDS::Solid(ex.Current());
           }
+          if (solid.IsNull()) return false;
+          joined = solid;
         }
-        if (!valid) {
-          result.errorCode = "GE_CONSTRUCTION_FAILED";
-          result.message =
-              "fuse result is invalid joining " + DescribeIds(a.ids) + " with " + DescribeIds(b.ids);
-          return false;
-        }
-        if (solidCount != 1) {
-          result.errorCode = "GE_CONSTRUCTION_FAILED";
-          result.message = "fuse produced " + std::to_string(solidCount) +
-                            " disconnected solid(s) joining " + DescribeIds(a.ids) + " with " +
-                            DescribeIds(b.ids) +
-                            " — every panel/bridge pair is expected to share a coincident face";
-          return false;
-        }
-        // BRepAlgoAPI_Fuse always returns a COMPOUND wrapper, even for a single
-        // connected solid result — unwrap to the bare solid, matching the
-        // existing fuseBodies() reference pattern (geometry_service_booleans.cc).
-        if (nextShape.ShapeType() != TopAbs_SOLID) {
-          TopoDS_Solid theSolid;
-          for (TopExp_Explorer ex(nextShape, TopAbs_SOLID); ex.More(); ex.Next()) {
-            theSolid = TopoDS::Solid(ex.Current());
-          }
-          nextShape = theSolid;
-        }
-        // Cap (never raise — tmin=0) this new node's own working tolerance
-        // back to kJoinRetryFuzzMm before it becomes an operand in a LATER
-        // round — see this fallback's own header comment for why unbounded
-        // tolerance growth across many joins is the actual root cause this
-        // whole restructuring targets.
         ShapeFix_ShapeTolerance toleranceFix;
-        toleranceFix.LimitTolerance(nextShape, 0.0, kJoinRetryFuzzMm);
-        out->shape = nextShape;
+        toleranceFix.LimitTolerance(joined, 0.0, kJoinRetryFuzzMm);
+        out->shape = joined;
         out->ids = a.ids;
         out->ids.insert(out->ids.end(), b.ids.begin(), b.ids.end());
         return true;
       };
 
-      while (nodes.size() > 1) {
+      bool assemblyOk = true;
+      while (nodes.size() > 1 && !edges.empty()) {
         std::vector<bool> matched(nodes.size(), false);
-        std::vector<std::pair<int, int>> matchedPairs;
-        std::vector<bool> edgeUsed(edges.size(), false);
-        for (size_t ei = 0; ei < edges.size(); ++ei) {
-          int u = edges[ei].first, v = edges[ei].second;
-          if (!matched[u] && !matched[v]) {
-            matched[u] = matched[v] = true;
-            matchedPairs.push_back({u, v});
-            edgeUsed[ei] = true;
+        std::vector<std::pair<int, int>> pairs;
+        std::vector<bool> consumed(edges.size(), false);
+        for (size_t i = 0; i < edges.size(); ++i) {
+          const auto [a, b] = edges[i];
+          if (!matched[a] && !matched[b]) {
+            matched[a] = matched[b] = true;
+            pairs.push_back({a, b});
+            consumed[i] = true;
           }
         }
+        if (pairs.empty()) break;
 
-        std::vector<int> newIndexOf(nodes.size(), -1);
+        std::vector<int> remap(nodes.size(), -1);
         std::vector<FuseNode> nextNodes;
-        nextNodes.reserve(nodes.size() - matchedPairs.size());
-        for (const auto& pr : matchedPairs) {
+        for (const auto [a, b] : pairs) {
           FuseNode merged;
-          if (!fuseNodes(nodes[pr.first], nodes[pr.second], &merged)) return result;
-          int ni = static_cast<int>(nextNodes.size());
+          if (!joinNodes(nodes[a], nodes[b], &merged)) {
+            assemblyOk = false;
+            break;
+          }
+          remap[a] = remap[b] = static_cast<int>(nextNodes.size());
           nextNodes.push_back(std::move(merged));
-          newIndexOf[pr.first] = ni;
-          newIndexOf[pr.second] = ni;
         }
+        if (!assemblyOk) break;
         for (size_t i = 0; i < nodes.size(); ++i) {
-          if (matched[i]) continue;
-          int ni = static_cast<int>(nextNodes.size());
-          nextNodes.push_back(std::move(nodes[i]));
-          newIndexOf[i] = ni;
+          if (!matched[i]) {
+            remap[i] = static_cast<int>(nextNodes.size());
+            nextNodes.push_back(std::move(nodes[i]));
+          }
         }
-
         std::vector<std::pair<int, int>> nextEdges;
-        nextEdges.reserve(edges.size() - matchedPairs.size());
-        for (size_t ei = 0; ei < edges.size(); ++ei) {
-          if (edgeUsed[ei]) continue;
-          nextEdges.push_back({newIndexOf[edges[ei].first], newIndexOf[edges[ei].second]});
+        for (size_t i = 0; i < edges.size(); ++i) {
+          if (!consumed[i]) nextEdges.push_back({remap[edges[i].first], remap[edges[i].second]});
         }
-
         nodes = std::move(nextNodes);
         edges = std::move(nextEdges);
       }
+      if (assemblyOk && nodes.size() == 1) {
+        currentShape = nodes.front().shape;
+        naryOk = currentShape.ShapeType() == TopAbs_SOLID &&
+                 BRepCheck_Analyzer(currentShape).IsValid() && countSolids(currentShape) == 1;
+      } else {
+        naryOk = false;
+      }
+    }
 
-      currentShape = nodes[0].shape;
-    }  // end fallback
+    // Strict policy: a complete, validated assembly is required. A failed
+    // graph assembly is never returned as a plausible partial model.
+    if (!naryOk) {
+      result.errorCode = "GE_CONSTRUCTION_FAILED";
+      result.message = "construction rejected by no-fallback policy: complete fused assembly failed";
+      return result;
+    }
 
     // Merge coplanar face fragments the fuse sequence leaves behind at internal
     // seams — matches the existing fuseBodies() reference pattern exactly

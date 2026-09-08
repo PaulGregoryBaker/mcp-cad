@@ -896,6 +896,31 @@ TEST_CASE("ConstructPartSolid: rejects non-positive thickness",
   CHECK(result.errorCode == "GE_INVALID_SHEET_METAL");
 }
 
+TEST_CASE("ConstructPartSolid: rejects a broken bend assembly instead of accepting a degraded result",
+          "[translation][construction][errors]") {
+  auto graph = MakeStrip(2, 60.0, 40.0, 2.0, 90.0, 1.5, 0.4);
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+  REQUIRE(layout.bridges.size() == 1);
+
+  // Deliberately invalidate the bridge's real zone metadata so the bridge
+  // cannot be assembled from its actual tangent quads. Under the strict
+  // no-fallback policy, this must fail closed and never be accepted as a
+  // valid solid.
+  layout.panels[0].wallOuter.clear();
+  layout.panels[0].wallBottomFace.clear();
+  layout.panels[0].wallTopFace.clear();
+  layout.panels[0].wallEdgeBendId.clear();
+  layout.panels[0].wallEdgeIsTransitionStep.clear();
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, graph.thicknessMm);
+  REQUIRE_FALSE(result.ok);
+  CHECK(result.errorCode == "GE_BRIDGE_EDGE_NOT_FOUND");
+  CHECK(state.solids.empty());
+  CHECK(state.shells.empty());
+}
+
 // Phase 5 Slice 4 investigation (merge_bodies_with_bend's own volume check
 // found this and needed to confirm it wasn't a merge-specific defect):
 // directly measures the boolean overlap between the two panel prisms of an
