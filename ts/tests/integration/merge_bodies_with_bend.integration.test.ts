@@ -122,6 +122,12 @@ function mergeTwoParts(store: GraphStore, partAId: string, partBId: string): Mer
     part_b_id: partBId,
     radius_mm: 2.0,
     k_factor: 0.4,
+    // Explicit: this fixture's DetectContact-derived angleDeg sign doesn't
+    // reliably predict which side is concave (evaluate-client.ts's own
+    // MergePartsWithBendInput.bottomIsConcave doc comment) — confirmed this
+    // real corner is a mountain/concave fold by checking constructed volume
+    // against the bend-allowance formula (checkMergeStructureAndSolid).
+    bottom_is_concave: true,
   }) as MergeToolResult;
 }
 

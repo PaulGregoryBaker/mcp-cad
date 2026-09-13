@@ -42,7 +42,7 @@ double TestBendAllowanceMm(double angleDeg, double radiusMm, double kFactor,
 // so call sites don't all need editing); `angleDeg`'s sign still selects
 // fold direction the same way BottomIsConcave's own fallback does.
 double TestPivotZOffset(double angleDeg, double /*radiusMm*/, double thicknessMm) {
-  bool isMountain = angleDeg >= 0.0;
+  bool isMountain = angleDeg < 0.0;  // matches BottomIsConcave's fallback polarity
   return isMountain ? 0.0 : thicknessMm;
 }
 
@@ -203,6 +203,27 @@ double PlaneDistance(const RegionPanelLayout& panelA, const RegionPanelLayout& p
   return std::fabs(v.x * n.x + v.y * n.y + v.z * n.z);
 }
 
+// Standard even-odd ray-casting point-in-polygon test (any simple polygon,
+// either winding) -- used to numerically check whether a bend's tangent
+// point actually lands inside a panel's own real 2D material footprint,
+// rather than trusting a distance-from-axis or self-consistency check that
+// can't tell "inside" from "outside" (both are equally valid answers to
+// "is this the right distance/rotation away").
+bool TestPointInPolygon(const Point2& p, const std::vector<Point2>& poly) {
+  bool inside = false;
+  const size_t n = poly.size();
+  for (size_t i = 0, j = n - 1; i < n; j = i++) {
+    const Point2& a = poly[i];
+    const Point2& b = poly[j];
+    const bool crosses = (a.y > p.y) != (b.y > p.y);
+    if (crosses) {
+      const double xIntersect = a.x + (p.y - a.y) * (b.x - a.x) / (b.y - a.y);
+      if (p.x < xIntersect) inside = !inside;
+    }
+  }
+  return inside;
+}
+
 }  // namespace
 
 // ─── C22-equivalent closure family: N-gon prism via N-1 equal bends ──────────
@@ -286,6 +307,104 @@ TEST_CASE("GraphEvaluator: N=4 square tube's opposite-wall spacing stays "
   auto measure = [&](double radiusMm) -> std::pair<double, double> {
     auto graph = MakeStrip(4, 100.0, 50.0, thicknessMm, 90.0, radiusMm, kFactor, 0.0, 0.0,
                            Transform3::Identity(), /*closesLoop=*/true);
+    EvaluateResult result = Evaluate(graph);
+    REQUIRE(result.ok);
+    REQUIRE(result.panels.size() == 4);
+    const RegionPanelLayout *seg0 = nullptr, *seg1 = nullptr, *seg2 = nullptr, *seg3 = nullptr;
+    for (auto& p : result.panels) {
+      if (p.regionPanelId == "seg0") seg0 = &p;
+      if (p.regionPanelId == "seg1") seg1 = &p;
+      if (p.regionPanelId == "seg2") seg2 = &p;
+      if (p.regionPanelId == "seg3") seg3 = &p;
+    }
+    REQUIRE(seg0 != nullptr);
+    REQUIRE(seg1 != nullptr);
+    REQUIRE(seg2 != nullptr);
+    REQUIRE(seg3 != nullptr);
+    return {PlaneDistance(*seg0, *seg2), PlaneDistance(*seg1, *seg3)};
+  };
+
+  auto [refA, refB] = measure(0.0);
+  INFO("radius=0 (reference) seg0-seg2=" << refA << " seg1-seg3=" << refB);
+  for (double radiusMm : {0.5, 1.0, 1.5, 3.0}) {
+    auto [a, b] = measure(radiusMm);
+    INFO("radiusMm=" << radiusMm << " seg0-seg2=" << a << " (reference=" << refA << ") "
+                      << "seg1-seg3=" << b << " (reference=" << refB << ")");
+    CHECK(a == Approx(refA).margin(1e-6));
+    CHECK(b == Approx(refB).margin(1e-6));
+  }
+}
+
+// TEMP DIAGNOSTIC (docs/BUG_REPORT_complex_panel_bend_surfaces.md
+// investigation): the "opposite-wall spacing stays fixed" test above has
+// ONLY ever been run with angleDeg=90 (mountain / concave bottom). This
+// runs the identical check for angleDeg=-90 (valley / convex bottom) to see
+// whether the right-SIZE property (not just closure) also holds for that
+// sign combination.
+TEST_CASE("DIAGNOSTIC: N=4 square tube's opposite-wall spacing stays fixed "
+          "regardless of bend radius -- VALLEY fold (angleDeg=-90)",
+          "[translation][closure][envelope][diagnostic]") {
+  double kFactor = 0.4, thicknessMm = 2.0;
+
+  auto measure = [&](double radiusMm) -> std::pair<double, double> {
+    auto graph = MakeStrip(4, 100.0, 50.0, thicknessMm, -90.0, radiusMm, kFactor, 0.0, 0.0,
+                           Transform3::Identity(), /*closesLoop=*/true);
+    EvaluateResult result = Evaluate(graph);
+    REQUIRE(result.ok);
+    REQUIRE(result.panels.size() == 4);
+    const RegionPanelLayout *seg0 = nullptr, *seg1 = nullptr, *seg2 = nullptr, *seg3 = nullptr;
+    for (auto& p : result.panels) {
+      if (p.regionPanelId == "seg0") seg0 = &p;
+      if (p.regionPanelId == "seg1") seg1 = &p;
+      if (p.regionPanelId == "seg2") seg2 = &p;
+      if (p.regionPanelId == "seg3") seg3 = &p;
+    }
+    REQUIRE(seg0 != nullptr);
+    REQUIRE(seg1 != nullptr);
+    REQUIRE(seg2 != nullptr);
+    REQUIRE(seg3 != nullptr);
+    return {PlaneDistance(*seg0, *seg2), PlaneDistance(*seg1, *seg3)};
+  };
+
+  auto [refA, refB] = measure(0.0);
+  INFO("radius=0 (reference) seg0-seg2=" << refA << " seg1-seg3=" << refB);
+  for (double radiusMm : {0.5, 1.0, 1.5, 3.0}) {
+    auto [a, b] = measure(radiusMm);
+    INFO("radiusMm=" << radiusMm << " seg0-seg2=" << a << " (reference=" << refA << ") "
+                      << "seg1-seg3=" << b << " (reference=" << refB << ")");
+    WARN("VALLEY radiusMm=" << radiusMm << " a=" << a << " b=" << b << " refA=" << refA
+         << " refB=" << refB << " diffA=" << (a - refA) << " diffB=" << (b - refB));
+    CHECK(a == Approx(refA).margin(1e-6));
+    CHECK(b == Approx(refB).margin(1e-6));
+  }
+}
+
+// axisInPlaneOffset's formula (manufacturing_graph_evaluator.cc) is
+// D*tan(angleRad/2) with D = bottomIsConcave ? +radiusMm : -radiusMm and
+// angleRad using angleDeg's own signed value — never a magnitude-only
+// |angleDeg| shortcut. Every closure/envelope test elsewhere in this file
+// leaves bottomIsConcave unset, so bottomIsConcave and angleDeg's sign are
+// always aligned via the angleDeg>=0 fallback — none of them can catch a
+// regression to the |angleDeg| shortcut, since D and angleRad's signs
+// cancel identically either way in the aligned case. This test explicitly
+// sets bottomIsConcave OPPOSITE to what the fallback would choose for a
+// negative angleDeg (concave=true at angleDeg=-90, where the fallback would
+// say convex) — a mismatched pair the |angleDeg| shortcut gets backwards
+// but the signed formula still gets right. If envelope preservation still
+// holds here, the code is reading bottomIsConcave itself, not re-deriving
+// it from angleDeg's sign.
+TEST_CASE("GraphEvaluator: N=4 square tube's opposite-wall spacing stays fixed "
+          "regardless of bend radius -- bottomIsConcave explicitly set OPPOSITE "
+          "to the angleDeg-sign fallback",
+          "[translation][closure][envelope]") {
+  double kFactor = 0.4, thicknessMm = 2.0;
+
+  auto measure = [&](double radiusMm) -> std::pair<double, double> {
+    auto graph = MakeStrip(4, 100.0, 50.0, thicknessMm, -90.0, radiusMm, kFactor, 0.0, 0.0,
+                           Transform3::Identity(), /*closesLoop=*/true);
+    for (auto& bend : graph.bends) {
+      bend.bottomIsConcave = true;  // fallback (angleDeg=-90 < 0) would say false
+    }
     EvaluateResult result = Evaluate(graph);
     REQUIRE(result.ok);
     REQUIRE(result.panels.size() == 4);
@@ -566,6 +685,10 @@ TEST_CASE("GraphEvaluator: N=3..9 triangle-through-nonagon prisms all close",
 // driver reproducing these JSON cases through the MCP layer knows in advance
 // which construction to use, instead of discovering a false "TS-layer bug"
 // from a mismatch that is actually just this formula-domain gap.
+//
+// Mountain is angleDeg<0 (bottomIsConcave's fallback polarity — see that
+// function's own comment), NOT angleDeg>=0 as an earlier version of this
+// test assumed.
 TEST_CASE("GraphEvaluator: sharp (r=0) N=3 closure — mountain matches the "
           "suite's independent zero-reference formula exactly; valley does "
           "NOT (real thickness-scale pivot offset), though both self-close",
@@ -574,10 +697,11 @@ TEST_CASE("GraphEvaluator: sharp (r=0) N=3 closure — mountain matches the "
   const double bendDeg = 120.0;  // 360/3
 
   // closure_family.mjs's own checkpoint formula (independent re-derivation,
-  // dirSign=+1 here — matches this test's "mountain" construction directly;
-  // the JSON suite's "down" cases instead mirror the whole construction via a
-  // world anchor rather than negating angleDeg — see this TEST_CASE's own
-  // banner comment and the companion "up"/"down" anchor-mirror test below).
+  // dirSign matches whichever angleDeg sign is actually under test in each
+  // SECTION below; the JSON suite's "down" cases instead mirror the whole
+  // construction via a world anchor rather than negating angleDeg — see this
+  // TEST_CASE's own banner comment and the companion "up"/"down" anchor-
+  // mirror test below).
   auto zeroReferenceCheckpoint1 = [&](double dirSign) -> Point3 {
     double theta = 2.0 * kTestPi / 3.0;
     double vx = L, vz = 0.0;  // V_1 = L * d(0) = L*(1,0,0)
@@ -585,25 +709,7 @@ TEST_CASE("GraphEvaluator: sharp (r=0) N=3 closure — mountain matches the "
     return {vx + 2.0 * L * dkx, 0.0, vz + 2.0 * L * dkz};
   };
 
-  SECTION("mountain (angleDeg=+bendDeg): exact match to the zero-reference formula") {
-    auto graph = MakeStrip(3, L, widthMm, thicknessMm, bendDeg, /*radiusMm=*/0.0,
-                           /*kFactor=*/0.0, 0.0, 0.0, Transform3::Identity(),
-                           /*closesLoop=*/false);
-    EvaluateResult result = Evaluate(graph);
-    REQUIRE(result.ok);
-    const RegionPanelLayout* seg1 = nullptr;
-    for (auto& p : result.panels) if (p.regionPanelId == "seg1") seg1 = &p;
-    REQUIRE(seg1 != nullptr);
-
-    double z = 0.0;  // bottom surface — meaningful check for nonzero R
-    CHECK(z == Approx(0.0).margin(1e-12));  // mountain at r=0: pivot sits exactly on bottomFace
-    Point3 got = seg1->pose.Apply({3.0 * L, 0.0, z});
-    Point3 expected = zeroReferenceCheckpoint1(+1.0);
-    CHECK(Dist(got, expected) < 1e-6);
-  }
-
-  SECTION("valley (angleDeg=-bendDeg): self-consistent closure, but a real "
-          "thicknessMm-scale gap from the zero-reference formula") {
+  SECTION("mountain (angleDeg=-bendDeg): exact match to the zero-reference formula") {
     auto graph = MakeStrip(3, L, widthMm, thicknessMm, -bendDeg, /*radiusMm=*/0.0,
                            /*kFactor=*/0.0, 0.0, 0.0, Transform3::Identity(),
                            /*closesLoop=*/false);
@@ -614,9 +720,27 @@ TEST_CASE("GraphEvaluator: sharp (r=0) N=3 closure — mountain matches the "
     REQUIRE(seg1 != nullptr);
 
     double z = TestPivotZOffset(-bendDeg, 0.0, thicknessMm);
-    CHECK(z == Approx(thicknessMm).margin(1e-12));  // valley at r=0: pivot is thicknessMm off bottomFace
+    CHECK(z == Approx(0.0).margin(1e-12));  // mountain at r=0: pivot sits exactly on bottomFace
     Point3 got = seg1->pose.Apply({3.0 * L, 0.0, z});
     Point3 expected = zeroReferenceCheckpoint1(-1.0);
+    CHECK(Dist(got, expected) < 1e-6);
+  }
+
+  SECTION("valley (angleDeg=+bendDeg): self-consistent closure, but a real "
+          "thicknessMm-scale gap from the zero-reference formula") {
+    auto graph = MakeStrip(3, L, widthMm, thicknessMm, bendDeg, /*radiusMm=*/0.0,
+                           /*kFactor=*/0.0, 0.0, 0.0, Transform3::Identity(),
+                           /*closesLoop=*/false);
+    EvaluateResult result = Evaluate(graph);
+    REQUIRE(result.ok);
+    const RegionPanelLayout* seg1 = nullptr;
+    for (auto& p : result.panels) if (p.regionPanelId == "seg1") seg1 = &p;
+    REQUIRE(seg1 != nullptr);
+
+    double z = TestPivotZOffset(bendDeg, 0.0, thicknessMm);
+    CHECK(z == Approx(thicknessMm).margin(1e-12));  // valley at r=0: pivot is thicknessMm off bottomFace
+    Point3 got = seg1->pose.Apply({3.0 * L, 0.0, z});
+    Point3 expected = zeroReferenceCheckpoint1(+1.0);
     // Real, expected gap — NOT a bug: documents exactly why a suite driver
     // must author "sharp" strips as mountain folds (with a mirrored world
     // anchor for the opposite direction) rather than negating angleDeg.
@@ -631,7 +755,7 @@ TEST_CASE("GraphEvaluator: sharp (r=0) N=3 closure — mountain matches the "
           "mirror since its X component happens to be exactly zero — see the "
           "N=4 section below, where a nonzero X finally tells them apart)") {
     Transform3 mirror = Transform3::RotationAboutAxis({0, 0, 0}, {1, 0, 0}, 180.0);
-    auto graph = MakeStrip(3, L, widthMm, thicknessMm, bendDeg, /*radiusMm=*/0.0,
+    auto graph = MakeStrip(3, L, widthMm, thicknessMm, -bendDeg, /*radiusMm=*/0.0,
                            /*kFactor=*/0.0, 0.0, 0.0, mirror, /*closesLoop=*/false);
     EvaluateResult result = Evaluate(graph);
     REQUIRE(result.ok);
@@ -639,15 +763,15 @@ TEST_CASE("GraphEvaluator: sharp (r=0) N=3 closure — mountain matches the "
     for (auto& p : result.panels) if (p.regionPanelId == "seg1") seg1 = &p;
     REQUIRE(seg1 != nullptr);
 
-    double z = 0.0;  // bottom surface — meaningful check for nonzero R
+    double z = TestPivotZOffset(-bendDeg, 0.0, thicknessMm);
     Point3 got = seg1->pose.Apply({3.0 * L, 0.0, z});
-    Point3 expected = zeroReferenceCheckpoint1(-1.0);  // the suite's "down" checkpoint
+    Point3 expected = zeroReferenceCheckpoint1(+1.0);  // the suite's "down" checkpoint
     CHECK(Dist(got, expected) < 1e-6);
   }
 
   SECTION("N=4 confirms 180deg-about-X (not -Y) is the correct mirror once X "
           "is nonzero at a checkpoint") {
-    const double L4 = 60.0, w4 = 40.0, t4 = 1.0, bend4 = 90.0;  // 360/4
+    const double L4 = 60.0, w4 = 40.0, t4 = 1.0, bend4 = -90.0;  // 360/4, mountain
     Transform3 mirrorX = Transform3::RotationAboutAxis({0, 0, 0}, {1, 0, 0}, 180.0);
     auto graph = MakeStrip(4, L4, w4, t4, bend4, /*radiusMm=*/0.0, /*kFactor=*/0.0,
                            0.0, 0.0, mirrorX, /*closesLoop=*/false);
@@ -658,7 +782,7 @@ TEST_CASE("GraphEvaluator: sharp (r=0) N=3 closure — mountain matches the "
     auto d4 = [&](int j, double dirSign) -> std::array<double, 2> {
       return {std::cos(j * theta4), dirSign * std::sin(j * theta4)};
     };
-    double z = 0.0;  // bottom surface — meaningful check for nonzero R
+    double z = TestPivotZOffset(bend4, 0.0, t4);  // mountain (bend4<0): pivot at bottomFace
     // The width-side query must use LOCAL y=-widthMm: mirrorX negates the
     // flat pattern's own Y axis too, so +widthMm in local space lands at
     // world y=-widthMm — querying the negated local Y compensates exactly
@@ -670,11 +794,11 @@ TEST_CASE("GraphEvaluator: sharp (r=0) N=3 closure — mountain matches the "
 
       double vx = 0.0, vz = 0.0;
       for (int j = 0; j < k; ++j) {
-        auto dPrev = d4(j, -1.0);
+        auto dPrev = d4(j, 1.0);
         vx += L4 * dPrev[0];
         vz += L4 * dPrev[1];
       }
-      auto dk = d4(k, -1.0);
+      auto dk = d4(k, 1.0);
       double ex = vx + (4 - k) * L4 * dk[0];
       double ez = vz + (4 - k) * L4 * dk[1];
 
@@ -1090,20 +1214,20 @@ TEST_CASE("GraphEvaluator: bend allowance shifts the child's subtree, leaves "
     CHECK(t.z == Approx(thicknessMm).margin(1e-9));
   }
 
-  // Child-side landing point (docs/BUG_REPORT_reconstructed_envelope_grows_
-  // with_bend_radius.md). Rotating seg1's own bend-adjacent bottomFace/
-  // topFace BACK by the bridge's own angle, about the bridge's own axis,
-  // used to land it exactly on the raw hinge vertex — that was only true
-  // because the child's own local frame wasn't extended at all. Now it's
-  // extended by 2x this bend's own setback (radiusMm*tan(|angleDeg|/2)) —
-  // the same per-bend, purely local quantity that also moves the axis — so
-  // unfolding lands 2x setback further out along nLeft than the raw hinge,
-  // never short of it, on either surface.
+  // Child-side landing point. Rotating seg1's own bend-adjacent bottomFace/
+  // topFace BACK by the bridge's own angle, about the bridge's own TRUE
+  // axis, does NOT land exactly on the raw hinge vertex — childPose rotates
+  // the child about the SHARP (raw-hinge) axis, not the bridge's true axis,
+  // so unfolding by the bridge's own rotation lands 2x this bend's own
+  // setback (radiusMm*tan(|angleDeg|/2)) SHORT of the raw hinge along nLeft
+  // (BuildBendCuts's own tangent point is pre-compensated by exactly this
+  // amount so the WALL — not the raw hinge — ends up tangent to the true
+  // axis; unfolding undoes the rotation but not that pre-compensation).
   Point2 hingeDir{bend.hingeB.x - bend.hingeA.x, bend.hingeB.y - bend.hingeA.y};
   double hingeDirLen = std::sqrt(hingeDir.x * hingeDir.x + hingeDir.y * hingeDir.y);
   Point2 nLeft{-hingeDir.y / hingeDirLen, hingeDir.x / hingeDirLen};
   double setbackMm = bend.radiusMm * std::tan(std::fabs(bend.angleDeg) * kTestPi / 180.0 / 2.0);
-  double extend = 2.0 * setbackMm;
+  double extend = -2.0 * setbackMm;
 
   Transform3 unfold = Transform3::RotationAboutAxis(bridge.pivotOriginWorld,
                                                       bridge.pivotAxisWorld, -bridge.angleDeg);
@@ -1263,7 +1387,7 @@ TEST_CASE("GraphEvaluator: parent AND child wall edges sit exactly "
     REQUIRE(seg0 != nullptr);
     REQUIRE(seg1 != nullptr);
 
-    bool concave = angleDeg >= 0.0;
+    bool concave = angleDeg < 0.0;  // matches BottomIsConcave's fallback polarity
     double rBottom = concave ? radiusMm : radiusMm + thicknessMm;
     double rTop = concave ? radiusMm + thicknessMm : radiusMm;
     double setbackMm = radiusMm * std::tan(std::fabs(angleDeg) * kTestPi / 180.0 / 2.0);
@@ -1479,7 +1603,7 @@ TEST_CASE("GraphEvaluator: bend geometry measured directly off the two "
     // not the rotation/composition step under test) — sqrt(setback^2 +
     // radius^2), same relationship as the probe test above, since the
     // child's own edge sits `setbackMm` off the axis's in-plane position.
-    bool concave = angleDeg >= 0.0;
+    bool concave = angleDeg < 0.0;  // matches BottomIsConcave's fallback polarity
     double rBottom = concave ? radiusMm : radiusMm + thicknessMm;
     double rTop = concave ? radiusMm + thicknessMm : radiusMm;
     double expectedBottom = std::sqrt(setbackMm * setbackMm + rBottom * rBottom);
@@ -1570,7 +1694,7 @@ TEST_CASE("GraphEvaluator: partial-width (T-shaped) seam wall edges sit exactly 
     REQUIRE(parent != nullptr);
     REQUIRE(child != nullptr);
 
-    bool concave = angleDeg >= 0.0;
+    bool concave = angleDeg < 0.0;  // matches BottomIsConcave's fallback polarity
     double rBottom = concave ? radiusMm : radiusMm + thicknessMm;
     double rTop = concave ? radiusMm + thicknessMm : radiusMm;
     double setbackMm = radiusMm * std::tan(std::fabs(angleDeg) * kTestPi / 180.0 / 2.0);
@@ -1993,6 +2117,304 @@ TEST_CASE("GraphEvaluator: a bend whose hinge is shorter than its own panel "
     INFO(bridge->bendId << "'s own closest wall-tagged point to the true miter ("
          << trueMiter.x << ", " << trueMiter.y << ") is " << bestDist << "mm away");
     CHECK(found);
+  }
+}
+
+// DIAGNOSTIC (rebuild/20-bend-bridge-geometry.md Ch. 5 Phase 2 investigation):
+// reproduces the exact Chapter 5 counterexample fixture (single 90deg bend,
+// r=t=0.95mm, outline (0,0)-(20,40), hinge at y=20, child below) and reports
+// each of the child panel's own tangent-line points' distance from the axis
+// childPose ACTUALLY rotates about (bridge.pivotOriginWorld/pivotAxisWorld),
+// via wallBottomFace/wallTopFace (the "already correctly trimmed" values)
+// -- checking directly whether they land at the expected radius (r or R) or
+// not, rather than assuming either.
+TEST_CASE("GraphEvaluator: DIAGNOSTIC -- Chapter 5 counterexample fixture, "
+          "wallBottomFace/wallTopFace tangency against the real pivot axis",
+          "[translation][diagnostic]") {
+  PartGraphSpec graph;
+  graph.partId = "test-part";
+  graph.rootRegionPanelId = "parent";
+  graph.thicknessMm = 0.95;
+  graph.outline.outer = {{0, 0}, {20, 0}, {20, 40}, {0, 40}};
+
+  BendSpec bend;
+  bend.id = "bend0";
+  bend.parentRegionPanelId = "parent";
+  bend.childRegionPanelId = "child";
+  bend.hingeA = {20, 20};
+  bend.hingeB = {0, 20};
+  bend.angleDeg = 90.0;
+  bend.radiusMm = 0.95;
+  bend.kFactor = 0.0;
+  graph.bends.push_back(bend);
+
+  EvaluateResult result = Evaluate(graph);
+  REQUIRE(result.ok);
+  REQUIRE(result.panels.size() == 2);
+  REQUIRE(result.bridges.size() == 1);
+
+  const RegionPanelLayout* child = nullptr;
+  const RegionPanelLayout* parent = nullptr;
+  for (auto& p : result.panels) {
+    if (p.regionPanelId == "child") child = &p;
+    if (p.regionPanelId == "parent") parent = &p;
+  }
+  REQUIRE(child != nullptr);
+  REQUIRE(parent != nullptr);
+  const BridgeLayout& bridge = result.bridges[0];
+
+  for (size_t i = 0; i < parent->wallOuter.size(); ++i) {
+    const Point3& b = parent->wallBottomFace[i];
+    const Point3& t = parent->wallTopFace[i];
+    WARN("parent wallOuter[" << i << "]=(" << parent->wallOuter[i].x << ","
+         << parent->wallOuter[i].y << ") edgeBendId=" << parent->wallEdgeBendId[i]
+         << " wallBottomFace=(" << b.x << "," << b.y << "," << b.z << ")"
+         << " wallTopFace=(" << t.x << "," << t.y << "," << t.z << ")");
+  }
+
+  INFO("pivotOriginWorld=(" << bridge.pivotOriginWorld.x << "," << bridge.pivotOriginWorld.y
+       << "," << bridge.pivotOriginWorld.z << ")");
+  INFO("pivotAxisWorld=(" << bridge.pivotAxisWorld.x << "," << bridge.pivotAxisWorld.y << ","
+       << bridge.pivotAxisWorld.z << ")");
+  INFO("setbackMm=" << bridge.setbackMm << " angleDeg=" << bridge.angleDeg);
+  INFO("childNLeftWorld=(" << bridge.childNLeftWorld.x << "," << bridge.childNLeftWorld.y << ","
+       << bridge.childNLeftWorld.z << ")");
+  WARN("expected inner radius(r)=0.95, outer radius(R=r+t)=1.9");
+
+  auto distFromAxis = [&](const Point3& p) -> double {
+    Point3 v{p.x - bridge.pivotOriginWorld.x, p.y - bridge.pivotOriginWorld.y,
+             p.z - bridge.pivotOriginWorld.z};
+    double along = v.x * bridge.pivotAxisWorld.x + v.y * bridge.pivotAxisWorld.y +
+                    v.z * bridge.pivotAxisWorld.z;
+    Point3 perp{v.x - along * bridge.pivotAxisWorld.x, v.y - along * bridge.pivotAxisWorld.y,
+                v.z - along * bridge.pivotAxisWorld.z};
+    return std::sqrt(perp.x * perp.x + perp.y * perp.y + perp.z * perp.z);
+  };
+
+  for (size_t i = 0; i < child->wallOuter.size(); ++i) {
+    const Point3& b = child->wallBottomFace[i];
+    const Point3& t = child->wallTopFace[i];
+    WARN("wallOuter[" << i << "]=(" << child->wallOuter[i].x << "," << child->wallOuter[i].y
+         << ") edgeBendId=" << child->wallEdgeBendId[i]
+         << " wallBottomFace=(" << b.x << "," << b.y << "," << b.z << ") dist=" << distFromAxis(b)
+         << " wallTopFace=(" << t.x << "," << t.y << "," << t.z << ") dist=" << distFromAxis(t));
+  }
+  for (size_t i = 0; i < child->rawOuter.size(); ++i) {
+    WARN("rawOuter[" << i << "]=(" << child->rawOuter[i].x << "," << child->rawOuter[i].y
+         << ") edgeBendId=" << child->edgeBendId[i]
+         << " bottomFace dist=" << distFromAxis(child->bottomFace[i])
+         << " topFace dist=" << distFromAxis(child->topFace[i]));
+  }
+}
+
+// DIAGNOSTIC, NOT a settled correctness check: distance from the axis (what
+// every other tangency probe in this file checks) is blind to direction -- a
+// point diametrically opposite the correct one is the same distance away and
+// passes identically. This check is stronger (it requires parent's own real
+// wall tangent point, rotated by the bend's own angleDeg about the bridge's
+// true axis, to land EXACTLY on child's own real wall tangent point) but it
+// is STILL NOT SUFFICIENT: it only proves parent and child agree with EACH
+// OTHER, not that the shared axis is in the physically correct place. A
+// formula that places both panels' tangent points outside their own material
+// in the same consistent way passes this check while still being wrong --
+// confirmed directly: this test passes against the current, un-fixed
+// formula, while direct 3D visualization of the same fixture shows the
+// tangent point landing outside the panel. Kept as a partial check and a
+// record of this gap, not as evidence of correctness. Reproduces the exact
+// failing fixture from part_solid_construction_test.cc ("radius==thickness,
+// no wing/T-shape").
+TEST_CASE("GraphEvaluator: DIAGNOSTIC -- parent's wall tangent point, rotated "
+          "by the bend's own angle about the true axis, must land exactly on "
+          "child's wall tangent point",
+          "[translation][diagnostic]") {
+  double thicknessMm = 0.95;
+  double radiusMm = 0.95;
+  double kFactor = 0.4;
+
+  PartGraphSpec graph;
+  graph.partId = "simplest";
+  graph.rootRegionPanelId = "parent";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = Transform3::Identity();
+  graph.outline.outer = {{0, 0}, {20, 0}, {20, 40}, {0, 40}};
+
+  BendSpec bend;
+  bend.id = "bend0";
+  bend.parentRegionPanelId = "parent";
+  bend.childRegionPanelId = "child";
+  bend.hingeA = {20, 20};
+  bend.hingeB = {0, 20};
+  bend.angleDeg = -90.0;
+  bend.radiusMm = radiusMm;
+  bend.kFactor = kFactor;
+  graph.bends.push_back(bend);
+
+  EvaluateResult result = Evaluate(graph);
+  REQUIRE(result.ok);
+  REQUIRE(result.bridges.size() == 1);
+
+  const RegionPanelLayout* parent = nullptr;
+  const RegionPanelLayout* child = nullptr;
+  for (auto& p : result.panels) {
+    if (p.regionPanelId == "parent") parent = &p;
+    if (p.regionPanelId == "child") child = &p;
+  }
+  REQUIRE(parent != nullptr);
+  REQUIRE(child != nullptr);
+  const BridgeLayout& bridge = result.bridges[0];
+
+  Transform3 trueRotation = Transform3::RotationAboutAxis(
+      bridge.pivotOriginWorld, bridge.pivotAxisWorld, bridge.angleDeg);
+
+  auto dist3 = [](const Point3& a, const Point3& b) {
+    return std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) +
+                      (a.z - b.z) * (a.z - b.z));
+  };
+  size_t n = parent->wallOuter.size();
+  size_t nc = child->wallOuter.size();
+  for (size_t i = 0; i < parent->wallEdgeBendId.size(); ++i) {
+    if (parent->wallEdgeBendId[i] != bridge.bendId) continue;
+    size_t i1 = (i + 1) % n;
+    for (size_t ii : {i, i1}) {
+      Point3 predictedBottom = trueRotation.Apply(parent->wallBottomFace[ii]);
+      Point3 predictedTop = trueRotation.Apply(parent->wallTopFace[ii]);
+
+      double bestBottomDist = 1e18, bestTopDist = 1e18;
+      for (size_t j = 0; j < nc; ++j) {
+        bestBottomDist = std::min(bestBottomDist, dist3(predictedBottom, child->wallBottomFace[j]));
+        bestTopDist = std::min(bestTopDist, dist3(predictedTop, child->wallTopFace[j]));
+      }
+      WARN("parent wall vertex " << ii << ": predictedBottom=(" << predictedBottom.x << ","
+           << predictedBottom.y << "," << predictedBottom.z
+           << ") closest child wallBottomFace dist=" << bestBottomDist);
+      WARN("parent wall vertex " << ii << ": predictedTop=(" << predictedTop.x << ","
+           << predictedTop.y << "," << predictedTop.z
+           << ") closest child wallTopFace dist=" << bestTopDist);
+      CHECK(bestBottomDist < 1e-6);
+      CHECK(bestTopDist < 1e-6);
+    }
+  }
+}
+
+// The numeric containment check the self-consistency and distance-only
+// checks above cannot do: does the bend's own tangent point actually land
+// INSIDE the panel it's supposed to trim? Converts each panel's own wall
+// tangent point into the shared 2D flat-pattern coordinate (the same frame
+// BuildBendCuts/wallOuter already use) and runs a point-in-polygon test
+// against that SAME panel's own raw, un-trimmed 2D outline (panel.rawOuter)
+// -- the actual authored material boundary, not a derived/rotated proxy.
+// Reproduces the exact failing fixture from part_solid_construction_test.cc
+// ("radius==thickness, no wing/T-shape").
+TEST_CASE("GraphEvaluator: DIAGNOSTIC -- bend tangent point numerically "
+          "inside each panel's own raw 2D outline (point-in-polygon, not "
+          "distance-from-axis)",
+          "[translation][diagnostic]") {
+  double thicknessMm = 0.95;
+  double radiusMm = 0.95;
+  double kFactor = 0.4;
+
+  PartGraphSpec graph;
+  graph.partId = "simplest";
+  graph.rootRegionPanelId = "parent";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = Transform3::Identity();
+  graph.outline.outer = {{0, 0}, {20, 0}, {20, 40}, {0, 40}};
+
+  BendSpec bend;
+  bend.id = "bend0";
+  bend.parentRegionPanelId = "parent";
+  bend.childRegionPanelId = "child";
+  bend.hingeA = {20, 20};
+  bend.hingeB = {0, 20};
+  bend.angleDeg = -90.0;
+  bend.radiusMm = radiusMm;
+  bend.kFactor = kFactor;
+  graph.bends.push_back(bend);
+
+  EvaluateResult result = Evaluate(graph);
+  REQUIRE(result.ok);
+  REQUIRE(result.bridges.size() == 1);
+
+  const RegionPanelLayout* parent = nullptr;
+  const RegionPanelLayout* child = nullptr;
+  for (auto& p : result.panels) {
+    if (p.regionPanelId == "parent") parent = &p;
+    if (p.regionPanelId == "child") child = &p;
+  }
+  REQUIRE(parent != nullptr);
+  REQUIRE(child != nullptr);
+  const BridgeLayout& bridge = result.bridges[0];
+
+  auto checkPanel = [&](const char* label, const RegionPanelLayout& panel) {
+    int checked = 0;
+    size_t n = panel.wallOuter.size();
+    for (size_t i = 0; i < panel.wallEdgeBendId.size(); ++i) {
+      if (panel.wallEdgeBendId[i] != bridge.bendId) continue;
+      // The tangent line's own endpoints can legitimately sit exactly on
+      // the panel's boundary (e.g. a hinge spanning the panel's full width
+      // touches both side edges) -- a genuine ray-casting ambiguity, not a
+      // containment failure. The edge's MIDPOINT has no such ambiguity: it
+      // is strictly inside the panel if and only if the tangent trim is
+      // correctly positioned.
+      const Point2& a = panel.wallOuter[i];
+      const Point2& b = panel.wallOuter[(i + 1) % n];
+      Point2 mid{(a.x + b.x) / 2.0, (a.y + b.y) / 2.0};
+      bool inside = TestPointInPolygon(mid, panel.rawOuter);
+      WARN(label << " tangent edge midpoint (" << mid.x << "," << mid.y
+           << ") inside own rawOuter=" << (inside ? "true" : "false"));
+      CHECK(inside);
+      ++checked;
+    }
+    CHECK(checked > 0);
+  };
+  checkPanel("parent", *parent);
+  checkPanel("child", *child);
+}
+
+// DIAGNOSTIC (rebuild/20-bend-bridge-geometry.md Ch. 5 Phase 2, EXPERIMENT 3):
+// a genuine 2-bend chain (seg0 -> seg1 -> seg2), checking wallBottomFace/
+// wallTopFace tangency INDEPENDENTLY at each bend, to isolate whether a
+// per-bend correction (bend1, seg0->seg1, no ancestor) behaves differently
+// from a chained one (bend2, seg1->seg2, seg1 already carries bend1's own
+// correction) -- with childExtension's coefficient set to 0.0 (see the
+// pose-walk's own EXPERIMENT 3 comment).
+TEST_CASE("GraphEvaluator: DIAGNOSTIC -- 2-bend chain, wallBottomFace/"
+          "wallTopFace tangency at EACH bend independently",
+          "[translation][diagnostic]") {
+  double radiusMm = 0.95, thicknessMm = 0.95, kFactor = 0.0;
+  auto graph = MakeStrip(3, 20.0, 10.0, thicknessMm, 90.0, radiusMm, kFactor);
+
+  EvaluateResult result = Evaluate(graph);
+  REQUIRE(result.ok);
+  REQUIRE(result.panels.size() == 3);
+  REQUIRE(result.bridges.size() == 2);
+
+  auto distFromAxis = [](const BridgeLayout& bridge, const Point3& p) -> double {
+    Point3 v{p.x - bridge.pivotOriginWorld.x, p.y - bridge.pivotOriginWorld.y,
+             p.z - bridge.pivotOriginWorld.z};
+    double along = v.x * bridge.pivotAxisWorld.x + v.y * bridge.pivotAxisWorld.y +
+                    v.z * bridge.pivotAxisWorld.z;
+    Point3 perp{v.x - along * bridge.pivotAxisWorld.x, v.y - along * bridge.pivotAxisWorld.y,
+                v.z - along * bridge.pivotAxisWorld.z};
+    return std::sqrt(perp.x * perp.x + perp.y * perp.y + perp.z * perp.z);
+  };
+
+  for (const auto& bridge : result.bridges) {
+    const RegionPanelLayout* childPanel = nullptr;
+    for (auto& p : result.panels) {
+      if (p.regionPanelId == bridge.childRegionPanelId) childPanel = &p;
+    }
+    REQUIRE(childPanel != nullptr);
+    WARN("bend=" << bridge.bendId << " parent=" << bridge.parentRegionPanelId
+         << " child=" << bridge.childRegionPanelId);
+    for (size_t i = 0; i < childPanel->wallOuter.size(); ++i) {
+      if (childPanel->wallEdgeBendId[i] != bridge.bendId) continue;
+      WARN("  wallOuter[" << i << "]=(" << childPanel->wallOuter[i].x << ","
+           << childPanel->wallOuter[i].y << ") wallBottomFace dist="
+           << distFromAxis(bridge, childPanel->wallBottomFace[i])
+           << " wallTopFace dist=" << distFromAxis(bridge, childPanel->wallTopFace[i])
+           << " (expected r=" << radiusMm << " R=" << radiusMm + thicknessMm << ")");
+    }
   }
 }
 

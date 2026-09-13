@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 380" font-family="Georgia, serif" font-size="14">
+  <style>
+    .mat { fill:#dce7f2; stroke:#2b3a4a; stroke-width:2; }
+    .neutral { stroke:#b0403a; stroke-width:1.5; stroke-dasharray:6,4; fill:none; }
+    .dim { stroke:#2b3a4a; stroke-width:1; }
+    .lbl { fill:#2b3a4a; }
+    .cap { fill:#5a6b7a; font-size:12; font-style:italic; }
+  </style>
+
+  <!-- LEFT: flat sheet, before bending -->
+  <text x="20" y="24" class="lbl" font-weight="bold">Before bending</text>
+  <rect x="40" y="140" width="220" height="24" class="mat"/>
+  <line x1="40" y1="152" x2="260" y2="152" class="neutral"/>
+  <line x1="30" y1="140" x2="30" y2="164" class="dim"/>
+  <line x1="26" y1="140" x2="34" y2="140" class="dim"/>
+  <line x1="26" y1="164" x2="34" y2="164" class="dim"/>
+  <text x="6" y="156" class="lbl">t</text>
+  <text x="60" y="135" class="lbl">top face (Z=t)</text>
+  <text x="60" y="180" class="lbl">bottom face (Z=0)</text>
+  <text x="60" y="200" class="cap">neutral axis (dashed)</text>
+
+  <!-- RIGHT: after a 90deg bend, geometry rebuilt so legs are PERPENDICULAR to
+       their own radius (tangent), not aligned with it -->
+  <text x="420" y="24" class="lbl" font-weight="bold">After a bend of angle θ</text>
+
+  <!-- Pivot P -->
+  <circle cx="560" cy="140" r="3" fill="#2b3a4a"/>
+  <text x="568" y="136" class="lbl">P</text>
+
+  <!-- Leg 1: vertical strip, tangent at the point directly LEFT of P.
+       Tangent point is 90 deg from P's horizontal, so the leg's own
+       surface (vertical) is perpendicular to the (horizontal) radius. -->
+  <!-- outer tangent point: (560-120,140)=(440,140); inner: (560-90,140)=(470,140) -->
+  <rect x="440" y="140" width="30" height="140" class="mat"/>
+  <text x="330" y="200" class="lbl">leg 1</text>
+
+  <!-- Leg 2: horizontal strip, tangent at the point directly ABOVE P.
+       Tangent point is 90 deg further around; leg surface (horizontal)
+       is perpendicular to the (vertical) radius there. -->
+  <!-- outer tangent point: (560,140-120)=(560,20); inner: (560,140-90)=(560,50) -->
+  <rect x="560" y="20" width="160" height="30" class="mat"/>
+  <text x="700" y="15" class="lbl">leg 2</text>
+
+  <!-- Curved band between the two tangent points, sweeping the upper-left
+       quadrant of the circle centered on P: outer arc (R=120) then back
+       along the inner arc (r=90). -->
+  <path d="M 440 140 A 120 120 0 0 1 560 20 L 560 50 A 90 90 0 0 0 470 140 Z" class="mat"/>
+
+  <!-- radius dimension lines, drawn perpendicular from P to each surface -->
+  <line x1="560" y1="140" x2="470" y2="140" class="dim"/>
+  <text x="495" y="132" class="lbl">r</text>
+  <line x1="560" y1="140" x2="440" y2="140" class="dim" stroke-dasharray="3,3"/>
+  <text x="455" y="158" class="lbl">R = r+t</text>
+
+  <!-- angle theta, measured at P between the two radii to the tangent points -->
+  <path d="M 500 140 A 60 60 0 0 1 560 80" fill="none" stroke="#b0403a" stroke-width="1.5"/>
+  <text x="514" y="120" class="lbl" fill="#b0403a">θ</text>
+
+  <text x="330" y="300" class="cap">outer surface (R=120): farther from P — convex, viewed from outside the bend</text>
+  <text x="330" y="320" class="cap">inner surface (r=90): closer to P — concave, viewed from inside the bend</text>
+  <text x="330" y="345" class="cap">note: each leg's own flat surface is PERPENDICULAR to its radius at the</text>
+  <text x="330" y="362" class="cap">tangent point (that is what tangency means) — not aligned with it.</text>
+</svg>

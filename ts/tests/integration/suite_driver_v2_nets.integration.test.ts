@@ -286,6 +286,12 @@ function authorNet(
         angle_deg: fold.angleDeg,
         radius_mm: 0,
         k_factor: 0,
+        // Explicit, not angleDeg-sign-derived — see file banner ("always a
+        // MOUNTAIN fold... never valley, for the same zero-pivot-offset
+        // reason as the C22 driver"); the fallback's sign convention
+        // (manufacturing_graph_evaluator.hpp's BottomIsConcave) is a
+        // separate concern this suite doesn't want to depend on.
+        bottom_is_concave: true,
       }) as { bend_id: string; child_region_panel_id: string };
       regionPanelIdByFace.set(fold.child, createNodeResult.child_region_panel_id);
       queue.push(fold.child);

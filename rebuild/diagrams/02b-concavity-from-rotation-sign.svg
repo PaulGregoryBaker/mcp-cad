@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 380" font-family="Georgia, serif" font-size="14">
+  <style>
+    .mat { fill:#dce7f2; stroke:#2b3a4a; stroke-width:2; }
+    .lbl { fill:#2b3a4a; }
+    .cap { fill:#5a6b7a; font-size:12; font-style:italic; }
+    .bad { fill:#b0403a; opacity:0.45; }
+    .badStroke { stroke:#b0403a; stroke-width:2; fill:none; }
+    .goodStroke { stroke:#2b6a4a; stroke-width:2; fill:none; }
+    .arrow { marker-end:url(#tip); }
+    .arrowGood { marker-end:url(#tipGood); }
+  </style>
+  <defs>
+    <marker id="tip" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#b0403a"/>
+    </marker>
+    <marker id="tipGood" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#2b6a4a"/>
+    </marker>
+  </defs>
+
+  <!-- ===== LEFT: concave pivot, at the bottom face ===== -->
+  <text x="20" y="24" class="lbl" font-weight="bold">Concave pivot (Z=0, the bottom face — Fact 3.1)</text>
+
+  <rect x="40" y="160" width="200" height="24" class="mat"/>
+  <text x="46" y="176" class="lbl" font-size="12">parent</text>
+  <circle cx="240" cy="184" r="4" fill="#2b3a4a"/>
+  <text x="248" y="200" class="lbl" font-size="12">pivot, at parent's own bottom face</text>
+
+  <!-- invalid direction: child swept up-and-over, overlapping parent's rect -->
+  <path d="M 240 184 Q 150 180 90 168" class="badStroke arrow"/>
+  <rect x="60" y="160" width="180" height="24" class="bad"/>
+  <text x="20" y="140" fill="#b0403a" font-weight="bold" font-size="13">✗ θ&gt;0: child swept this way overlaps</text>
+  <text x="20" y="156" fill="#b0403a" font-weight="bold" font-size="13">parent's own solid immediately — invalid</text>
+
+  <!-- valid direction: child swept down and away, clean -->
+  <path d="M 240 184 Q 260 230 260 280" class="goodStroke arrowGood"/>
+  <rect x="248" y="280" width="24" height="80" class="mat" transform="rotate(4 260 280)"/>
+  <text x="20" y="300" fill="#2b6a4a" font-weight="bold" font-size="13">✓ θ&lt;0: child swept this way stays clear</text>
+  <text x="20" y="316" fill="#2b6a4a" font-weight="bold" font-size="13">of parent — valid → concave bottom</text>
+
+  <!-- ===== RIGHT: convex pivot, at the top face ===== -->
+  <text x="420" y="24" class="lbl" font-weight="bold">Convex pivot (Z=t, the top face — Fact 3.1)</text>
+
+  <rect x="460" y="160" width="200" height="24" class="mat"/>
+  <text x="466" y="176" class="lbl" font-size="12">parent</text>
+  <circle cx="660" cy="160" r="4" fill="#2b3a4a"/>
+  <text x="668" y="150" class="lbl" font-size="12">pivot, at parent's own top face</text>
+
+  <!-- invalid direction: child swept down-and-under, overlapping parent's rect -->
+  <path d="M 660 160 Q 570 168 510 178" class="badStroke arrow"/>
+  <rect x="480" y="160" width="180" height="24" class="bad"/>
+  <text x="440" y="140" fill="#b0403a" font-weight="bold" font-size="13">✗ θ&lt;0: child swept this way overlaps</text>
+  <text x="440" y="156" fill="#b0403a" font-weight="bold" font-size="13">parent's own solid immediately — invalid</text>
+
+  <!-- valid direction: child swept up and away, clean -->
+  <path d="M 660 160 Q 680 120 680 70" class="goodStroke arrowGood"/>
+  <rect x="668" y="10" width="24" height="80" class="mat" transform="rotate(-4 680 90)"/>
+  <text x="440" y="290" fill="#2b6a4a" font-weight="bold" font-size="13">✓ θ≥0: child swept this way stays clear</text>
+  <text x="440" y="306" fill="#2b6a4a" font-weight="bold" font-size="13">of parent — valid → convex bottom</text>
+
+  <text x="20" y="345" class="cap">A rotation that runs the child's own material through the parent's solid is not a real bend — only</text>
+  <text x="20" y="361" class="cap">one sign of θ is clear of the parent for a given pivot, and that sign is what Fact 2.1 pins to concavity.</text>
+</svg>

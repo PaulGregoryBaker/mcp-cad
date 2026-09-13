@@ -110,6 +110,11 @@ d('[v2] merge_bodies_with_bend — T-shaped, asymmetric (partial-run) seam', () 
     const merged = dispatchGraphTool(store, 'merge_bodies_with_bend', {
       part_a_id: plate.part_id,
       part_b_id: flange.part_id,
+      // Explicit: this fixture's DetectContact-derived angleDeg sign
+      // doesn't reliably predict which side is concave (evaluate-client.ts's
+      // MergePartsWithBendInput.bottomIsConcave doc comment) — confirmed
+      // this fold is mountain/concave via the constructed bbox check below.
+      bottom_is_concave: true,
     }) as MergeToolResult;
     expect(merged.part_id).toBe(plate.part_id);
     expect(merged.bend_id).toBeTruthy();

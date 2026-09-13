@@ -25,9 +25,15 @@ bool NearlyEqual2(const Point2& a, const Point2& b) {
 
 // Whether this bend's bottom (z=0) reference is the concave side — same rule
 // as manufacturing_graph_evaluator.cc's BottomIsConcave (mirrored, not
-// shared — see this module's own header comment on why).
+// shared — see this module's own header comment on why). Fallback polarity
+// must track that function's own exactly: it was found backward there
+// (rebuild/20-bend-bridge-geometry.md) and fixed to angleDeg<0 — this
+// mirrored copy was missed in that fix, which silently desynced this
+// module's own tangent-shift formula from Evaluate()'s wallOuter for any
+// bend relying on the fallback (caught by this file's own
+// "flush side matches Evaluate()'s own wallOuter" cross-check test).
 bool BottomIsConcave(const BendSpec& bend) {
-  return bend.bottomIsConcave.has_value() ? *bend.bottomIsConcave : (bend.angleDeg >= 0.0);
+  return bend.bottomIsConcave.has_value() ? *bend.bottomIsConcave : (bend.angleDeg < 0.0);
 }
 
 struct GroundedLine {

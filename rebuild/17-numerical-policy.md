@@ -54,7 +54,7 @@ fixed rather than tunable:
 | `BOOLEAN_FUZZ_MM` | `1e-5` | Kernel-internal noise floor (Port C/D, 16). The v1 bug (0.15 mm silently discarding ~50% of volume once kerf detail existed) is exactly what happens when this is treated as tunable. **Scales with the smallest feature present, not part size** — see §2.1. |
 | `COLLINEARITY_EPSILON` | fixed, small (cross-product-based) | Used by the region-clipping algorithm (14 §2.1/OPEN-D2.6) to detect degenerate/near-zero-area slivers. Purely a numerical-robustness constant. |
 | `ZERO_LENGTH_EPSILON_MM` | fixed, small | Detects degenerate edges/hinges during import reconciliation (13 §6) and outline editing (K2). |
-| `MERGE_EDGE_ALIGNMENT_TOLERANCE_MM` | ~2 mm (v1 evidence) | The adjacency gate for "close enough to share a bend edge" during `merge_bodies_with_bend` (14 §2.1.2). `[OPEN-17.1]` this one is borderline — see §4. |
+| `MERGE_EDGE_ALIGNMENT_TOLERANCE_MM` | ~2 mm (v1 evidence) | The adjacency gate for "close enough to share a bend edge" during `merge_bodies_with_bend` (14 §2.1.2). Stays fixed — `OPEN-17.1` resolved (§7): this is genuinely an import-noise floor, not a judgment call, once it isn't also asked to decide which of two rigid-transform hypotheses is true (that's a different, tighter, `kCoplanarLinearToleranceMm`-class decision — see `step_reconciliation.cc`'s `kSelfConsistencyToleranceMm`, rebuild/20-bend-bridge-geometry.md Ch. 6d). |
 
 ### 2.1 Why boolean fuzz is a *relative*, not absolute, constant
 
@@ -121,12 +121,20 @@ second source for them.
 
 ## 7. Open points
 
-- `[OPEN-17.1]` `MERGE_EDGE_ALIGNMENT_TOLERANCE_MM` (~2 mm) sits oddly among the
-  other fixed constants — 2 mm is much coarser than a numerical-noise floor, and
-  arguably *is* a judgment call about "how close is close enough to call two edges
-  the same seam," which sounds more like an N11-profile concern than a fixed
-  robustness constant. Needs a decision: keep fixed (simpler, matches v1 practice) or
-  move into the tolerance profile as a named budget (`seamAlignmentMm`)?
+- `[OPEN-17.1]` **Resolved.** `MERGE_EDGE_ALIGNMENT_TOLERANCE_MM` (~2 mm) originally
+  looked like a judgment call because `step_reconciliation.cc`'s own mirror of it,
+  `kSelfConsistencyToleranceMm`, was sharing the exact same 2 mm value for a *different*
+  question: not "are these two edges close enough to be the same seam" (genuine
+  import-noise robustness — this constant's real job) but "which of two candidate
+  rigid-transform hypotheses (concave vs. convex pivot) actually matches this piece's
+  measured position" (a geometric-fact decision, which needs a tighter, precedented
+  tolerance — see `kCoplanarLinearToleranceMm`, 0.1mm). Conflating the two made the
+  geometric-fact decision impossible to get right for realistic material thickness
+  (derivation + fix: `rebuild/20-bend-bridge-geometry.md` Ch. 6d). Once split, this
+  constant is exactly what its name says — an import-noise floor — and stays fixed, not
+  moved into the tolerance profile. The general lesson: a tolerance shared between an
+  adjacency/robustness check and a which-hypothesis-is-true check is a smell, not a
+  convenience — split them before concluding either one needs to be tunable.
 - `[OPEN-17.2]` Exact numeric values for `COLLINEARITY_EPSILON` and
   `ZERO_LENGTH_EPSILON_MM` are named but not pinned to a specific number in this
   doc — v1 evidence didn't surface explicit values for these the way it did for

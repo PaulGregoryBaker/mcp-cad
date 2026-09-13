@@ -24,9 +24,47 @@ namespace {
 // already-established MERGE_EDGE_ALIGNMENT_TOLERANCE_MM precedent
 // (part_merge.hpp, ~2mm, rebuild/17-numerical-policy.md OPEN-17.1) for
 // exactly this "how close is close enough to call two edges the same seam"
-// question, reused here rather than inventing a separate number.
+// question, reused here rather than inventing a separate number. This is
+// the right tolerance for THAT question (is this piece pair even
+// adjacent?) — but doc 20 Ch. 6d found it is the WRONG one for deciding
+// WHICH of the two pivotZ hypotheses is true (tryPivotZ, below): the exact
+// discrepancy this comment describes (up to a couple mm) is precisely what
+// distinguishes concave from convex, so sharing one tolerance between "are
+// these adjacent" and "which hypothesis is true" makes the two
+// indistinguishable — resolves OPEN-17.1 by splitting the two concerns
+// rather than picking one shared number. Adjacency-detection additionally
+// widens this per-pair by 2*max(thicknessA, thicknessB) (below) so a
+// genuinely convex pair — whose true edge sits exactly this far from the
+// naive prediction — is never rejected as non-adjacent before tryPivotZ
+// gets to run at all.
 constexpr double kPieceEdgeMatchToleranceMm = 2.0;
-constexpr double kSelfConsistencyToleranceMm = 2.0;
+// tryPivotZ tries concave FIRST and accepts it outright if within this
+// tolerance, only falling back to convex if concave fails outright — a
+// relative "smaller residual wins" comparison was tried and reverted: it
+// looks more rigorous but actually chases the wrong signal. Real STEP
+// fixtures (testcube.step, cauldron.step, l_bracket_corner_90deg.stp,
+// unequal_leg_bracket_90deg.stp) all show a genuine, real sharp-corner
+// footprint discrepancy up to ~1.4mm on EITHER hypothesis — sometimes
+// concave's own residual is numerically larger than convex's even when
+// concave is the physically correct answer (confirmed independently on
+// testcube.step: downstream, its own real, un-modeled 4th-seam closure
+// gap is exactly 0mm under concave, vs. accepting convex there — smaller
+// self-consistency residual, 0.32mm vs 1.0mm — which breaks that same
+// downstream closure and several merge_bodies_with_bend/fuse_bodies live
+// regressions). So the self-consistency residual is a noisy signal at
+// this scale and the smaller of two noisy numbers isn't a good tie-
+// breaker; concave-tried-first is. This value only needs to (a) absorb
+// every real fixture's own concave-hypothesis noise (confirmed: 0.32-
+// 1.4mm across the fixtures above) and (b) still force the fallback to
+// convex for a genuinely convex fold — matches
+// kPieceEdgeMatchToleranceMm's own ~2mm real-world precedent, and
+// MakeMiteredCornerWithConvexPiece1 (step_reconciliation_test.cc) confirms
+// a real convex fold's concave-vs-convex gap (2*thicknessMm*|sin(angle/2)|)
+// clears 2mm comfortably for any non-microscopically-thin material — that
+// fixture deliberately uses thicknessMm=5 (7.07mm gap) specifically
+// because thicknessMm=1's ~1.41mm gap is indistinguishable from real
+// noise at this scale, not a case this tolerance is meant to resolve.
+constexpr double kSelfConsistencyToleranceMm = kPieceEdgeMatchToleranceMm;
 // Ring vertices closer together than this are collapsed before
 // reconciliation (see SimplifyRing) — the same sharp-corner discrepancy
 // above shows up WITHIN a single panel's own ring as a spurious short edge
@@ -244,11 +282,26 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
   };
   std::vector<AdjacencyEdge> edges;
   {
+    // A genuinely convex fold's hinge-adjacent edge is offset from the
+    // naive (concave) prediction by up to 2*thicknessMm (doc 20 Ch. 6d,
+    // exact bound 2*thicknessMm*|sin(angle/2)|) — real geometry, not import
+    // noise, and it must not be rejected as non-adjacent before tryPivotZ
+    // ever gets to consider the convex hypothesis. The grid cell size is
+    // widened by the largest thickness present so the ±1-neighbour search
+    // still guarantees coverage (see the property this relies on, above);
+    // the per-pair NearlyEqual3 check below uses each pair's own thickness,
+    // tighter than this shared, worst-case grid sizing.
+    double maxThicknessMm = 0.0;
+    for (const auto& piece : simplifiedPieces) {
+      maxThicknessMm = std::max(maxThicknessMm, piece.thicknessMm);
+    }
+    double edgeMatchGridCellSizeMm = kPieceEdgeMatchToleranceMm + 2.0 * maxThicknessMm;
+
     using CellKey = std::array<int64_t, 3>;
-    auto cellOf = [](const Point3& p) -> CellKey {
-      return {static_cast<int64_t>(std::floor(p.x / kPieceEdgeMatchToleranceMm)),
-              static_cast<int64_t>(std::floor(p.y / kPieceEdgeMatchToleranceMm)),
-              static_cast<int64_t>(std::floor(p.z / kPieceEdgeMatchToleranceMm))};
+    auto cellOf = [edgeMatchGridCellSizeMm](const Point3& p) -> CellKey {
+      return {static_cast<int64_t>(std::floor(p.x / edgeMatchGridCellSizeMm)),
+              static_cast<int64_t>(std::floor(p.y / edgeMatchGridCellSizeMm)),
+              static_cast<int64_t>(std::floor(p.z / edgeMatchGridCellSizeMm))};
     };
 
     // Index every piece's every edge by its END point (the "b1" side of the
@@ -278,8 +331,11 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
                 size_t nj = simplifiedPieces[j].ringLocal.size();
                 const Point3& b0 = trueRootLocalRing[j][eb];
                 const Point3& b1 = trueRootLocalRing[j][(eb + 1) % nj];
-                if (NearlyEqual3(a0, b1, kPieceEdgeMatchToleranceMm) &&
-                    NearlyEqual3(a1, b0, kPieceEdgeMatchToleranceMm)) {
+                double pairToleranceMm =
+                    kPieceEdgeMatchToleranceMm +
+                    2.0 * std::max(simplifiedPieces[i].thicknessMm, simplifiedPieces[j].thicknessMm);
+                if (NearlyEqual3(a0, b1, pairToleranceMm) &&
+                    NearlyEqual3(a1, b0, pairToleranceMm)) {
                   edges.push_back({i, ea, j, eb});
                 }
               }
@@ -676,7 +732,8 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
         for (size_t k = 0; k < nc; ++k) {
           Point3 flatK{cFlat[k].x, cFlat[k].y, 0.0};
           Point3 predicted = candidatePose.Apply(flatK);
-          if (!NearlyEqual3(predicted, compTrueRootLocalRing[i][k], kSelfConsistencyToleranceMm)) {
+          const Point3& truth = compTrueRootLocalRing[i][k];
+          if (!NearlyEqual3(predicted, truth, kSelfConsistencyToleranceMm)) {
             return cand;
           }
         }

@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 460" font-family="Georgia, serif" font-size="14">
+  <style>
+    .mat { fill:#dce7f2; stroke:#2b3a4a; stroke-width:2; }
+    .lbl { fill:#2b3a4a; }
+    .cap { fill:#5a6b7a; font-size:12; font-style:italic; }
+    .top { stroke:#c9822a; }
+    .bottom { stroke:#3a6ea5; }
+    .topFill { fill:#c9822a; }
+    .bottomFill { fill:#3a6ea5; }
+  </style>
+
+  <!-- ===== TOP: flat sheet before bending — fixed face colors ===== -->
+  <text x="20" y="24" class="lbl" font-weight="bold">Flat sheet, before bending — fixed convention: top face always orange, bottom always blue</text>
+  <rect x="40" y="40" width="220" height="24" class="mat"/>
+  <line x1="40" y1="41" x2="260" y2="41" class="top" stroke-width="3"/>
+  <line x1="40" y1="63" x2="260" y2="63" class="bottom" stroke-width="3"/>
+  <text x="266" y="46" fill="#c9822a" font-size="12">top face</text>
+  <text x="266" y="68" fill="#3a6ea5" font-size="12">bottom face</text>
+  <line x1="150" y1="35" x2="150" y2="69" stroke="#5a6b7a" stroke-width="1" stroke-dasharray="3,3"/>
+  <text x="130" y="100" class="cap">(dashed: where it will fold)</text>
+
+  <!-- ===== LEFT: Bends up -> convex bottom (top closes to the inside) ===== -->
+  <text x="20" y="150" class="lbl" font-weight="bold">Bends up → convex bottom</text>
+
+  <circle cx="230" cy="320" r="3" fill="#2b3a4a"/>
+  <text x="238" y="316" class="lbl" font-size="12">P (concave side — always here)</text>
+
+  <!-- base: horizontal, fixed (parent), extends left -->
+  <rect x="80" y="390" width="150" height="25" class="mat"/>
+  <!-- riser: vertical, extends up -->
+  <rect x="300" y="200" width="25" height="120" class="mat"/>
+  <!-- band -->
+  <path d="M 325 320 A 95 95 0 0 1 230 415 L 230 390 A 70 70 0 0 0 300 320 Z" class="mat"/>
+
+  <!-- inner (r=70, closer to P) = TOP face here -->
+  <path d="M 300 320 A 70 70 0 0 1 230 390" fill="none" class="top" stroke-width="4" opacity="0.85"/>
+  <!-- outer (R=95, farther) = BOTTOM face here -->
+  <path d="M 325 320 A 95 95 0 0 1 230 415" fill="none" class="bottom" stroke-width="4" opacity="0.5"/>
+
+  <text x="20" y="440" fill="#c9822a" font-weight="bold" font-size="13">top face → inner (closes on the inside)</text>
+  <text x="20" y="456" fill="#3a6ea5" font-size="13">bottom face → outer</text>
+
+  <!-- ===== RIGHT: Bends down -> concave bottom (bottom closes to the inside) ===== -->
+  <text x="470" y="150" class="lbl" font-weight="bold">Bends down → concave bottom</text>
+
+  <circle cx="650" cy="320" r="3" fill="#2b3a4a"/>
+  <text x="658" y="316" class="lbl" font-size="12">P (concave side — always here)</text>
+
+  <!-- base: horizontal, fixed (parent), extends left, above P -->
+  <rect x="500" y="225" width="150" height="25" class="mat"/>
+  <!-- riser: vertical, extends down -->
+  <rect x="720" y="320" width="25" height="120" class="mat"/>
+  <!-- band -->
+  <path d="M 745 320 A 95 95 0 0 0 650 225 L 650 250 A 70 70 0 0 1 720 320 Z" class="mat"/>
+
+  <!-- inner (r=70) = BOTTOM face here -->
+  <path d="M 720 320 A 70 70 0 0 0 650 250" fill="none" class="bottom" stroke-width="4" opacity="0.85"/>
+  <!-- outer (R=95) = TOP face here -->
+  <path d="M 745 320 A 95 95 0 0 0 650 225" fill="none" class="top" stroke-width="4" opacity="0.5"/>
+
+  <text x="470" y="440" fill="#3a6ea5" font-weight="bold" font-size="13">bottom face → inner (closes on the inside)</text>
+  <text x="470" y="456" fill="#c9822a" font-size="13">top face → outer</text>
+</svg>

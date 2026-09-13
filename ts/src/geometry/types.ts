@@ -631,8 +631,8 @@ export interface NapiBendSpec {
   kFactor?: number;
   // Overrides the angleDeg-sign-derived mountain/valley pivot-side
   // classification (manufacturing_graph_evaluator.hpp's own BendSpec
-  // field doc comment has the full rationale). Unset: falls back to the
-  // old isMountain=(angleDeg>=0) rule.
+  // field doc comment has the full rationale). Unset: falls back to
+  // concave=(angleDeg<0).
   bottomIsConcave?: boolean;
   // true (default) if unset: radiusMm is a real, authored/confirmed value.
   // false: step_reconciliation.cc produced this bend and radiusMm is a

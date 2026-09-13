@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 520" font-family="Georgia, serif" font-size="14">
+  <style>
+    .mat { fill:#dce7f2; stroke:#2b3a4a; stroke-width:2; }
+    .lbl { fill:#2b3a4a; }
+    .cap { fill:#5a6b7a; font-size:12; font-style:italic; }
+    .hinge { stroke:#b0403a; stroke-width:1.5; stroke-dasharray:5,4; }
+    .parentT { stroke:#2b6a4a; stroke-width:2.5; }
+    .childT { stroke:#8a4a9a; stroke-width:2.5; }
+    .badT { stroke:#b0403a; stroke-width:2.5; }
+  </style>
+
+  <!-- ===== TOP: self-consistent input (Fact 2.1 satisfied) ===== -->
+  <text x="20" y="24" class="lbl" font-weight="bold">Self-consistent input: axisInPlaneOffset(θ) = r·tan(θ/2), shown here at θ=+90°, r=0.95mm, concave</text>
+
+  <line x1="60" y1="150" x2="740" y2="150" class="hinge"/>
+  <text x="746" y="154" fill="#b0403a" font-size="12">raw hinge S</text>
+
+  <rect x="150" y="40" width="500" height="70" class="mat" opacity="0.5"/>
+  <text x="160" y="60" class="lbl">parent's raw material</text>
+
+  <rect x="150" y="190" width="500" height="70" class="mat" opacity="0.5"/>
+  <text x="160" y="270" class="lbl">child's raw material</text>
+
+  <!-- parent tangent line: stays on parent's own side (above S) -->
+  <line x1="150" y1="120" x2="650" y2="120" class="parentT"/>
+  <text x="660" y="124" fill="#2b6a4a">parent's tangent line — 0.95mm short of S,</text>
+  <text x="660" y="140" fill="#2b6a4a" font-size="12" font-style="italic">stays on parent's own side</text>
+
+  <!-- child tangent line: stays on child's own side (below S) -->
+  <line x1="150" y1="180" x2="650" y2="180" class="childT"/>
+  <text x="660" y="184" fill="#8a4a9a">child's tangent line — 0.95mm short of S,</text>
+  <text x="660" y="200" fill="#8a4a9a" font-size="12" font-style="italic">stays on child's own side</text>
+
+  <line x1="400" y1="150" x2="400" y2="120" stroke="#5a6b7a" stroke-width="1"/>
+  <text x="406" y="138" class="lbl" font-size="12">axisInPlaneOffset = r·tan(θ/2) = 0.95·tan(45°) = 0.95mm</text>
+
+  <text x="20" y="300" class="cap">Neither tangent line reaches the other panel's material, or even the hinge itself. This is</text>
+  <text x="20" y="316" class="cap">the only outcome Chapter 4's formula produces for a self-consistent (concave, θ) pair.</text>
+
+  <!-- ===== BOTTOM: inconsistent input (Fact 2.1 violated) ===== -->
+  <text x="20" y="360" class="lbl" font-weight="bold" fill="#b0403a">Inconsistent input: concave left "true" while θ stored as −90° in the same convention (Fact 2.1: violated)</text>
+
+  <line x1="60" y1="470" x2="740" y2="470" class="hinge"/>
+  <text x="746" y="474" fill="#b0403a" font-size="12">raw hinge S</text>
+
+  <rect x="150" y="400" width="500" height="30" class="mat" opacity="0.5"/>
+  <text x="160" y="418" class="lbl" font-size="12">parent's raw material</text>
+
+  <rect x="150" y="480" width="500" height="30" class="mat" opacity="0.5"/>
+  <text x="160" y="500" class="lbl" font-size="12">child's raw material</text>
+
+  <!-- parent tangent line WRONGLY crosses past S into child's gap -->
+  <line x1="150" y1="490" x2="650" y2="490" class="badT"/>
+  <text x="660" y="480" fill="#b0403a" font-size="12">parent's tangent line — crossed past S</text>
+
+  <!-- child tangent line WRONGLY crosses past S into parent's gap -->
+  <line x1="150" y1="450" x2="650" y2="450" class="badT"/>
+  <text x="660" y="460" fill="#b0403a" font-size="12">child's tangent line — crossed past S</text>
+
+  <text x="20" y="508" class="cap" fill="#b0403a">Not a valid bend — a convention mismatch between concave and θ (Fact 2.1), not a case to support.</text>
+</svg>

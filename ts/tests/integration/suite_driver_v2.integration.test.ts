@@ -119,10 +119,11 @@ function casePose(c: SuiteCase): { rotDeg: number; offsetMm: [number, number] } 
 // construction time to author correct graph rows, never read back by
 // production code). BA=0 always in this suite (every T2 case is "sharp").
 
-function pivotZOffset(angleDeg: number, radiusMm: number, thicknessMm: number): number {
-  const isMountain = angleDeg >= 0;
-  const rBottom = isMountain ? radiusMm : radiusMm + thicknessMm;
-  return isMountain ? -rBottom : rBottom;
+// Every bend in this suite is authored with bottom_is_concave:true explicitly
+// (not angleDeg-sign-derived — see authorStrip's own create_node call), so
+// this oracle always takes the concave branch: pivotZ=-radiusMm.
+function pivotZOffset(radiusMm: number, _thicknessMm: number): number {
+  return -radiusMm;
 }
 
 function applyPose(
@@ -256,6 +257,10 @@ function authorStrip(
       angle_deg: bendDeg, // always mountain — see file banner
       radius_mm: 0,
       k_factor: 0,
+      // Explicit, not angleDeg-sign-derived — same reasoning as the file
+      // banner's "always mountain" note: this suite's zero-pivot-offset
+      // oracle must not depend on BottomIsConcave's angleDeg-sign fallback.
+      bottom_is_concave: true,
     }) as { bend_id: string; child_region_panel_id: string };
     parentRegionPanelId = createNodeResult.child_region_panel_id;
     segRegionPanelIds.push(parentRegionPanelId);
@@ -295,7 +300,7 @@ d('core correctness suite — v2 driver (C22 polygon closure)', () => {
       const byId = new Map<string, NapiRegionPanelLayout>(
         evalResult.panels.map((p) => [p.regionPanelId, p]),
       );
-      const z = pivotZOffset(bendDeg, 0, thicknessMm);
+      const z = pivotZOffset(0, thicknessMm);
       const farX = N * L; // BA=0: no closure correction needed for open checkpoints
       // MIRROR_X_ANCHOR negates the flat-pattern's own Y (width) axis, so the
       // width-side query must use LOCAL y=-widthMm for "down" to land at the
@@ -403,6 +408,7 @@ d('core correctness suite — v2 driver (C22 polygon closure)', () => {
       angle_deg: bendDeg,
       radius_mm: 0,
       k_factor: 0,
+      bottom_is_concave: true,
     }) as { bend_id: string; child_region_panel_id: string };
 
     const evalResult = evaluatePart(store, createPartResult.part_id);
@@ -412,7 +418,7 @@ d('core correctness suite — v2 driver (C22 polygon closure)', () => {
 
     const byId = new Map(evalResult.panels.map((p) => [p.regionPanelId, p]));
     const seg1 = requirePanel(byId, createNodeResult.child_region_panel_id);
-    const z = pivotZOffset(bendDeg, 0, thicknessMm);
+    const z = pivotZOffset(0, thicknessMm);
     const got = applyPose(seg1.pose, { x: 2 * L, y: 0, z });
     // Sharp 90-degree mountain fold at the hinge (x=L): the far corner swings
     // from (2L,0,0) to (L,0,L) — a quarter-turn about the hinge line.

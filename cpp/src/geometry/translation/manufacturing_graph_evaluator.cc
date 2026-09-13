@@ -30,10 +30,28 @@ double DegToRad(double deg) { return deg * kPi / 180.0; }
 // whether the pivot touches it at radiusMm=0. bend.bottomIsConcave, when
 // set, is authoritative (see its own doc comment in the header: it and
 // angleDeg's sign are independent facts). Falls back to the old
-// isMountain=(angleDeg>=0) rule when unset, for graphs authored before
+// isMountain=(angleDeg<0) rule when unset, for graphs authored before
 // this field existed.
+//
+// The sign here was wrong (confirmed by direct 3D inspection, industry-
+// standard-radius cross-check): "inside bend radius" is the universal
+// sheet-metal definition of radiusMm (the tooling/punch radius; outside =
+// inside + thicknessMm, never the other way around, regardless of fold
+// direction — see BottomRadiusMm below). The old `angleDeg >= 0.0` fallback
+// predates this file's pose-walk (childPose rotates about a SHARP,
+// radiusMm=0 axis; the bend's real cylindrical bridge is a separate TRUE
+// axis offset in-plane and in height from it) and no longer matches that
+// pose's actual handedness: for a fixture with angleDeg=-90 the bottom
+// surface is measurably the CONCAVE (inside) one, not convex as the old
+// fallback assumed, and for angleDeg=+90 it is measurably CONVEX (outside)
+// — the exact opposite of "positive=mountain/bottom-inner" the old
+// angleDeg doc comment claimed. Flipping this fallback alone (pivotZ,
+// axisInPlaneOffset's signedD, and sharpZ all keep their original,
+// concave-branching formulas — this was the only wrong piece) reproduces
+// the confirmed-correct axis position and tangent lines for both fold
+// directions.
 bool BottomIsConcave(const BendSpec& bend) {
-  return bend.bottomIsConcave.has_value() ? *bend.bottomIsConcave : (bend.angleDeg >= 0.0);
+  return bend.bottomIsConcave.has_value() ? *bend.bottomIsConcave : (bend.angleDeg < 0.0);
 }
 
 // Radius of the BOTTOM surface (13 D3: what regionOf/DXF maps to). Concave
@@ -48,6 +66,7 @@ double BottomRadiusMm(const BendSpec& bend, double thicknessMm) {
 
 Point2 Sub2(const Point2& a, const Point2& b) { return {a.x - b.x, a.y - b.y}; }
 double Cross2(const Point2& a, const Point2& b) { return a.x * b.y - a.y * b.x; }
+double Dot2(const Point2& a, const Point2& b) { return a.x * b.x + a.y * b.y; }
 double Length2(const Point2& v) { return std::sqrt(v.x * v.x + v.y * v.y); }
 
 // Intersection of the infinite line through (p1, p1+d1) with the infinite
@@ -66,6 +85,12 @@ std::optional<Point2> LineIntersect2(const Point2& p1, const Point2& d1, const P
 // ─── 3D vector helpers ───────────────────────────────────────────────────────
 
 Point3 Sub3(const Point3& a, const Point3& b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
+Point3 Add3(const Point3& a, const Point3& b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
+Point3 Scale3(const Point3& v, double s) { return {v.x * s, v.y * s, v.z * s}; }
+double Dot3(const Point3& a, const Point3& b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+Point3 Cross3(const Point3& a, const Point3& b) {
+  return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+}
 double Length3(const Point3& v) { return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z); }
 Point3 Normalize3(const Point3& v) {
   double len = Length3(v);
@@ -353,6 +378,13 @@ std::pair<std::vector<Point2>, std::vector<EffectiveHinge>> EnsureHingeVertices(
 
 struct BendCut {
   std::string bendId;
+  // Carried through purely so BuildCutEdges' own ring-order normalization
+  // (below) can tell which side of a shared vertex is genuinely this
+  // bend's child territory using the GRAPH's own tree structure, not 2D
+  // geometry sampling — see that normalization loop's own comment for why
+  // geometry sampling alone isn't reliable on a real, many-bend ring.
+  std::string parentRegionPanelId;
+  std::string childRegionPanelId;
   Point2 hingeA, hingeB;
   Point2 childShiftA, childShiftB;
   Point2 parentShiftA, parentShiftB;
@@ -399,11 +431,16 @@ std::vector<BendCut> BuildBendCuts(const PartGraphSpec& graph,
     double sb = zeroOffset ? 0.0 : signedD * std::tan(DegToRad(bend.angleDeg) / 2.0);
     BendCut cut;
     cut.bendId = bend.id;
+    cut.parentRegionPanelId = bend.parentRegionPanelId;
+    cut.childRegionPanelId = bend.childRegionPanelId;
     cut.hingeA = hingeA;
     cut.hingeB = hingeB;
-    // Bit-for-bit the same sideSign/offset convention already verified
-    // elsewhere (part_solid_construction.cc's TrimToTangentLines, before its
-    // own removal): child = -setbackMm along nLeft, parent = +setbackMm.
+    // The panel is posed by a pure rotation about the SHARP (raw hinge,
+    // radiusMm=0) axis; the bend's true, radius-shifted axis is a separate
+    // object (the bridge/cylinder). Verified by direct 3D inspection and a
+    // numeric point-in-polygon check (both panels' tangent points land
+    // inside their own raw 2D outline, not outside) once BottomIsConcave's
+    // fallback polarity was fixed — see that function's own comment.
     cut.childShiftA = {hingeA.x - sb * nLeft.x, hingeA.y - sb * nLeft.y};
     cut.childShiftB = {hingeB.x - sb * nLeft.x, hingeB.y - sb * nLeft.y};
     cut.parentShiftA = {hingeA.x + sb * nLeft.x, hingeA.y + sb * nLeft.y};
@@ -496,23 +533,126 @@ struct CutEdgesResult {
 
 CutEdgesResult BuildCutEdges(const std::vector<Point2>& ring, std::vector<BendCut> cuts) {
   size_t n = ring.size();
-  std::vector<std::vector<size_t>> hingeBAt(n);
-  std::vector<std::vector<size_t>> hingeAAt(n);
+
+  // Match each cut's hingeA/hingeB to their ring positions first — before
+  // any topology bookkeeping depends on which one is which.
   for (size_t c = 0; c < cuts.size(); ++c) {
     for (size_t i = 0; i < n; ++i) {
       if (NearlyEqual2Local(ring[i], cuts[c].hingeB)) {
-        hingeBAt[i].push_back(c);
         cuts[c].iB = static_cast<int>(i);
         break;
       }
     }
     for (size_t i = 0; i < n; ++i) {
       if (NearlyEqual2Local(ring[i], cuts[c].hingeA)) {
-        hingeAAt[i].push_back(c);
         cuts[c].iA = static_cast<int>(i);
         break;
       }
     }
+  }
+
+  // Normalize ring-walk direction, per cut. Everything below this point
+  // assumes "walking the ring FORWARD from hingeA reaches PARENT's own
+  // territory, forward from hingeB reaches CHILD's" — but nothing about a
+  // graph's outline actually requires it to be authored that way; the only
+  // contract a caller's data has to satisfy is the one this whole file
+  // already relies on everywhere else, that child sits on nLeft's own side
+  // of the hinge LINE (BuildBendCuts's own comment: "child = left side").
+  // A caller doesn't control — and this evaluator doesn't get to require —
+  // which of the two hinge-adjacent ring spans happens to be authored
+  // first, so detect which side is actually which and swap this cut's own
+  // A/B-paired fields when its outline was authored the other way round.
+  // Every other rule in this function keys off iA/iB, hingeA/hingeB, and
+  // the *ShiftA/*ShiftB pairs uniformly, so swapping all four together
+  // (never just one) keeps every downstream rule correct without needing
+  // to know which physical direction it's looking at.
+  //
+  // Decided TOPOLOGICALLY first, from the graph's own tree structure, not
+  // by sampling 2D geometry: on a real, many-bend ring (a whole flattened
+  // net, not a single two-flap hinge), the "forward from A" arc can run
+  // through many OTHER bends' own hinge points before ever reaching B, and
+  // averaging (or sampling) their positions against this cut's own nLeft
+  // line is unreliable — those other bends' own territory isn't
+  // constrained to stay on one consistent side of a line that has nothing
+  // to do with them (confirmed on cauldron.step: both an arc-average and a
+  // single-nearest-vertex geometric test produced a wrong swap for one of
+  // several real fixtures, never all of them at once, because neither
+  // reflects a real invariant). The graph itself already has the real
+  // invariant: any OTHER bend whose own hinge vertex falls inside this
+  // arc must, in a well-formed tree, be either (a) strictly inside this
+  // cut's own child subtree — only possible if the arc IS the child's own
+  // territory — or (b) unrelated to it (a sibling or an ancestor's own
+  // bend) — only possible if the arc is the PARENT's remaining territory.
+  // Whichever is found first settles the question outright. Falls back to
+  // the geometric nLeft-sign test only when the arc contains no other
+  // bend's hinge at all (the simple, single-bend case this file's own
+  // early tests exercise) — geometry is reliable there precisely because
+  // there's nothing else on the ring to contaminate the sample.
+  for (size_t c = 0; c < cuts.size(); ++c) {
+    if (cuts[c].iA < 0 || cuts[c].iB < 0) continue;
+    Point2 hingeDir = Sub2(cuts[c].hingeB, cuts[c].hingeA);
+    double hingeLen = Length2(hingeDir);
+    if (hingeLen < kGeometricEpsilon) continue;
+    Point2 nLeft{-hingeDir.y / hingeLen, hingeDir.x / hingeLen};
+
+    size_t iA = static_cast<size_t>(cuts[c].iA);
+    size_t iB = static_cast<size_t>(cuts[c].iB);
+
+    // idx's position strictly between iA and iB, walking forward from iA.
+    auto inOpenForwardArc = [&](size_t idx) {
+      if (idx == iA || idx == iB) return false;
+      size_t rel = (idx + n - iA) % n;
+      size_t endRel = (iB + n - iA) % n;
+      return rel < endRel;
+    };
+
+    bool forwardFromAIsChild = false;
+    bool decided = false;
+    {
+      std::unordered_set<std::string> descendants{cuts[c].childRegionPanelId};
+      bool changed = true;
+      while (changed) {
+        changed = false;
+        for (const auto& other : cuts) {
+          if (descendants.count(other.parentRegionPanelId) &&
+              !descendants.count(other.childRegionPanelId)) {
+            descendants.insert(other.childRegionPanelId);
+            changed = true;
+          }
+        }
+      }
+      for (size_t c2 = 0; c2 < cuts.size(); ++c2) {
+        if (c2 == c) continue;
+        bool aIn = cuts[c2].iA >= 0 && inOpenForwardArc(static_cast<size_t>(cuts[c2].iA));
+        bool bIn = cuts[c2].iB >= 0 && inOpenForwardArc(static_cast<size_t>(cuts[c2].iB));
+        if (!aIn && !bIn) continue;
+        forwardFromAIsChild = descendants.count(cuts[c2].parentRegionPanelId) > 0;
+        decided = true;
+        break;
+      }
+    }
+    if (!decided) {
+      double sumDot = 0.0;
+      size_t count = 0;
+      for (size_t i = (iA + 1) % n; i != iB && count <= n; i = (i + 1) % n, ++count) {
+        Point2 v = Sub2(ring[i], cuts[c].hingeA);
+        sumDot += v.x * nLeft.x + v.y * nLeft.y;
+      }
+      forwardFromAIsChild = count > 0 && sumDot > 0.0;
+    }
+    if (forwardFromAIsChild) {
+      std::swap(cuts[c].hingeA, cuts[c].hingeB);
+      std::swap(cuts[c].childShiftA, cuts[c].childShiftB);
+      std::swap(cuts[c].parentShiftA, cuts[c].parentShiftB);
+      std::swap(cuts[c].iA, cuts[c].iB);
+    }
+  }
+
+  std::vector<std::vector<size_t>> hingeBAt(n);
+  std::vector<std::vector<size_t>> hingeAAt(n);
+  for (size_t c = 0; c < cuts.size(); ++c) {
+    if (cuts[c].iB >= 0) hingeBAt[static_cast<size_t>(cuts[c].iB)].push_back(c);
+    if (cuts[c].iA >= 0) hingeAAt[static_cast<size_t>(cuts[c].iA)].push_back(c);
   }
   // Each cut's own forward span (iB -> iA, in ring order) — the interval-
   // nesting metric: a smaller span is more deeply nested.
@@ -734,6 +874,31 @@ CutEdgesResult BuildCutEdges(const std::vector<Point2>& ring, std::vector<BendCu
     // bridge back to it directly).
     if (hingeAAt[iA].size() > 1 && minSpanOf(hingeAAt[iA]) != ci) continue;
     size_t prevA = (iA + n - 1) % n;
+    // The main-edge-building pass above (`hingeAAt[j]` branch) already pulls
+    // this edge's own endpoint (`edges[prevA].to`) to childShiftA — correct
+    // for an ordinary corner. But for a PARTIAL-WIDTH seam, `ring[prevA]`
+    // itself can be a FREE edge's own endpoint collinear with the hinge
+    // line: the child's own material wider than the seam (e.g. a
+    // fuse_bodies composite / wing), continuing right up to hingeA instead
+    // of stopping at the tangent line the way an ordinary corner would.
+    // Left as the raw ring coordinate, that vertex becomes a genuine
+    // wallOuter point sitting IN the bend's own allowance zone rather than
+    // outside it — confirmed live (docs/BUG_REPORT_complex_panel_bend_
+    // surfaces.md): the resulting wall solid has REAL, non-negligible 3D
+    // volume overlap with the bend's own bridge solid (a genuine untrimmed
+    // protrusion, not a boolean-fuse artifact), erasing most of the
+    // bridge's own outer cylindrical face once fused. The isB&&!isA branch
+    // above already detects this same "free edge collinear with the hinge"
+    // condition for its own mirror case; only in that collinear case here,
+    // apply the SAME rigid setback translation the hinge point itself gets
+    // (hingeA -> childShiftA) to ring[prevA] too, so the wing's own near-
+    // fold vertex lands ON the tangent line instead of short of it.
+    Point2 hDirA = Sub2(cuts[ci].hingeB, cuts[ci].hingeA);
+    double crossPrev = Cross2(hDirA, Sub2(ring[prevA], cuts[ci].hingeA));
+    if (std::fabs(crossPrev) < kGeometricEpsilon) {
+      Point2 setbackShift = Sub2(cuts[ci].hingeA, cuts[ci].childShiftA);
+      edges[prevA].from = Sub2(ring[prevA], setbackShift);
+    }
     edges[prevA].next = childBridgeIdx[ci];
   }
 
@@ -1143,60 +1308,41 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
       // comment for why this is independent of angleDeg's sign in general.
       bool concave = BottomIsConcave(*bend);
       double rBottom = BottomRadiusMm(*bend, graph.thicknessMm);
-      double pivotZ = concave ? -rBottom : rBottom;
 
-      // Axis in-plane position, plus a matching child-side extension
-      // (docs/BUG_REPORT_reconstructed_envelope_grows_with_bend_radius.md).
-      // This is a SEPARATE property from RegionOf's own per-panel setback
-      // trim (confirmed by real test failures, not assumed): trimming each
-      // panel's own rawOuter to its true tangent line makes THAT panel's own
-      // wall edge locally tangent to its own bend's cylinder, but does
-      // nothing to stop the CUMULATIVE 3D pose of a multi-bend chain (e.g. an
-      // N-gon tube closing on itself) from drifting as radiusMm varies —
-      // removing this block once, to test whether it had become redundant
-      // with RegionOf's new trim, reintroduced exactly that drift (confirmed
-      // via the N=4/5/6 closed-tube tests, off by an amount scaling with
-      // radiusMm), while the single-bend tangency test stayed green either
-      // way. The two corrections address different scopes and both stay.
+      // The pose-walk uses TWO axes — the PANEL pose (childPose) rotates
+      // about the SHARP (radiusMm=0, raw hinge) axis; the bend's own
+      // cylindrical bridge is built from a separate TRUE axis, the raw hinge
+      // shifted in-plane by axisInPlaneOffset and in height by pivotZ. The
+      // panels' wall geometry (BuildBendCuts) is trimmed to where the true
+      // axis's cylinder begins, so that once posed by the SHARP rotation, it
+      // meets the separately-built bridge exactly.
       //
-      // A wall built from the raw, un-widened hinge coordinate is tangent to
-      // the bend's own cylinder (pivotZ above) but that alone does not keep
-      // the part's overall envelope fixed as radiusMm changes — proved
-      // algebraically: for ANY in-plane axis offset, with height held at
-      // pivotZ, rotating a fixed-length child by exactly angleDeg about that
-      // axis reproduces the sharp-corner (radiusMm=0) target only in the
-      // trivial radiusMm=0 case itself. (A rotation about a parallel axis
-      // always differs from one about the true, radiusMm=0 axis by exactly
-      // one constant translation; cancelling that translation for every
-      // point at once forces pivotZ back to its own radiusMm=0 value — so
-      // axis position alone, or a translation added afterward alone, can
-      // never do it while pivotZ stays real.) The only way to keep a real,
-      // tangent pivotZ AND the sharp-corner envelope is to also change how
-      // far the child's own local frame reaches: a per-bend, purely local
-      // setback — a function of this bend's own radiusMm and angleDeg only,
-      // never anything upstream — both moves the axis and extends the
-      // child's effective local origin by twice that amount. This composes
-      // correctly down an arbitrarily deep chain with no extra running
-      // total: each bend reads only its own raw hinge and the pose its
-      // parent already carries (which already carries every ancestor's own
-      // correction), so nothing needs threading through cumulativeShift or
-      // any other side channel. Verified exactly (0 residual, both fold
-      // directions, five bend angles, chained two deep) in the bug report
-      // above. The general, fully-signed formula is D*tan(angleRad/2), where
-      // D = pivotZ_true - pivotZ = concave ? +radiusMm : -radiusMm and
-      // angleRad uses angleDeg's OWN sign (not its magnitude) — this must
-      // NOT be simplified to a magnitude-only |angleDeg| shortcut: concave
-      // and angleDeg's sign are independent facts (BottomIsConcave's own doc
-      // comment), not always aligned — a real, reconciled graph can and does
-      // set bottomIsConcave true with a negative angleDeg (or vice versa),
-      // which the |angleDeg| shortcut silently gets backwards (a real bug
-      // this exact case caught, see the bug report above). When concave and
-      // angleDeg's sign DO happen to align (the common authored case), D and
-      // angleRad's signs cancel and this reduces to the simpler
-      // radiusMm*tan(|angleRad|/2), always toward the child — but that's a
-      // consequence of this formula, not a separate rule.
+      // Root cause (confirmed by direct 3D inspection against industry-
+      // standard inside/outside bend radius): BottomIsConcave's own fallback
+      // had the mountain/valley polarity backward for this pose-walk's
+      // actual handedness (see that function's own comment) — these
+      // formulas (pivotZ, signedD, sharpZ) were never wrong in themselves.
+      double pivotZ = concave ? -rBottom : rBottom;
       double signedD = concave ? bend->radiusMm : -bend->radiusMm;
       double axisInPlaneOffset = signedD * std::tan(DegToRad(bend->angleDeg) / 2.0);
+
+      // sharpZ is pivotZ's own radiusMm->0 limit (concave: rBottom->0;
+      // convex: rBottom->thicknessMm) — kept in sync with pivotZ's sign
+      // above, not an independent choice.
+      double sharpZ = concave ? 0.0 : graph.thicknessMm;
+      Point3 rawHingeA3{bend->hingeA.x, bend->hingeA.y, sharpZ};
+      Point3 rawHingeB3{bend->hingeB.x, bend->hingeB.y, sharpZ};
+      Point3 sharpHingeAWorld = parentPose.Apply(rawHingeA3);
+      Point3 sharpHingeBWorld = parentPose.Apply(rawHingeB3);
+      Point3 sharpAxis = Normalize3(Sub3(sharpHingeBWorld, sharpHingeAWorld));
+      if (Length3(sharpAxis) < kGeometricEpsilon) {
+        result.errorCode = EvaluateErrorCode::kDegenerateOutline;
+        result.message = "bend " + bend->id + " has a zero-length hinge";
+        return result;
+      }
+      Transform3 worldFold =
+          Transform3::RotationAboutAxis(sharpHingeAWorld, sharpAxis, bend->angleDeg);
+      Transform3 childPose = worldFold.Compose(parentPose);
 
       Point3 hingeA3{bend->hingeA.x + axisInPlaneOffset * nLeft.x,
                       bend->hingeA.y + axisInPlaneOffset * nLeft.y, pivotZ};
@@ -1210,17 +1356,6 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
         result.message = "bend " + bend->id + " has a zero-length hinge";
         return result;
       }
-      Transform3 worldFold = Transform3::RotationAboutAxis(hingeAWorld, axis, bend->angleDeg);
-
-      // Child-side extension: every point of the child's own subtree is
-      // translated by 2x this bend's own in-plane offset, along nLeft, in
-      // the shared flat frame, BEFORE the fold above is applied — composed
-      // as the innermost transform so ancestor corrections (already baked
-      // into parentPose) carry through first, and this bend's own
-      // correction is added on top, once.
-      Transform3 childExtension = Transform3::Translation(
-          2.0 * axisInPlaneOffset * nLeft.x, 2.0 * axisInPlaneOffset * nLeft.y, 0.0);
-      Transform3 childPose = worldFold.Compose(parentPose).Compose(childExtension);
       poseByRegionPanel[bend->childRegionPanelId] = childPose;
       cumulativeShift[bend->childRegionPanelId] = {parentShift.x + ba * nLeft.x,
                                                      parentShift.y + ba * nLeft.y};
@@ -1231,6 +1366,8 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
       // start (the parent's own edge); the center is exactly half the
       // zone's own width (ba*nLeft) further along, toward the child. This
       // is a purely 2D, flat-pattern-facing fact, unrelated to the 3D pose.
+      Point3 nLeftWorld = parentPose.ApplyVector({nLeft.x, nLeft.y, 0.0});
+
       BridgeLayout bridge;
       bridge.bendId = bend->id;
       bridge.parentRegionPanelId = bend->parentRegionPanelId;
@@ -1246,7 +1383,7 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
       // points from this exact same value (BuildBendCuts), not from any
       // hingeA/hingeB-based absolute position. Signed — never abs().
       bridge.setbackMm = axisInPlaneOffset;
-      bridge.nLeftWorld = parentPose.ApplyVector({nLeft.x, nLeft.y, 0.0});
+      bridge.nLeftWorld = nLeftWorld;
       bridge.childNLeftWorld = worldFold.ApplyVector(bridge.nLeftWorld);
       bridge.rawHingeA = bend->hingeA;
       bridge.rawHingeB = bend->hingeB;

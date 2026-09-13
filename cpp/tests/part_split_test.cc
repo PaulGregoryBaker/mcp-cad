@@ -407,16 +407,22 @@ TEST_CASE("SplitPartAtBend: flush side matches Evaluate()'s own wallOuter for th
   REQUIRE(childPanel != nullptr);
   REQUIRE(parentPanel != nullptr);
 
-  // keepCornerOn=kChild cuts at CHILD's own tangent line (childShiftA/B),
-  // so child's output here should be the exact same real shape as its own
-  // wallOuter — an independent oracle for this module's tangent-shift
-  // formula. RegionOf's own trace never emits the ORIGINAL (now-collinear)
-  // hinge vertices this module's ring-insertion approach leaves in place
-  // (see the previous test case), so vertex LISTS legitimately differ in
-  // count; area is the robust, representation-independent equality check
-  // (same discipline as part_merge_test.cc's own ShoelaceArea oracle), plus
-  // every wallOuter vertex must lie exactly on this module's own boundary.
-  auto childFlush = SplitPartAtBend(outline, bend, 1.0, CornerSide::kChild);
+  // keepCornerOn's own direction is a fixed fabrication choice (kChild:
+  // shift -sb*nLeft; kParent: +sb*nLeft, sb an unsigned magnitude) —
+  // deliberately independent of fold direction (this module's own header
+  // comment above BottomIsConcave/signedD). wallOuter's own tangent shift
+  // (BuildBendCuts) is SIGNED and does depend on fold direction: for a
+  // concave bottom, child's real shift is -sb*nLeft (matches kChild
+  // directly); for a convex bottom, it's +sb*nLeft (matches kParent
+  // instead). So which CornerSide's output actually lands on which
+  // wallOuter flips with concave -- there is no fixed kChild<->child
+  // pairing independent of fold direction, only a fixed pairing once
+  // concave is known.
+  bool concave = bend.bottomIsConcave.has_value() ? *bend.bottomIsConcave : (bend.angleDeg < 0.0);
+  CornerSide sideMatchingChild = concave ? CornerSide::kChild : CornerSide::kParent;
+  CornerSide sideMatchingParent = concave ? CornerSide::kParent : CornerSide::kChild;
+
+  auto childFlush = SplitPartAtBend(outline, bend, 1.0, sideMatchingChild);
   REQUIRE(childFlush.ok);
   CHECK(std::fabs(ShoelaceArea(childFlush.childOutline)) ==
         Approx(std::fabs(ShoelaceArea(childPanel->wallOuter))).margin(1e-6));
@@ -428,9 +434,9 @@ TEST_CASE("SplitPartAtBend: flush side matches Evaluate()'s own wallOuter for th
     CHECK(found);
   }
 
-  // Mirror: keepCornerOn=kParent cuts at PARENT's own tangent line, so
-  // parent's output should match region A's own wallOuter the same way.
-  auto parentFlush = SplitPartAtBend(outline, bend, 1.0, CornerSide::kParent);
+  // Mirror: whichever CornerSide's own direction matches parent's real
+  // (signed) tangent shift for this bend's fold direction.
+  auto parentFlush = SplitPartAtBend(outline, bend, 1.0, sideMatchingParent);
   REQUIRE(parentFlush.ok);
   CHECK(std::fabs(ShoelaceArea(parentFlush.parentOutline)) ==
         Approx(std::fabs(ShoelaceArea(parentPanel->wallOuter))).margin(1e-6));

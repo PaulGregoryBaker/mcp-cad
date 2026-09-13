@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 420" font-family="Georgia, serif" font-size="14">
+  <style>
+    .mat { fill:#dce7f2; stroke:#2b3a4a; stroke-width:2; }
+    .dim { stroke:#5a6b7a; stroke-width:1; }
+    .lbl { fill:#2b3a4a; }
+    .cap { fill:#5a6b7a; font-size:12; font-style:italic; }
+    .good { stroke:#2b6a4a; stroke-width:2.5; fill:none; }
+    .bad { stroke:#b0403a; stroke-width:2.5; fill:none; }
+    .badfill { fill:#b0403a; }
+    .goodfill { fill:#2b6a4a; }
+  </style>
+
+  <text x="20" y="24" class="lbl" font-weight="bold">The counterexample: parent (0,0)-(20,40), hinge at Y=20, r=t=0.95mm, θ=90deg</text>
+
+  <!-- pivot axis -->
+  <circle cx="200" cy="310" r="4" fill="#2b3a4a"/>
+  <text x="208" y="306" class="lbl">axis</text>
+
+  <!-- parent solid: a flat rectangular block, correctly placed -->
+  <rect x="60" y="120" width="360" height="40" class="mat"/>
+  <text x="66" y="112" class="lbl">parent's solid (Z ∈ [0, 0.95], correctly placed by Chapters 1-4)</text>
+
+  <!-- bridge arc from theta=0 (at parent's tangent, near axis) to theta=90 (child's tangent) -->
+  <path d="M 200 150 A 160 160 0 0 1 360 310" class="dim" stroke-width="1.5" stroke-dasharray="3,3" fill="none"/>
+  <text x="330" y="170" class="cap">bridge sweeps θ: 0° → 90°</text>
+
+  <!-- tangent point: CORRECT, verified exact -->
+  <circle cx="360" cy="310" r="5" class="goodfill"/>
+  <text x="368" y="300" fill="#2b6a4a" font-weight="bold">child's tangent point — verified exact</text>
+
+  <!-- correct continuation: continuing past 90deg, away from axis -->
+  <path d="M 360 310 L 470 380" class="good"/>
+  <circle cx="470" cy="380" r="5" class="goodfill"/>
+  <text x="440" y="405" fill="#2b6a4a">physically required: continues away from axis</text>
+
+  <!-- WRONG: far point wraps back near theta=0, overlapping parent -->
+  <path d="M 360 310 L 90 190" class="bad"/>
+  <circle cx="90" cy="190" r="5" class="badfill"/>
+  <text x="20" y="215" fill="#b0403a" font-weight="bold">current construction: wraps back —</text>
+  <text x="20" y="232" fill="#b0403a">lands inside parent's own solid (Z ∈ [0,0.95] band)</text>
+
+  <!-- straight line crossing through parent -->
+  <line x1="90" y1="190" x2="360" y2="310" stroke="#b0403a" stroke-width="1" stroke-dasharray="2,2" opacity="0.6"/>
+
+  <text x="20" y="360" class="cap">The segment from the (correct) tangent point to the wrapped-back far point passes directly through the interior of parent's own solid — a real, measured self-intersection, not a rounding error.</text>
+</svg>

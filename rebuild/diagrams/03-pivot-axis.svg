@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 300" font-family="Georgia, serif" font-size="14">
+  <style>
+    .dim { stroke:#2b3a4a; stroke-width:1; }
+    .lbl { fill:#2b3a4a; }
+    .cap { fill:#5a6b7a; font-size:12; font-style:italic; }
+    .r1 { stroke:#8a4a9a; stroke-width:2; }
+    .r2 { stroke:#b0403a; stroke-width:2; }
+  </style>
+
+  <!-- LEFT: concave, r=0 sanity check -->
+  <text x="20" y="24" class="lbl" font-weight="bold">Concave, r→0 (sharp fold)</text>
+  <line x1="60" y1="150" x2="260" y2="150" stroke="#2b3a4a" stroke-width="2"/>
+  <circle cx="160" cy="150" r="4" fill="#2b3a4a"/>
+  <text x="168" y="146" class="lbl">P at Z=0 (bottom face)</text>
+  <text x="60" y="180" class="cap">pivotZ_true = 0</text>
+
+  <!-- RIGHT: concave, real r -->
+  <text x="420" y="24" class="lbl" font-weight="bold">Concave, real r &gt; 0</text>
+  <line x1="460" y1="130" x2="660" y2="130" stroke="#2b3a4a" stroke-width="2"/>
+  <line x1="460" y1="150" x2="660" y2="150" stroke="#2b3a4a" stroke-width="2" opacity="0.5" stroke-dasharray="4,4"/>
+  <circle cx="560" cy="70" r="4" fill="#2b3a4a"/>
+  <text x="568" y="66" class="lbl">P at Z=−r (below bottom face)</text>
+
+  <line x1="560" y1="70" x2="560" y2="130" class="r1"/>
+  <text x="536" y="102" fill="#8a4a9a">r (to bottom/inner)</text>
+  <line x1="560" y1="70" x2="560" y2="150" class="r2" stroke-dasharray="2,2"/>
+  <text x="566" y="200" fill="#b0403a">r+t (to top/outer, dashed line at Z=t)</text>
+
+  <text x="420" y="240" class="cap">pivotZ = −r   (matches pivotZ_true=0 in the limit r→0)</text>
+  <text x="20" y="270" class="lbl" font-weight="bold">D = pivotZ_true − pivotZ = 0 − (−r) = +r</text>
+</svg>

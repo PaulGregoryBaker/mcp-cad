@@ -42,6 +42,7 @@ const ToolSchemas = {
     radius_mm: z.number().min(0).optional(),
     k_factor: z.number().min(0).max(1).optional(),
     label: z.string().optional(),
+    bottom_is_concave: z.boolean().optional(),
   }),
 
   // docs/TASK_SPEC.md — no edge_a/edge_b/angle_deg: the seam and fold angle

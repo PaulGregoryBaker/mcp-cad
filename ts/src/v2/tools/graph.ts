@@ -675,6 +675,7 @@ function handleCreateNode(
   const kFactor = optNumber(args, 'k_factor');
   const label = optString(args, 'label');
   const bendProcess = optString(args, 'bend_process');
+  const bottomIsConcave = optBoolean(args, 'bottom_is_concave');
 
   try {
     const { bend, childRegionPanel } = store.createBendNode({
@@ -687,6 +688,7 @@ function handleCreateNode(
       kFactor,
       label,
       bendProcess,
+      bottomIsConcave,
     });
     return { bend_id: bend.bendId, child_region_panel_id: childRegionPanel.regionPanelId };
   } catch (err) {

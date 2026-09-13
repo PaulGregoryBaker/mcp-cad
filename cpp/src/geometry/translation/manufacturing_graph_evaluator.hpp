@@ -133,8 +133,10 @@ struct BendSpec {
   Point2 hingeA;
   Point2 hingeB;
   double angleDeg = 0.0;  // signed, RH rule about (hingeB - hingeA); sign also
-                           // selects fold direction (positive = mountain/bottom-
-                           // inner, negative = valley/bottom-outer) — see header.
+                           // selects fold direction when bottomIsConcave is unset
+                           // (negative = mountain/bottom-inner, positive =
+                           // valley/bottom-outer — see BottomIsConcave's own
+                           // comment for why this polarity, not the reverse).
   double radiusMm = 0.0;   // bend radius, mm; 0 is a normal value, not a special case
   double kFactor = 0.0;    // neutral-fibre position as a fraction of thickness
   // Overrides the angleDeg-sign-derived mountain/valley pivot-side
@@ -143,17 +145,23 @@ struct BendSpec {
   // pivot touches it exactly at radiusMm=0 — what "mountain" used to
   // always mean); false = bottom is the CONVEX side (pivot always offset
   // by thicknessMm, never touching — what "valley" used to always mean).
-  // These are two INDEPENDENT facts — angleDeg's sign records rotation
-  // direction; this records which side of the (single, part-wide) bottom
-  // reference is concave at THIS specific crease — and a part's bottom
-  // reference is not guaranteed concave at every positive-angle bend and
-  // convex at every negative-angle one (confirmed on a real mitered-corner
-  // fixture: a bend needed bottom=convex WITH a touching, r=0 pivot, a
-  // combination the old sign-only rule could not express — see
-  // step_reconciliation.cc, the only writer of this field so far).
+  // Whether concavity is actually independent of angleDeg's sign, for a
+  // single fixed axis-direction/child-side convention, is an open question
+  // — see rebuild/20-bend-bridge-geometry.md Ch. 2 (Fact 2.1) and Ch. 6c,
+  // which argue it is NOT independent. An earlier version of this comment
+  // claimed independence was "confirmed on a real mitered-corner fixture"
+  // via step_reconciliation.cc's tryPivotZ search; that claim's own basis
+  // does not hold up — tryPivotZ has a verified structural gap (same doc,
+  // Ch. 6d) where the convex branch can never be reliably selected in the
+  // first place (masked by kSelfConsistencyToleranceMm when the offset is
+  // small, rejected by kPieceEdgeMatchToleranceMm — the SAME constant —
+  // when it isn't), for any fold angle. Until that gap is fixed, nothing
+  // step_reconciliation.cc has produced is good evidence either way.
   // Unset (nullopt): falls back to the old isMountain=(angleDeg>=0) rule
   // for full backward compatibility with every graph authored before this
-  // field existed (Slices 1-4, part_merge.hpp).
+  // field existed (Slices 1-4, part_merge.hpp) — per Fact 2.1 this fallback
+  // may in fact be the physically correct rule, not just a default; see
+  // doc 20 Ch. 6c.
   std::optional<bool> bottomIsConcave;
   // true (default): radiusMm is a real, authored/confirmed value — a
   // caller explicitly chose it (create_node, merge_bodies_with_bend,

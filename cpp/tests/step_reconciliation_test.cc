@@ -63,6 +63,84 @@ std::vector<PanelPieceSpec> MakeUChannel() {
   return pieces;
 }
 
+// A real mitered corner: piece0 (200x200 floor, z=0 plane) is parent to TWO
+// separate children, piece1 and piece2, each folded up 90deg from a
+// DIFFERENT edge of piece0 that meets at piece0's own (0,0,0) corner —
+// piece1 from the Y=0 edge, piece2 from the X=0 edge. Once folded, piece1's
+// far edge and piece2's near edge both land on the same world line
+// (X=0,Y=0,Z=0..150) — they touch after folding but share no flat material
+// (a real "two bends converging on one corner" case, manufacturing_graph_
+// evaluator.hpp's bottomIsConcave doc comment's own cited scenario). Hand-
+// derived the same way as MakeLBracket/MakeUChannel (normal = uAxis x vAxis
+// throughout, each child's u/v traversing its shared edge with piece0 in
+// reverse order from piece0's own ring). Realistic sheet-metal proportions
+// throughout (200mm panels, 1mm
+// thickness — thickness << side, unlike an earlier draft of this fixture
+// that used thickness=10 on a 10mm panel, which isn't a "panel" at all and
+// produced meaningless edge-matching behaviour).
+std::vector<PanelPieceSpec> MakeMiteredCorner() {
+  PanelPieceSpec piece0;
+  piece0.origin = {0, 0, 0};
+  piece0.uAxis = {1, 0, 0};
+  piece0.vAxis = {0, 1, 0};
+  piece0.normal = {0, 0, 1};
+  piece0.ringLocal = {{0, 0}, {200, 0}, {200, 200}, {0, 200}};
+  piece0.thicknessMm = 1.0;
+
+  // Folds up from piece0's Y=0 edge, (0,0,0)-(200,0,0), traversed in reverse.
+  PanelPieceSpec piece1;
+  piece1.origin = {200, 0, 0};
+  piece1.uAxis = {-1, 0, 0};
+  piece1.vAxis = {0, 0, 1};
+  piece1.normal = {0, 1, 0};
+  piece1.ringLocal = {{0, 0}, {200, 0}, {200, 150}, {0, 150}};
+  piece1.thicknessMm = 1.0;
+
+  // Folds up from piece0's X=0 edge, (0,200,0)-(0,0,0), traversed in reverse.
+  PanelPieceSpec piece2;
+  piece2.origin = {0, 0, 0};
+  piece2.uAxis = {0, 1, 0};
+  piece2.vAxis = {0, 0, 1};
+  piece2.normal = {1, 0, 0};
+  piece2.ringLocal = {{0, 0}, {200, 0}, {200, 150}, {0, 150}};
+  piece2.thicknessMm = 1.0;
+
+  return {piece0, piece1, piece2};
+}
+
+// Same corner, but with thicknessMm=5 (not 1) throughout -- still a
+// realistic 2.5% of the 200mm panel side, not the earlier (invalid)
+// thickness=10-on-a-10mm-panel draft -- and piece1 replaced by piece1cvx:
+// the SAME 90deg rotation (same angleDeg must be recoverable, since
+// angleDeg is a pure function of the panels' normals, independent of pivot
+// position) applied about pivotZ = thicknessMm instead of pivotZ = 0 --
+// i.e. a genuine convex (bottom = outer, non-touching) fold. Derived by
+// hand: piece1's own world corners, rotated about the shifted axis line
+// {(x, 0, 5)} instead of {(x, 0, 0)} by the identical rotation -- general
+// formula (verified against the thickness=1 case first): origin becomes
+// (W, -T, T) instead of (W, 0, 0), everything else unchanged. At T=5 the
+// concave/convex hypotheses are 5*sqrt(2)~=7.07mm apart in world space,
+// comfortably beyond kSelfConsistencyToleranceMm/kPieceEdgeMatchToleranceMm
+// (2.0mm each) -- unlike thickness=1 (~1.41mm apart, indistinguishable) or
+// the invalid thickness=10-on-10mm-panel draft (14mm apart but the panel
+// itself wasn't thin, and the shifted edge fell out of match tolerance
+// entirely, treating piece1 as disconnected).
+std::vector<PanelPieceSpec> MakeMiteredCornerWithConvexPiece1() {
+  auto pieces = MakeMiteredCorner();
+  for (auto& p : pieces) p.thicknessMm = 5.0;
+
+  PanelPieceSpec piece1cvx;
+  piece1cvx.origin = {200, -5, 5};
+  piece1cvx.uAxis = {-1, 0, 0};
+  piece1cvx.vAxis = {0, 0, 1};
+  piece1cvx.normal = {0, 1, 0};
+  piece1cvx.ringLocal = {{0, 0}, {200, 0}, {200, 150}, {0, 150}};
+  piece1cvx.thicknessMm = 5.0;
+
+  pieces[1] = piece1cvx;
+  return pieces;
+}
+
 }  // namespace
 
 TEST_CASE("ReconcilePieces: 2-piece L reproduces true 3D positions via MapPointToWorld",
@@ -317,4 +395,68 @@ TEST_CASE("ReconcilePieces: a malformed (non-orthonormal) piece frame is a typed
   auto result = ReconcilePieces(pieces, 1.0);
   REQUIRE_FALSE(result.ok);
   CHECK(result.errorCode == ReconcileErrorCode::kNonDevelopableFold);
+}
+
+// rebuild/20-bend-bridge-geometry.md Ch. 6d: a symmetric mitered corner
+// (both children folding the same physical direction, up) must reconcile
+// both bends to the SAME, fallback-matching concavity -- there's no reason
+// for a symmetric corner to disagree with itself. Regression-pins the
+// non-convex half of Ch. 6d's fix (this passed even before that fix; kept
+// as a baseline so a future change can't silently break the ordinary case
+// while "fixing" the convex one).
+TEST_CASE("ReconcilePieces: mitered corner (piece0 parent of TWO children via "
+          "separate edges), both folding the same direction, agree with the "
+          "angleDeg-sign fallback",
+          "[translation][step_reconciliation]") {
+  auto pieces = MakeMiteredCorner();
+  auto result = ReconcilePieces(pieces, 1.0);
+  INFO("errorCode=" << static_cast<int>(result.errorCode) << " message=" << result.message);
+  REQUIRE(result.ok);
+  CHECK(result.graph.rootRegionPanelId == "piece0");
+  REQUIRE(result.graph.bends.size() == 2);
+
+  for (const auto& bend : result.graph.bends) {
+    CHECK(bend.angleDeg == Approx(90.0));
+    CHECK(bend.bottomIsConcave.value_or(true) == true);
+  }
+  // The non-tree piece1/piece2 touch (the miter seam itself) must be
+  // reported, not silently dropped or mistaken for a third bend.
+  CHECK_FALSE(result.notes.empty());
+}
+
+// rebuild/20-bend-bridge-geometry.md Ch. 6d's actual fix, locked in: with
+// piece1 replaced by a genuinely convex fold (MakeMiteredCornerWithConvexPiece1
+// -- realistic 200mm/5mm proportions, well beyond the old shared-tolerance
+// ambiguity zone), tryPivotZ must now correctly select the convex branch --
+// a real, verified disagreement with the angleDeg>=0 fallback, unlike the
+// old "confirmed on a mitered-corner fixture" claim this test replaces
+// (manufacturing_graph_evaluator.hpp's bottomIsConcave doc comment), which
+// no test ever actually backed. Notably, bottomIsConcave=false with
+// angleDeg=+90 here AGREES with Fact 2.1's own fold-direction prediction
+// (doc 20 Ch. 2) for a fold going "up" in this convention -- this is not a
+// counterexample to Fact 2.1.
+TEST_CASE("ReconcilePieces: mitered corner with piece1 as a genuine CONVEX "
+          "fold (pivotZ=thicknessMm, not 0) is correctly detected, "
+          "disagreeing with the angleDeg-sign fallback",
+          "[translation][step_reconciliation]") {
+  auto pieces = MakeMiteredCornerWithConvexPiece1();
+  auto result = ReconcilePieces(pieces, 5.0);
+  INFO("errorCode=" << static_cast<int>(result.errorCode) << " message=" << result.message);
+  REQUIRE(result.ok);
+  REQUIRE(result.graph.bends.size() == 2);
+
+  const BendSpec* bend1 = nullptr;
+  const BendSpec* bend2 = nullptr;
+  for (const auto& bend : result.graph.bends) {
+    if (bend.childRegionPanelId == "piece1") bend1 = &bend;
+    if (bend.childRegionPanelId == "piece2") bend2 = &bend;
+  }
+  REQUIRE(bend1 != nullptr);
+  REQUIRE(bend2 != nullptr);
+
+  CHECK(bend1->angleDeg == Approx(90.0));
+  CHECK(bend1->bottomIsConcave.value_or(true) == false);  // genuinely convex
+
+  CHECK(bend2->angleDeg == Approx(90.0));
+  CHECK(bend2->bottomIsConcave.value_or(true) == true);  // still concave, unchanged
 }
