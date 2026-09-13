@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <functional>
 #include <limits>
 #include <map>
@@ -721,6 +722,7 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
         bool ok = false;
         Point3 axisOrigin;
         bool bottomIsConcave = true;
+        double maxDev = 0.0;
       };
       auto tryPivotZ = [&](double pivotZ, bool bottomIsConcave) -> FoldCandidate {
         FoldCandidate cand;
@@ -729,14 +731,19 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
 
         Transform3 fold = Transform3::RotationAboutAxis(axisOrigin, axisDir, angleDeg);
         Transform3 candidatePose = fold.Compose(parentPose);
+        double maxDev = 0.0;
+        bool anyFail = false;
         for (size_t k = 0; k < nc; ++k) {
           Point3 flatK{cFlat[k].x, cFlat[k].y, 0.0};
           Point3 predicted = candidatePose.Apply(flatK);
           const Point3& truth = compTrueRootLocalRing[i][k];
+          maxDev = std::max(maxDev, Length3(Sub3(predicted, truth)));
           if (!NearlyEqual3(predicted, truth, kSelfConsistencyToleranceMm)) {
-            return cand;
+            anyFail = true;
           }
         }
+        cand.maxDev = maxDev;
+        if (anyFail) return cand;
         cand.ok = true;
         cand.axisOrigin = axisOrigin;
         cand.bottomIsConcave = bottomIsConcave;
@@ -757,8 +764,52 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
       // function's own header comment for why that's safe (Evaluate() is a
       // pure function of current state; AC-E.3 self-consistency holds at
       // whatever radius a bend carries, not only at r=0).
-      FoldCandidate winner = tryPivotZ(0.0, /*bottomIsConcave=*/true);
-      if (!winner.ok) winner = tryPivotZ(thicknessMm, /*bottomIsConcave=*/false);
+      // Both hypotheses are computed unconditionally — "concave, because
+      // it's tried first" whenever concave merely PASSES the tolerance
+      // silently ignores that convex may ALSO be plausible, and once both
+      // are, which one is physically true isn't reliably told apart by
+      // relative self-consistency residual: confirmed on real fixtures
+      // where the WORSE-fitting hypothesis by that metric was physically
+      // correct (testcube.step's concave, self-consistency 1.03mm vs
+      // convex's 0.32mm, yet concave is the answer that closes its own
+      // unmodeled 4th seam at 0mm — convex leaves a 2.7mm gap), so a
+      // "smaller residual wins" rule (tried and reverted earlier) is
+      // actively wrong there. The one signal that IS trustworthy: an
+      // EXACT (near-zero-residual) fit is real evidence on its own —
+      // MakeLBracket/MakeUChannel are hand-derived synthetic fixtures
+      // whose correct hypothesis replays to ~0 error, and demoting that to
+      // a tiebreak (tried and reverted: broke both) throws away a genuine
+      // signal these all-real fixtures don't have. So: an exact fit wins
+      // outright over a merely-plausible one. Only when NEITHER is exact
+      // (both are real, noisily-fitting candidates — testcube.step,
+      // cauldron.step's shallow ~4.27deg bends where concave/convex fit
+      // ~0.19mm vs ~0.17mm, near-tied) does angleDeg's own sign — the
+      // same, single-piece, directly-measured convention BottomIsConcave's
+      // own fallback already uses everywhere else in this codebase —
+      // break the tie, rather than an arbitrary "whichever was tried
+      // first" default (confirmed wrong on cauldron.step: traced to a
+      // real downstream wall/panel overlap and a zero-volume boolean
+      // fuse). When only one hypothesis passes at all, pass/fail itself
+      // decides regardless of exactness or sign (the
+      // MakeMiteredCornerWithConvexPiece1 case: concave's ~7mm gap fails
+      // outright).
+      constexpr double kExactFitMm = 0.01;
+      FoldCandidate concaveCand = tryPivotZ(0.0, /*bottomIsConcave=*/true);
+      FoldCandidate convexCand = tryPivotZ(thicknessMm, /*bottomIsConcave=*/false);
+      FoldCandidate winner;
+      if (concaveCand.ok && convexCand.ok) {
+        bool concaveExact = concaveCand.maxDev < kExactFitMm;
+        bool convexExact = convexCand.maxDev < kExactFitMm;
+        if (concaveExact != convexExact) {
+          winner = concaveExact ? concaveCand : convexCand;
+        } else {
+          winner = (angleDeg < 0.0) ? concaveCand : convexCand;
+        }
+      } else if (concaveCand.ok) {
+        winner = concaveCand;
+      } else if (convexCand.ok) {
+        winner = convexCand;
+      }
       if (!winner.ok) {
         out.errorCode = ReconcileErrorCode::kNonDevelopableFold;
         out.message = "fold at piece " + std::to_string(i) +
