@@ -35,6 +35,7 @@ import {
 import { geometryBinding } from '../../src/geometry/binding';
 import { McpToolError } from '../../src/mcp/errors';
 import type { NapiRegionPanelLayout } from '../../src/geometry/types';
+import { readGraphResource } from '../../src/v2/resources/graph';
 
 const ENABLED = process.env.SUITE_V2_DRIVER === '1';
 const d = ENABLED ? describe : describe.skip;
@@ -542,4 +543,37 @@ d('v2 merge_bodies_with_bend live regression: a fuse_bodies-produced outline wit
         + 'merge_bodies_with_bend and be checked',
     ).toBe(true);
   });
+
+  it('every per-part graph resource fails closed (GRAPH_PART_ALIASED) when read via a '
+    + 'merged-away part id, instead of silently returning an empty graph', () => {
+    // Confirmed live: fuse_bodies/merge_bodies_with_bend alias B into A
+    // (B5d — never delete) by re-parenting every one of B's region panels
+    // and bends onto A, but B's own row survives with mergedIntoPartId set.
+    // Before this fix, graph://part/{B}/full (and every sibling resource)
+    // returned a technically-successful response with regionPanels:[],
+    // bends:[] — indistinguishable from "this part genuinely has no graph
+    // yet." A caller still tracking a part by its pre-merge id (exactly
+    // what happened live: Component 2's own id, after being merged into
+    // the fused target) saw an empty manufacturing graph, not an error
+    // pointing at where its content actually went.
+    const store = new GraphStore();
+    const { partAId, partBId } = authorTwoParts(store);
+    mergeTwoParts(store, partAId, partBId);
+
+    for (const resName of ['full', 'boundary', 'mesh', 'findings', 'flat-pattern', 'map-2d-3d']) {
+      expect(
+        () => readGraphResource(store, `graph://part/${partBId}/${resName}`),
+        `graph://part/${partBId}/${resName} (partB, now aliased into partA) must fail closed`,
+      ).toThrow(McpToolError);
+    }
+
+    // The live target (partA) still reads normally after the merge.
+    const full = readGraphResource(store, `graph://part/${partAId}/full`) as {
+      regionPanels: unknown[];
+      bends: unknown[];
+    };
+    expect(full.regionPanels.length).toBeGreaterThan(0);
+    expect(full.bends.length).toBeGreaterThan(0);
+  });
+
 });

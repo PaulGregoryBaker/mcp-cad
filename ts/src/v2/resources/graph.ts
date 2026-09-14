@@ -173,7 +173,39 @@ function parseNumberList(raw: string, count: number, label: string): number[] {
   return values;
 }
 
+/**
+ * Every per-part resource read must fail closed on an aliased (merged-away)
+ * part id, not silently succeed with empty/misleading content: fuse_bodies
+ * and merge_bodies_with_bend never delete part B's row (B5d — alias, not
+ * delete), but DO re-parent every one of its region panels and bends onto
+ * part A (store.ts's own mergePartsWithBend/fuseBodies). So `getPart(staleId)`
+ * still finds a row, and a naive resource read (snapshotPart/evaluatePart on
+ * that same stale id) returns a technically-successful response with zero
+ * region panels and zero bends — indistinguishable, to a caller, from "this
+ * part genuinely has no graph yet." Confirmed live: a caller still tracking
+ * a part by its pre-merge id sees an empty manufacturing graph, not an
+ * error pointing at where its content actually went. Reuses the same
+ * GRAPH_PART_ALIASED code store.ts's own mergePartsWithBend/fuseBodies
+ * already throw for this exact condition on the WRITE side — this is the
+ * READ-side equivalent, per the NO FALLBACK rule (fail with a typed,
+ * actionable error, never a plausible-looking partial result).
+ */
+function requireLivePart(store: GraphStore, partId: string): void {
+  const part = store.getPart(partId);
+  if (!part) {
+    throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${partId}`, false);
+  }
+  if (part.mergedIntoPartId !== null) {
+    throwError(
+      ErrorCodes.GRAPH_PART_ALIASED,
+      `part ${partId} was merged into part ${part.mergedIntoPartId} — read that part's resources instead`,
+      false,
+    );
+  }
+}
+
 function readMap2d3d(store: GraphStore, partId: string, queryString: string | undefined): Map2d3dResponse {
+  requireLivePart(store, partId);
   const params = new URLSearchParams(queryString ?? '');
   const pointParam = params.get('point');
 
@@ -219,6 +251,7 @@ function readMap2d3d(store: GraphStore, partId: string, queryString: string | un
 }
 
 function readMap3d2d(store: GraphStore, partId: string, queryString: string | undefined): Map3d2dResponse {
+  requireLivePart(store, partId);
   const params = new URLSearchParams(queryString ?? '');
   const pointParam = params.get('point');
   if (pointParam === null) {
@@ -265,6 +298,7 @@ interface FlatPatternBend {
 }
 
 function readFlatPattern(store: GraphStore, partId: string): FlatPatternResponse {
+  requireLivePart(store, partId);
   const part = store.getPart(partId);
   if (!part) {
     throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${partId}`, false);
@@ -404,10 +438,7 @@ function readPartsList(store: GraphStore): PartsListResponse {
 }
 
 function readFull(store: GraphStore, partId: string): FullResponse {
-  const part = store.getPart(partId);
-  if (!part) {
-    throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${partId}`, false);
-  }
+  requireLivePart(store, partId);
   const snapshot = store.snapshotPart(partId);
   const findingsResult = evaluateFindings(store, partId);
 
@@ -437,9 +468,7 @@ function readFull(store: GraphStore, partId: string): FullResponse {
  * findings (15 §3.2's "one computation, two projections" rule), fetched
  * directly without the rest of the graph structure. */
 function readFindings(store: GraphStore, partId: string): FindingsResponse {
-  if (!store.getPart(partId)) {
-    throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${partId}`, false);
-  }
+  requireLivePart(store, partId);
   const result = evaluateFindings(store, partId);
   return { partId, findings: result.findings };
 }
@@ -550,20 +579,14 @@ function toRef(entry: BlobCacheEntry, url: string): z.infer<typeof RefSchema> {
 }
 
 function readBoundary(store: GraphStore, partId: string): BoundaryEnvelopeResponse {
-  const part = store.getPart(partId);
-  if (!part) {
-    throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${partId}`, false);
-  }
+  requireLivePart(store, partId);
   const { entry } = ensureBoundaryBlobFresh(store, partId);
   const key = buildBlobCacheKey(partId, 'boundary', 'default');
   return { partId, ref: toRef(entry, buildV2BlobUrl(key)) };
 }
 
 function readMesh(store: GraphStore, partId: string): MeshEnvelopeResponse {
-  const part = store.getPart(partId);
-  if (!part) {
-    throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${partId}`, false);
-  }
+  requireLivePart(store, partId);
   const { entry } = ensureMeshBlobFresh(store, partId);
   const key = buildBlobCacheKey(partId, 'mesh', 'default');
   return { partId, ref: toRef(entry, buildV2BlobUrl(key)) };
