@@ -2622,18 +2622,33 @@ TEST_CASE("DIAGNOSTIC: C-channel, parent->child1->child2, child2 curls back "
   CHECK(outerArea > 0.5 * (2 * expectedPerBendOuter));
 }
 
-// TEMP DIAGNOSTIC (docs/BUG_REPORT_complex_panel_bend_surfaces.md
-// investigation): a textbook-correct, hand-built 90deg r=t=0.95mm bend --
-// NO reference to Evaluate()/BuildCutEdges/BuildBendCuts/pivotZ/setback at
-// all. Parent is a flat rectangle sitting with its own bottom (Z=0, the
-// OUTER surface for this fold direction) at the tangent point; the bridge
-// is a revolve of the SAME tangent quad around an axis placed by hand at
-// (Y=0, Z=R=r+t) -- the textbook position for "bottom=outer". If this
-// independently-built reference ALSO shows the outer face eclipsed, the
-// eclipse is inherent geometry, not a pipeline bug. If it does NOT, the
-// pipeline's own construction differs from this reference somewhere.
+// RESOLVED (docs/BUG_REPORT_complex_panel_bend_surfaces.md investigation,
+// 2026-09-14 finding): a textbook-correct, hand-built 90deg r=t=0.95mm
+// bend -- NO reference to Evaluate()/BuildCutEdges/BuildBendCuts/pivotZ/
+// setback at all. Parent is a flat rectangle sitting with its own bottom
+// (Z=0, the OUTER surface for this fold direction) at the tangent point;
+// the bridge is a revolve of the SAME tangent quad around an axis placed
+// by hand at (Y=0, Z=R=r+t) -- the textbook position for "bottom=outer".
+// This independently-built reference ALSO shows the outer face eclipsed,
+// proving the eclipse is inherent geometry, not a pipeline bug (the
+// original hypothesis this diagnostic was written to test is FALSE).
+//
+// Worked by hand: the bridge's outer-radius surface point at sweep angle
+// phi (measured from parent's own tangent line) sits at
+// (Y,Z) = (R sin(phi), R(1 - cos(phi))). That point is enclosed by
+// parent's own flat slab (Z in [0,t], Y in [0,legLen]) whenever
+// Z <= t, i.e. phi <= acos(1 - t/R) =: phiCrit -- so the fused solid's
+// outer face can only ever expose the REMAINING (pi/2 - phiCrit) of the
+// 90deg sweep; the rest is legitimately interior material once parent is
+// unioned in, exactly as BRepAlgoAPI_Fuse should behave. The child side
+// has no equivalent eclipse (Z = R(1-cos(phi)) <= R always, touching
+// child's own Z-range floor of R only at the single shared endpoint
+// phi=90deg), confirmed by the bridge+CHILD-alone survey below measuring
+// the full theoretical area. For r=t=0.95 (R=1.9), phiCrit=60deg, so
+// only the last 1/3 of the 90deg sweep survives -- matching the measured
+// 19.90 / 59.69 = 1/3 exactly, not a coincidence.
 TEST_CASE("DIAGNOSTIC: hand-built (no pipeline formulas) 90deg r=t=0.95mm "
-          "bend -- is the eclipse inherent geometry?",
+          "bend -- is the eclipse inherent geometry? (yes)",
           "[translation][construction][diagnostic]") {
   const double r = 0.95, t = 0.95, R = r + t, W = 20.0, legLen = 20.0;
 
@@ -2714,10 +2729,14 @@ TEST_CASE("DIAGNOSTIC: hand-built (no pipeline formulas) 90deg r=t=0.95mm "
     }
   }
   double expectedInner = (kTestPi / 2.0) * r * W;
-  double expectedOuter = (kTestPi / 2.0) * R * W;
+  // Only the (pi/2 - phiCrit) tail of the 90deg sweep survives as a real
+  // outer boundary face once parent's own flat slab is unioned in -- see
+  // this TEST_CASE's own doc comment for the full derivation.
+  double phiCrit = std::acos(std::clamp(1.0 - t / R, -1.0, 1.0));
+  double expectedOuter = (kTestPi / 2.0 - phiCrit) * R * W;
   WARN("HANDBUILT innerArea=" << innerArea << " (expected~" << expectedInner
        << ") outerArea=" << outerArea << " (expected~" << expectedOuter << ")");
 
-  CHECK(innerArea > 0.5 * expectedInner);
-  CHECK(outerArea > 0.5 * expectedOuter);
+  CHECK(innerArea == Approx(expectedInner).epsilon(0.05));
+  CHECK(outerArea == Approx(expectedOuter).epsilon(0.05));
 }
