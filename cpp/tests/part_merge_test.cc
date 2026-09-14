@@ -219,6 +219,96 @@ TEST_CASE("DetectContact: two disjoint contact regions - the longer one is chose
   CHECK(Dist2(contact.bRunEnd, {7, 0}) < 1e-6);
 }
 
+// Live-app regression (2026-09-14): the EXACT real outlines/anchors captured
+// from merge_bodies_with_bend.integration.test.ts's "ZZZ REPRO" dump (a real
+// testcube.step import, split_part_at_bend on every bend with
+// keep_corner_on='parent', Protrusion2 translated +75mm on Y, fuse_bodies
+// onto the resulting panel, then merge_bodies_with_bend against another
+// imported component) — reproduced live as GE_MERGE_SELF_INTERSECTION
+// ("spliced outline would self-intersect - detected contact interval was
+// wrong"), with no STEP import and no TS layer involved, isolating the
+// failure to this module alone. Values are bit-for-bit what the TS repro
+// dumped (not hand-derived or rounded).
+//
+// Root cause: outlineA is a hexagon - a 150x150 main panel plus a fused
+// protrusion "wing" hanging off its left edge (vertices 0-2), whose own
+// near-bottom edge (vertex2->vertex3, (-24.05,-0.05) to (0.05,0)) is
+// ALMOST but not exactly collinear with the panel's TRUE bottom edge
+// (vertex3->vertex4, (0.05,0) to (150.95,0)) - a real ~0.05mm kink baked
+// into this fixture's own STEP geometry, not import noise from this
+// recipe. DetectContact's own A-side coverage scan (part_merge.cc) checks
+// every A edge independently against a flat kMergeContactToleranceMm
+// (2mm) perpendicular-distance tolerance, with NO requirement that
+// qualifying edges be CONTIGUOUS with the genuine seam edge found first by
+// walking B's own run. Because the wing's edge is well within that 2mm
+// band (0.05mm max deviation over ~24mm), it gets pulled into the same
+// coverage interval as the real seam edge (vertex3->vertex4) even though
+// it is a physically different, non-touching feature - and because THIS
+// wing edge happens to be checked first in outlineA's own array order, its
+// own (slightly tilted) line becomes aLineOrigin/aLineDirHat, and the
+// run's own boundary point gets projected onto that wrong line instead of
+// the true seam line - landing ~0.05-0.3mm short of vertex3, not on it.
+// ReconcileOutlines then splices B onto a point that is not quite A's real
+// corner, leaving a razor-thin sliver of the wing's own edge unconsumed,
+// which SegmentsBadOverlap correctly flags (it sits nowhere near the tight
+// kExactMatchEpsilonMm "same point" tolerance the splice-vertex allowance
+// uses). The error message is accurate, not a false alarm - the CONTACT
+// INTERVAL itself is what's wrong.
+//
+// PINNED AS A KNOWN BUG, not yet fixed: this test currently asserts the
+// CURRENT (buggy) rejection. Once DetectContact's A-side coverage scan is
+// changed to require CONTIGUITY with the seed seam edge (matching how B's
+// own side already finds its run via a contiguous edgeIsFlat walk, not a
+// pointwise per-edge distance check), this test should be updated to
+// assert reconciliation SUCCEEDS instead.
+TEST_CASE("DetectContact+ReconcileOutlines: a fused protrusion's near-collinear wing edge "
+ "steals A-side seam coverage (KNOWN BUG, not yet fixed)",
+          "[part_merge][known_bug]") {
+  std::vector<Point2> outlineA = {
+      {0.05000000000001137, 150},
+      {-24, 150.05},
+      {-24.049999999999997, -0.05000000000001137},
+      {0.05000000000001137, 0},
+      {150.94999999999996, 0},
+      {150.94999999999996, 150},
+  };
+  Transform3 anchorA;
+  anchorA.r[0] = 1; anchorA.r[1] = 0; anchorA.r[2] = 0;
+  anchorA.r[3] = 0; anchorA.r[4] = 0; anchorA.r[5] = 1;
+  anchorA.r[6] = 0; anchorA.r[7] = -1; anchorA.r[8] = 0;
+  anchorA.t[0] = -75; anchorA.t[1] = 74.275; anchorA.t[2] = 75;
+
+  std::vector<Point2> outlineB = {
+      {149.95, 74.95000000000002},
+      {150, 150},
+      {76.05, 150},
+      {0, 150},
+      {0, 76.05000000000001},
+      {0, 1.4210854715202004e-14},
+      {74.95, 0},
+      {150, 1.4210854715202004e-14},
+  };
+  Transform3 anchorB;
+  anchorB.r[0] = 1; anchorB.r[1] = 0; anchorB.r[2] = 0;
+  anchorB.r[3] = 0; anchorB.r[4] = 1; anchorB.r[5] = 0;
+  anchorB.r[6] = 0; anchorB.r[7] = 0; anchorB.r[8] = 1;
+  anchorB.t[0] = -75; anchorB.t[1] = -75.00000000000001; anchorB.t[2] = 74.25;
+
+  auto contact = DetectContact(outlineA, anchorA, outlineB, anchorB);
+  REQUIRE(contact.ok);
+  // DetectContact itself reports success - the wrong interval, not an
+  // outright rejection, is exactly what makes this bug class dangerous:
+  // it silently produces a slightly-wrong boundary instead of failing
+  // closed at this step.
+  CHECK(contact.contactRegionCount == 1);
+
+  auto result = ReconcileOutlines(outlineA, contact.aRunStart, contact.aRunEnd, outlineB, contact.bRunStart,
+                                   contact.bRunEnd);
+  // KNOWN BUG: currently rejected. See this TEST_CASE's own doc comment.
+  CHECK_FALSE(result.ok);
+  CHECK(result.errorCode == MergeErrorCode::kMergeSelfIntersecting);
+}
+
 // STEP 2 (structured repro, live-app regression 2026-09): the EXACT real
 // outlines/anchors captured from
 // merge_bodies_with_bend.integration.test.ts's "STEP 1" repro (a real
