@@ -150,8 +150,13 @@ struct ReconcilePiecesResult {
 // error at every radius tested. See
 // docs/BUG_REPORT_import_bend_radius_always_zero_or_thickness.md's full
 // history for both the original finding and this correction.
+// defaultBendRadiusMm: -1.0 (the default) means "no org-profile override
+// configured" and falls back to thicknessMm when stamping (see
+// step_reconciliation.cc's final-stamp comment). An explicit 0.0 is a real
+// caller request for a sharp fold and is stamped literally — only the -1.0
+// sentinel, never a real radius, triggers the fallback.
 ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
                                        double thicknessMm,
-                                       double defaultBendRadiusMm = 0.0);
+                                       double defaultBendRadiusMm = -1.0);
 
 }  // namespace mcp_cad::translation

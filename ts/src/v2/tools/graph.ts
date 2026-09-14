@@ -143,7 +143,7 @@ export const graphToolDefinitions = [
   {
     name: 'import_part',
     description:
-      "Ingest a STEP file into a v2 manufacturing graph (rebuild/15 §4.1, Level C): heal, decompose into flat panel pieces (Port A/B), then reconcile them into one outline + bend tree (13 §6) — the same graph shape create_part/create_node build directly. Synchronous this slice (no job/progress polling yet). Each detected protrusion (flange/tab) becomes its own simple, independent v2 Part — see protrusion_part_ids in the result — rather than being represented within the main part's own outline/bend tree. reconcilePieces cannot measure a real bend radius from a flat-panel decomposition (only two flat faces meeting at a fold are ever seen), so every reconciled bend's radius_mm is assumed to equal profile.rules.default_bend_radius_mm (defaults to 0, a sharp fold, when omitted) — radius_measured=false records that this is a default, not a confirmation; MIN_BEND_RADIUS still checks the actual value normally. Call update_node(kind=bend, patch:{radius_mm}) to confirm/change it later.",
+      "Ingest a STEP file into a v2 manufacturing graph (rebuild/15 §4.1, Level C): heal, decompose into flat panel pieces (Port A/B), then reconcile them into one outline + bend tree (13 §6) — the same graph shape create_part/create_node build directly. Synchronous this slice (no job/progress polling yet). Each detected protrusion (flange/tab) becomes its own simple, independent v2 Part — see protrusion_part_ids in the result — rather than being represented within the main part's own outline/bend tree. reconcilePieces cannot measure a real bend radius from a flat-panel decomposition (only two flat faces meeting at a fold are ever seen), so every reconciled bend's radius_mm is assumed to equal profile.rules.default_bend_radius_mm; when that's omitted entirely it falls back to the part's own thickness_mm (a real, manufacturable minimum — matching this profile's own default min_bend_radius_factor=1.0), not a literal 0 — pass default_bend_radius_mm:0 explicitly to request a genuinely sharp fold instead. radius_measured=false records that this is a default, not a confirmation; MIN_BEND_RADIUS still checks the actual value normally. Call update_node(kind=bend, patch:{radius_mm}) to confirm/change it later.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -159,7 +159,7 @@ export const graphToolDefinitions = [
         profile: {
           type: 'object',
           description:
-            "The org's manufacturing profile — {profile_id?, name?, rules?: {default_bend_radius_mm, min_bend_radius_factor, ...}}, same shape the findings/manufacturability resource's ManufacturingProfile uses. Defaults to the built-in sheet-metal default profile (default_bend_radius_mm: 0, i.e. a sharp fold) when omitted.",
+            "The org's manufacturing profile — {profile_id?, name?, rules?: {default_bend_radius_mm, min_bend_radius_factor, ...}}, same shape the findings/manufacturability resource's ManufacturingProfile uses. Defaults to the built-in sheet-metal default profile when omitted; that profile leaves default_bend_radius_mm unset, which reconcilePieces resolves to the part's own thickness_mm rather than a literal sharp fold — pass default_bend_radius_mm:0 explicitly for a genuinely sharp fold.",
         },
       },
       required: ['file'],

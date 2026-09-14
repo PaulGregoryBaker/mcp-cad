@@ -931,7 +931,12 @@ export const DEFAULT_MANUFACTURING_PROFILE: NapiManufacturingProfile = {
   rules: {
     minBendRadiusFactor: 1.0,
     maxBendAngleDeg: 180.0,
-    defaultBendRadiusMm: 0.0,
+    // Left unset (not 0.0) deliberately: this field is only meaningful to
+    // reconcilePieces (import_part), which isn't what this profile is for
+    // (evaluateFindings ignores it) — and unset is what reconcilePieces
+    // resolves to thicknessMm, not a literal sharp fold. Setting it to 0.0
+    // here would silently reintroduce the always-sharp-fold bug for any
+    // future caller that reuses this constant as a reconcilePieces profile.
     minHoleDiameterFactor: 1.0,
     minHoleToBendClearanceMm: 2.0,
     minHoleToEdgeClearanceMm: 1.5,

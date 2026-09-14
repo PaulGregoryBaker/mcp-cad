@@ -31,9 +31,17 @@ struct ManufacturingProfile {
   // step_reconciliation.hpp's own header comment for why stamping it in is
   // safe: Evaluate() re-derives the flat/3D representation fresh from
   // whatever radius a bend carries, so this is a real, effective
-  // manufacturing decision, not inert metadata). Default 0.0 preserves the
-  // sharp-fold assumption when a caller doesn't configure one.
-  double defaultBendRadiusMm = 0.0;
+  // manufacturing decision, not inert metadata).
+  //
+  // -1.0 is the sentinel for "the caller never configured this" — NOT a
+  // real radius. A caller that explicitly wants a sharp fold passes 0.0
+  // literally; ReconcilePieces treats that as a genuine request (0.0 is a
+  // valid double coming over the NAPI boundary exactly like any other
+  // value) and does NOT substitute thicknessMm for it. Only the -1.0
+  // sentinel — which a real radius can never be — triggers the
+  // thicknessMm fallback (docs/BUG_REPORT_import_bend_radius_always_
+  // zero_or_thickness.md's 2026-09-14 correction).
+  double defaultBendRadiusMm = -1.0;
 
   // ── Hole rules ──────────────────────────────────────────────────────────
   double minHoleDiameterFactor = 1.0;     // min diameter ≥ factor × thickness

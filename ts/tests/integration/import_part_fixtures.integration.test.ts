@@ -194,22 +194,27 @@ d('import_part integration suite (real STEP fixtures)', () => {
     probeRoundTripSelfConsistent(store, result.part_id, 0.001);
 
     // docs/BUG_REPORT_import_bend_radius_always_zero_or_thickness.md's
-    // 2026-08-09 correction: with no profile passed, a reconciled bend still
-    // gets radiusMm=0.0/radiusMeasured=false (a real default, not a
-    // measurement) — but radiusMeasured is provenance metadata only and no
-    // longer gates validation, so a genuinely under-spec radius (0mm, on
-    // real material thickness) produces a normal MIN_BEND_RADIUS finding,
-    // same as it would for an authored bend.
+    // 2026-09-14 correction (the 2026-08-09 fix above never actually closed
+    // the loop — DEFAULT_MANUFACTURING_PROFILE.rules.defaultBendRadiusMm
+    // was still 0.0, so every real import kept tripping MIN_BEND_RADIUS by
+    // construction, exactly the original report's own symptom): with no
+    // profile passed, a reconciled bend's radiusMm now defaults to the
+    // part's own thicknessMm (step_reconciliation.cc's final-stamp comment)
+    // — the standard sheet-metal rule-of-thumb minimum bend radius, and
+    // exactly what this project's own default MIN_BEND_RADIUS profile
+    // (minBendRadiusFactor=1.0) requires, so a normal import no longer
+    // fails its own validation by default. radiusMeasured stays false
+    // regardless (provenance metadata only, never gates validation).
     const snap = store.snapshotPart(result.part_id);
     expect(snap.bends).toHaveLength(1);
-    expect(snap.bends[0].radiusMm).toBe(0);
+    expect(snap.bends[0].radiusMm).toBeCloseTo(1.5, 6);
     expect(snap.bends[0].radiusMeasured).toBe(false);
 
     const full = readGraphResource(store, `graph://part/${result.part_id}/full`) as {
       findings: Array<{ code: string }>;
     };
     const bendRadiusFindings = full.findings.filter((f) => f.code === 'MIN_BEND_RADIUS');
-    expect(bendRadiusFindings).toHaveLength(1);
+    expect(bendRadiusFindings).toHaveLength(0);
     expect(full.findings.some((f) => f.code === 'BEND_RADIUS_NOT_MEASURED')).toBe(false);
   });
 

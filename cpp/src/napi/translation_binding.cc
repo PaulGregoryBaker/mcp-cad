@@ -1151,7 +1151,7 @@ Napi::Value ReconcilePiecesBinding(const Napi::CallbackInfo& info) {
   try {
     std::vector<PanelPieceSpec> pieces = ReadPanelPieceSpecArray(info[0].As<Napi::Array>());
     double thicknessMm = info[1].As<Napi::Number>().DoubleValue();
-    double defaultBendRadiusMm = 0.0;
+    double defaultBendRadiusMm = -1.0;  // sentinel: no profile passed at all
     if (info.Length() >= 3 && info[2].IsObject()) {
       defaultBendRadiusMm = ReadProfile(info[2].As<Napi::Object>()).defaultBendRadiusMm;
     }

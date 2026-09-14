@@ -1,11 +1,14 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include "geometry/translation/flat_outline.hpp"
 #include "geometry/translation/manufacturing_graph_evaluator.hpp"
 #include "geometry/translation/point_mapping.hpp"
 #include "geometry/translation/step_reconciliation.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 using namespace mcp_cad::translation;
 using Catch::Approx;
@@ -220,16 +223,45 @@ TEST_CASE("ReconcilePieces: 2-piece L reproduces true 3D positions via MapPointT
 
   // Stronger, independent check: piece1's TRUE world corner (10,0,8) is
   // known directly from MakeLBracket's own hand-derivation (not derived via
-  // this module) — its flat-frame position must be exactly piece1's own
-  // ringLocal[1]=(5,0) spliced into the combined outline (i.e. world x=18,
-  // y=0 in the flat pattern, since piece1's local (5,0) maps to combined
-  // (18,0) by the hand-verified outline above) — mapping THAT known flat
-  // point forward must reproduce (10,0,8) exactly.
-  MapToWorldResult corner = MapPointToWorld(result.graph, layout, {18.0, 0.0});
+  // this module). `result.graph.outline.outer` is deliberately the RAW
+  // (zero-bend-allowance) frame — the same semantic as any manually-
+  // authored part's own `outline` field, matching what `graph.outline.outer`
+  // is actually built from (step_reconciliation's own r=0 topology-
+  // validation ring) — it only ever coincided with MapPointToWorld's real
+  // "F" contract (point_mapping.cc's own header: "the SAME widened frame
+  // flat_outline.cc's combined outline lives in") back when every
+  // reconciled bend's radiusMm was hardcoded to 0 (zero bend allowance, so
+  // raw==F). Now that a bend's default radius is a real, physical value
+  // (thicknessMm — see step_reconciliation.cc's own final-stamp comment),
+  // raw and F genuinely diverge by the bend's own allowance, and a query
+  // point must come from BuildFlatOutline's fresh, radius-aware F-frame
+  // output, never straight from graph.outline.outer, to stay correct at
+  // any radius (confirmed: mapping BuildFlatOutline's own corner forward
+  // reproduces the identical (10,0,8)/(10,5,8) truth at radiusMm=0 AND at
+  // the new thicknessMm default alike — the true 3D corner position is
+  // itself radius-independent for this fixture, since piece1 is a single
+  // rigid, unbent panel; only the F-frame COORDINATE that reaches it moves).
+  FlatOutlineResult flatOutline = BuildFlatOutline(result.graph, layout);
+  REQUIRE(flatOutline.ok);
+  // piece1's own far corners are the flat outline's own two vertices whose
+  // x-coordinate is the outline's own max (piece1 extends furthest from the
+  // hinge along the fold direction) — found structurally, not by a
+  // hardcoded value that would only hold at one specific radius.
+  double maxX = -std::numeric_limits<double>::infinity();
+  for (const auto& p : flatOutline.outer) maxX = std::max(maxX, p.x);
+  std::vector<Point2> farCorners;
+  for (const auto& p : flatOutline.outer) {
+    if (std::fabs(p.x - maxX) < 1e-6) farCorners.push_back(p);
+  }
+  REQUIRE(farCorners.size() == 2);
+  std::sort(farCorners.begin(), farCorners.end(),
+            [](const Point2& a, const Point2& b) { return a.y < b.y; });
+
+  MapToWorldResult corner = MapPointToWorld(result.graph, layout, farCorners[0]);
   REQUIRE(corner.ok);
   CHECK(Dist3(corner.point3d, {10, 0, 8}) < 1e-6);
 
-  MapToWorldResult corner2 = MapPointToWorld(result.graph, layout, {18.0, 5.0});
+  MapToWorldResult corner2 = MapPointToWorld(result.graph, layout, farCorners[1]);
   REQUIRE(corner2.ok);
   CHECK(Dist3(corner2.point3d, {10, 5, 8}) < 1e-6);
 }
@@ -326,12 +358,19 @@ TEST_CASE("ReconcilePieces: defaultBendRadiusMm is stamped onto every bend witho
           "[translation][step_reconciliation]") {
   auto pieces = MakeLBracket();
 
-  // Default (0.0, matching the historical sharp-fold assumption) round-trips
-  // to the exact positions the un-parameterized overload always produced.
+  // Default (unset — 0.0, the sentinel for "no org profile override") now
+  // resolves to thicknessMm, not a literal 0.0: see step_reconciliation.cc's
+  // own final-stamp comment and docs/BUG_REPORT_import_bend_radius_always_
+  // zero_or_thickness.md's 2026-09-14 correction — a caller that never
+  // specifies a default gets a real, manufacturable radius (the standard
+  // sheet-metal rule-of-thumb minimum, matching this project's own default
+  // MIN_BEND_RADIUS profile: minBendRadiusFactor=1.0 means the minimum
+  // acceptable radius already equals thicknessMm), not one guaranteed to
+  // fail its own validation on every single import.
   auto baseline = ReconcilePieces(pieces, 1.0);
   REQUIRE(baseline.ok);
   REQUIRE(baseline.graph.bends.size() == 1);
-  CHECK(baseline.graph.bends[0].radiusMm == Approx(0.0));
+  CHECK(baseline.graph.bends[0].radiusMm == Approx(1.0));
   CHECK(baseline.graph.bends[0].radiusMeasured == false);
   bool bottomIsConcave = baseline.graph.bends[0].bottomIsConcave.value_or(true);
 

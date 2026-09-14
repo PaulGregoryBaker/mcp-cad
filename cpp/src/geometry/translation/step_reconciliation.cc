@@ -942,8 +942,20 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
     // the flat zone width and 3D bridge together, fresh, from whatever
     // radius a bend carries — AC-E.3 self-consistency holds at any radius,
     // not only the one this replay happened to validate against).
+    //
+    // A caller that leaves defaultBendRadiusMm at its sentinel default
+    // (-1.0 — see this function's header comment) gets thicknessMm here,
+    // not a literal 0 — the standard sheet-metal rule-of-thumb minimum bend
+    // radius (confirmed: this exactly matches findings' own default
+    // profile, minBendRadiusFactor=1.0, i.e. minimum acceptable radius =
+    // thicknessMm — so an omitted default no longer trips MIN_BEND_RADIUS
+    // on every single import by construction). A caller that explicitly
+    // wants a genuinely sharp fold passes 0.0 literally and gets exactly
+    // that — -1.0 is not a real radius, so it's the only value that
+    // triggers the fallback; a real 0.0 request is honored as-is.
+    double effectiveDefaultRadiusMm = defaultBendRadiusMm < 0.0 ? thicknessMm : defaultBendRadiusMm;
     for (auto& bend : graph.bends) {
-      bend.radiusMm = defaultBendRadiusMm;
+      bend.radiusMm = effectiveDefaultRadiusMm;
     }
 
     out.ok = true;
