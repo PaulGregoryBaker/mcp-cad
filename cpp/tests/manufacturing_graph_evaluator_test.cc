@@ -689,9 +689,9 @@ TEST_CASE("GraphEvaluator: N=3..9 triangle-through-nonagon prisms all close",
 // Mountain is angleDeg<0 (bottomIsConcave's fallback polarity — see that
 // function's own comment), NOT angleDeg>=0 as an earlier version of this
 // test assumed.
-TEST_CASE("GraphEvaluator: sharp (r=0) N=3 closure — mountain matches the "
-          "suite's independent zero-reference formula exactly; valley does "
-          "NOT (real thickness-scale pivot offset), though both self-close",
+TEST_CASE("GraphEvaluator: sharp (r=0) N=3 closure - mountain matches the "
+ "suite's independent zero-reference formula exactly; valley does "
+ "NOT (real thickness-scale pivot offset), though both self-close",
           "[translation][closure][investigation]") {
   const double L = 60.0, widthMm = 40.0, thicknessMm = 1.0;
   const double bendDeg = 120.0;  // 360/3
@@ -1327,10 +1327,11 @@ TEST_CASE("GraphEvaluator: bend allowance shift is a no-op at radiusMm=0, kFacto
   CHECK(result.bridges[0].hingeB.y == Approx(graph.bends[0].hingeB.y).margin(1e-9));
 }
 
-TEST_CASE("ComputeBendGeometry: setback matches the standard sheet-metal formula "
-          "at a non-90-degree angle (90 alone can't distinguish tan(angle/2) "
-          "from other plausible variants, e.g. cot(angle/2), which happen to "
-          "coincide exactly at 90 degrees)",
+// 90 alone can't distinguish tan(angle/2) from other plausible variants,
+// e.g. cot(angle/2), which happen to coincide exactly at 90 degrees - a
+// non-90-degree angle is required to pin the real formula down.
+TEST_CASE("ComputeBendGeometry: setback matches the standard sheet-metal "
+          "formula at a non-90-degree angle",
           "[translation][bendgeometry]") {
   double angleRad = 1.0;  // ~57.3 degrees, deliberately not 90 or any round degree value
   double angleDeg = angleRad * 180.0 / kTestPi;

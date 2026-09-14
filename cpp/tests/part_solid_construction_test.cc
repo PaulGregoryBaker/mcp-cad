@@ -212,10 +212,12 @@ TEST_CASE("ConstructPartSolid: a panel with a circular hole and a polygon hole h
   CHECK(SolidVolume(it->second.shape) == Approx(expectedVolume).epsilon(0.001));
 }
 
+// New coverage for rawPolygonHoles/rawCircleHoles in a bent, shifted context
+// - nothing else in this file exercises a hole together with BA>0. Kept
+// short (see cpp/CMakeLists.txt's catch_discover_tests comment) - the full
+// rationale lives here, not in the ctest-registered name.
 TEST_CASE("ConstructPartSolid: a nonzero-radius bend with a hole on the child "
-          "panel reduces volume by exactly the hole's own volume (new coverage "
-          "for rawPolygonHoles/rawCircleHoles in a bent, shifted context — "
-          "nothing else in this file exercises a hole together with BA>0)",
+ "panel reduces volume by exactly the hole's own volume",
           "[translation][construction][holes]") {
   double widthMm = 40.0, thicknessMm = 2.0, radiusMm = 1.5, kFactor = 0.4;
 
@@ -961,9 +963,9 @@ TEST_CASE("ConstructPartSolid: rejects a broken bend assembly instead of accepti
 // as a permanent regression: if this ever stops matching, the overlap
 // mechanism itself has changed, which every other test here only bounds,
 // never explains directly.
-TEST_CASE("ConstructPartSolid: N=2 asymmetric sharp mountain fold — measured panel/panel "
-          "overlap minus the bridge's own real pie-wedge volume exactly accounts for the "
-          "naive-sum shortfall",
+TEST_CASE("ConstructPartSolid: N=2 asymmetric sharp mountain fold - measured panel/panel "
+ "overlap minus the bridge's own real pie-wedge volume exactly accounts for the "
+ "naive-sum shortfall",
           "[translation][construction]") {
   double widthMm = 5.0, thicknessMm = 1.0;
   double seg0Len = 8.115044407846124, seg1Len = 6.115044407846124;
@@ -1254,8 +1256,8 @@ TEST_CASE("ConstructPartSolid: each wall's own tangent-line boundary sits "
 // bit merge_partial_seam_tab_bracket.integration.test.ts's own
 // ReconcileOutlines output), but now actually constructed and diffed against
 // its own two source panels' real flat solids.
-TEST_CASE("ConstructPartSolid: partial-width (T-shaped) seam at a real nonzero radius — "
-          "binary diff against the two source panels leaves ONLY a small sliver at the bend",
+TEST_CASE("ConstructPartSolid: partial-width (T-shaped) seam at a real nonzero radius - "
+ "binary diff against the two source panels leaves ONLY a small sliver at the bend",
           "[translation][construction][regression]") {
   for (double angleDeg : {90.0, -90.0}) {
   for (double radiusMm : {0.95, 2.0}) {

@@ -116,7 +116,7 @@ TEST_CASE("DetectContact: signed angleDeg matches RotationAboutAxis's own conven
   CHECK(Dist2(contact.aRunEnd, {10, 5}) < 1e-6);
 }
 
-TEST_CASE("DetectContact: an asymmetric seam — B's edge covers only PART of A's longer edge",
+TEST_CASE("DetectContact: an asymmetric seam - B's edge covers only PART of A's longer edge",
           "[part_merge]") {
   // A: 20-wide x 5-tall plate; its right edge (length 5, x=20, y in [0,5]) is
   // one plain, un-split edge — no pre-authored sub-splitting. B: a 3x4
@@ -185,7 +185,7 @@ TEST_CASE("DetectContact: a genuinely coplanar pair is a typed error directing t
   CHECK(contact.errorCode == MergeErrorCode::kCoplanarSeam);
 }
 
-TEST_CASE("DetectContact: two disjoint contact regions — the longer one is chosen deterministically",
+TEST_CASE("DetectContact: two disjoint contact regions - the longer one is chosen deterministically",
           "[part_merge]") {
   // A: a 10x10 plate, right edge (10,-5)-(10,5) one plain unbroken edge.
   // B (local, CCW): a rectangle with a notch cut into its own bottom edge —
@@ -231,8 +231,8 @@ TEST_CASE("DetectContact: two disjoint contact regions — the longer one is cho
 // what the TS repro dumped (not hand-derived or rounded). Now asserts the
 // FIXED behavior: the real relief-cut midpoint (74.95, 0) sitting between
 // edgeB0/edgeB1 is dropped as part of the vanishing seam, not rejected.
-TEST_CASE("ReconcileOutlines: live-app regression — B's outline carries a real vertex strictly "
-          "between edgeB0 and edgeB1 (a relief-cut midpoint), absorbed into the seam",
+TEST_CASE("ReconcileOutlines: live-app regression - B's outline carries a real vertex strictly "
+ "between edgeB0 and edgeB1 (a relief-cut midpoint), absorbed into the seam",
           "[part_merge]") {
   std::vector<Point2> outlineA = {
       {450, 5.684341886080802e-14},
@@ -311,7 +311,7 @@ TEST_CASE("ReconcileOutlines: live-app regression — B's outline carries a real
 // exactly. It is the correctness spec the fix must satisfy: it must handle
 // the wrap-around case WITHOUT duplicating any vertex.
 TEST_CASE("ReconcileOutlines: a real interior vertex on a seam that wraps across the outline "
-          "array's own start/end boundary — the fix must not duplicate A's outline",
+ "array's own start/end boundary - the fix must not duplicate A's outline",
           "[part_merge]") {
   // A: a 10x5 rectangle with one genuine extra vertex (0,1) already sitting
   // on its own left edge (a "relief-cut midpoint," same real-world shape as

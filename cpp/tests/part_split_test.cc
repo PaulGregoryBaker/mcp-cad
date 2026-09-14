@@ -169,7 +169,7 @@ BendSpec MakeRightWallBend(double radiusMm) {
 }  // namespace
 
 TEST_CASE("SplitPartAtBend: on a branching cross net, radiusMm=0 (bend not yet measured) succeeds on "
-          "BOTH corner sides — a zero-length offset needs no local-edge search at all",
+ "BOTH corner sides - a zero-length offset needs no local-edge search at all",
           "[part_split]") {
   // Real reconciled parts (e.g. cpp/tests/fixtures/testcube.step, as
   // imported) commonly carry radiusMm=0 until a real bend radius is set.
@@ -202,9 +202,12 @@ TEST_CASE("SplitPartAtBend: on a branching cross net, radiusMm=0 (bend not yet m
   }
 }
 
-TEST_CASE("SplitPartAtBend: a negative angleDeg with an explicit bottomIsConcave (both real for "
-          "reconciled bends, not just hand-authored fixtures) does NOT change which keepCornerOn "
-          "value stays local — that's a fabrication choice, not a function of fold direction",
+// A negative angleDeg with an explicit bottomIsConcave (both real for
+// reconciled bends, not just hand-authored fixtures) does NOT change which
+// keepCornerOn value stays local - that's a fabrication choice, not a
+// function of fold direction.
+TEST_CASE("SplitPartAtBend: a negative angleDeg with an explicit "
+ "bottomIsConcave does not change which keepCornerOn value stays local",
           "[part_split]") {
   // ReconcilePieces stamps angleDeg<0 for some folds and bottomIsConcave
   // explicitly (not left to default) — both real for reconciled bends, and
@@ -247,10 +250,13 @@ TEST_CASE("SplitPartAtBend: a negative angleDeg with an explicit bottomIsConcave
   }
 }
 
-TEST_CASE("SplitPartAtBend: exhaustive over every (angleDeg sign, bottomIsConcave) combination a real "
-          "reconciled bend can carry — BOTH keepCornerOn sides stay local at this hinge (one via a "
-          "direct replace, the other via a local notch around the shared corner), regardless of "
-          "which literal fold direction produced the data",
+// Exhaustive over every (angleDeg sign, bottomIsConcave) combination a real
+// reconciled bend can carry - BOTH keepCornerOn sides stay local at this
+// hinge (one via a direct replace, the other via a local notch around the
+// shared corner), regardless of which literal fold direction produced the
+// data.
+TEST_CASE("SplitPartAtBend: exhaustive over every (angleDeg sign, "
+ "bottomIsConcave) combination stays local on both keepCornerOn sides",
           "[part_split]") {
   // sb's raw sign = (concave ? +1 : -1) * sign(angleDeg) — a real, data-
   // driven fact for reconciled bends, not just a hand-authored-fixture
@@ -347,8 +353,8 @@ TEST_CASE("SplitPartAtBend: on a branching cross net, a cut direction with no di
         Approx(std::fabs(ShoelaceArea(outline))).margin(1e-9));
 }
 
-TEST_CASE("SplitPartAtBend: on a branching cross net, the other direction stays local — child is just "
-          "the wall, not a sliver spanning the whole net",
+TEST_CASE("SplitPartAtBend: on a branching cross net, the other direction stays local - child is just "
+ "the wall, not a sliver spanning the whole net",
           "[part_split]") {
   auto outline = CrossOutline();
   auto bend = MakeRightWallBend(2.0);  // sb = 2*tan(45deg) = 2mm

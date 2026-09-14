@@ -39,10 +39,11 @@ std::vector<Point2> Rect(double x0, double y0, double x1, double y1) {
 
 }  // namespace
 
-TEST_CASE("PolygonUnion: a real testcube.step ring pair with OPPOSITE (CW vs CCW) winding — a "
-          "clean 0.05mm overlap, not a gap — unions correctly (live fuse_bodies failure, "
-          "2026-09; root cause was PolygonUnion never canonicalizing its input rings' winding "
-          "before building faces, NOT a position/shape/mirror defect)",
+// Live fuse_bodies failure, 2026-09; root cause was PolygonUnion never
+// canonicalizing its input rings' winding before building faces, NOT a
+// position/shape/mirror defect.
+TEST_CASE("PolygonUnion: a real testcube.step ring pair with OPPOSITE (CW vs "
+ "CCW) winding - a clean overlap, not a gap - unions correctly",
           "[translation][polygon_boolean]") {
   // A: a real split_part_at_bend panel's local outline (CCW), exactly as
   // measured live against testcube.step.
@@ -314,9 +315,10 @@ TEST_CASE("FuseCoplanarParts: a per-vertex-skewed touching edge (real STEP-impor
   CHECK(PolygonArea(result.outer) == Approx(120.0).margin(0.2));
 }
 
-TEST_CASE("FuseCoplanarParts: a rejected (too-large) gap reports the actual measured distance in "
-          "its error message, not just a generic 'disjoint' — this is what made a real live "
-          "'2 faces' failure (2026-08) unguessable without instrumenting the function by hand",
+// This is what made a real live '2 faces' failure (2026-08) unguessable
+// without instrumenting the function by hand.
+TEST_CASE("FuseCoplanarParts: a rejected (too-large) gap reports the actual "
+ "measured distance in its error message, not just a generic 'disjoint'",
           "[translation][polygon_boolean]") {
   Transform3 anchorA = Transform3::Identity();
   auto outlineA = Rect(0, 0, 10, 5);
