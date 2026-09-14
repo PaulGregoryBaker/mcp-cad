@@ -238,32 +238,30 @@ TEST_CASE("DetectContact: two disjoint contact regions - the longer one is chose
 // into this fixture's own STEP geometry, not import noise from this
 // recipe. DetectContact's own A-side coverage scan (part_merge.cc) checks
 // every A edge independently against a flat kMergeContactToleranceMm
-// (2mm) perpendicular-distance tolerance, with NO requirement that
-// qualifying edges be CONTIGUOUS with the genuine seam edge found first by
-// walking B's own run. Because the wing's edge is well within that 2mm
-// band (0.05mm max deviation over ~24mm), it gets pulled into the same
-// coverage interval as the real seam edge (vertex3->vertex4) even though
-// it is a physically different, non-touching feature - and because THIS
-// wing edge happens to be checked first in outlineA's own array order, its
-// own (slightly tilted) line becomes aLineOrigin/aLineDirHat, and the
-// run's own boundary point gets projected onto that wrong line instead of
-// the true seam line - landing ~0.05-0.3mm short of vertex3, not on it.
-// ReconcileOutlines then splices B onto a point that is not quite A's real
-// corner, leaving a razor-thin sliver of the wing's own edge unconsumed,
-// which SegmentsBadOverlap correctly flags (it sits nowhere near the tight
-// kExactMatchEpsilonMm "same point" tolerance the splice-vertex allowance
-// uses). The error message is accurate, not a false alarm - the CONTACT
-// INTERVAL itself is what's wrong.
+// (2mm) perpendicular-distance tolerance, and picked whichever qualifying
+// edge came FIRST in outlineA's own array order to set aLineOrigin/
+// aLineDirHat (the line B's boundary gets projected onto). The wing edge
+// is checked first (index 2, before the true seam edge at index 3) and is
+// well within that 2mm band, so its own (slightly tilted) line won by
+// pure accident even though its genuine overlap with this run's own
+// [0, runLen] window is only ~0.05mm - a coincidental sliver, not a real
+// physical touch - against the true seam edge's ~150mm overlap. Landing
+// on the wrong line projected the run's boundary ~0.05-0.3mm short of
+// vertex3, not onto it; ReconcileOutlines then spliced B onto a point
+// that wasn't quite A's real corner, leaving a razor-thin sliver of the
+// wing's own edge unconsumed, which SegmentsBadOverlap correctly flagged.
 //
-// PINNED AS A KNOWN BUG, not yet fixed: this test currently asserts the
-// CURRENT (buggy) rejection. Once DetectContact's A-side coverage scan is
-// changed to require CONTIGUITY with the seed seam edge (matching how B's
-// own side already finds its run via a contiguous edgeIsFlat walk, not a
-// pointwise per-edge distance check), this test should be updated to
-// assert reconciliation SUCCEEDS instead.
-TEST_CASE("DetectContact+ReconcileOutlines: a fused protrusion's near-collinear wing edge "
- "steals A-side seam coverage (KNOWN BUG, not yet fixed)",
-          "[part_merge][known_bug]") {
+// FIXED: aLineOrigin/aLineDirHat are now chosen by whichever qualifying
+// edge has the GREATEST positive-length overlap with the run's own
+// window, not simply the first one found in array order - the true seam
+// edge's ~150mm overlap always dominates a coincidental sliver like the
+// wing edge's 0.05mm. Also added: an edge whose own extent doesn't
+// positively overlap the run's window at all (a touch or a miss) no
+// longer counts as coverage, the same "positive-length overlap, not just
+// a touch" distinction SegmentsBadOverlap already relies on elsewhere.
+TEST_CASE("DetectContact+ReconcileOutlines: a fused protrusion's near-collinear wing edge no "
+ "longer steals A-side seam coverage (regression for the fix above)",
+          "[part_merge]") {
   std::vector<Point2> outlineA = {
       {0.05000000000001137, 150},
       {-24, 150.05},
@@ -296,17 +294,20 @@ TEST_CASE("DetectContact+ReconcileOutlines: a fused protrusion's near-collinear 
 
   auto contact = DetectContact(outlineA, anchorA, outlineB, anchorB);
   REQUIRE(contact.ok);
-  // DetectContact itself reports success - the wrong interval, not an
-  // outright rejection, is exactly what makes this bug class dangerous:
-  // it silently produces a slightly-wrong boundary instead of failing
-  // closed at this step.
   CHECK(contact.contactRegionCount == 1);
+  // The detected interval now lands cleanly on A's own true seam edge
+  // (0,0)-(150,0), not ~0.05-0.3mm off it.
+  CHECK(Dist2(contact.aRunStart, {0, 0}) < 1e-3);
+  CHECK(Dist2(contact.aRunEnd, {150, 0}) < 1e-3);
 
   auto result = ReconcileOutlines(outlineA, contact.aRunStart, contact.aRunEnd, outlineB, contact.bRunStart,
                                    contact.bRunEnd);
-  // KNOWN BUG: currently rejected. See this TEST_CASE's own doc comment.
-  CHECK_FALSE(result.ok);
-  CHECK(result.errorCode == MergeErrorCode::kMergeSelfIntersecting);
+  REQUIRE(result.ok);
+  double areaA = std::fabs(ShoelaceArea(outlineA));
+  double areaB = std::fabs(ShoelaceArea(outlineB));
+  double areaCombined = ShoelaceArea(result.combinedOutline);
+  CHECK(areaCombined == Approx(areaA + areaB).margin(1e-2));
+  CHECK(areaCombined > 0.0);  // still CCW
 }
 
 // STEP 2 (structured repro, live-app regression 2026-09): the EXACT real

@@ -271,7 +271,27 @@ DetectContactResult DetectContact(const std::vector<Point2>& outlineA, const Tra
     Point2 aLineDirHat{};
     bool anyACoverage = false;
     bool aForwardIsIncreasingT = true;
-    bool haveDirection = false;
+    // The edge that sets aLineOrigin/aLineDirHat is chosen by which
+    // qualifying edge has the GREATEST positive-length overlap with this
+    // run's own [0, runLen] window — never simply "whichever edge is
+    // first in outlineA's own array order" (the earlier design). A
+    // completely different physical feature (e.g. a fused protrusion's
+    // own edge) can pass the perpendicular-distance check by coincidence
+    // whenever it happens to run near-parallel to the seam's line,
+    // without actually being part of the same contact run — confirmed
+    // live (testcube.step, a fused Protrusion2): a wing edge overlapped
+    // this run's window by only 0.05mm (real STEP-fixture noise, not a
+    // rejection-worthy amount) while the TRUE seam edge overlapped it by
+    // the full ~150mm run length. Under "first found," the wing edge
+    // (checked first in array order) won by accident, and B's boundary
+    // got projected onto its own slightly-tilted line instead of the
+    // true seam's, landing the detected contact interval ~0.05mm off the
+    // panel's real corner and producing a spurious
+    // GE_MERGE_SELF_INTERSECTION. "Largest overlap wins" picks whichever
+    // edge is actually, overwhelmingly responsible for this run's A-side
+    // coverage, which a coincidental sliver from an unrelated edge can
+    // never outweigh.
+    double bestLineOverlapMm = 0.0;
     for (size_t i = 0; i < n; ++i) {
       const Point2& a1 = outlineA[i];
       const Point2& a2 = outlineA[(i + 1) % n];
@@ -287,21 +307,31 @@ DetectContactResult DetectContact(const std::vector<Point2>& outlineA, const Tra
       if (perpDist(a1) > kMergeContactToleranceMm || perpDist(a2) > kMergeContactToleranceMm) continue;
       const double t1 = Dot2(Sub2(a1, runStart2D), runDir);
       const double t2 = Dot2(Sub2(a2, runStart2D), runDir);
+      // This edge's own [t1,t2] extent must have a genuine positive-
+      // length overlap with the run's own [0, runLen] window — an edge
+      // that merely touches or misses that window entirely (its whole
+      // extent on one side) isn't coverage of THIS run at all, the same
+      // "positive-length overlap, not just a touch" distinction
+      // SegmentsBadOverlap (below) already relies on elsewhere.
+      const double edgeLo = std::min(t1, t2);
+      const double edgeHi = std::max(t1, t2);
+      const double coverageOverlap = std::min(edgeHi, runLen) - std::max(edgeLo, 0.0);
+      if (coverageOverlap <= kExactMatchEpsilonMm) continue;
       if (t1 < aLo) { aLo = t1; aLoPoint = a1; }
       if (t2 < aLo) { aLo = t2; aLoPoint = a2; }
       if (t1 > aHi) { aHi = t1; aHiPoint = a1; }
       if (t2 > aHi) { aHi = t2; aHiPoint = a2; }
       anyACoverage = true;
-      if (!haveDirection) {
+      if (coverageOverlap > bestLineOverlapMm) {
         // A's own forward walk on THIS edge goes a1 -> a2; record whether
         // that is increasing or decreasing t, to orient the final output,
         // and this edge's own true line for the gap-closing projection above.
+        bestLineOverlapMm = coverageOverlap;
         aForwardIsIncreasingT = t2 > t1;
         aLineOrigin = a1;
         const Point2 aDir = Sub2(a2, a1);
         const double aDirLen = Length2(aDir);
         aLineDirHat = aDirLen > 1e-9 ? Point2{aDir.x / aDirLen, aDir.y / aDirLen} : runDir;
-        haveDirection = true;
       }
     }
     if (!anyACoverage) continue;
