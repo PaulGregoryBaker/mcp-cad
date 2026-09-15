@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 
 import { GraphStore } from '../../src/v2/graph/store';
 import { dispatchGraphTool } from '../../src/v2/tools/graph';
-import { evaluatePart } from '../../src/v2/graph/evaluate-client';
+import { evaluatePart, mapPointToWorld } from '../../src/v2/graph/evaluate-client';
 import { McpToolError } from '../../src/mcp/errors';
 import type { Point2 } from '../../src/v2/graph/types';
 import type { NapiTransform3 } from '../../src/geometry/types';
@@ -196,6 +196,68 @@ d('split_part_at_bend', () => {
     const childArea = shoelaceArea(store.getPart(split.new_part_ids[0])!.outline);
     expect(parentArea).toBeGreaterThan(10 * 5);
     expect(childArea).toBeLessThan(5 * 8);
+  });
+
+  /**
+   * Live-app regression (2026-09-15): "gaps between panels" reported after
+   * split_part_at_bend on every bend of a real multi-bend imported part.
+   * Root cause: the new child part's outline (part_split.hpp, C++) is
+   * trimmed/grown at the bend's TRUE TANGENT LINE (sb = |radius *
+   * tan(angle/2)| from the raw hinge — real material for a non-zero-radius
+   * bend), but its anchor (evaluate-client.ts's `childAnchor:
+   * childPanelLayout.pose`) is a rotation about the SHARP (radius=0, raw
+   * hinge) axis — manufacturing_graph_evaluator.cc's own pose-walk comment
+   * confirms this is deliberate for ITS OWN use ("the panels' wall geometry
+   * is trimmed to where the TRUE axis's cylinder begins, so that once posed
+   * by the SHARP rotation, it meets the separately-built bridge exactly").
+   * split_part_at_bend removes the bend and its bridge entirely, so the
+   * child's outline extends into exactly the zone where the sharp-axis
+   * pose and the true axis diverge — for THIS fixture (radius=2,
+   * angle=-90, concave), that divergence is real and measurable, not a
+   * unit-conversion or float-noise scale gap.
+   *
+   * The pinned regression: the actual NEW boundary vertex the split
+   * introduces (not the invariant raw hinge, which both bendRow.hingeA/B
+   * and the existing tests above already cover and which this bug does
+   * NOT affect) must map to the SAME world position whether queried via
+   * the parent's own remaining outline+anchor or the child's own new
+   * outline+anchor — it is the same physical edge, shared by construction.
+   */
+  it('KNOWN BUG: the new tangent-line boundary vertex a real (non-zero-radius) split '
+    + 'introduces must land at the same world position on both sides of the cut', () => {
+    const store = new GraphStore();
+    const { partAId, partBId } = authorTwoParts(store);
+    const merged = mergeTwoParts(store, partAId, partBId);
+
+    const split = dispatchGraphTool(store, 'split_part_at_bend', {
+      part_id: partAId,
+      bend_id: merged.bend_id,
+      keep_corner_on: 'parent',
+    }) as SplitToolResult;
+    const childId = split.new_part_ids[0];
+
+    const parentOutline = store.getPart(partAId)!.outline;
+    const childOutline = store.getPart(childId)!.outline;
+    const sharedVertices = childOutline.filter((cv) =>
+      parentOutline.some((pv) => Math.abs(pv.x - cv.x) < 1e-6 && Math.abs(pv.y - cv.y) < 1e-6));
+    // The split must actually introduce at least one new, real boundary
+    // vertex shared by both sides — otherwise this test isn't exercising
+    // the bug at all (radius=2 on a 90deg bend always does).
+    expect(sharedVertices.length).toBeGreaterThan(0);
+
+    for (const v of sharedVertices) {
+      const fromParent = mapPointToWorld(store, partAId, v);
+      const fromChild = mapPointToWorld(store, childId, v);
+      expect(fromParent.ok, fromParent.message).toBe(true);
+      expect(fromChild.ok, fromChild.message).toBe(true);
+      const gap = Math.hypot(
+        fromParent.point3d.x - fromChild.point3d.x,
+        fromParent.point3d.y - fromChild.point3d.y,
+        fromParent.point3d.z - fromChild.point3d.z,
+      );
+      expect(gap, `shared vertex (${v.x},${v.y}) must land at the same world position ` +
+        `from both parent and child`).toBeLessThan(1e-6);
+    }
   });
 
   it('split_part_at_bend rejects a bend that does not belong to the given part', () => {
