@@ -66,12 +66,42 @@ struct SplitAtBendResult {
   std::string message;
   std::vector<Point2> parentOutline;  // CCW
   std::vector<Point2> childOutline;   // CCW
+  // The new child part's own anchor — a rotation about the axis THIS
+  // split's own cut actually introduces (the corner-biased cut point,
+  // raw hinge shifted by this bend's own setback magnitude along nLeft
+  // per keepCornerOn — never negative, see this file's own
+  // BottomIsConcave/setback comment), composed with `parentPose` (the
+  // caller's own, unchanged pose for whichever region panel is
+  // SplitPartAtBend's own bend.parentRegionPanelId).
+  //
+  // Deliberately NOT built from Evaluate()'s own axisInPlaneOffset-based
+  // axis (a different, pose-walk-internal quantity whose sign depends on
+  // angleDeg's own raw sign combined with concave/convex, and can come
+  // out on the wrong side of the raw hinge for some real fold/concavity
+  // combinations — confirmed live, see split_part_at_bend.integration.
+  // test.ts's own regression test): using THIS split's own cut point
+  // instead guarantees childAnchor and childOutline stay self-consistent
+  // by construction, since both come from the same cutA/cutB — no second,
+  // independently-signed quantity to drift out of sync with the first.
+  //
+  // Only meaningful when SplitPartAtBend was called with a real
+  // `parentPose` — defaults to Transform3::Identity() composed the same
+  // way when the caller doesn't have one (e.g. a pure-2D unit test that
+  // only cares about parentOutline/childOutline).
+  Transform3 childAnchor;
 };
 
 // outline: the part's one stored flat outline (CCW). bend: the ONE live bend
 // being split off — bend.hingeA/hingeB in the SAME flat frame as `outline`.
 // thicknessMm: the part's own thickness (bend allowance's kFactor term).
+// parentPose: the CURRENT 3D pose of bend.parentRegionPanelId (Evaluate()'s
+// own already-computed, always-correct RegionPanelLayout::pose for that
+// panel — see SplitAtBendResult::childAnchor's own comment for why this
+// function derives the new child's anchor from it directly rather than
+// leaving the caller to reconcile a second, independently-signed axis).
+// Defaults to identity for callers that only need the 2D outlines.
 SplitAtBendResult SplitPartAtBend(const std::vector<Point2>& outline, const BendSpec& bend,
-                                   double thicknessMm, CornerSide keepCornerOn);
+                                   double thicknessMm, CornerSide keepCornerOn,
+                                   const Transform3& parentPose = Transform3::Identity());
 
 }  // namespace mcp_cad::translation

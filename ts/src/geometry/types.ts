@@ -794,6 +794,11 @@ export interface SplitPartAtBendResult {
   message: string;
   parentOutline: NapiPoint2[];
   childOutline: NapiPoint2[];
+  // The new child part's own anchor — a rotation about the axis this
+  // split's own cut introduces (self-consistent with childOutline by
+  // construction, see SplitAtBendResult::childAnchor's own C++ doc
+  // comment), composed with the parentPose passed into splitPartAtBend.
+  childAnchor: NapiTransform3;
 }
 
 // rebuild/13-translation-module-design.md §6 / step_reconciliation.hpp —

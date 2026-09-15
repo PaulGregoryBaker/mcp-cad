@@ -268,7 +268,8 @@ std::vector<Point2> ResolveCrossings(std::vector<Point2> ring) {
 }  // namespace
 
 SplitAtBendResult SplitPartAtBend(const std::vector<Point2>& outline, const BendSpec& bend,
-                                   double thicknessMm, CornerSide keepCornerOn) {
+                                   double thicknessMm, CornerSide keepCornerOn,
+                                   const Transform3& parentPose) {
   SplitAtBendResult result;
 
   auto groundedHinge = GroundLine(outline, bend.hingeA, bend.hingeB, bend.hingeA, bend.hingeB);
@@ -439,6 +440,38 @@ SplitAtBendResult SplitPartAtBend(const std::vector<Point2>& outline, const Bend
   result.ok = true;
   result.childOutline = childOut;
   result.parentOutline = parentOut;
+
+  // childAnchor: a rotation about the axis THIS split's own cut (cutA/
+  // cutB, already computed above — always the correct, non-negative-
+  // magnitude tangent point per keepCornerOn, see SplitAtBendResult's own
+  // doc comment) introduces, composed with the caller's own parentPose —
+  // never Evaluate()'s own axisInPlaneOffset-based axis, so childAnchor
+  // and childOutline are self-consistent by construction (same cutA/
+  // cutB feed both).
+  Point3 cutA3{cutA.x, cutA.y, 0.0};
+  Point3 cutB3{cutB.x, cutB.y, 0.0};
+  Point3 cutAWorld = parentPose.Apply(cutA3);
+  Point3 cutBWorld = parentPose.Apply(cutB3);
+  Point3 axisDelta{cutBWorld.x - cutAWorld.x, cutBWorld.y - cutAWorld.y, cutBWorld.z - cutAWorld.z};
+  double axisLen = std::sqrt(axisDelta.x * axisDelta.x + axisDelta.y * axisDelta.y +
+                              axisDelta.z * axisDelta.z);
+  if (axisLen < kGeometricEpsilon) {
+    // Mathematically unreachable given a valid (rigid) parentPose and a
+    // real bend (cutA != cutB in 2D, guaranteed by the ring-vertex/chain-
+    // size checks already passed above) — a rigid transform can't collapse
+    // two distinct 2D points onto the same 3D point. Fails typed rather
+    // than silently defaulting childAnchor (no-fallback-rule), in case
+    // that guarantee is ever violated by a future caller.
+    result.ok = false;
+    result.errorCode = SplitErrorCode::kDegenerateResult;
+    result.message = "cutA/cutB collapsed to the same 3D point under parentPose — no rotation "
+                      "axis to build the child anchor from";
+    return result;
+  }
+  Point3 axisDir{axisDelta.x / axisLen, axisDelta.y / axisLen, axisDelta.z / axisLen};
+  Transform3 cutFold = Transform3::RotationAboutAxis(cutAWorld, axisDir, bend.angleDeg);
+  result.childAnchor = cutFold.Compose(parentPose);
+
   return result;
 }
 
