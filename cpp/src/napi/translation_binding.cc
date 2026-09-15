@@ -940,7 +940,6 @@ Napi::Object WriteSplitAtBendResult(Napi::Env env, const SplitAtBendResult& resu
   obj.Set("message", Napi::String::New(env, result.message));
   obj.Set("parentOutline", WritePoint2Array(env, result.parentOutline));
   obj.Set("childOutline", WritePoint2Array(env, result.childOutline));
-  obj.Set("childAnchor", WriteTransform3(env, result.childAnchor));
   return obj;
 }
 
@@ -955,11 +954,11 @@ Napi::Object WritePolygonBooleanResult(Napi::Env env, const PolygonBooleanResult
 
 Napi::Value SplitPartAtBendBinding(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  if (info.Length() < 5 || !info[0].IsArray() || !info[1].IsObject() || !info[2].IsNumber() ||
-      !info[3].IsString() || !info[4].IsObject()) {
+  if (info.Length() < 4 || !info[0].IsArray() || !info[1].IsObject() || !info[2].IsNumber() ||
+      !info[3].IsString()) {
     Napi::TypeError::New(
         env, "splitPartAtBend(outline: Point2[], bend: BendSpec, thicknessMm: number, "
-             "keepCornerOn: 'parent' | 'child', parentPose: Transform3)")
+             "keepCornerOn: 'parent' | 'child')")
         .ThrowAsJavaScriptException();
     return env.Undefined();
   }
@@ -970,10 +969,9 @@ Napi::Value SplitPartAtBendBinding(const Napi::CallbackInfo& info) {
     std::string keepCornerOnStr = info[3].As<Napi::String>().Utf8Value();
     CornerSide keepCornerOn =
         keepCornerOnStr == "child" ? CornerSide::kChild : CornerSide::kParent;
-    Transform3 parentPose = ReadTransform3(info[4].As<Napi::Object>());
 
     SplitAtBendResult result =
-        translation::SplitPartAtBend(outline, bend, thicknessMm, keepCornerOn, parentPose);
+        translation::SplitPartAtBend(outline, bend, thicknessMm, keepCornerOn);
     return WriteSplitAtBendResult(env, result);
   } catch (const std::exception& e) {
     Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();

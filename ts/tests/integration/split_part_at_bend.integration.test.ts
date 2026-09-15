@@ -11,12 +11,27 @@ import { describe, expect, it } from 'vitest';
 
 import { GraphStore } from '../../src/v2/graph/store';
 import { dispatchGraphTool } from '../../src/v2/tools/graph';
-import { mapPointToWorld } from '../../src/v2/graph/evaluate-client';
+import { evaluatePart, mapPointToWorld } from '../../src/v2/graph/evaluate-client';
 import { McpToolError } from '../../src/mcp/errors';
 import type { Point2 } from '../../src/v2/graph/types';
+import type { NapiTransform3 } from '../../src/geometry/types';
 
 const ENABLED = process.env.SUITE_V2_DRIVER === '1';
 const d = ENABLED ? describe : describe.skip;
+
+/** p' = R*p + t (row-major 3x3 r), z=0 — mirrors Transform3::Apply
+ * (manufacturing_graph_evaluator.hpp) so the test can independently verify
+ * a `pose` bakes a flat-frame point to the SAME 3D position on both sides
+ * of a split, without depending on any internal helper under test. */
+function applyPose(pose: NapiTransform3, p: Point2): { x: number; y: number; z: number } {
+  const [r0, r1, r2, r3, r4, r5, r6, r7, r8] = pose.r;
+  const [tx, ty, tz] = pose.t;
+  return {
+    x: r0 * p.x + r1 * p.y + r2 * 0 + tx,
+    y: r3 * p.x + r4 * p.y + r5 * 0 + ty,
+    z: r6 * p.x + r7 * p.y + r8 * 0 + tz,
+  };
+}
 
 interface MergeToolResult {
   part_id: string;
@@ -105,6 +120,19 @@ d('split_part_at_bend', () => {
     const combinedArea = shoelaceArea(store.getPart(partAId)!.outline);
     expect(combinedArea).toBeCloseTo(10 * 5 + 5 * 8, 6);
 
+    // Capture the bend's own hinge (frame F) and the pose it folds that
+    // hinge to in 3D WHILE the merge is still intact — the ground truth
+    // "where this material actually is" the split must not disturb.
+    const bendRow = store.getBend(merged.bend_id)!;
+    const layoutBefore = evaluatePart(store, partAId);
+    expect(layoutBefore.ok).toBe(true);
+    const childPanelBefore = layoutBefore.panels.find(
+      (p) => p.regionPanelId === merged.child_region_panel_id,
+    )!;
+    expect(childPanelBefore).toBeDefined();
+    const hingeA3dBefore = applyPose(childPanelBefore.pose, bendRow.hingeA);
+    const hingeB3dBefore = applyPose(childPanelBefore.pose, bendRow.hingeB);
+
     const split = dispatchGraphTool(store, 'split_part_at_bend', {
       part_id: partAId,
       bend_id: merged.bend_id,
@@ -129,30 +157,23 @@ d('split_part_at_bend', () => {
     expect(childArea).toBeGreaterThan(5 * 8);
     expect(parentArea).toBeLessThan(10 * 5);
 
-    // The split-off part no longer has a live bend to fold it. Removing a
-    // real (non-zero-radius) bend means its child's ENTIRE body legitimately
-    // moves to a new, flat-cut position — a fixed, whole-body offset from
-    // where the same material sat under the real curved fold (two different
-    // rotation axes for the same angle differ by a CONSTANT vector, the
-    // same at every point, not just near the hinge) — so "the same frame-F
-    // point lands at the same 3D position as before" is not the right
-    // invariant to check post-fix. What must hold is internal consistency:
-    // the new shared boundary this split introduces lands at the SAME 3D
-    // position whether queried via the parent's own (unchanged) anchor or
-    // the child's own new one — see split_part_at_bend.integration.test.ts's
-    // own "KNOWN BUG" regression test for the full derivation of why.
-    const sharedVertices = childOutline.filter((cv) =>
-      parentOutline.some((pv) => Math.abs(pv.x - cv.x) < 1e-6 && Math.abs(pv.y - cv.y) < 1e-6));
-    expect(sharedVertices.length).toBeGreaterThan(0);
-    for (const v of sharedVertices) {
-      const fromParent = mapPointToWorld(store, partAId, v);
-      const fromChild = mapPointToWorld(store, childId, v);
-      expect(fromParent.ok, fromParent.message).toBe(true);
-      expect(fromChild.ok, fromChild.message).toBe(true);
-      expect(fromChild.point3d.x).toBeCloseTo(fromParent.point3d.x, 6);
-      expect(fromChild.point3d.y).toBeCloseTo(fromParent.point3d.y, 6);
-      expect(fromChild.point3d.z).toBeCloseTo(fromParent.point3d.z, 6);
-    }
+    // The split-off part no longer has a live bend to fold it — its own
+    // anchor must already bake in the fold, so the SAME frame-F hinge
+    // points land at the SAME 3D position as they did while still merged.
+    const layoutAfter = evaluatePart(store, childId);
+    expect(layoutAfter.ok).toBe(true);
+    const childPanelAfter = layoutAfter.panels.find(
+      (p) => p.regionPanelId === merged.child_region_panel_id,
+    )!;
+    expect(childPanelAfter).toBeDefined();
+    const hingeA3dAfter = applyPose(childPanelAfter.pose, bendRow.hingeA);
+    const hingeB3dAfter = applyPose(childPanelAfter.pose, bendRow.hingeB);
+    expect(hingeA3dAfter.x).toBeCloseTo(hingeA3dBefore.x, 6);
+    expect(hingeA3dAfter.y).toBeCloseTo(hingeA3dBefore.y, 6);
+    expect(hingeA3dAfter.z).toBeCloseTo(hingeA3dBefore.z, 6);
+    expect(hingeB3dAfter.x).toBeCloseTo(hingeB3dBefore.x, 6);
+    expect(hingeB3dAfter.y).toBeCloseTo(hingeB3dBefore.y, 6);
+    expect(hingeB3dAfter.z).toBeCloseTo(hingeB3dBefore.z, 6);
 
     // Regression guard: for a real (non-zero-angle) bend, the child's own
     // anchor must NOT just be a copy of the parent's (that was the bug —
@@ -180,41 +201,30 @@ d('split_part_at_bend', () => {
   /**
    * Live-app regression (2026-09-15): "gaps between panels" reported after
    * split_part_at_bend on every bend of a real multi-bend imported part.
-   *
    * Root cause: the new child part's outline (part_split.hpp, C++) is
    * trimmed/grown at the bend's TRUE TANGENT LINE (sb = |radius *
    * tan(angle/2)| from the raw hinge — real material for a non-zero-radius
-   * bend), but its anchor used to be built from Evaluate()'s own
-   * childRegionPanelId pose — a rotation about a DIFFERENT axis
-   * (Evaluate()'s pose-walk uses one axis for the flat panel and a
-   * separate, offset TRUE axis for the bend's own curved bridge; the two
-   * only reconcile when both are present together and fused, which
-   * split_part_at_bend's whole point is to remove). Reusing that pose for
-   * an outline trimmed at the true tangent line left a real, measurable
-   * gap — not a unit-conversion or float-noise scale issue.
-   *
-   * A tangent-line offset is a physical distance and can never be
-   * negative; an attempted fix that added `fabs()` to Evaluate()'s own
-   * axisInPlaneOffset formula (to match ComputeBendGeometry's own always-
-   * non-negative setbackMm) broke 19 other, already-passing tests — other
-   * code already depends on that value's current signed behavior. Fixed
-   * instead by having SplitPartAtBend (part_split.cc) build the child's
-   * own anchor directly from THIS split's own cut point (already
-   * correctly signed, magnitude-only per keepCornerOn) composed with the
-   * caller-supplied parentPose — never Evaluate()'s axisInPlaneOffset-
-   * based axis at all, so childAnchor and childOutline are self-
-   * consistent by construction (SplitAtBendResult::childAnchor's own doc
-   * comment).
+   * bend), but its anchor (evaluate-client.ts's `childAnchor:
+   * childPanelLayout.pose`) is a rotation about the SHARP (radius=0, raw
+   * hinge) axis — manufacturing_graph_evaluator.cc's own pose-walk comment
+   * confirms this is deliberate for ITS OWN use ("the panels' wall geometry
+   * is trimmed to where the TRUE axis's cylinder begins, so that once posed
+   * by the SHARP rotation, it meets the separately-built bridge exactly").
+   * split_part_at_bend removes the bend and its bridge entirely, so the
+   * child's outline extends into exactly the zone where the sharp-axis
+   * pose and the true axis diverge — for THIS fixture (radius=2,
+   * angle=-90, concave), that divergence is real and measurable, not a
+   * unit-conversion or float-noise scale gap.
    *
    * The pinned regression: the actual NEW boundary vertex the split
-   * introduces (not the invariant raw hinge, which the other tests above
-   * already cover and which this bug never affected) must map to the SAME
-   * world position whether queried via the parent's own remaining
-   * outline+anchor or the child's own new outline+anchor — it is the same
-   * physical edge, shared by construction.
+   * introduces (not the invariant raw hinge, which both bendRow.hingeA/B
+   * and the existing tests above already cover and which this bug does
+   * NOT affect) must map to the SAME world position whether queried via
+   * the parent's own remaining outline+anchor or the child's own new
+   * outline+anchor — it is the same physical edge, shared by construction.
    */
-  it('the new tangent-line boundary vertex a real (non-zero-radius) split introduces '
-    + 'lands at the same world position on both sides of the cut', () => {
+  it('KNOWN BUG: the new tangent-line boundary vertex a real (non-zero-radius) split '
+    + 'introduces must land at the same world position on both sides of the cut', () => {
     const store = new GraphStore();
     const { partAId, partBId } = authorTwoParts(store);
     const merged = mergeTwoParts(store, partAId, partBId);
