@@ -335,6 +335,36 @@ export function splitPartAtBend(
     );
   }
 
+  // The bend's own parentRegionPanelId pose, read WHILE the bend is still
+  // live — the chain-product 3D transform (root anchor + every ancestor
+  // bend) that panel currently has, always correct (this panel's own
+  // fold, if any, is unaffected by removing a bend further down its own
+  // subtree). Passed into splitPartAtBend (C++) below so it can build the
+  // new child part's own anchor directly from THIS split's own cut point
+  // (part_split.hpp's SplitAtBendResult::childAnchor doc comment) —
+  // deliberately not Evaluate()'s own childRegionPanelId pose (the
+  // pre-split live-bend pose), which relies on a different, pose-walk-
+  // internal axis that isn't guaranteed consistent with this split's own
+  // 2D cut (confirmed live: a real measurable gap for some fold/
+  // concavity combinations — split_part_at_bend.integration.test.ts's
+  // own regression test).
+  const layout = evaluatePart(store, input.partId);
+  if (!layout.ok) {
+    throwError(
+      (layout.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
+      layout.message || `evaluatePartGraph failed for part ${input.partId}`,
+      false,
+    );
+  }
+  const parentPanelLayout = layout.panels.find((p) => p.regionPanelId === bend.parentRegionPanelId);
+  if (!parentPanelLayout) {
+    throwError(
+      ErrorCodes.INTERNAL_ERROR,
+      `evaluatePartGraph result for part ${input.partId} is missing panel ${bend.parentRegionPanelId}`,
+      false,
+    );
+  }
+
   const split = geometryBinding.splitPartAtBend(
     part.outline,
     {
@@ -351,6 +381,7 @@ export function splitPartAtBend(
     },
     part.thicknessMm,
     input.keepCornerOn,
+    parentPanelLayout.pose,
   );
   if (!split.ok) {
     throwError(
@@ -360,35 +391,12 @@ export function splitPartAtBend(
     );
   }
 
-  // The bend's own childRegionPanelId pose, read WHILE the bend is still
-  // live — the chain-product 3D transform (root anchor + every ancestor
-  // bend) that panel had while folded. This becomes the new child part's
-  // anchor below, so it keeps its exact 3D position with no live bend left
-  // to fold it there (see SplitPartAtBendInput.childAnchor's own comment,
-  // store.ts).
-  const layout = evaluatePart(store, input.partId);
-  if (!layout.ok) {
-    throwError(
-      (layout.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
-      layout.message || `evaluatePartGraph failed for part ${input.partId}`,
-      false,
-    );
-  }
-  const childPanelLayout = layout.panels.find((p) => p.regionPanelId === bend.childRegionPanelId);
-  if (!childPanelLayout) {
-    throwError(
-      ErrorCodes.INTERNAL_ERROR,
-      `evaluatePartGraph result for part ${input.partId} is missing panel ${bend.childRegionPanelId}`,
-      false,
-    );
-  }
-
   const { childPart } = store.splitPartAtBend({
     partId: input.partId,
     bendId: input.bendId,
     parentOutline: split.parentOutline,
     childOutline: split.childOutline,
-    childAnchor: childPanelLayout.pose,
+    childAnchor: split.childAnchor,
   });
   return { childPart, bendId: input.bendId };
 }
