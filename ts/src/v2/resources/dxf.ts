@@ -87,3 +87,34 @@ export function buildFlatPatternDxf(
   lines.push('0', 'ENDSEC', '0', 'EOF');
   return lines.join('\n');
 }
+
+/** One placed copy on a nesting sheet — outline/holes/circleHoles already
+ * transformed into the sheet frame by C++ (rebuild/21 §6.2), so this module
+ * only formats them. */
+export interface NestedSheetPlacement {
+  partId: string;
+  copyIndex: number;
+  outline: Point2[];
+  holes: Point2[][];
+  circleHoles: Array<{ cx: number; cy: number; radiusMm: number }>;
+}
+
+/** One sheet of a nested layout as an ENTITIES-only ASCII DXF. Each placed
+ * copy is drawn on its own `<part_id>#<copy_index>` layer (outline as a
+ * closed LWPOLYLINE, polygon holes as closed LWPOLYLINEs, circle holes as
+ * native CIRCLEs) so a CAM post can tell which copy is which. Pure string
+ * formatting of C++-computed point arrays — no geometric computation
+ * (constitution v2.0.0 principle IV). */
+export function buildNestedSheetDxf(placements: NestedSheetPlacement[]): string {
+  const lines: string[] = ['0', 'SECTION', '2', 'ENTITIES'];
+  for (const p of placements) {
+    const layer = `${p.partId}#${p.copyIndex}`;
+    lines.push(...ringToDxfLwpolyline(p.outline, layer));
+    for (const h of p.holes) lines.push(...ringToDxfLwpolyline(h, layer));
+    for (const c of p.circleHoles) {
+      lines.push(...circleHoleToDxfCircle({ x: c.cx, y: c.cy }, c.radiusMm, layer));
+    }
+  }
+  lines.push('0', 'ENDSEC', '0', 'EOF');
+  return lines.join('\n');
+}

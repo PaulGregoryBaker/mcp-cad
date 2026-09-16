@@ -7,6 +7,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import type { Point2 } from '../graph/types';
+import { toStructuredError } from '../../mcp/errors';
 
 // ─── Job types ───────────────────────────────────────────────────────────────
 
@@ -30,10 +32,14 @@ export interface V2Job {
 export interface NestingResult {
   placements: Array<{
     partId: string;
+    copyIndex: number;
     sheetIndex: number;
     x: number;
     y: number;
     rotationDeg: number;
+    outline: Point2[];
+    holes: Point2[][];
+    circleHoles: Array<{ cx: number; cy: number; radiusMm: number }>;
   }>;
   utilisationPct: number;
   sheetsRequired: number;
@@ -75,11 +81,10 @@ class V2JobQueue {
       job.status = 'failed';
       job.progress = 0;
       job.completedAt = Date.now();
-      job.error = {
-        code: 'INTERNAL_ERROR',
-        message: err instanceof Error ? err.message : String(err),
-        recoverable: false,
-      };
+      // Preserve the structured error (typed code, e.g. NEST_INVALID_CUTTING_WIDTH)
+      // instead of collapsing every failure to INTERNAL_ERROR — get_job forwards
+      // job.error opaquely, so the wire must already carry the right code.
+      job.error = toStructuredError(err);
     }
   }
 }

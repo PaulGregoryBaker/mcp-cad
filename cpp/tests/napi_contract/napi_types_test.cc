@@ -10,6 +10,7 @@
 
 #include "geometry/geometry_service.hpp"
 #include "geometry/topology_graph.hpp"
+#include "geometry/translation/nesting/nest_polygons.hpp"
 
 #include <string>
 #include <regex>
@@ -98,4 +99,74 @@ TEST_CASE("NAPI Contract: GeometryError code is non-empty string", "[contract][n
       return c != '_' && !std::isupper(c) && !std::isdigit(c);
     }));
   }
+}
+
+// ─── Nesting contract (rebuild/21 §9.3) ───────────────────────────────────────
+
+TEST_CASE("NAPI Contract: NestPolygon result fields are double precision",
+          "[contract][napi][nest]") {
+  using mcp_cad::translation::NestPolygonPlacement;
+  using mcp_cad::translation::NestPolygonResult;
+  static_assert(std::is_same_v<decltype(NestPolygonPlacement::x), double>,
+                "NestPolygonPlacement::x must be double");
+  static_assert(std::is_same_v<decltype(NestPolygonPlacement::y), double>,
+                "NestPolygonPlacement::y must be double");
+  static_assert(std::is_same_v<decltype(NestPolygonPlacement::rotationDeg), double>,
+                "NestPolygonPlacement::rotationDeg must be double");
+  static_assert(std::is_same_v<decltype(NestPolygonResult::utilisationPct), double>,
+                "NestPolygonResult::utilisationPct must be double");
+  SUCCEED("NestPolygon NAPI boundary fields are double precision");
+}
+
+TEST_CASE("NAPI Contract: nest error codes roundtrip as ALL_CAPS strings",
+          "[contract][napi][nest]") {
+  using mcp_cad::translation::NestErrorCode;
+  using mcp_cad::translation::NestErrorCodeFromString;
+  using mcp_cad::translation::NestErrorCodeToString;
+  REQUIRE(NestErrorCodeToString(NestErrorCode::kPartExceedsSheet) ==
+          "NEST_PART_EXCEEDS_SHEET");
+  REQUIRE(NestErrorCodeToString(NestErrorCode::kInvalidCuttingWidth) ==
+          "NEST_INVALID_CUTTING_WIDTH");
+  REQUIRE(NestErrorCodeToString(NestErrorCode::kInvalidInput) ==
+          "NEST_INVALID_INPUT");
+  REQUIRE(NestErrorCodeFromString("NEST_PART_EXCEEDS_SHEET") ==
+          NestErrorCode::kPartExceedsSheet);
+}
+
+TEST_CASE("NAPI Contract: nestPolygons maps invalid cutting width to typed error",
+          "[contract][napi][nest]") {
+  using mcp_cad::translation::NestPolygonInput;
+  using mcp_cad::translation::NestPolygonOptions;
+  using mcp_cad::translation::NestErrorCode;
+
+  NestPolygonInput part;
+  part.id = "P";
+  part.outer = {{0, 0}, {10, 0}, {10, 10}, {0, 10}};
+
+  NestPolygonOptions opts;
+  opts.maxKerfWidthMm = 0.2;
+  opts.cuttingWidthMm = 1.0;  // above the ceiling
+  auto r = mcp_cad::translation::nestPolygons({part}, 100.0, 100.0, opts);
+
+  REQUIRE_FALSE(r.ok);
+  REQUIRE(r.errorCode == NestErrorCode::kInvalidCuttingWidth);
+}
+
+TEST_CASE("NAPI Contract: nestPolygons maps oversize part to typed error",
+          "[contract][napi][nest]") {
+  using mcp_cad::translation::NestPolygonInput;
+  using mcp_cad::translation::NestPolygonOptions;
+  using mcp_cad::translation::NestErrorCode;
+
+  NestPolygonInput part;
+  part.id = "BIG";
+  part.outer = {{0, 0}, {50, 0}, {50, 50}, {0, 50}};
+
+  NestPolygonOptions opts;
+  opts.sheetMarginMm = 0.0;
+  auto r = mcp_cad::translation::nestPolygons({part}, 20.0, 20.0, opts);
+
+  REQUIRE_FALSE(r.ok);
+  REQUIRE(r.errorCode == NestErrorCode::kPartExceedsSheet);
+  REQUIRE(r.message.find("BIG") != std::string::npos);
 }

@@ -26,7 +26,10 @@ import {
 } from '../graph/evaluate-client';
 import { V2DoltStore, type V2DoltStoreOptions } from '../persistence/dolt-store';
 import { v2JobQueue } from '../jobs/queue';
-import { throwError, ErrorCodes } from '../../mcp/errors';
+import { throwError, ErrorCodes, type ErrorCode } from '../../mcp/errors';
+import { geometryBinding } from '../../geometry/binding';
+import { getNestingConfig } from '../../config/loader';
+import { buildNestedSheetDxf, type NestedSheetPlacement } from '../resources/dxf';
 import {
   requireString,
   requireStringArray,
@@ -44,7 +47,6 @@ import {
   optNullableNumber,
   optNullableBoolean,
 } from './helpers';
-import type { NestingResult } from '../jobs/queue';
 import { toolSchemaFor } from '../schemas/tools';
 import type { NapiManufacturingProfile } from '../../geometry/types';
 
@@ -521,7 +523,7 @@ export const graphToolDefinitions = [
   {
     name: 'export_production_pack',
     description:
-      'Export a production pack: drawings + DXF + BOM + assembly instructions (rebuild/15 §4.5). Async job. NOTE: drawings resource is not yet built — this tool is a stub returning an error until the drawing pipeline exists.',
+      'Export a production pack (rebuild/15 §4.5). Async job. format="dxf" (default): nests one copy of each part deterministically and returns per-sheet DXF strings, each placement on a <part_id>#<copy_index> layer. Other formats require the drawings resource, which is not yet built and fail with an error.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1304,92 +1306,77 @@ async function handleSimulateNesting(
     }
   }
 
+  // copies: a positive integer (explicit count of each part) or "fill" (as
+  // many complete kits as fit). -1 is the C++ fill-mode sentinel.
+  const rawCopies = args['copies'];
+  let copies = 1;
+  if (typeof rawCopies === 'number' && Number.isInteger(rawCopies) && rawCopies >= 1) {
+    copies = rawCopies;
+  } else if (rawCopies === 'fill') {
+    copies = -1;
+  } else if (rawCopies !== undefined) {
+    throwError(ErrorCodes.INTERNAL_ERROR, "copies must be a positive integer or 'fill'", false);
+  }
+
+  const cfg = getNestingConfig();
+  const cuttingWidthMm = optNumber(args, 'cutting_width_mm') ?? cfg.cuttingWidthMm;
+
   const jobId = v2JobQueue.enqueue(async () => {
-    // Collect flat outline bounding boxes for each part
-    const rectangles: Array<{ partId: string; width: number; height: number }> = [];
-    for (const pid of partIds) {
+    // Cutting-width validation runs inside the job so an invalid override
+    // surfaces as a failed job with a typed code (get_job → status: "failed",
+    // error.code === "NEST_INVALID_CUTTING_WIDTH"), not a synchronous throw
+    // (rebuild/21 §9.4).
+    if (cuttingWidthMm <= 0 || cuttingWidthMm > cfg.maxKerfWidthMm) {
+      throwError(
+        ErrorCodes.NEST_INVALID_CUTTING_WIDTH,
+        `cutting_width_mm must be > 0 and <= ${cfg.maxKerfWidthMm}`,
+        false,
+      );
+    }
+
+    const inputs = partIds.map((pid) => {
       const part = store.getPart(pid)!;
-      // Compute bounding box of the flat outline
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      for (const p of part.outline) {
-        if (p.x < minX) minX = p.x;
-        if (p.y < minY) minY = p.y;
-        if (p.x > maxX) maxX = p.x;
-        if (p.y > maxY) maxY = p.y;
+      const holes: Array<Array<{ x: number; y: number }>> = [];
+      const circleHoles: Array<{ cx: number; cy: number; radiusMm: number }> = [];
+      for (const h of part.holes) {
+        if (h.kind === 'polygon') holes.push(h.ring);
+        else circleHoles.push({ cx: h.center.x, cy: h.center.y, radiusMm: h.radiusMm });
       }
-      rectangles.push({ partId: pid, width: maxX - minX, height: maxY - minY });
+      return { id: pid, outer: part.outline, holes, circleHoles };
+    });
+
+    const result = geometryBinding.nestPolygons(inputs, sheetW, sheetH, {
+      cuttingWidthMm,
+      maxKerfWidthMm: cfg.maxKerfWidthMm,
+      safetyGapMm: cfg.safetyGapMm,
+      sheetMarginMm: cfg.sheetMarginMm,
+      placementAccuracy: cfg.placementAccuracy,
+      rotationsDeg: cfg.rotationsDeg,
+      copies,
+    });
+
+    if (!result.ok) {
+      throwError(
+        (result.errorCode || ErrorCodes.GE_NEST_FAILED) as ErrorCode,
+        result.message,
+        false,
+      );
     }
 
-    // Simple shelf-next-fit decreasing algorithm
-    rectangles.sort((a, b) => b.height - a.height || b.width - a.width);
-
-    const result: NestingResult = {
-      placements: [],
-      utilisationPct: 0,
-      sheetsRequired: 1,
-    };
-
-    let sheetIndex = 0;
-    let xCursor = 0;
-    let yCursor = 0;
-    let rowHeight = 0;
-    let totalArea = 0;
-
-    for (const rect of rectangles) {
-      totalArea += rect.width * rect.height;
-
-      // If this piece doesn't fit in the current row, start a new row
-      if (xCursor + rect.width > sheetW) {
-        xCursor = 0;
-        yCursor += rowHeight;
-        rowHeight = 0;
-      }
-
-      // If this piece doesn't fit on the current sheet, start a new sheet
-      if (yCursor + rect.height > sheetH) {
-        sheetIndex++;
-        xCursor = 0;
-        yCursor = 0;
-        rowHeight = 0;
-        result.sheetsRequired = sheetIndex + 1;
-      }
-
-      result.placements.push({
-        partId: rect.partId,
-        sheetIndex,
-        x: xCursor,
-        y: yCursor,
-        rotationDeg: 0,
-      });
-
-      xCursor += rect.width;
-      if (rect.height > rowHeight) rowHeight = rect.height;
-    }
-
-    const sheetArea = sheetW * sheetH;
-    result.utilisationPct = totalArea / (sheetArea * result.sheetsRequired) * 100;
-
-    // Wire convention (every other v2 tool response is hand-converted the
-    // same way, e.g. handleCreatePart's { part_id, root_region_panel_id }):
-    // tool call requests/responses use snake_case, but `NestingResult`
-    // (jobs/queue.ts) is an internal TS interface, deliberately camelCase
-    // like every other in-process model in this store. `get_job` forwards
-    // `job.result` to the client completely opaquely (`result?: unknown` —
-    // V2Job's own doc comment), so nothing upstream converts this for us;
-    // omitting this step left the Dart client's `SimulateNestingResult.
-    // fromJson`/`NestPlacement.fromJson` reading `part_id`/`rotation_deg`/
-    // `utilisation_pct`/`sheets_required` that were never actually present,
-    // silently defaulting every placement's part id to '' and its
-    // width/height to 0 — the Sheet Nesting view's own painter skips any
-    // placement with zero width/height, so the sheet rendered with nothing
-    // on it even though a real, non-empty result had come back.
+    // Wire convention: job results reach the client opaquely via get_job, so
+    // the snake_case conversion happens here (see the Dart-client regression
+    // test in slice_11_async_jobs.integration.test.ts).
     return {
       placements: result.placements.map((p) => ({
-        part_id: p.partId,
+        part_id: p.id,
+        copy_index: p.copyIndex,
         sheet_index: p.sheetIndex,
         x: p.x,
         y: p.y,
         rotation_deg: p.rotationDeg,
+        outline: p.outline,
+        holes: p.holes,
+        circle_holes: p.circleHoles.map((c) => ({ cx: c.cx, cy: c.cy, radius_mm: c.radiusMm })),
       })),
       utilisation_pct: result.utilisationPct,
       sheets_required: result.sheetsRequired,
@@ -1404,6 +1391,7 @@ async function handleExportProductionPack(
   args: Record<string, unknown>,
 ): Promise<{ job_id: string }> {
   const partIds = requireStringArray(args, 'part_ids');
+  const format = optString(args, 'format') ?? 'dxf';
 
   for (const pid of partIds) {
     if (!store.getPart(pid)) {
@@ -1412,11 +1400,72 @@ async function handleExportProductionPack(
   }
 
   const jobId = v2JobQueue.enqueue(async () => {
-    // Stub: drawings resource is not built yet (Slice 11 MVP)
-    throw new Error(
-      'export_production_pack requires the drawings resource, which is not yet built. ' +
-      'Revisit when the drawing pipeline (rebuild/07-engineering-drawings.md) is implemented.',
-    );
+    // Only the per-sheet DXF nesting export is implemented (rebuild/21
+    // Phase 5). Drawings/BOM/assembly-instructions still depend on the
+    // drawing pipeline (rebuild/07-engineering-drawings.md), which is not
+    // built — every other format fails with a typed, actionable error rather
+    // than silently producing a partial pack.
+    if (format !== 'dxf') {
+      throw new Error(
+        `export_production_pack format "${format}" requires the drawings ` +
+          'resource, which is not yet built. Only "dxf" is supported ' +
+          '(rebuild/07-engineering-drawings.md).',
+      );
+    }
+
+    const inputs = partIds.map((pid) => {
+      const part = store.getPart(pid)!;
+      const holes: Array<Array<{ x: number; y: number }>> = [];
+      const circleHoles: Array<{ cx: number; cy: number; radiusMm: number }> = [];
+      for (const h of part.holes) {
+        if (h.kind === 'polygon') holes.push(h.ring);
+        else circleHoles.push({ cx: h.center.x, cy: h.center.y, radiusMm: h.radiusMm });
+      }
+      return { id: pid, outer: part.outline, holes, circleHoles };
+    });
+
+    // A production pack is one copy of each part, nested deterministically on
+    // the default stock sheet (same 2440×1220 default as simulate_nesting).
+    // No sheet/copies args exist on this tool; the pack is the BOM set, not a
+    // fill-everything layout.
+    const cfg = getNestingConfig();
+    const result = geometryBinding.nestPolygons(inputs, 2440, 1220, {
+      cuttingWidthMm: cfg.cuttingWidthMm,
+      maxKerfWidthMm: cfg.maxKerfWidthMm,
+      safetyGapMm: cfg.safetyGapMm,
+      sheetMarginMm: cfg.sheetMarginMm,
+      placementAccuracy: cfg.placementAccuracy,
+      rotationsDeg: cfg.rotationsDeg,
+      copies: 1,
+    });
+
+    if (!result.ok) {
+      throwError(
+        (result.errorCode || ErrorCodes.GE_NEST_FAILED) as ErrorCode,
+        result.message,
+        false,
+      );
+    }
+
+    const bySheet = new Map<number, NestedSheetPlacement[]>();
+    for (const p of result.placements) {
+      const list = bySheet.get(p.sheetIndex) ?? [];
+      list.push({
+        partId: p.id,
+        copyIndex: p.copyIndex,
+        outline: p.outline,
+        holes: p.holes,
+        circleHoles: p.circleHoles,
+      });
+      bySheet.set(p.sheetIndex, list);
+    }
+
+    const dxfs: string[] = [];
+    for (let s = 0; s < result.sheetsRequired; ++s) {
+      dxfs.push(buildNestedSheetDxf(bySheet.get(s) ?? []));
+    }
+
+    return { dxfs, sheets_required: result.sheetsRequired };
   });
 
   return { job_id: jobId };

@@ -276,7 +276,7 @@ case Paul intended a narrower change.]`
 ### 4.5 Produce (J8) — 2 tools + uniform job API
 | Tool | Purpose | Key params | Notes |
 |---|---|---|---|
-| `simulate_nesting` | Nest parts' flat outlines on stock sheets | `part_ids[]`, `sheetSpec` | Consumes graph-derived flat patterns directly (fixes v1's `unfold_ids` coupling, FR-G2). Async job. |
+| `simulate_nesting` | Nest parts' flat outlines (irregular shapes) on stock sheets | `part_ids[]`, `sheet_width_mm?`, `sheet_height_mm?`, `copies?` (integer ≥1, or `"fill"` to fill one sheet), `cutting_width_mm?` | Consumes graph-derived flat patterns directly (fixes v1's `unfold_ids` coupling, FR-G2). Async job. Result placements carry `copy_index` + pre-transformed `outline`/`holes`/`circle_holes` (nesting-only, separate from part flat-pattern); top level carries `utilisation_pct` + `sheets_required`. Solver + cutting-width policy: see `21-nesting-libnest2d.md`. |
 | `export_production_pack` | Drawings + DXF + BOM + assembly instructions | `part_ids[]`, `format?` | Async job. |
 | `get_job` | Poll any async job | `job_id` | Uniform: `{status: queued\|running\|done\|error, progress?, result?, error?}`. Used by `import_part`, `simulate_nesting`, `export_production_pack`, and any future heavy op — one pattern, not per-tool status/result pairs (absorbing `get_export_job_status`/`get_export_job_result`). Where a job's result is geometry (an export pack, a nesting layout), `result` is a `Ref` or list of `Ref`s (§3.0) — the pattern jobs used first and §3.0 generalized to ordinary resource reads, not the other way around. |
 

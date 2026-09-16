@@ -28,6 +28,7 @@
 #include "../geometry/translation/rip_edge.hpp"
 #include "../geometry/translation/generate_reliefs.hpp"
 #include "../geometry/translation/split_by_plane.hpp"
+#include "../geometry/translation/nesting/nest_polygons.hpp"
 #include "../geometry/validation/rules_engine.hpp"
 #include "../geometry/validation/profile.hpp"
 
@@ -63,6 +64,9 @@ using translation::CutPanelErrorCode;
 using translation::CutPanelResult;
 using translation::FlatOutlineErrorCode;
 using translation::FlatOutlineResult;
+using translation::NestPolygonInput;
+using translation::NestPolygonOptions;
+using translation::NestPolygonResult;
 
 // svc() (the single-session-per-process GeometryService instance) is already
 // declared+defined, `static`, in geometry_binding.cc — addon.cc #includes that
@@ -959,7 +963,7 @@ Napi::Value SplitPartAtBendBinding(const Napi::CallbackInfo& info) {
       !info[3].IsString() || !info[4].IsObject()) {
     Napi::TypeError::New(
         env, "splitPartAtBend(outline: Point2[], bend: BendSpec, thicknessMm: number, "
-             "keepCornerOn: 'parent' | 'child', parentPose: Transform3)")
+             "keepCornerOn: 'parent' | 'child', childPose: Transform3)")
         .ThrowAsJavaScriptException();
     return env.Undefined();
   }
@@ -970,10 +974,10 @@ Napi::Value SplitPartAtBendBinding(const Napi::CallbackInfo& info) {
     std::string keepCornerOnStr = info[3].As<Napi::String>().Utf8Value();
     CornerSide keepCornerOn =
         keepCornerOnStr == "child" ? CornerSide::kChild : CornerSide::kParent;
-    Transform3 parentPose = ReadTransform3(info[4].As<Napi::Object>());
+    Transform3 childPose = ReadTransform3(info[4].As<Napi::Object>());
 
     SplitAtBendResult result =
-        translation::SplitPartAtBend(outline, bend, thicknessMm, keepCornerOn, parentPose);
+        translation::SplitPartAtBend(outline, bend, thicknessMm, keepCornerOn, childPose);
     return WriteSplitAtBendResult(env, result);
   } catch (const std::exception& e) {
     Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
@@ -1428,6 +1432,112 @@ Napi::Value ComputeSplitByPlaneBinding(const Napi::CallbackInfo& info) {
   }
 }
 
+Napi::Value NestPolygonsBinding(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 3 || !info[0].IsArray() || !info[1].IsNumber() || !info[2].IsNumber()) {
+    Napi::TypeError::New(
+        env, "nestPolygons(parts: {id, outer, holes}[], sheetW: number, "
+             "sheetH: number, opts?: object)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    std::vector<NestPolygonInput> parts;
+    Napi::Array partsArr = info[0].As<Napi::Array>();
+    for (uint32_t i = 0; i < partsArr.Length(); ++i) {
+      Napi::Object pObj = partsArr.Get(i).As<Napi::Object>();
+      NestPolygonInput in;
+      in.id = pObj.Get("id").As<Napi::String>().Utf8Value();
+      in.outer = ReadPoint2Array(pObj.Get("outer").As<Napi::Array>());
+      Napi::Value holesV = pObj.Get("holes");
+      if (holesV.IsArray()) {
+        Napi::Array holesArr = holesV.As<Napi::Array>();
+        for (uint32_t h = 0; h < holesArr.Length(); ++h) {
+          in.holes.push_back(ReadPoint2Array(holesArr.Get(h).As<Napi::Array>()));
+        }
+      }
+      Napi::Value circleHolesV = pObj.Get("circleHoles");
+      if (circleHolesV.IsArray()) {
+        Napi::Array circleHolesArr = circleHolesV.As<Napi::Array>();
+        for (uint32_t c = 0; c < circleHolesArr.Length(); ++c) {
+          Napi::Object chObj = circleHolesArr.Get(c).As<Napi::Object>();
+          translation::NestCircleHole ch;
+          ch.cx = chObj.Get("cx").As<Napi::Number>().DoubleValue();
+          ch.cy = chObj.Get("cy").As<Napi::Number>().DoubleValue();
+          ch.radiusMm = chObj.Get("radiusMm").As<Napi::Number>().DoubleValue();
+          in.circleHoles.push_back(ch);
+        }
+      }
+      parts.push_back(std::move(in));
+    }
+
+    const double sheetW = info[1].As<Napi::Number>().DoubleValue();
+    const double sheetH = info[2].As<Napi::Number>().DoubleValue();
+
+    NestPolygonOptions opts;
+    if (info.Length() >= 4 && info[3].IsObject()) {
+      Napi::Object o = info[3].As<Napi::Object>();
+      auto num = [&o](const char* key, double dflt) {
+        Napi::Value v = o.Get(key);
+        return v.IsNumber() ? v.As<Napi::Number>().DoubleValue() : dflt;
+      };
+      opts.cuttingWidthMm = num("cuttingWidthMm", opts.cuttingWidthMm);
+      opts.maxKerfWidthMm = num("maxKerfWidthMm", opts.maxKerfWidthMm);
+      opts.safetyGapMm = num("safetyGapMm", opts.safetyGapMm);
+      opts.sheetMarginMm = num("sheetMarginMm", opts.sheetMarginMm);
+      opts.placementAccuracy = num("placementAccuracy", opts.placementAccuracy);
+      Napi::Value copiesV = o.Get("copies");
+      opts.copies = copiesV.IsNumber() ? copiesV.As<Napi::Number>().Int32Value() : opts.copies;
+      Napi::Value rotsV = o.Get("rotationsDeg");
+      if (rotsV.IsArray()) {
+        opts.rotationsDeg.clear();
+        Napi::Array rots = rotsV.As<Napi::Array>();
+        for (uint32_t r = 0; r < rots.Length(); ++r) {
+          opts.rotationsDeg.push_back(rots.Get(r).As<Napi::Number>().DoubleValue());
+        }
+      }
+    }
+
+    NestPolygonResult result = translation::nestPolygons(parts, sheetW, sheetH, opts);
+
+    Napi::Object obj = Napi::Object::New(env);
+    obj.Set("ok", Napi::Boolean::New(env, result.ok));
+    obj.Set("errorCode", Napi::String::New(env, translation::NestErrorCodeToString(result.errorCode)));
+    obj.Set("message", Napi::String::New(env, result.message));
+    obj.Set("utilisationPct", Napi::Number::New(env, result.utilisationPct));
+    obj.Set("sheetsRequired", Napi::Number::New(env, result.sheetsRequired));
+
+    Napi::Array placements = Napi::Array::New(env, result.placements.size());
+    for (size_t i = 0; i < result.placements.size(); ++i) {
+      const auto& pl = result.placements[i];
+      Napi::Object p = Napi::Object::New(env);
+      p.Set("id", Napi::String::New(env, pl.id));
+      p.Set("copyIndex", Napi::Number::New(env, pl.copyIndex));
+      p.Set("sheetIndex", Napi::Number::New(env, pl.sheetIndex));
+      p.Set("x", Napi::Number::New(env, pl.x));
+      p.Set("y", Napi::Number::New(env, pl.y));
+      p.Set("rotationDeg", Napi::Number::New(env, pl.rotationDeg));
+      p.Set("outline", WritePoint2Array(env, pl.outline));
+      p.Set("holes", WritePolygonHoleArray(env, pl.holes));
+      Napi::Array chArr = Napi::Array::New(env, pl.circleHoles.size());
+      for (size_t c = 0; c < pl.circleHoles.size(); ++c) {
+        Napi::Object ch = Napi::Object::New(env);
+        ch.Set("cx", Napi::Number::New(env, pl.circleHoles[c].cx));
+        ch.Set("cy", Napi::Number::New(env, pl.circleHoles[c].cy));
+        ch.Set("radiusMm", Napi::Number::New(env, pl.circleHoles[c].radiusMm));
+        chArr.Set(c, ch);
+      }
+      p.Set("circleHoles", chArr);
+      placements.Set(i, p);
+    }
+    obj.Set("placements", placements);
+    return obj;
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
 void RegisterTranslationMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("evaluatePartGraph", Napi::Function::New(env, EvaluatePartGraph));
   exports.Set("constructPartSolid", Napi::Function::New(env, ConstructPartSolidBinding));
@@ -1449,6 +1559,7 @@ void RegisterTranslationMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("computeRipEdge", Napi::Function::New(env, ComputeRipEdgeBinding));
   exports.Set("computeReliefPolygons", Napi::Function::New(env, ComputeReliefPolygonsBinding));
   exports.Set("computeSplitByPlane", Napi::Function::New(env, ComputeSplitByPlaneBinding));
+  exports.Set("nestPolygons", Napi::Function::New(env, NestPolygonsBinding));
 }
 
 }  // namespace mcp_cad

@@ -794,10 +794,8 @@ export interface SplitPartAtBendResult {
   message: string;
   parentOutline: NapiPoint2[];
   childOutline: NapiPoint2[];
-  // The new child part's own anchor — a rotation about the axis this
-  // split's own cut introduces (self-consistent with childOutline by
-  // construction, see SplitAtBendResult::childAnchor's own C++ doc
-  // comment), composed with the parentPose passed into splitPartAtBend.
+  // The new child part's own anchor — exactly the childPose passed in,
+  // unchanged. See part_split.hpp's own SplitPartAtBend doc comment for why.
   childAnchor: NapiTransform3;
 }
 
@@ -852,6 +850,55 @@ export interface PolygonBooleanResult {
   // "GE_POLYGON_MULTIPLE_LOOPS" | "GE_POLYGON_HAS_HOLES" | "GE_POLYGON_NOT_COPLANAR"
   message: string;
   outer: NapiPoint2[];
+}
+
+// ─── Irregular-shape nesting (rebuild/21-nesting-libnest2d.md) ───────────
+
+/** One part fed to the C++ nestPolygons solver. `outer`/`holes` are open rings
+ * (no duplicated closing vertex) in millimetres, matching the v2 graph's own
+ * Point2[] convention. */
+export interface NestCircleHole {
+  cx: number;
+  cy: number;
+  radiusMm: number;
+}
+
+export interface NestPolygonInputSpec {
+  id: string;
+  outer: NapiPoint2[];
+  holes: NapiPoint2[][];
+  circleHoles: NestCircleHole[];
+}
+
+export interface NestPolygonOptions {
+  cuttingWidthMm?: number;
+  maxKerfWidthMm?: number;
+  safetyGapMm?: number;
+  sheetMarginMm?: number;
+  placementAccuracy?: number;
+  rotationsDeg?: number[];
+  copies?: number; // explicit copy count of each part; -1 = fill mode
+}
+
+export interface NestPolygonPlacementResult {
+  id: string;
+  copyIndex: number;
+  sheetIndex: number;
+  x: number;
+  y: number;
+  rotationDeg: number;
+  outline: NapiPoint2[];      // transformed into the sheet frame
+  holes: NapiPoint2[][];      // transformed into the sheet frame
+  circleHoles: NestCircleHole[]; // transformed centres, sheet frame
+}
+
+export interface NestPolygonsResult {
+  ok: boolean;
+  errorCode: string; // "" | "NEST_INVALID_INPUT" | "NEST_INVALID_CUTTING_WIDTH" | "NEST_PART_EXCEEDS_SHEET"
+  message: string;
+  placements: NestPolygonPlacementResult[];
+  utilisationPct: number;
+  sheetsRequired: number;
 }
 
 // rebuild/06-plan.md Phase 5 Slice 9a / cut_panel.hpp. Validates a candidate

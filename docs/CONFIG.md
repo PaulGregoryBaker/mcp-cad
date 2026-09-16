@@ -31,6 +31,18 @@ tooling:
     max_kerf_width_mm: number      # Maximum laser kerf (mm)
     min_hole_diameter_mm: number   # Minimum hole diameter (mm)
 
+nesting:
+  cutting_width_mm: number         # Kerf used as inter-part clearance; >0 and <= max_kerf_width_mm
+  safety_gap_mm: number            # Extra spacing added to cutting width (default 0)
+  sheet_margin_mm: number          # Min distance from part outline to sheet edge
+  rotations_deg: [number, ...]     # Allowed part rotations
+  optimizer:
+    placement_accuracy: number     # 0..1 — NfpPlacer search effort
+    rotation: none | genetic       # Global pile-rotation search (off by default)
+    seed: number                   # genetic only — fixed for determinism
+    max_iterations: number         # genetic only — NLopt maxeval
+    relative_score_difference: number  # genetic only — NLopt ftol_rel
+
 logistics:
   shipping_envelope:
     max_length_mm: number
@@ -128,3 +140,38 @@ persistence:
   database: semantic_braai
   data_dir: ./state/dolt/braai
 ```
+
+## Nesting (`nesting:`)
+
+Controls irregular-shape nesting (`simulate_nesting`). See
+`rebuild/21-nesting-libnest2d.md` for the full design.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `nesting.cutting_width_mm` | float | `tooling.laser.max_kerf_width_mm` | Cutting width (kerf) used as the inter-part clearance. Must be `> 0` and `<= tooling.laser.max_kerf_width_mm`; out-of-range values fail with `NEST_INVALID_CUTTING_WIDTH`. |
+| `nesting.safety_gap_mm` | float | `0.0` | Extra spacing added to the cutting width. Inter-part distance passed to the solver is `cutting_width_mm + safety_gap_mm`. |
+| `nesting.sheet_margin_mm` | float | `2.0` | Minimum distance from a part outline to the sheet edge. |
+| `nesting.rotations_deg` | int[] | `[0, 90, 180, 270]` | Allowed part rotations. |
+| `nesting.optimizer.placement_accuracy` | float 0..1 | `0.65` | NFP-placer search effort (`floor(1000 × accuracy)` iterations). |
+| `nesting.optimizer.rotation` | `none` \| `genetic` | `none` | Global pile-rotation search. Off by default. |
+| `nesting.optimizer.seed` | int | `42` | Fixed RNG seed for the genetic search (determinism). Genetic only. |
+| `nesting.optimizer.max_iterations` | int | `800` | NLopt maxeval for the genetic search. Genetic only. |
+| `nesting.optimizer.relative_score_difference` | float | `1e-6` | NLopt ftol_rel for the genetic search. Genetic only. |
+
+### Cutting width process
+
+The cutting width is the **kerf** — the material removed along one cut line. It
+is taken from shop tooling, not computed from part geometry: the default is
+`tooling.laser.max_kerf_width_mm`, and a shop may set `nesting.cutting_width_mm`
+as long as it stays within `(0, max_kerf_width_mm]`. `simulate_nesting` may
+also pass a per-job `cutting_width_mm` override, validated against the same
+ceiling. The solver's inter-part clearance is `cutting_width_mm + safety_gap_mm`,
+and the sheet margin shrinks the packing area on each side.
+
+### Optimiser
+
+libnest2d ships no simulated-annealing optimiser. Placement always uses the
+NFP + local subplex (`L_SUBPLEX`) search; the optional `optimizer.rotation:
+genetic` enables a seeded NLopt ESCH evolutionary search over the whole-pile
+rotation to minimise bounding box / material use. It is off by default so the
+default path is deterministic.

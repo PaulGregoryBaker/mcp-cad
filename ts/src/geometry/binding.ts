@@ -75,6 +75,9 @@ import type {
   NapiPanelPieceSpec,
   ReconcilePiecesResult,
   PolygonBooleanResult,
+  NestPolygonsResult,
+  NestPolygonInputSpec,
+  NestPolygonOptions,
   CutPanelResult,
   NapiTransform3,
   EvaluateFindingsResult,
@@ -362,7 +365,7 @@ export interface GeometryAddon {
     bend: NapiBendSpec,
     thicknessMm: number,
     keepCornerOn: 'parent' | 'child',
-    parentPose: NapiTransform3,
+    childPose: NapiTransform3,
   ): SplitPartAtBendResult;
 
   // ── Phase 5 Slice 5: ingest STEP -> graph piece reconciliation ────────────
@@ -391,6 +394,14 @@ export interface GeometryAddon {
     anchorB: NapiTransform3,
     thicknessMm: number,
   ): PolygonBooleanResult;
+
+  // ── Nesting (rebuild/21-nesting-libnest2d.md) ────────────────────────
+  nestPolygons?(
+    parts: NestPolygonInputSpec[],
+    sheetWidthMm: number,
+    sheetHeightMm: number,
+    opts?: NestPolygonOptions,
+  ): NestPolygonsResult;
 
   // ── Phase 5 Slice 9a: cut_panel(kind=circle|polygon) ──────────────────────
   prepareCircleCut?(
@@ -1422,13 +1433,13 @@ export class GeometryBinding {
     bend: NapiBendSpec,
     thicknessMm: number,
     keepCornerOn: 'parent' | 'child',
-    parentPose: NapiTransform3,
+    childPose: NapiTransform3,
   ): SplitPartAtBendResult {
     if (!this.addon.splitPartAtBend) {
       throw new Error('Geometry addon does not expose splitPartAtBend');
     }
     try {
-      return this.addon.splitPartAtBend(outline, bend, thicknessMm, keepCornerOn, parentPose);
+      return this.addon.splitPartAtBend(outline, bend, thicknessMm, keepCornerOn, childPose);
     } catch (err) {
       throw toStructuredError(err);
     }
@@ -1494,6 +1505,22 @@ export class GeometryBinding {
     }
     try {
       return this.addon.fuseCoplanarParts(outlineA, anchorA, outlineB, anchorB, thicknessMm);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  nestPolygons(
+    parts: NestPolygonInputSpec[],
+    sheetWidthMm: number,
+    sheetHeightMm: number,
+    opts?: NestPolygonOptions,
+  ): NestPolygonsResult {
+    if (!this.addon.nestPolygons) {
+      throw new Error('Geometry addon does not expose nestPolygons');
+    }
+    try {
+      return this.addon.nestPolygons(parts, sheetWidthMm, sheetHeightMm, opts);
     } catch (err) {
       throw toStructuredError(err);
     }

@@ -31,8 +31,47 @@ include(FetchContent)
 find_package(OpenCASCADE REQUIRED)
 find_package(Catch2 3 REQUIRED)
 
-# libnest2d is NOT required — the project uses a built-in Shelf-Next-Fit
-# Decreasing rectangular bin-packing algorithm (see nesting.hpp).
+# libnest2d (header-only, wired manually — see rebuild/21-nesting-libnest2d.md).
+# We populate the sources but deliberately do NOT add_subdirectory(): libnest2d's
+# own CMake is broken on modern CMake (find_package(Boost ... COMPONENTS headers)
+# is rejected by FindBoost) and its clipper backend hard-requires Boost headers
+# our compile path never includes. Instead we define the backend macros and link
+# the vcpkg Clipper/NLopt directly (libnest2d README integration option 2).
+if(POLICY CMP0169)
+  cmake_policy(SET CMP0169 OLD)   # FetchContent_Populate-only (no add_subdirectory)
+endif()
+FetchContent_Declare(libnest2d
+  GIT_REPOSITORY https://github.com/tamasmeszaros/libnest2d.git
+  GIT_TAG        663daa69e1d7478669f714218e27681edbc96640
+  GIT_SHALLOW    TRUE
+)
+FetchContent_GetProperties(libnest2d)
+if(NOT libnest2d_POPULATED)
+  FetchContent_Populate(libnest2d)
+endif()
+set(LIBNEST2D_INCLUDE_DIR      ${libnest2d_SOURCE_DIR}/include)
+set(LIBNEST2D_CMAKE_MODULES_DIR ${libnest2d_SOURCE_DIR}/cmake_modules)
+
+# libnest2d's own FindNLopt module defines the imported target NLopt::nlopt
+# from vcpkg-installed nlopt. Clipper is NOT taken from vcpkg — its SourceForge
+# download is unreliable — so we fetch the GitHub mirror libnest2d itself uses
+# and compile clipper.cpp directly into geometry_engine below.
+FetchContent_Declare(libpolyclipping
+  GIT_REPOSITORY https://github.com/tamasmeszaros/libpolyclipping.git
+  GIT_TAG        784ff113071f1fa7832ebe74667f2fd0756c634f
+  GIT_SHALLOW    TRUE
+)
+FetchContent_GetProperties(libpolyclipping)
+if(NOT libpolyclipping_POPULATED)
+  FetchContent_Populate(libpolyclipping)
+endif()
+set(LIBCLIPPER_INCLUDE_DIR ${libpolyclipping_SOURCE_DIR})
+
+list(APPEND CMAKE_MODULE_PATH ${LIBNEST2D_CMAKE_MODULES_DIR})
+find_package(NLopt REQUIRED)
+# The clipper backend unconditionally includes libnest2d/utils/boost_alg.hpp
+# (Boost.Geometry), so header-only Boost is a compile-time requirement.
+find_package(Boost REQUIRED)
 
 # ─── Compile flags ───────────────────────────────────────────────────────────
 if(MSVC)
@@ -97,6 +136,8 @@ add_library(geometry_engine STATIC
   src/geometry/translation/rip_edge.cc
   src/geometry/translation/generate_reliefs.cc
   src/geometry/translation/split_by_plane.cc
+  src/geometry/translation/nesting/nest_polygons.cc
+  ${libpolyclipping_SOURCE_DIR}/clipper.cpp
   src/geometry/validation/rules_engine.cc
   src/geometry/validation/rules/bend_radius.cc
   src/geometry/validation/rules/bend_angle.cc
@@ -110,11 +151,24 @@ add_library(geometry_engine STATIC
 
 target_include_directories(geometry_engine
   PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  PUBLIC  ${LIBNEST2D_INCLUDE_DIR}
+  PUBLIC  ${LIBCLIPPER_INCLUDE_DIR}
+)
+
+# Header-only libnest2d backend selection (rebuild/21-nesting-libnest2d.md §3).
+# LIBNEST2D_THREADING_std is required — with no threading macro, __parallel::enumerate
+# compiles to a no-op and NfpPlacer computes no NFP.
+target_compile_definitions(geometry_engine PUBLIC
+  LIBNEST2D_GEOMETRIES_clipper
+  LIBNEST2D_OPTIMIZER_nlopt
+  LIBNEST2D_THREADING_std
 )
 
 # Link all OCCT modules exported by this package revision.
 target_link_libraries(geometry_engine PUBLIC
   ${OpenCASCADE_LIBRARIES}
+  NLopt::nlopt
+  Boost::headers
 )
 
 # ─── NAPI Addon (built separately via cmake-js) ───────────────────────────────
@@ -135,6 +189,7 @@ add_executable(geometry_tests
   tests/ge_decompose_integration_test.cc
   tests/determinism_test.cc
   tests/nesting_test.cc
+  tests/nest_polygons_test.cc
   tests/production_workflow_test.cc
   tests/manufacturing_graph_evaluator_test.cc
   tests/part_solid_construction_test.cc
