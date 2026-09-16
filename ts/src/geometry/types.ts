@@ -666,12 +666,27 @@ export interface NapiRegionPanelLayout {
   // consume; regionOuter is the flat-pattern/DXF-only, shifted view. See
   // manufacturing_graph_evaluator.hpp's own doc comment.
   rawOuter: NapiPoint2[];
+  // The setback-trimmed ring solid-wall/bridge construction actually
+  // consumes (part_solid_construction.cc) — see wallEdgeBendId's own doc
+  // comment below.
+  wallOuter: NapiPoint2[];
   bottomFace: NapiPoint3[];
   topFace: NapiPoint3[];
   pose: NapiTransform3;
   // edgeBendId[i] names the bend whose zone the edge (regionOuter[i],
   // regionOuter[i+1]) borders, or "" for a true outer boundary.
   edgeBendId: string[];
+  // wallOuter's own per-edge bend tag (same convention as edgeBendId, but
+  // index-correlated with wallOuter) — this, together with
+  // wallEdgeIsTransitionStep, is exactly what part_solid_construction.cc's
+  // FindZoneEdges scans; a bend with no tagged, non-transition, non-zero-
+  // length edge here on EITHER its parent or child region panel is exactly
+  // what throws GE_BRIDGE_EDGE_NOT_FOUND at construct time.
+  wallEdgeBendId: string[];
+  // wallEdgeIsTransitionStep[i]: true if wallOuter edge i is a transition
+  // step (not a genuine bend-zone boundary) — FindZoneEdges skips these
+  // even when wallEdgeBendId[i] matches.
+  wallEdgeIsTransitionStep: boolean[];
   // Phase 5 Slice 9a: holes belonging to THIS region panel (RegionOf's own
   // containment assignment — see manufacturing_graph_evaluator.hpp).
   regionPolygonHoles: NapiPoint2[][];

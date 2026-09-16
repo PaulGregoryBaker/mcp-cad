@@ -225,6 +225,18 @@ export const ErrorCodes = {
   // translation::SplitErrorCode.
   GE_SPLIT_HINGE_NOT_GROUNDED: 'GE_SPLIT_HINGE_NOT_GROUNDED',
   GE_SPLIT_CORNER_ZONE_NOT_GROUNDED: 'GE_SPLIT_CORNER_ZONE_NOT_GROUNDED',
+  // A DIFFERENT failure than the two codes above (which are part_split.cc's
+  // own 2D cut failing to ground THIS bend's hinge) — this one fires when
+  // the 2D cut itself succeeds, but leaves a DIFFERENT, still-live bend on
+  // one of the two resulting parts unable to ground its own zone against
+  // the reshaped outline (live-app regression 2026-09-16, cauldron.step: a
+  // narrow panel sandwiched between two bends — removing one via
+  // split_part_at_bend can leave the other's own zone ungroundable).
+  // part_split.hpp cuts one bend at a time with no knowledge of any other
+  // bend on the same ring (its own header comment) — this code is the
+  // safety net: never silently hand back a part that constructPartSolid
+  // would immediately fail on (GE_BRIDGE_EDGE_NOT_FOUND) with no warning.
+  GE_SPLIT_RESULT_NOT_CONSTRUCTIBLE: 'GE_SPLIT_RESULT_NOT_CONSTRUCTIBLE',
 
   // split_body_by_plane (Phase 5 Slice 9b) — a distinct tool from
   // split_part_at_bend above; own code rather than reusing GE_SPLIT_FAILED

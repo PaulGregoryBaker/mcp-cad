@@ -387,6 +387,7 @@ export function splitPartAtBend(
     );
   }
 
+  const before = store.snapshotAll();
   const { childPart } = store.splitPartAtBend({
     partId: input.partId,
     bendId: input.bendId,
@@ -394,7 +395,70 @@ export function splitPartAtBend(
     childOutline: split.childOutline,
     childAnchor: split.childAnchor,
   });
+
+  // Safety net: part_split.hpp cuts ONE bend at a time with no knowledge of
+  // any other bend on the same ring (its own header comment) — a real
+  // mitered/narrow-panel corner (live-app regression 2026-09-16,
+  // cauldron.step: a panel sandwiched between two bends) can leave a
+  // DIFFERENT, still-live bend unable to ground its own zone on one of the
+  // two resulting parts, even though THIS split's own 2D cut succeeded
+  // cleanly. Check both resulting parts BEFORE committing to this outcome
+  // and roll back rather than silently hand back a part constructPartSolid
+  // would immediately fail on with no warning — cheap (evaluatePartGraph's
+  // own clip/pose-walk, no OCCT solid construction) since it only reads an
+  // already-computed tag, not derives new geometry (principle IV).
+  for (const checkPartId of [input.partId, childPart.partId]) {
+    const checkLayout = evaluatePart(store, checkPartId);
+    const ungroundedBendId = checkLayout.ok ? findUngroundedBend(checkLayout) : null;
+    if (!checkLayout.ok || ungroundedBendId) {
+      store.restoreAll(before);
+      throwError(
+        ErrorCodes.GE_SPLIT_RESULT_NOT_CONSTRUCTIBLE,
+        checkLayout.ok
+          ? `splitting bend ${input.bendId} leaves bend ${ungroundedBendId} unable to ground its ` +
+            `own zone on part ${checkPartId} — a mitered/narrow-panel corner split_part_at_bend ` +
+            `cannot cleanly separate yet`
+          : `splitting bend ${input.bendId} leaves part ${checkPartId} unable to evaluate at all: ` +
+            `${checkLayout.message}`,
+        true,
+      );
+    }
+  }
+
   return { childPart, bendId: input.bendId };
+}
+
+/** True (returns the ungrounded bend's own id) if some bend still live on
+ * `layout`'s own part has no zone-boundary edge taggable on both its
+ * parent and child region panel — exactly the presence check part_solid_
+ * construction.cc's FindZoneEdges performs (same tag fields, same
+ * transition-step and zero-length-edge exclusions), replicated here so a
+ * doomed split can be caught before committing rather than only when a
+ * later constructPart call throws GE_BRIDGE_EDGE_NOT_FOUND. */
+function findUngroundedBend(layout: EvaluatePartGraphResult): string | null {
+  const hasZoneEdge = (panel: EvaluatePartGraphResult['panels'][number] | undefined, bendId: string): boolean => {
+    if (!panel) return false;
+    const n = panel.wallOuter.length;
+    for (let i = 0; i < panel.wallEdgeBendId.length; i++) {
+      if (panel.wallEdgeBendId[i] !== bendId) continue;
+      if (panel.wallEdgeIsTransitionStep[i]) continue;
+      const a = panel.wallOuter[i];
+      const b = panel.wallOuter[(i + 1) % n];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      if (dx * dx + dy * dy < 1e-18) continue; // zero-length, skip (kClipEpsilon^2)
+      return true;
+    }
+    return false;
+  };
+  for (const bridge of layout.bridges) {
+    const parentPanel = layout.panels.find((p) => p.regionPanelId === bridge.parentRegionPanelId);
+    const childPanel = layout.panels.find((p) => p.regionPanelId === bridge.childRegionPanelId);
+    if (!hasZoneEdge(parentPanel, bridge.bendId) || !hasZoneEdge(childPanel, bridge.bendId)) {
+      return bridge.bendId;
+    }
+  }
+  return null;
 }
 
 /**
