@@ -23,19 +23,6 @@ bool NearlyEqual2(const Point2& a, const Point2& b) {
   return Length2(Sub2(a, b)) <= kVertexMatchEpsilonMm;
 }
 
-// Whether this bend's bottom (z=0) reference is the concave side — same rule
-// as manufacturing_graph_evaluator.cc's BottomIsConcave (mirrored, not
-// shared — see this module's own header comment on why). Fallback polarity
-// must track that function's own exactly: it was found backward there
-// (rebuild/20-bend-bridge-geometry.md) and fixed to angleDeg<0 — this
-// mirrored copy was missed in that fix, which silently desynced this
-// module's own tangent-shift formula from Evaluate()'s wallOuter for any
-// bend relying on the fallback (caught by this file's own
-// "flush side matches Evaluate()'s own wallOuter" cross-check test).
-bool BottomIsConcave(const BendSpec& bend) {
-  return bend.bottomIsConcave.has_value() ? *bend.bottomIsConcave : (bend.angleDeg < 0.0);
-}
-
 struct GroundedLine {
   std::vector<Point2> ring;  // possibly with 2 new vertices inserted
   Point2 crossA, crossB;     // real ring-boundary points, nearer-to-lineA first
@@ -269,8 +256,12 @@ std::vector<Point2> ResolveCrossings(std::vector<Point2> ring) {
 
 SplitAtBendResult SplitPartAtBend(const std::vector<Point2>& outline, const BendSpec& bend,
                                    double thicknessMm, CornerSide keepCornerOn,
-                                   const Transform3& parentPose) {
+                                   const Transform3& childPose) {
   SplitAtBendResult result;
+  // childAnchor is exactly childPose, unchanged — child transformations
+  // are relative to the parent's own pose, which the pose-walk already
+  // gets right on its own; no separate correction is needed here.
+  result.childAnchor = childPose;
 
   auto groundedHinge = GroundLine(outline, bend.hingeA, bend.hingeB, bend.hingeA, bend.hingeB);
   if (!groundedHinge) {
@@ -328,30 +319,27 @@ SplitAtBendResult SplitPartAtBend(const std::vector<Point2>& outline, const Bend
   double side = Dot2(Sub2(sample, groundedHinge->crossA), nLeft);
   bool chainABIsChild = side > 0.0;
 
-  // manufacturing_graph_evaluator.cc's BuildBendCuts uses this exact SIGNED
-  // value (NOT ComputeBendGeometry's kFactor-inclusive setbackMm — see that
-  // file's own comment on why these are two different, both-real
-  // quantities) to independently clip each region panel to its own role's
-  // shift (child panels always at childShift, parent panels always at
-  // parentShift) — sb's sign there just encodes which literal formula-side
-  // a given fold direction puts each shift on, and Evaluate() never has to
-  // choose between them since the real curved bend material still exists
-  // between the two flat panels. SplitPartAtBend has no such luxury: once
-  // the bend is gone, ONE side must absorb that whole curved zone, and
-  // `keepCornerOn` is the caller's CHOICE of which — a choice about
-  // fabrication intent, unrelated to fold direction. Only the MAGNITUDE
-  // (the true physical tangent-line offset; kFactor never enters it) is
-  // shared with BuildBendCuts here; the direction is fixed by keepCornerOn
-  // alone, via nLeft (which always points toward child, independent of
-  // sb's sign) — so kParent always means "parent grows to keep the corner,
-  // child is cut back" and vice versa, regardless of which literal fold
-  // direction this bend happens to be.
-  bool concave = BottomIsConcave(bend);
-  double signedD = concave ? bend.radiusMm : -bend.radiusMm;
-  double sb = std::fabs(signedD * std::tan(DegToRad(bend.angleDeg) / 2.0));
+  // Lap-joint extension: how far the GROWN side alone must extend past the
+  // raw hinge to cover the trimmed side's own full cross-section at the
+  // corner — see this file's own header comment for the hand-verified
+  // derivation. Purely a function of the fold angle and material thickness,
+  // never radiusMm/kFactor (unlike ComputeBendGeometry/BuildBendCuts,
+  // which describe an INTACT bend's own curved allowance zone, a different
+  // physical thing this module deliberately does not reuse).
+  double angleDegAbs = std::fabs(bend.angleDeg);
+  double aMagRad = DegToRad(std::fabs(90.0 - angleDegAbs));
+  double extensionMm = thicknessMm * std::sin(DegToRad(angleDegAbs));
+  if (angleDegAbs > 90.0) {
+    extensionMm += thicknessMm * std::tan(aMagRad);
+  }
 
-  Point2 shift = keepCornerOn == CornerSide::kChild ? Point2{-sb * nLeft.x, -sb * nLeft.y}
-                                                     : Point2{sb * nLeft.x, sb * nLeft.y};
+  // nLeft always points toward the child side (left-hand normal of
+  // hingeA->hingeB) — direction is fixed by keepCornerOn alone via nLeft,
+  // independent of fold direction, so kParent always means "parent
+  // extends into the corner" and vice versa, regardless of which literal
+  // fold direction this bend happens to be.
+  Point2 shift = keepCornerOn == CornerSide::kChild ? Point2{-extensionMm * nLeft.x, -extensionMm * nLeft.y}
+                                                     : Point2{extensionMm * nLeft.x, extensionMm * nLeft.y};
   bool trimChild = keepCornerOn == CornerSide::kParent;
 
   std::vector<Point2>& childChain = chainABIsChild ? chainAB : chainBA;
@@ -363,74 +351,64 @@ SplitAtBendResult SplitPartAtBend(const std::vector<Point2>& outline, const Bend
   Point2 cutB = {groundedHinge->crossB.x + shift.x, groundedHinge->crossB.y + shift.y};
   // Which offset point sits next to which raw endpoint is fixed purely by
   // which hinge endpoint that raw point IS — crossA's own cap is always
-  // cutA, crossB's is always cutB, on EITHER chain, EITHER role. No search.
+  // cutA, crossB's is always cutB. No search. Only GROWN ever uses these —
+  // trimmed is cut square at the raw hinge itself, no cap at all.
   auto cutNear = [&](const Point2& p) -> Point2 {
     return NearlyEqual2(p, groundedHinge->crossA) ? cutA : cutB;
   };
 
-  double trimmedSignBefore = ShoelaceArea(trimmed) >= 0.0 ? 1.0 : -1.0;
+  double grownSignBefore = ShoelaceArea(grown) >= 0.0 ? 1.0 : -1.0;
 
   std::vector<Point2> trimmedOut = trimmed;
   std::vector<Point2> grownOut = grown;
 
-  // sb == 0 (radius 0, or a real-but-currently-unmeasured bend) means the
-  // offset line IS the hinge line — nothing to place, both sides already
-  // meet exactly at crossA/crossB. Leave both untouched (Simplify below
-  // would be a no-op here anyway, since front()/back() already equal their
-  // own cutNear).
+  // Trimmed side: untouched by this cut itself (cut square at the raw
+  // hinge, already true of `trimmed` as grounded above) — still run
+  // through Simplify/ResolveCrossings since a SIBLING bend split off
+  // earlier can have left its own notch wall or crossing artifact
+  // somewhere in this material, unrelated to this cut.
+  trimmedOut = Simplify(trimmedOut);
+  trimmedOut = ResolveCrossings(trimmedOut);
+
+  // extensionMm == 0 (a flat, unfolded "bend") means there's nothing to
+  // add — grown already meets trimmed exactly at crossA/crossB.
   if (Length2(shift) >= kVertexMatchEpsilonMm) {
-    // ONE construction for both sides, no branch on local edge shape:
-    // insert each endpoint's own cap point right next to it — front's own
+    // Insert each endpoint's own cap point right next to it — front's own
     // cap before front, back's own cap after back — leaving the endpoint
-    // itself untouched. When the cap lands squarely on this endpoint's own
+    // itself untouched. When the cap lands squarely on grown's own
     // adjacent edge (the ordinary case — that edge runs perpendicular to
     // the hinge, ordinary sheet-metal geometry), the insertion creates a
     // 180-degree spike there that Simplify collapses right back down to a
-    // plain in-place replacement — the exact same point CrossSegment used
-    // to find by search, reached here without ever searching. When the
-    // cap instead lands beside a corner shared with ANOTHER live bend
-    // (that edge runs parallel to the hinge, continuing straight through
-    // this corner instead), nothing collapses: the insertion IS the
-    // answer, a small local notch or bump, still never touching anything
-    // beyond this one corner.
-    Point2 cutNearFront = cutNear(trimmed.front());
-    Point2 cutNearBack = cutNear(trimmed.back());
-
-    trimmedOut.insert(trimmedOut.begin(), cutNearFront);
-    trimmedOut.push_back(cutNearBack);
-    trimmedOut = Simplify(trimmedOut);
+    // plain in-place replacement. When the cap instead lands beside a
+    // corner shared with ANOTHER live bend (that edge runs parallel to
+    // the hinge, continuing straight through this corner instead),
+    // nothing collapses: the insertion IS the answer, a small local notch
+    // or bump, still never touching anything beyond this one corner.
+    Point2 cutNearFront = cutNear(grown.front());
+    Point2 cutNearBack = cutNear(grown.back());
+    grownOut.insert(grownOut.begin(), cutNearFront);
+    grownOut.push_back(cutNearBack);
+    grownOut = Simplify(grownOut);
     // A sibling bend split off earlier can have left its OWN notch wall
-    // sitting somewhere in the middle of trimmed's own material — this
+    // sitting somewhere in the middle of grown's own material too — this
     // cut's own bend line, spanning its own full hinge length with no
     // knowledge of that, can cross it (see ResolveCrossings' own comment).
-    trimmedOut = ResolveCrossings(trimmedOut);
-
-    // Grown side: the SAME two points bound the band it gains — splice
-    // them onto its matching ends (grown.front() == trimmed.back() and
-    // vice versa, since the two raw chains share endpoints in swapped
-    // order). Same construction, same cleanup — one path, not a mirrored
-    // second copy of it.
-    grownOut.insert(grownOut.begin(), cutNearBack);
-    grownOut.push_back(cutNearFront);
-    grownOut = Simplify(grownOut);
     grownOut = ResolveCrossings(grownOut);
   }
 
   // Validity falls out of the result itself rather than a separate
-  // upfront gate: a cap that lands well past where this side's own
-  // material actually reaches (the setback wider than the flush side —
-  // see the "corner bias wider than material" test) simplifies away
-  // FURTHER real vertices than it should, flipping the trimmed side's own
-  // winding relative to what it started as. That flip — not a bounds
-  // check on any one edge — is the general, single signal that this cut
-  // isn't locally representable on this side.
-  bool trimmedSignFlipped = trimmedOut.size() >= 3 &&
-                             (ShoelaceArea(trimmedOut) >= 0.0 ? 1.0 : -1.0) != trimmedSignBefore;
-  if (trimmedOut.size() < 3 || grownOut.size() < 3 || trimmedSignFlipped) {
+  // upfront gate: a degenerate local shape (an extremely short adjacent
+  // edge, or a sibling-bend interaction the fixed-point loops above
+  // couldn't resolve) flips grown's own winding relative to what it
+  // started as. That flip — not a bounds check on any one edge — is the
+  // general, single signal that this cut isn't locally representable.
+  bool grownSignFlipped = grownOut.size() >= 3 &&
+                          (ShoelaceArea(grownOut) >= 0.0 ? 1.0 : -1.0) != grownSignBefore;
+  if (trimmedOut.size() < 3 || grownOut.size() < 3 || grownSignFlipped) {
     result.errorCode = SplitErrorCode::kCornerZoneNotGrounded;
     result.message =
-        "the corner-biased cut is not locally representable on the flush side — its own material "
-        "is narrower than the setback";
+        "the corner-biased cut is not locally representable on the growing side — its own "
+        "adjacent material is too short for the lap-joint extension";
     return result;
   }
 
@@ -440,37 +418,6 @@ SplitAtBendResult SplitPartAtBend(const std::vector<Point2>& outline, const Bend
   result.ok = true;
   result.childOutline = childOut;
   result.parentOutline = parentOut;
-
-  // childAnchor: a rotation about the axis THIS split's own cut (cutA/
-  // cutB, already computed above — always the correct, non-negative-
-  // magnitude tangent point per keepCornerOn, see SplitAtBendResult's own
-  // doc comment) introduces, composed with the caller's own parentPose —
-  // never Evaluate()'s own axisInPlaneOffset-based axis, so childAnchor
-  // and childOutline are self-consistent by construction (same cutA/
-  // cutB feed both).
-  Point3 cutA3{cutA.x, cutA.y, 0.0};
-  Point3 cutB3{cutB.x, cutB.y, 0.0};
-  Point3 cutAWorld = parentPose.Apply(cutA3);
-  Point3 cutBWorld = parentPose.Apply(cutB3);
-  Point3 axisDelta{cutBWorld.x - cutAWorld.x, cutBWorld.y - cutAWorld.y, cutBWorld.z - cutAWorld.z};
-  double axisLen = std::sqrt(axisDelta.x * axisDelta.x + axisDelta.y * axisDelta.y +
-                              axisDelta.z * axisDelta.z);
-  if (axisLen < kGeometricEpsilon) {
-    // Mathematically unreachable given a valid (rigid) parentPose and a
-    // real bend (cutA != cutB in 2D, guaranteed by the ring-vertex/chain-
-    // size checks already passed above) — a rigid transform can't collapse
-    // two distinct 2D points onto the same 3D point. Fails typed rather
-    // than silently defaulting childAnchor (no-fallback-rule), in case
-    // that guarantee is ever violated by a future caller.
-    result.ok = false;
-    result.errorCode = SplitErrorCode::kDegenerateResult;
-    result.message = "cutA/cutB collapsed to the same 3D point under parentPose — no rotation "
-                      "axis to build the child anchor from";
-    return result;
-  }
-  Point3 axisDir{axisDelta.x / axisLen, axisDelta.y / axisLen, axisDelta.z / axisLen};
-  Transform3 cutFold = Transform3::RotationAboutAxis(cutAWorld, axisDir, bend.angleDeg);
-  result.childAnchor = cutFold.Compose(parentPose);
 
   return result;
 }

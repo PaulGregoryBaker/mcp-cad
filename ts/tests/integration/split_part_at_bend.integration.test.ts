@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 
 import { GraphStore } from '../../src/v2/graph/store';
 import { dispatchGraphTool } from '../../src/v2/tools/graph';
-import { mapPointToWorld } from '../../src/v2/graph/evaluate-client';
+import { evaluatePart } from '../../src/v2/graph/evaluate-client';
 import { McpToolError } from '../../src/mcp/errors';
 import type { Point2 } from '../../src/v2/graph/types';
 
@@ -27,6 +27,45 @@ interface MergeToolResult {
 interface SplitToolResult {
   part_id: string;
   new_part_ids: string[];
+}
+
+/** A region panel's own bottomFace — pose.Apply(rawOuter point, z=0),
+ * ALREADY world-space (manufacturing_graph_evaluator.cc), built from the
+ * SAME rawOuter+pose pair the actual 3D solid uses. Deliberately not
+ * regionOuter (the flat-pattern/DXF-only widened view, point_mapping.cc's
+ * own PanelShift derives from it): that widening resets to zero once a
+ * bend is removed (a fresh, bendless part's root panel always starts
+ * cumulativeShift=0), so comparing regionOuter-frame coordinates across a
+ * split boundary compares two different reference frames, not real 3D
+ * position — bottomFace sidesteps that by already being world-space. */
+function regionPanelBottomFace(
+  store: GraphStore, partId: string, regionPanelId: string,
+): Array<{ x: number; y: number; z: number }> {
+  const layout = evaluatePart(store, partId);
+  if (!layout.ok) throw new Error(`evaluatePart(${partId}) failed: ${layout.message}`);
+  const panel = layout.panels.find((p) => p.regionPanelId === regionPanelId);
+  if (!panel) throw new Error(`region panel ${regionPanelId} not found on part ${partId}`);
+  return panel.bottomFace;
+}
+
+/** Every vertex in `before` must still be found, unmoved, among `after` —
+ * a lap-joint extension only ever ADDS vertices (part_split.hpp's own
+ * header comment), never moves or removes existing ones, so this holds
+ * whether or not the panel itself grew on this side of the split. */
+function expectVerticesPreserved(
+  before: Array<{ x: number; y: number; z: number }>,
+  after: Array<{ x: number; y: number; z: number }>,
+) {
+  for (const vBefore of before) {
+    let bestDrift = Infinity;
+    for (const vAfter of after) {
+      bestDrift = Math.min(bestDrift, Math.hypot(
+        vAfter.x - vBefore.x, vAfter.y - vBefore.y, vAfter.z - vBefore.z,
+      ));
+    }
+    expect(bestDrift, `vertex ${JSON.stringify(vBefore)} not found unmoved in ${JSON.stringify(after)}`)
+      .toBeLessThan(1e-6);
+  }
 }
 
 function shoelaceArea(poly: Array<{ x: number; y: number }>): number {
@@ -96,14 +135,33 @@ function mergeTwoParts(store: GraphStore, partAId: string, partBId: string): Mer
   }) as MergeToolResult;
 }
 
+/**
+ * A LAP JOINT, not a mitered tangent-line trim (part_split.hpp's own header
+ * comment has the full derivation, hand-verified against a real 3D solid).
+ * keep_corner_on's chosen side EXTENDS past the raw hinge into the other
+ * side's old territory to fill the corner completely; the OTHER side is cut
+ * square at the raw hinge, its own full natural shape, unchanged. The two
+ * sides' 2D flat-pattern footprints therefore deliberately OVERLAP near the
+ * corner (they occupy different heights in the real 3D lap joint) — area is
+ * NOT conserved across a split, and there is no longer a single boundary
+ * vertex shared by both sides' outlines to compare — so neither invariant
+ * is checked below. What IS checked: each side's own FAR (interior,
+ * non-boundary) material lands at EXACTLY the same 3D position after the
+ * split as it did before, while the bend was still live (live-app
+ * regression, 2026-09-15: "panels shifted outward" — traced to childAnchor
+ * reusing a pose whose own PanelShift, point_mapping.cc's flat-pattern-vs-
+ * pose frame offset, silently changes once a region panel becomes the root
+ * of a brand-new, bendless part; part_split.hpp's SplitPartAtBend doc
+ * comment has the fix).
+ */
 d('split_part_at_bend', () => {
-  it('splits a merged 2-panel part back into two parts whose areas partition the combined outline', () => {
+  it('splits a merged 2-panel part back into two parts; child extends into the corner, parent '
+    + 'is cut square, and each side\'s own far material lands at its true pre-split position', () => {
     const store = new GraphStore();
     const { partAId, partBId } = authorTwoParts(store);
     const merged = mergeTwoParts(store, partAId, partBId);
 
-    const combinedArea = shoelaceArea(store.getPart(partAId)!.outline);
-    expect(combinedArea).toBeCloseTo(10 * 5 + 5 * 8, 6);
+    const bFacesBefore = regionPanelBottomFace(store, partAId, merged.child_region_panel_id);
 
     const split = dispatchGraphTool(store, 'split_part_at_bend', {
       part_id: partAId,
@@ -118,106 +176,33 @@ d('split_part_at_bend', () => {
     // The original bend is gone.
     expect(store.getBend(merged.bend_id)).toBeUndefined();
 
-    const parentOutline = store.getPart(partAId)!.outline;
-    const childOutline = store.getPart(childId)!.outline;
-    const parentArea = shoelaceArea(parentOutline);
-    const childArea = shoelaceArea(childOutline);
-    // A strict partition of the same original combined outline.
-    expect(parentArea + childArea).toBeCloseTo(combinedArea, 6);
-    // keep_corner_on='child' => child absorbs the allowance band, so it's
-    // larger than its own pre-merge 40mm^2 (5x8) footprint.
+    // keep_corner_on='child' => child extends into the corner (larger than
+    // its own pre-merge 40mm^2 (5x8) footprint); parent is cut square at
+    // the raw hinge — its own FULL natural 50mm^2 (10x5) shape, unchanged.
+    const parentArea = shoelaceArea(store.getPart(partAId)!.outline);
+    const childArea = shoelaceArea(store.getPart(childId)!.outline);
     expect(childArea).toBeGreaterThan(5 * 8);
-    expect(parentArea).toBeLessThan(10 * 5);
+    expect(parentArea).toBeCloseTo(10 * 5, 6);
 
-    // The split-off part no longer has a live bend to fold it. Removing a
-    // real (non-zero-radius) bend means its child's ENTIRE body legitimately
-    // moves to a new, flat-cut position — a fixed, whole-body offset from
-    // where the same material sat under the real curved fold (two different
-    // rotation axes for the same angle differ by a CONSTANT vector, the
-    // same at every point, not just near the hinge) — so "the same frame-F
-    // point lands at the same 3D position as before" is not the right
-    // invariant to check post-fix. What must hold is internal consistency:
-    // the new shared boundary this split introduces lands at the SAME 3D
-    // position whether queried via the parent's own (unchanged) anchor or
-    // the child's own new one — see split_part_at_bend.integration.test.ts's
-    // own "KNOWN BUG" regression test for the full derivation of why.
-    const sharedVertices = childOutline.filter((cv) =>
-      parentOutline.some((pv) => Math.abs(pv.x - cv.x) < 1e-6 && Math.abs(pv.y - cv.y) < 1e-6));
-    expect(sharedVertices.length).toBeGreaterThan(0);
-    for (const v of sharedVertices) {
-      const fromParent = mapPointToWorld(store, partAId, v);
-      const fromChild = mapPointToWorld(store, childId, v);
-      expect(fromParent.ok, fromParent.message).toBe(true);
-      expect(fromChild.ok, fromChild.message).toBe(true);
-      expect(fromChild.point3d.x).toBeCloseTo(fromParent.point3d.x, 6);
-      expect(fromChild.point3d.y).toBeCloseTo(fromParent.point3d.y, 6);
-      expect(fromChild.point3d.z).toBeCloseTo(fromParent.point3d.z, 6);
-    }
+    // B's own original material (every vertex it already had, well clear
+    // of the cut) lands at its exact pre-split 3D position — child's own
+    // anchor is reused unchanged, not re-derived from this split.
+    const bFacesAfter = regionPanelBottomFace(store, childId, merged.child_region_panel_id);
+    expectVerticesPreserved(bFacesBefore, bFacesAfter);
 
     // Regression guard: for a real (non-zero-angle) bend, the child's own
-    // anchor must NOT just be a copy of the parent's (that was the bug —
-    // it silently un-folds the part back to flat).
+    // anchor must NOT just be a copy of the parent's (an early bug — it
+    // silently un-folds the part back to flat).
     expect(store.getPart(childId)!.anchor).not.toEqual(store.getPart(partAId)!.anchor);
   });
 
-  it('keep_corner_on=parent gives the mirror-image partition', () => {
+  it('keep_corner_on=parent gives the mirror-image extension: parent grows, child is cut '
+    + 'square and stays at its own true pre-split position', () => {
     const store = new GraphStore();
     const { partAId, partBId } = authorTwoParts(store);
     const merged = mergeTwoParts(store, partAId, partBId);
 
-    const split = dispatchGraphTool(store, 'split_part_at_bend', {
-      part_id: partAId,
-      bend_id: merged.bend_id,
-      keep_corner_on: 'parent',
-    }) as SplitToolResult;
-
-    const parentArea = shoelaceArea(store.getPart(partAId)!.outline);
-    const childArea = shoelaceArea(store.getPart(split.new_part_ids[0])!.outline);
-    expect(parentArea).toBeGreaterThan(10 * 5);
-    expect(childArea).toBeLessThan(5 * 8);
-  });
-
-  /**
-   * Live-app regression (2026-09-15): "gaps between panels" reported after
-   * split_part_at_bend on every bend of a real multi-bend imported part.
-   *
-   * Root cause: the new child part's outline (part_split.hpp, C++) is
-   * trimmed/grown at the bend's TRUE TANGENT LINE (sb = |radius *
-   * tan(angle/2)| from the raw hinge — real material for a non-zero-radius
-   * bend), but its anchor used to be built from Evaluate()'s own
-   * childRegionPanelId pose — a rotation about a DIFFERENT axis
-   * (Evaluate()'s pose-walk uses one axis for the flat panel and a
-   * separate, offset TRUE axis for the bend's own curved bridge; the two
-   * only reconcile when both are present together and fused, which
-   * split_part_at_bend's whole point is to remove). Reusing that pose for
-   * an outline trimmed at the true tangent line left a real, measurable
-   * gap — not a unit-conversion or float-noise scale issue.
-   *
-   * A tangent-line offset is a physical distance and can never be
-   * negative; an attempted fix that added `fabs()` to Evaluate()'s own
-   * axisInPlaneOffset formula (to match ComputeBendGeometry's own always-
-   * non-negative setbackMm) broke 19 other, already-passing tests — other
-   * code already depends on that value's current signed behavior. Fixed
-   * instead by having SplitPartAtBend (part_split.cc) build the child's
-   * own anchor directly from THIS split's own cut point (already
-   * correctly signed, magnitude-only per keepCornerOn) composed with the
-   * caller-supplied parentPose — never Evaluate()'s axisInPlaneOffset-
-   * based axis at all, so childAnchor and childOutline are self-
-   * consistent by construction (SplitAtBendResult::childAnchor's own doc
-   * comment).
-   *
-   * The pinned regression: the actual NEW boundary vertex the split
-   * introduces (not the invariant raw hinge, which the other tests above
-   * already cover and which this bug never affected) must map to the SAME
-   * world position whether queried via the parent's own remaining
-   * outline+anchor or the child's own new outline+anchor — it is the same
-   * physical edge, shared by construction.
-   */
-  it('the new tangent-line boundary vertex a real (non-zero-radius) split introduces '
-    + 'lands at the same world position on both sides of the cut', () => {
-    const store = new GraphStore();
-    const { partAId, partBId } = authorTwoParts(store);
-    const merged = mergeTwoParts(store, partAId, partBId);
+    const bFacesBefore = regionPanelBottomFace(store, partAId, merged.child_region_panel_id);
 
     const split = dispatchGraphTool(store, 'split_part_at_bend', {
       part_id: partAId,
@@ -226,28 +211,38 @@ d('split_part_at_bend', () => {
     }) as SplitToolResult;
     const childId = split.new_part_ids[0];
 
-    const parentOutline = store.getPart(partAId)!.outline;
-    const childOutline = store.getPart(childId)!.outline;
-    const sharedVertices = childOutline.filter((cv) =>
-      parentOutline.some((pv) => Math.abs(pv.x - cv.x) < 1e-6 && Math.abs(pv.y - cv.y) < 1e-6));
-    // The split must actually introduce at least one new, real boundary
-    // vertex shared by both sides — otherwise this test isn't exercising
-    // the bug at all (radius=2 on a 90deg bend always does).
-    expect(sharedVertices.length).toBeGreaterThan(0);
+    const parentArea = shoelaceArea(store.getPart(partAId)!.outline);
+    const childArea = shoelaceArea(store.getPart(childId)!.outline);
+    expect(parentArea).toBeGreaterThan(10 * 5);
+    // Child is cut square at the raw hinge — its own full natural shape.
+    expect(childArea).toBeCloseTo(5 * 8, 6);
 
-    for (const v of sharedVertices) {
-      const fromParent = mapPointToWorld(store, partAId, v);
-      const fromChild = mapPointToWorld(store, childId, v);
-      expect(fromParent.ok, fromParent.message).toBe(true);
-      expect(fromChild.ok, fromChild.message).toBe(true);
-      const gap = Math.hypot(
-        fromParent.point3d.x - fromChild.point3d.x,
-        fromParent.point3d.y - fromChild.point3d.y,
-        fromParent.point3d.z - fromChild.point3d.z,
-      );
-      expect(gap, `shared vertex (${v.x},${v.y}) must land at the same world position ` +
-        `from both parent and child`).toBeLessThan(1e-6);
-    }
+    const bFacesAfter = regionPanelBottomFace(store, childId, merged.child_region_panel_id);
+    expectVerticesPreserved(bFacesBefore, bFacesAfter);
+  });
+
+  it('the same drift-preservation invariant also holds for a CONVEX bend', () => {
+    const store = new GraphStore();
+    const { partAId, partBId } = authorTwoParts(store);
+    const merged = dispatchGraphTool(store, 'merge_bodies_with_bend', {
+      part_a_id: partAId,
+      part_b_id: partBId,
+      radius_mm: 2.0,
+      k_factor: 0.4,
+      bottom_is_concave: false,
+    }) as MergeToolResult;
+
+    const bFacesBefore = regionPanelBottomFace(store, partAId, merged.child_region_panel_id);
+
+    const split = dispatchGraphTool(store, 'split_part_at_bend', {
+      part_id: partAId,
+      bend_id: merged.bend_id,
+      keep_corner_on: 'parent',
+    }) as SplitToolResult;
+    const childId = split.new_part_ids[0];
+
+    const bFacesAfter = regionPanelBottomFace(store, childId, merged.child_region_panel_id);
+    expectVerticesPreserved(bFacesBefore, bFacesAfter);
   });
 
   it('split_part_at_bend rejects a bend that does not belong to the given part', () => {
@@ -307,9 +302,6 @@ d('split_part_at_bend', () => {
       radius_mm: 1.0,
     });
 
-    const totalAreaBefore = shoelaceArea(store.getPart(part.part_id)!.outline);
-    expect(totalAreaBefore).toBeCloseTo(10 * 5, 6);
-
     const split = dispatchGraphTool(store, 'split_part_at_bend', {
       part_id: part.part_id,
       keep_corner_on: 'child',
@@ -318,16 +310,22 @@ d('split_part_at_bend', () => {
     expect(split.new_part_ids).toHaveLength(2);
     const allIds = [split.part_id, ...split.new_part_ids];
 
-    let totalAreaAfter = 0;
+    // Both bends are children of the SAME root directly (siblings, not
+    // chained) and keep_corner_on='child' means root is cut square at
+    // every hinge — root's own territory (x in [7,10]) is never grown, so
+    // its own area is unaffected; each child instead extends into the
+    // corner (grows past its own natural width). Area is no longer
+    // conserved across a lap-joint split (part_split.hpp's own header
+    // comment) — each part's own material must simply still exist, with
+    // zero bends left.
     for (const id of allIds) {
       const part = store.getPart(id);
       expect(part, `split-off part ${id} must exist`).toBeDefined();
-      totalAreaAfter += shoelaceArea(part!.outline);
+      expect(shoelaceArea(part!.outline)).toBeGreaterThan(0);
       // Every resulting part must have zero bends of its own left.
       const bendsOnPart = store.snapshotPart(id).bends;
       expect(bendsOnPart).toHaveLength(0);
     }
-    expect(totalAreaAfter).toBeCloseTo(totalAreaBefore, 6);
   });
 
   it('bend_id omitted, all-or-nothing: a failed multi-bend split leaves the store untouched', () => {

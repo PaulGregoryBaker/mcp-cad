@@ -544,6 +544,99 @@ d('v2 merge_bodies_with_bend live regression: a fuse_bodies-produced outline wit
     ).toBe(true);
   });
 
+  it('split_part_at_bend regression: testcube.step, splitting every bend on Component1 '
+    + '(a real multi-level chain — a wall splits off, then a further bend splits off '
+    + "that wall's own new part) — every region panel's own already-existing geometry "
+    + 'stays at exactly the same world position it had before any split (live-app '
+    + 'regression 2026-09-15, "panels shifted outward")', () => {
+    const store = new GraphStore();
+    const imported = dispatchGraphTool(store, 'import_part', {
+      file: path.join(FIXTURES_DIR, 'testcube.step'),
+    }) as { part_id: string; protrusion_part_ids: string[]; component_part_ids: string[] };
+
+    let component1 = imported.component_part_ids[0];
+    let maxBends = -1;
+    for (const cid of imported.component_part_ids) {
+      const n = store.snapshotPart(cid).bends.length;
+      if (n > maxBends) { maxBends = n; component1 = cid; }
+    }
+
+    // BEFORE any split: capture every region panel's own bottomFace —
+    // pose.Apply(rawOuter point, z=0), ALREADY world-space, built directly
+    // from the same rawOuter+pose pair the actual 3D solid uses
+    // (manufacturing_graph_evaluator.cc) — deliberately NOT regionOuter
+    // (the flat-pattern/DXF-only widened view, point_mapping.cc's own
+    // PanelShift derives from it): that widening resets to zero once a
+    // bend is removed (a brand-new, bendless part's root panel always
+    // starts cumulativeShift=0), so comparing regionOuter-frame
+    // coordinates across a split boundary compares two DIFFERENT
+    // reference frames, not a real 3D drift — bottomFace sidesteps that
+    // entirely by already being in world space on both sides.
+    //
+    // A panel that ends up on the GROWN (keep_corner_on='parent') side of
+    // a LATER split — e.g. rightwall here, once bottom splits off it — has
+    // its own outline legitimately EXTENDED afterward (it absorbs that
+    // bend's corner), so its own centroid genuinely, correctly moves; that
+    // is not drift. What must hold, and is checked below, is that every
+    // vertex the panel already had stays exactly where it was — a lap-
+    // joint extension only ever ADDS vertices (part_split.hpp's own header
+    // comment), never moves or removes existing ones.
+    const before = new Map<string, Array<{ x: number; y: number; z: number }>>();
+    const layoutBefore = evaluatePart(store, component1);
+    expect(layoutBefore.ok).toBe(true);
+    for (const panel of layoutBefore.panels) {
+      before.set(panel.regionPanelId, panel.bottomFace);
+    }
+
+    // eslint-disable-next-line no-console
+    console.log(`captured ${before.size} region panels before splitting`);
+
+    const worklist: string[] = [component1];
+    while (worklist.length > 0) {
+      const pid = worklist.pop()!;
+      const bends = store.snapshotPart(pid).bends;
+      if (bends.length === 0) continue;
+      const bend = bends[0];
+      const result = dispatchGraphTool(store, 'split_part_at_bend', {
+        part_id: pid,
+        bend_id: bend.bendId,
+        keep_corner_on: 'parent',
+      }) as { new_part_ids: string[] };
+      for (const npid of result.new_part_ids) worklist.push(npid);
+      worklist.push(pid);
+    }
+
+    let maxDriftMm = 0;
+    for (const [regionPanelId, facesBefore] of before) {
+      const row = store.getRegionPanel(regionPanelId);
+      expect(row, `region panel ${regionPanelId} must still exist after splitting`).toBeDefined();
+      const currentPartId = row!.partId;
+      const layoutAfter = evaluatePart(store, currentPartId);
+      expect(layoutAfter.ok, `part ${currentPartId}: ${layoutAfter.message}`).toBe(true);
+      const panelAfter = layoutAfter.panels.find((p) => p.regionPanelId === regionPanelId);
+      expect(panelAfter, `panel ${regionPanelId} missing from part ${currentPartId}`).toBeDefined();
+      const facesAfter = panelAfter!.bottomFace;
+
+      // Every ORIGINAL vertex must still be found, unmoved, among the
+      // current bottomFace — new vertices from a later extension are fine
+      // and expected, an existing one moving or vanishing is not.
+      for (const vBefore of facesBefore) {
+        let bestDrift = Infinity;
+        for (const vAfter of facesAfter) {
+          const d = Math.hypot(vAfter.x - vBefore.x, vAfter.y - vBefore.y, vAfter.z - vBefore.z);
+          bestDrift = Math.min(bestDrift, d);
+        }
+        // eslint-disable-next-line no-console
+        console.log(`panel=${regionPanelId} part=${currentPartId} vertex=${JSON.stringify(vBefore)} `
+          + `closest-match-drift=${bestDrift.toFixed(4)}mm`);
+        maxDriftMm = Math.max(maxDriftMm, bestDrift);
+      }
+    }
+    // eslint-disable-next-line no-console
+    console.log(`maxDriftMm=${maxDriftMm}`);
+    expect(maxDriftMm).toBeLessThan(1e-6);
+  });
+
   it('every per-part graph resource fails closed (GRAPH_PART_ALIASED) when read via a '
     + 'merged-away part id, instead of silently returning an empty graph', () => {
     // Confirmed live: fuse_bodies/merge_bodies_with_bend alias B into A

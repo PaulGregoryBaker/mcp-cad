@@ -335,19 +335,15 @@ export function splitPartAtBend(
     );
   }
 
-  // The bend's own parentRegionPanelId pose, read WHILE the bend is still
-  // live — the chain-product 3D transform (root anchor + every ancestor
-  // bend) that panel currently has, always correct (this panel's own
-  // fold, if any, is unaffected by removing a bend further down its own
-  // subtree). Passed into splitPartAtBend (C++) below so it can build the
-  // new child part's own anchor directly from THIS split's own cut point
-  // (part_split.hpp's SplitAtBendResult::childAnchor doc comment) —
-  // deliberately not Evaluate()'s own childRegionPanelId pose (the
-  // pre-split live-bend pose), which relies on a different, pose-walk-
-  // internal axis that isn't guaranteed consistent with this split's own
-  // 2D cut (confirmed live: a real measurable gap for some fold/
-  // concavity combinations — split_part_at_bend.integration.test.ts's
-  // own regression test).
+  // The child region panel's own TRUE pose, read WHILE the bend is still
+  // live — reused UNCHANGED as the new child part's own anchor. No shift
+  // correction is needed: the actual 3D solid a region panel builds comes
+  // from rawOuter + pose (manufacturing_graph_evaluator.cc's bottomFace/
+  // topFace), never regionOuter (the flat-pattern/DXF-only widened view,
+  // point_mapping.cc's own PanelShift) — that widening is a purely-
+  // derived, per-query display quantity, meaningless once the bend it was
+  // widening for is gone. part_split.hpp's own SplitPartAtBend doc comment
+  // has the full reasoning.
   const layout = evaluatePart(store, input.partId);
   if (!layout.ok) {
     throwError(
@@ -356,11 +352,11 @@ export function splitPartAtBend(
       false,
     );
   }
-  const parentPanelLayout = layout.panels.find((p) => p.regionPanelId === bend.parentRegionPanelId);
-  if (!parentPanelLayout) {
+  const childPanelLayout = layout.panels.find((p) => p.regionPanelId === bend.childRegionPanelId);
+  if (!childPanelLayout) {
     throwError(
       ErrorCodes.INTERNAL_ERROR,
-      `evaluatePartGraph result for part ${input.partId} is missing panel ${bend.parentRegionPanelId}`,
+      `evaluatePartGraph result for part ${input.partId} is missing panel ${bend.childRegionPanelId}`,
       false,
     );
   }
@@ -381,7 +377,7 @@ export function splitPartAtBend(
     },
     part.thicknessMm,
     input.keepCornerOn,
-    parentPanelLayout.pose,
+    childPanelLayout.pose,
   );
   if (!split.ok) {
     throwError(

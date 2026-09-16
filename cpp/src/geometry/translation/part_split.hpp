@@ -12,30 +12,33 @@
  * onto it (this module has no knowledge of parts, region panels, or bends
  * as graph rows — only raw polygons, same discipline as part_merge.hpp).
  *
- * Real material meets a real bend at TWO tangent lines, one on each leg,
- * bracketing the curved bend-allowance zone between them (manufacturing_
- * graph_evaluator.hpp's own header comment: BA = angleRad*(radiusMm +
- * kFactor*thicknessMm), SB = reff*tan(angleRad/2)) — cutting a formed part
- * back into two loose flat blanks means picking ONE of those two tangent
- * lines as the single dividing line, so exactly one side absorbs the whole
- * curved zone ("goes into the corner") and the other is trimmed flush at
- * its own tangent line, carrying no allowance material at all (`kFactor`
- * included, per that same allowance formula — this is the sense in which
- * the corner-losing side has the bend's kFactor-driven stretch removed,
- * not just its angle). `keepCornerOn` selects which side that is.
+ * A LAP JOINT, not a mitered tangent-line trim. Converting a real (nonzero-
+ * radius) bend into a sharp corner means one side ("grown", `keepCornerOn`'s
+ * choice) extends past the raw hinge far enough to cover the OTHER side's
+ * ("trimmed") own full cross-section at the corner — trimmed is cut SQUARE
+ * (perpendicular to its own length) exactly at the raw hinge, nothing more:
+ * its own solid, extruded through its own full thickness, already begins
+ * exactly at the bend's true fold axis once cut flush there, no matter which
+ * face (inner or outer) that axis actually sits at for this bend's own fold
+ * direction — no separate reconciliation needed on that side at all.
  *
- * The tangent-shift formula (`sb`, signed by which surface is concave) is
- * bit-for-bit the same one manufacturing_graph_evaluator.cc's BuildBendCuts
- * already uses to trim RegionPanelLayout::wallOuter — deliberately mirrored
- * here (not re-derived) rather than exported and shared, because that
- * function's own hinge-grounding pass is coupled to simultaneously cutting
- * EVERY bend on a ring (later bends see earlier bends' inserted vertices);
- * this module only ever grounds ONE line against ONE ring, with no such
- * coupling, so sharing the loop itself would add a parameter no other
- * caller needs. cpp/tests/part_split_test.cc cross-checks this module's
- * flush-side output directly against Evaluate()'s own wallOuter for the
- * same bend, so drift from the source formula is caught by tests, not by
- * hoping the two copies stay in sync.
+ * How far must grown extend? Hand-verified against a real 3D solid (not
+ * just the 2D outline): for a 90-degree fold and 1mm material, extending by
+ * exactly 1mm puts the grown side's own far face flush against the trimmed
+ * side's own near face, no gap, no overlap. In general (interior angle
+ * between the two panels, thetaBetween = 180 - |angleDeg|; a = thetaBetween
+ * - 90, its own deviation from square):
+ *   extensionMm = thicknessMm * sin(|angleDeg|)                     (thetaBetween >= 90, obtuse or square)
+ *   extensionMm = thicknessMm * sin(|angleDeg|) + thicknessMm * tan(|a|)   (thetaBetween < 90, acute)
+ * (sin(|angleDeg|) == cos(|a|) by the co-function identity, since a = 90 -
+ * |angleDeg| in the first branch — this is the SAME formula continuously
+ * extended, not two unrelated cases; the tan(|a|) term only ever adds for
+ * an acute (pinched) corner, where the grown side must reach further still
+ * to cover trimmed's now-more-oblique cross-section). Neither term involves
+ * radiusMm or kFactor at all — this is purely a function of the fold angle
+ * and the trimmed side's own material thickness, unlike the tangent-line/
+ * bend-allowance formulas (ComputeBendGeometry, BuildBendCuts) used
+ * elsewhere in this codebase for an INTACT bend's own flat-pattern unroll.
  */
 
 #include "manufacturing_graph_evaluator.hpp"
@@ -50,14 +53,13 @@ enum class SplitErrorCode {
   kDegenerateResult,      // a resulting ring has fewer than 3 vertices
 };
 
-// Which side is cut at its OWN natural (corner-reaching) tangent line —
-// that side keeps its normal, un-shrunk shape; the OTHER side is cut at the
-// SAME line, which sits on the far side of the raw hinge from ITS OWN
-// tangent line, so it loses the whole allowance band (trimmed past even a
-// raw-hinge cut, not merely flush at it).
+// Which side extends into the corner (see this file's own header comment
+// for the lap-joint construction) — that side's own outline grows past the
+// raw hinge; the OTHER side is simply cut square at the raw hinge, nothing
+// removed from its own normal shape at all.
 enum class CornerSide {
-  kParent,  // parent keeps its normal shape; child is the harshly-trimmed side
-  kChild,   // child keeps its normal shape; parent is the harshly-trimmed side
+  kParent,  // parent extends into the corner; child is cut square at the raw hinge
+  kChild,   // child extends into the corner; parent is cut square at the raw hinge
 };
 
 struct SplitAtBendResult {
@@ -66,42 +68,34 @@ struct SplitAtBendResult {
   std::string message;
   std::vector<Point2> parentOutline;  // CCW
   std::vector<Point2> childOutline;   // CCW
-  // The new child part's own anchor — a rotation about the axis THIS
-  // split's own cut actually introduces (the corner-biased cut point,
-  // raw hinge shifted by this bend's own setback magnitude along nLeft
-  // per keepCornerOn — never negative, see this file's own
-  // BottomIsConcave/setback comment), composed with `parentPose` (the
-  // caller's own, unchanged pose for whichever region panel is
-  // SplitPartAtBend's own bend.parentRegionPanelId).
-  //
-  // Deliberately NOT built from Evaluate()'s own axisInPlaneOffset-based
-  // axis (a different, pose-walk-internal quantity whose sign depends on
-  // angleDeg's own raw sign combined with concave/convex, and can come
-  // out on the wrong side of the raw hinge for some real fold/concavity
-  // combinations — confirmed live, see split_part_at_bend.integration.
-  // test.ts's own regression test): using THIS split's own cut point
-  // instead guarantees childAnchor and childOutline stay self-consistent
-  // by construction, since both come from the same cutA/cutB — no second,
-  // independently-signed quantity to drift out of sync with the first.
-  //
-  // Only meaningful when SplitPartAtBend was called with a real
-  // `parentPose` — defaults to Transform3::Identity() composed the same
-  // way when the caller doesn't have one (e.g. a pure-2D unit test that
-  // only cares about parentOutline/childOutline).
+  // The new child part's own anchor — always exactly the caller-supplied
+  // `childPose`, unchanged. See SplitPartAtBend's own doc comment for why
+  // no correction is needed.
   Transform3 childAnchor;
 };
 
-// outline: the part's one stored flat outline (CCW). bend: the ONE live bend
-// being split off — bend.hingeA/hingeB in the SAME flat frame as `outline`.
-// thicknessMm: the part's own thickness (bend allowance's kFactor term).
-// parentPose: the CURRENT 3D pose of bend.parentRegionPanelId (Evaluate()'s
-// own already-computed, always-correct RegionPanelLayout::pose for that
-// panel — see SplitAtBendResult::childAnchor's own comment for why this
-// function derives the new child's anchor from it directly rather than
-// leaving the caller to reconcile a second, independently-signed axis).
-// Defaults to identity for callers that only need the 2D outlines.
+// outline: the part's one stored flat outline (CCW) — bend.hingeA/hingeB
+// and every vertex here live in the RAW frame (manufacturing_graph_
+// evaluator.cc's own rawOuter: "cut exactly at each bend's raw hinge line,
+// no setback" — what pose/bottomFace/topFace, and hence the actual 3D
+// solid, consume directly; NOT regionOuter, the flat-pattern/DXF-only
+// widened view point_mapping.cc's own PanelShift derives from it — that
+// widening is a purely-derived, per-query display quantity, meaningless
+// for a bend that's just been removed). thicknessMm: the part's own
+// thickness — this file's own lap-joint extension formula (header comment
+// above), not a bend-allowance term.
+//
+// childPose: the bend's own childRegionPanelId's TRUE pose, already
+// computed by Evaluate() while the bend was still live (RegionPanelLayout::
+// pose) — reused UNCHANGED as childAnchor. Because both `outline` and the
+// new child's own pose consumption are RAW-frame throughout, no shift
+// correction is needed: a brand-new, bendless part's root panel starting a
+// fresh pose-walk with cumulativeShift=0 doesn't change what its OWN raw
+// geometry means, only what its (unrelated, display-only) regionOuter
+// widening would be. Defaults to identity for callers that only need the
+// 2D outlines.
 SplitAtBendResult SplitPartAtBend(const std::vector<Point2>& outline, const BendSpec& bend,
                                    double thicknessMm, CornerSide keepCornerOn,
-                                   const Transform3& parentPose = Transform3::Identity());
+                                   const Transform3& childPose = Transform3::Identity());
 
 }  // namespace mcp_cad::translation
