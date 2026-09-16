@@ -1,8 +1,8 @@
 # 21 — Irregular-shape nesting via libnest2d
 
-**Status:** Implemented (Phases 0–5, 7 done; Phase 6 UI pending). Decisions
-recorded 2026-09-15; solver approach revised 2026-09-16 (see §1 deviation
-note).
+**Status:** Implemented (Phases 0–7 done; Phase 6 UI shipped in the Form.AI.tion
+client repo). Decisions recorded 2026-09-15; solver approach revised 2026-09-16
+(see §1 deviation note).
 
 **Scope:** v2 only. Replaces the pure-TypeScript Shelf-Next-Fit rectangle packer
 (`ts/src/v2/tools/graph.ts` → `handleSimulateNesting`) with an irregular-shape
@@ -331,6 +331,18 @@ cutting_width_mm?: number          # optional override; validated vs ceiling
 **Phase 6 — UI (Dart client)**
 - Painter draws each placement's `outline`/`holes` polygons; parse `copy_index`
   and the new fields; keep snake_case handling.
+- **Implemented 2026-09-16 (Form.AI.tion repo):**
+  - `lib/mcp/tools/simulate_nesting.dart`: `NestPlacement.fromJson` parses
+    `copy_index`, `sheet_index`, `outline`, `holes`, `circle_holes`.
+  - `lib/core/models/flat_pattern.dart`: `PartPlacement` gains `sheetIndex`,
+    `copyIndex`, `outline`, `holes`, `circleHoles` (new `NestCircleHole`);
+    `NestingResult` gains `sheetsRequired`.
+  - `lib/features/flat_patterns/widgets/sheet_nesting_view.dart`: painter draws
+    the pre-transformed polygon outline with holes cut out via even-odd
+    winding (no client-side rotate/translate); falls back to the bbox rect for
+    legacy results; footer uses the server's `sheets_required`.
+  - Single-sheet diagram draws sheet 0 only; a multi-sheet selector is a later
+    slice (noted).
 
 **Phase 7 — tests**
 - Implement the full testing strategy in §9, in this order (TDD: write the
