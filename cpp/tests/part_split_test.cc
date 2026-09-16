@@ -48,6 +48,10 @@ BendSpec MakeBend(double angleDeg) {
   return bend;
 }
 
+// Any point safely inside B's own natural territory (x in [10,18], y in
+// [0,5]) — CombinedOutline's own child side.
+const Point2 kCombinedChildHint{14.0, 2.5};
+
 }  // namespace
 
 // part_split.hpp's own header comment derives, and hand-verifies against a
@@ -67,7 +71,7 @@ TEST_CASE("SplitPartAtBend: keepCornerOn=kChild — child extends into the corne
   auto outline = CombinedOutline();
   auto bend = MakeBend(90.0);
 
-  auto result = SplitPartAtBend(outline, bend, /*thicknessMm=*/1.0, CornerSide::kChild);
+  auto result = SplitPartAtBend(outline, bend, /*thicknessMm=*/1.0, CornerSide::kChild, kCombinedChildHint);
   REQUIRE(result.ok);
 
   // Parent (A) is cut square exactly at the raw hinge (x=10) — its own
@@ -96,7 +100,7 @@ TEST_CASE("SplitPartAtBend: keepCornerOn=kParent gives the mirror-image extensio
   auto outline = CombinedOutline();
   auto bend = MakeBend(90.0);
 
-  auto result = SplitPartAtBend(outline, bend, 1.0, CornerSide::kParent);
+  auto result = SplitPartAtBend(outline, bend, 1.0, CornerSide::kParent, kCombinedChildHint);
   REQUIRE(result.ok);
 
   std::vector<Point2> expectedParent = {{11, 5}, {10, 5}, {0, 5}, {0, 0}, {10, 0}, {11, 0}};
@@ -124,8 +128,8 @@ TEST_CASE("SplitPartAtBend: angleDeg=0 (a flat, unfolded 'bend') needs no extens
   auto outline = CombinedOutline();
   auto bend = MakeBend(0.0);
 
-  auto childKeep = SplitPartAtBend(outline, bend, 1.0, CornerSide::kChild);
-  auto parentKeep = SplitPartAtBend(outline, bend, 1.0, CornerSide::kParent);
+  auto childKeep = SplitPartAtBend(outline, bend, 1.0, CornerSide::kChild, kCombinedChildHint);
+  auto parentKeep = SplitPartAtBend(outline, bend, 1.0, CornerSide::kParent, kCombinedChildHint);
   REQUIRE(childKeep.ok);
   REQUIRE(parentKeep.ok);
 
@@ -174,7 +178,7 @@ TEST_CASE("SplitPartAtBend: angleDeg's sign and bottomIsConcave never affect the
     BendSpec bend = MakeBend(c.angleDeg);
     bend.bottomIsConcave = c.concave;
 
-    auto result = SplitPartAtBend(outline, bend, 1.0, CornerSide::kParent);
+    auto result = SplitPartAtBend(outline, bend, 1.0, CornerSide::kParent, kCombinedChildHint);
     REQUIRE(result.ok);
     REQUIRE(result.parentOutline.size() == expectedParent.size());
     for (size_t i = 0; i < expectedParent.size(); ++i) {
@@ -213,6 +217,10 @@ BendSpec MakeRightWallBend() {
   return bend;
 }
 
+// Any point safely inside rightWall's own natural territory (x in [10,20],
+// y in [0,10]).
+const Point2 kRightWallChildHint{15.0, 5.0};
+
 }  // namespace
 
 TEST_CASE("SplitPartAtBend: on a branching cross net, kParent's own extension is a small local "
@@ -222,7 +230,7 @@ TEST_CASE("SplitPartAtBend: on a branching cross net, kParent's own extension is
   auto outline = CrossOutline();
   auto bend = MakeRightWallBend();
 
-  auto result = SplitPartAtBend(outline, bend, 1.0, CornerSide::kParent);
+  auto result = SplitPartAtBend(outline, bend, 1.0, CornerSide::kParent, kRightWallChildHint);
   REQUIRE(result.ok);
 
   // Child (rightWall) is cut square at the raw hinge — its own FULL
@@ -253,7 +261,7 @@ TEST_CASE("SplitPartAtBend: on a branching cross net, kChild's own extension is 
   auto outline = CrossOutline();
   auto bend = MakeRightWallBend();
 
-  auto result = SplitPartAtBend(outline, bend, 1.0, CornerSide::kChild);
+  auto result = SplitPartAtBend(outline, bend, 1.0, CornerSide::kChild, kRightWallChildHint);
   REQUIRE(result.ok);
 
   double minY = result.childOutline[0].y, maxY = result.childOutline[0].y;
@@ -282,4 +290,71 @@ TEST_CASE("SplitPartAtBend: on a branching cross net, kChild's own extension is 
   for (size_t i = 0; i < expectedParent.size(); ++i) {
     CHECK(Dist2(result.parentOutline[i], expectedParent[i]) < 1e-9);
   }
+}
+
+namespace {
+
+// Minimal repro for a live-app bug (2026-09-16, cauldron.step "Component
+// 2"): a small, deliberate notch on PARENT's own side, immediately after
+// hingeA — real, complex STEP-imported ring geometry can have exactly this
+// shape near a bend (a mitered-corner reconciliation artifact), and the
+// notch's own vertex sits on the CHILD side of nLeft even though the chain
+// it belongs to is really parent's own (much larger) territory. A stand-in
+// for "which side of nLeft does the very next ring vertex sit on" used to
+// answer chainABIsChild directly and got this backwards.
+std::vector<Point2> NotchedOutline() {
+  return {{0, 0}, {10, 0}, {18, 0}, {18, 5}, {10, 5}, {10.3, 4.8}, {0, 5}};
+}
+
+}  // namespace
+
+TEST_CASE("SplitPartAtBend: chainABIsChild is decided by which chain actually contains "
+          "childHintPoint, not by which side of nLeft the very next ring vertex sits on "
+          "(cauldron.step live regression)",
+          "[part_split]") {
+  auto outline = NotchedOutline();
+  auto bend = MakeBend(90.0);
+  // Safely inside B's own true territory (x in [10,18]) — same point a
+  // single-neighboring-vertex heuristic would get right on CombinedOutline
+  // but wrong here, since chainAB[1] (the notch, (10.3,4.8)) sits on B's
+  // own side of nLeft even though chainAB is really A's own chain.
+  const Point2 childHint{14.0, 2.5};
+
+  auto result = SplitPartAtBend(outline, bend, 1.0, CornerSide::kParent, childHint);
+  REQUIRE(result.ok);
+
+  // Child (B) is cut square at the raw hinge — its own FULL natural shape,
+  // exactly the plain rectangle it always was. A wrong classification
+  // would hand this the LARGE, notch-containing chain instead (7
+  // vertices, ~50mm^2) rather than this exact 4-vertex, 40mm^2 rectangle.
+  std::vector<Point2> expectedChild = {{10, 0}, {18, 0}, {18, 5}, {10, 5}};
+  REQUIRE(result.childOutline.size() == expectedChild.size());
+  for (size_t i = 0; i < expectedChild.size(); ++i) {
+    CHECK(Dist2(result.childOutline[i], expectedChild[i]) < 1e-9);
+  }
+  CHECK(std::fabs(ShoelaceArea(result.childOutline)) == Approx(8.0 * 5.0).margin(1e-9));
+
+  // Parent (A) keeps its own large, notch-containing chain (extended by
+  // the lap joint) — it must include A's own far corners (0,0) and (0,5),
+  // never just a small rectangle near the hinge.
+  bool hasFarCorner0 = false, hasFarCorner5 = false;
+  for (const auto& p : result.parentOutline) {
+    if (Dist2(p, {0, 0}) < 1e-9) hasFarCorner0 = true;
+    if (Dist2(p, {0, 5}) < 1e-9) hasFarCorner5 = true;
+  }
+  CHECK(hasFarCorner0);
+  CHECK(hasFarCorner5);
+  CHECK(result.parentOutline.size() > expectedChild.size());
+}
+
+TEST_CASE("SplitPartAtBend: a childHintPoint outside both candidate chains fails typed, "
+          "never silently guesses",
+          "[part_split]") {
+  auto outline = CombinedOutline();
+  auto bend = MakeBend(90.0);
+  const Point2 farAwayPoint{1000.0, 1000.0};
+
+  auto result = SplitPartAtBend(outline, bend, 1.0, CornerSide::kParent, farAwayPoint);
+  CHECK_FALSE(result.ok);
+  CHECK(result.errorCode == SplitErrorCode::kChildHintPointAmbiguous);
 }

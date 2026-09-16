@@ -225,6 +225,14 @@ export const ErrorCodes = {
   // translation::SplitErrorCode.
   GE_SPLIT_HINGE_NOT_GROUNDED: 'GE_SPLIT_HINGE_NOT_GROUNDED',
   GE_SPLIT_CORNER_ZONE_NOT_GROUNDED: 'GE_SPLIT_CORNER_ZONE_NOT_GROUNDED',
+  // childHintPoint (evaluate-client.ts's own centroid of the child region
+  // panel's true rawOuter) wasn't found inside either of this split's two
+  // candidate 2D chains — fails typed rather than silently guessing which
+  // side is really the child (part_split.hpp's own childHintPoint doc
+  // comment). A simple vertex-average centroid isn't guaranteed interior
+  // for every possible (non-convex) real panel shape; this is the backstop
+  // for when it isn't.
+  GE_SPLIT_CHILD_HINT_POINT_AMBIGUOUS: 'GE_SPLIT_CHILD_HINT_POINT_AMBIGUOUS',
   // A DIFFERENT failure than the two codes above (which are part_split.cc's
   // own 2D cut failing to ground THIS bend's hinge) — this one fires when
   // the 2D cut itself succeeds, but leaves a DIFFERENT, still-live bend on

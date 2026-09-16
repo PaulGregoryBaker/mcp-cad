@@ -119,6 +119,7 @@ const char* SplitErrorCodeToString(SplitErrorCode code) {
     case SplitErrorCode::kHingeNotGrounded: return "GE_SPLIT_HINGE_NOT_GROUNDED";
     case SplitErrorCode::kCornerZoneNotGrounded: return "GE_SPLIT_CORNER_ZONE_NOT_GROUNDED";
     case SplitErrorCode::kDegenerateResult: return "GE_DEGENERATE_OUTLINE";
+    case SplitErrorCode::kChildHintPointAmbiguous: return "GE_SPLIT_CHILD_HINT_POINT_AMBIGUOUS";
   }
   return "GE_UNKNOWN_ERROR";
 }
@@ -959,11 +960,11 @@ Napi::Object WritePolygonBooleanResult(Napi::Env env, const PolygonBooleanResult
 
 Napi::Value SplitPartAtBendBinding(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  if (info.Length() < 5 || !info[0].IsArray() || !info[1].IsObject() || !info[2].IsNumber() ||
-      !info[3].IsString() || !info[4].IsObject()) {
+  if (info.Length() < 6 || !info[0].IsArray() || !info[1].IsObject() || !info[2].IsNumber() ||
+      !info[3].IsString() || !info[4].IsObject() || !info[5].IsObject()) {
     Napi::TypeError::New(
         env, "splitPartAtBend(outline: Point2[], bend: BendSpec, thicknessMm: number, "
-             "keepCornerOn: 'parent' | 'child', childPose: Transform3)")
+             "keepCornerOn: 'parent' | 'child', childHintPoint: Point2, childPose: Transform3)")
         .ThrowAsJavaScriptException();
     return env.Undefined();
   }
@@ -974,10 +975,11 @@ Napi::Value SplitPartAtBendBinding(const Napi::CallbackInfo& info) {
     std::string keepCornerOnStr = info[3].As<Napi::String>().Utf8Value();
     CornerSide keepCornerOn =
         keepCornerOnStr == "child" ? CornerSide::kChild : CornerSide::kParent;
-    Transform3 childPose = ReadTransform3(info[4].As<Napi::Object>());
+    Point2 childHintPoint = ReadPoint2(info[4].As<Napi::Object>());
+    Transform3 childPose = ReadTransform3(info[5].As<Napi::Object>());
 
-    SplitAtBendResult result =
-        translation::SplitPartAtBend(outline, bend, thicknessMm, keepCornerOn, childPose);
+    SplitAtBendResult result = translation::SplitPartAtBend(outline, bend, thicknessMm, keepCornerOn,
+                                                              childHintPoint, childPose);
     return WriteSplitAtBendResult(env, result);
   } catch (const std::exception& e) {
     Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();

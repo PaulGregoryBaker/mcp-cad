@@ -361,6 +361,24 @@ export function splitPartAtBend(
     );
   }
 
+  // A point Evaluate() already knows, with certainty, lies within the
+  // child region panel's own true (pre-split) territory — its own
+  // centroid, in the SAME raw frame as `part.outline`/`bend.hingeA/
+  // hingeB` (rawOuter, never regionOuter — see part_split.hpp's own doc
+  // comment). part_split.cc uses this to tell its two candidate 2D chains
+  // apart instead of guessing from local ring geometry: a single-
+  // neighboring-vertex heuristic used to do that guessing and got it
+  // backwards on real, complex outlines (live-app regression 2026-09-16,
+  // cauldron.step — see part_split.hpp's own doc comment for the full
+  // derivation).
+  const childHintPoint: Point2 = { x: 0, y: 0 };
+  for (const v of childPanelLayout.rawOuter) {
+    childHintPoint.x += v.x;
+    childHintPoint.y += v.y;
+  }
+  childHintPoint.x /= childPanelLayout.rawOuter.length;
+  childHintPoint.y /= childPanelLayout.rawOuter.length;
+
   const split = geometryBinding.splitPartAtBend(
     part.outline,
     {
@@ -377,6 +395,7 @@ export function splitPartAtBend(
     },
     part.thicknessMm,
     input.keepCornerOn,
+    childHintPoint,
     childPanelLayout.pose,
   );
   if (!split.ok) {

@@ -365,6 +365,7 @@ export interface GeometryAddon {
     bend: NapiBendSpec,
     thicknessMm: number,
     keepCornerOn: 'parent' | 'child',
+    childHintPoint: NapiPoint2,
     childPose: NapiTransform3,
   ): SplitPartAtBendResult;
 
@@ -1433,13 +1434,21 @@ export class GeometryBinding {
     bend: NapiBendSpec,
     thicknessMm: number,
     keepCornerOn: 'parent' | 'child',
+    childHintPoint: NapiPoint2,
     childPose: NapiTransform3,
   ): SplitPartAtBendResult {
     if (!this.addon.splitPartAtBend) {
       throw new Error('Geometry addon does not expose splitPartAtBend');
     }
     try {
-      return this.addon.splitPartAtBend(outline, bend, thicknessMm, keepCornerOn, childPose);
+      return this.addon.splitPartAtBend(
+        outline,
+        bend,
+        thicknessMm,
+        keepCornerOn,
+        childHintPoint,
+        childPose,
+      );
     } catch (err) {
       throw toStructuredError(err);
     }

@@ -51,6 +51,8 @@ enum class SplitErrorCode {
   kCornerZoneNotGrounded, // the corner-biased cut line doesn't cross the outline at exactly 2 points
                           // (the flush side's own material is narrower than the requested setback)
   kDegenerateResult,      // a resulting ring has fewer than 3 vertices
+  kChildHintPointAmbiguous, // childHintPoint wasn't found inside either candidate chain — see
+                            // SplitPartAtBend's own doc comment on childHintPoint
 };
 
 // Which side extends into the corner (see this file's own header comment
@@ -85,6 +87,21 @@ struct SplitAtBendResult {
 // thickness — this file's own lap-joint extension formula (header comment
 // above), not a bend-allowance term.
 //
+// childHintPoint: a point the caller already knows, with certainty, lies
+// within bend.childRegionPanelId's own true (pre-split) territory — e.g.
+// the centroid of Evaluate()'s own RegionPanelLayout::regionOuter for that
+// panel. REQUIRED, no default: this is how the split's own two candidate
+// chains (crossA..crossB one way around the ring, or the other) are told
+// apart — never guessed from local ring geometry. An earlier version used
+// a single-neighboring-vertex side test instead ("does the ring vertex
+// right after the hinge sit on the child side of nLeft") and was wrong on
+// real, complex branching outlines: confirmed live on cauldron.step, where
+// a local notch immediately after the hinge sat on the wrong side even
+// though that whole chain was really the OTHER side's own material —
+// silently swapping parentOutline and childOutline outright (a 23-region-
+// panel remainder handed a 6-vertex outline it could never actually
+// contain, a 1-panel leaf handed the other 48).
+//
 // childPose: the bend's own childRegionPanelId's TRUE pose, already
 // computed by Evaluate() while the bend was still live (RegionPanelLayout::
 // pose) — reused UNCHANGED as childAnchor. Because both `outline` and the
@@ -96,6 +113,7 @@ struct SplitAtBendResult {
 // 2D outlines.
 SplitAtBendResult SplitPartAtBend(const std::vector<Point2>& outline, const BendSpec& bend,
                                    double thicknessMm, CornerSide keepCornerOn,
+                                   const Point2& childHintPoint,
                                    const Transform3& childPose = Transform3::Identity());
 
 }  // namespace mcp_cad::translation

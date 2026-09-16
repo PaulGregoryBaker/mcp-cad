@@ -23,6 +23,41 @@ bool NearlyEqual2(const Point2& a, const Point2& b) {
   return Length2(Sub2(a, b)) <= kVertexMatchEpsilonMm;
 }
 
+double PointSegmentDistance2(const Point2& p, const Point2& a, const Point2& b) {
+  Point2 ab = Sub2(b, a);
+  double lenSq = ab.x * ab.x + ab.y * ab.y;
+  if (lenSq < kGeometricEpsilon) return Length2(Sub2(p, a));
+  double t = std::clamp(Dot2(Sub2(p, a), ab) / lenSq, 0.0, 1.0);
+  Point2 proj{a.x + ab.x * t, a.y + ab.y * t};
+  return Length2(Sub2(p, proj));
+}
+
+// Standard inclusive point-in-polygon (mirrors point_mapping.cc's own
+// PointInPolygon2 — not shared, same "mirror, don't couple" discipline as
+// this file's own header comment): a boundary-distance short circuit for
+// inclusive membership, then a crossing-number test for the strict
+// interior. `poly` here is always one of this split's own two chains,
+// implicitly closed by the straight hinge line back from its own last
+// vertex to its first (exactly how ShoelaceArea and every other consumer
+// of these chains already treats them).
+bool PointInPolygon2(const Point2& p, const std::vector<Point2>& poly) {
+  if (poly.size() < 3) return false;
+  for (size_t i = 0; i < poly.size(); ++i) {
+    const Point2& a = poly[i];
+    const Point2& b = poly[(i + 1) % poly.size()];
+    if (PointSegmentDistance2(p, a, b) < kVertexMatchEpsilonMm) return true;
+  }
+  bool inside = false;
+  for (size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++) {
+    const Point2& pi = poly[i];
+    const Point2& pj = poly[j];
+    bool crosses = ((pi.y > p.y) != (pj.y > p.y)) &&
+                   (p.x < (pj.x - pi.x) * (p.y - pi.y) / (pj.y - pi.y) + pi.x);
+    if (crosses) inside = !inside;
+  }
+  return inside;
+}
+
 struct GroundedLine {
   std::vector<Point2> ring;  // possibly with 2 new vertices inserted
   Point2 crossA, crossB;     // real ring-boundary points, nearer-to-lineA first
@@ -256,7 +291,7 @@ std::vector<Point2> ResolveCrossings(std::vector<Point2> ring) {
 
 SplitAtBendResult SplitPartAtBend(const std::vector<Point2>& outline, const BendSpec& bend,
                                    double thicknessMm, CornerSide keepCornerOn,
-                                   const Transform3& childPose) {
+                                   const Point2& childHintPoint, const Transform3& childPose) {
   SplitAtBendResult result;
   // childAnchor is exactly childPose, unchanged — child transformations
   // are relative to the parent's own pose, which the pose-walk already
@@ -311,13 +346,30 @@ SplitAtBendResult SplitPartAtBend(const std::vector<Point2>& outline, const Bend
   Point2 nLeft{0.0, 0.0};
   if (len >= kGeometricEpsilon) nLeft = {-dir.y / len, dir.x / len};
 
-  // Classify chainAB by which side of the raw hinge its own (non-endpoint)
-  // material sits on. Always local — doesn't depend on the corner shift, so
-  // it can't be fooled by a concave/branching outline the way a cut-line
-  // half-plane test could.
-  Point2 sample = chainAB[1];
-  double side = Dot2(Sub2(sample, groundedHinge->crossA), nLeft);
-  bool chainABIsChild = side > 0.0;
+  // Classify chainAB vs chainBA by which one actually CONTAINS the caller-
+  // supplied childHintPoint — a point Evaluate() already knows, with
+  // certainty (bend.childRegionPanelId's own true pre-split territory),
+  // lies within the child side, never guessed here. A single-neighboring-
+  // vertex side test used to stand in for this ("chainAB[1]'s own side of
+  // nLeft") and was wrong on real, complex branching outlines: confirmed
+  // live on cauldron.step, where a local notch immediately after the hinge
+  // sat on the wrong side of nLeft even though that whole chain was really
+  // the OTHER side's own material — silently swapping parentOutline and
+  // childOutline outright (a 23-region-panel remainder handed a 6-vertex
+  // outline it could never actually contain, a 1-panel leaf handed the
+  // other 48).
+  bool chainABIsChild = PointInPolygon2(childHintPoint, chainAB);
+  if (!chainABIsChild && !PointInPolygon2(childHintPoint, chainBA)) {
+    // Neither candidate chain actually contains childHintPoint — fails
+    // typed rather than silently defaulting to one guess (no-fallback
+    // rule): the caller's own hint point (normally a simple centroid of
+    // the child region panel's own true rawOuter) isn't reliably interior
+    // for every real, possibly non-convex, panel shape.
+    result.errorCode = SplitErrorCode::kChildHintPointAmbiguous;
+    result.message = "childHintPoint was not found inside either candidate chain — cannot tell "
+                      "which side of this hinge is really the child";
+    return result;
+  }
 
   // Lap-joint extension: how far the GROWN side alone must extend past the
   // raw hinge to cover the trimmed side's own full cross-section at the
