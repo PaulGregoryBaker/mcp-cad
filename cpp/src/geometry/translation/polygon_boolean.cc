@@ -26,13 +26,11 @@ namespace mcp_cad::translation {
 
 namespace {
 
-// Same fixed-fuzz precedent as part_solid_construction.cc's own
-// kBooleanFuzzMm (rebuild/17-numerical-policy.md §2/§2.1) — reused rather
-// than inventing a second number for the same "how close is close enough
-// for a kernel boolean" question. 1e-3mm (1 micron): resolution is only
-// meaningful relative to this project's working unit (millimetres), matching
-// the policy doc's corrected value.
-constexpr double kBooleanFuzzMm = 1e-3;
+// Same relative-fuzz precedent as part_solid_construction.cc's own
+// kBooleanFuzzMm (rebuild/12-domain-notes.md §2 / rebuild/17-numerical-
+// policy.md §2.1) — reused rather than inventing a second number for the
+// same "how close is close enough for a kernel boolean" question.
+constexpr double kBooleanFuzzMm = 1e-5;
 
 double PolygonArea2(const std::vector<Point2>& ring) {
   double sum = 0.0;
@@ -486,7 +484,7 @@ PolygonBooleanResult FuseCoplanarParts(const std::vector<Point2>& outlineA,
   //     rigid translate/rotate of the whole ring). One shared delta zeroes
   //     out the closest pair and leaves every OTHER near-touching vertex
   //     with a residual gap the boolean's fuzzy value (kBooleanFuzzMm =
-  //     1e-3) cannot bridge.
+  //     1e-5) cannot bridge.
   // These are not alternatives to pick between — both can be true on the
   // same part at once — so both corrections apply unconditionally, in a
   // fixed order: first the single rigid best-fit shift (closest point pair,
