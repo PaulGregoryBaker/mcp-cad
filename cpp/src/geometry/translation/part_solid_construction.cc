@@ -7,7 +7,6 @@
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
-#include <BOPAlgo_GlueEnum.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <ShapeFix_ShapeTolerance.hxx>
@@ -28,7 +27,6 @@
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 #include <Standard_Failure.hxx>
-#include <TopTools_ListOfShape.hxx>
 
 #include <algorithm>
 #include <cmath>
@@ -39,26 +37,23 @@ namespace mcp_cad::translation {
 namespace {
 
 // Local, named numerical-robustness constant (constitution v2.0.0 principle V's
-// distinction: this never varies by project). Matches the corrected (post-
-// 0.15mm-bug) relative-fuzz value documented in rebuild/12-domain-notes.md §2 /
-// rebuild/17-numerical-policy.md §2.1.
-constexpr double kBooleanFuzzMm = 1e-5;
+// distinction: this never varies by project) — the ONE fixed boolean-fuzz
+// value every join in this file uses, per rebuild/17-numerical-policy.md §2/
+// §2.1 (no per-join retry at a second, looser value: a join that doesn't
+// validate at this fuzz fails with a typed error, it is never retried
+// looser — policy §4, "degeneracy is reported, never silently repaired").
+// Fixed at 1e-3mm (1 micron), not a smaller value: resolution is only
+// meaningful relative to this project's working unit (millimetres — metres
+// are impractical at sheet-metal scale), and sub-micron floating-point noise
+// (~2e-4mm at cauldron.step's ~3000mm scale, accumulated through a long
+// chained-bend pose walk) is real and expected at this scale, not a defect
+// to chase with a tighter value. Sheet-metal fabrication can't hold better
+// than ~0.1mm in practice, so 1e-3mm stays ~100x under any achievable real
+// tolerance, and ~150x below the previously-documented 0.15mm value that
+// discarded real kerf-notch detail. Also used below by HasDegenerateFace as
+// the pipeline's own documented noise floor.
+constexpr double kBooleanFuzzMm = 1e-3;
 constexpr double kPi = 3.14159265358979323846;
-
-// kJoinRetryFuzzMm: fallback fuzzy value tried only when the tight
-// kBooleanFuzzMm leaves a join's fuse result invalid. Root cause (verified
-// on real cauldron.step data): sub-micron floating-point noise (~2e-4mm at
-// this model's ~3000mm scale) accumulated through a long chained-bend pose
-// walk, not a real geometric feature — ShapeFix_Shape post-hoc healing was
-// tried and empirically does not touch this defect (the shape is already
-// one connected solid, not the free/disconnected sub-shapes it targets).
-// Sheet-metal fabrication can't hold better than ~0.1mm in practice, so
-// 1e-3mm stays ~100x under any achievable real tolerance, and ~150x below
-// the previously-documented 0.15mm value that discarded real kerf-notch
-// detail — retried once, only for the specific join that failed, so every
-// other join keeps the tight kBooleanFuzzMm untouched. Also used below by
-// HasDegenerateFace as the pipeline's own documented noise floor.
-constexpr double kJoinRetryFuzzMm = 1e-3;
 
 // A boolean-fuse sliver face is the fuse operator's OWN artifact: when two
 // operands meet at near-but-not-exactly-coincident geometry (e.g. a child
@@ -78,27 +73,16 @@ constexpr double kJoinRetryFuzzMm = 1e-3;
 // BETWEEN the two live-bug sliver areas actually observed — proving area
 // alone isn't a valid signature at any threshold). The sliver is instead
 // identified by what created it: an edge whose length is on the order of
-// kJoinRetryFuzzMm, the pipeline's own already-documented noise floor for
-// real live-app coordinate drift — NOT scaled to whichever fuzzMm the
-// CURRENT fuse attempt happens to be using: a first attempt tried that
-// (fuzzMm-relative) scaling and it silently failed, because at the tight
-// kBooleanFuzzMm=1e-5 tier the scaled threshold (1e-4mm) fell BELOW the
-// live sliver's own edge length (0.000626mm) — the tight-tolerance result
-// then passed the check and got accepted immediately, and the retry tier
-// that would actually weld the sliver away never ran. A threshold fixed to
-// the pipeline's known noise floor regardless of tier avoids that: measured
-// on the live reproduction (part_solid_construction_test.cc's own "EXACT
-// live testcube.step corner geometry" test) the sliver's shortest edge was
-// 0.000626mm (0.06x kJoinRetryFuzzMm); measured on the pentagon test, the
-// legitimate face's shortest edge was 0.0305mm (30x) — a clean separation
-// at any tier. Checking for this explicitly, as another tier of the SAME
-// existing tight->loose->glue retry ladder, means a looser tolerance gets a
-// chance to weld the near-coincident vertices properly instead of leaving a
-// sliver.
+// kBooleanFuzzMm, the pipeline's own already-documented noise floor for real
+// live-app coordinate drift. Measured on the live reproduction
+// (part_solid_construction_test.cc's own "EXACT live testcube.step corner
+// geometry" test) the sliver's shortest edge was 0.000626mm; measured on the
+// pentagon test, the legitimate face's shortest edge was 0.0305mm (30x) — a
+// clean separation.
 constexpr double kDegenerateEdgeLenNoiseFloorMultiple = 10.0;
 
 bool HasDegenerateFace(const TopoDS_Shape& shape) {
-  const double minAllowedEdgeLen = kDegenerateEdgeLenNoiseFloorMultiple * kJoinRetryFuzzMm;
+  const double minAllowedEdgeLen = kDegenerateEdgeLenNoiseFloorMultiple * kBooleanFuzzMm;
   for (TopExp_Explorer ex(shape, TopAbs_FACE); ex.More(); ex.Next()) {
     for (TopExp_Explorer ee(ex.Current(), TopAbs_EDGE); ee.More(); ee.Next()) {
       GProp_GProps edgeProps;
@@ -391,23 +375,18 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
       };
       auto tryFuseBridgeSegments = [&](const TopoDS_Shape& a, const TopoDS_Shape& b)
           -> TopoDS_Shape {
-        for (double fuzzMm : {kBooleanFuzzMm, kJoinRetryFuzzMm}) {
-          for (bool glue : {false, true}) {
-            BRepAlgoAPI_Fuse segFuser(a, b);
-            segFuser.SetFuzzyValue(fuzzMm);
-            if (glue) segFuser.SetGlue(BOPAlgo_GlueShift);
-            segFuser.Build();
-            if (!segFuser.IsDone()) continue;
+        BRepAlgoAPI_Fuse segFuser(a, b);
+        segFuser.SetFuzzyValue(kBooleanFuzzMm);
+        segFuser.Build();
+        if (!segFuser.IsDone()) return TopoDS_Shape();
 
-            TopoDS_Shape fused = segFuser.Shape();
-            if (fused.IsNull() || !BRepCheck_Analyzer(fused).IsValid()) continue;
-            if (HasDegenerateFace(fused)) continue;
+        TopoDS_Shape fused = segFuser.Shape();
+        if (fused.IsNull() || !BRepCheck_Analyzer(fused).IsValid()) return TopoDS_Shape();
+        if (HasDegenerateFace(fused)) return TopoDS_Shape();
 
-            constexpr double kVolumeRelTol = 1e-6;
-            double maxInVolume = std::max(solidVolume(a), solidVolume(b));
-            if (solidVolume(fused) >= maxInVolume * (1.0 - kVolumeRelTol)) return fused;
-          }
-        }
+        constexpr double kVolumeRelTol = 1e-6;
+        double maxInVolume = std::max(solidVolume(a), solidVolume(b));
+        if (solidVolume(fused) >= maxInVolume * (1.0 - kVolumeRelTol)) return fused;
         return TopoDS_Shape();
       };
 
@@ -464,10 +443,8 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
           continue;
         }
         // Policy: a bend bridge is either fully assembled from its real zone
-        // segments or it is not accepted. This path retries the same
-        // tight->loose->glue tolerance ladder used elsewhere in this file for
-        // the real-world near-coincident-vertex case; a failed final join is
-        // still hard-failed, never silently accepted as a degraded result.
+        // segments or it is not accepted — a failed join is hard-failed,
+        // never silently accepted as a degraded result.
         TopoDS_Shape fused = tryFuseBridgeSegments(bridgeSolid, revol.Shape());
         if (fused.IsNull()) {
           result.errorCode = "GE_BRIDGE_BUILD_FAILED";
@@ -479,34 +456,16 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
       bridgeSolidByBendId[bridge.bendId] = bridgeSolid;
     }
 
-    // Fuse in parent-panel -> bridge -> child-panel order (not "all panels
-    // then all bridges") — an un-bridged panel pair may not touch or overlap
-    // at all, so fusing two panels before their connecting bridge exists
-    // would spuriously report a disconnected result. `layout.panels[0]` is
-    // the root (Evaluate()'s own BFS always visits it first); walking
-    // `layout.bridges` in parent-before-child order (also guaranteed by that
-    // same BFS) interleaves each bridge between its parent and child panel
-    // correctly, including for a tree with branching, not just a straight
-    // chain.
-    std::vector<TopoDS_Shape> orderedPieces;
-    orderedPieces.reserve(layout.panels.size() + layout.bridges.size());
-    orderedPieces.push_back(panelSolidById.at(layout.panels[0].regionPanelId));
-    for (const auto& bridge : layout.bridges) {
-      orderedPieces.push_back(bridgeSolidByBendId.at(bridge.bendId));
-      orderedPieces.push_back(panelSolidById.at(bridge.childRegionPanelId));
-    }
-
     auto solidVolume = [](const TopoDS_Shape& shape) {
       GProp_GProps props;
       BRepGProp::VolumeProperties(shape, props);
       return props.Mass();
     };
-    auto fuseJoin = [&solidVolume](double fuzzMm, bool glue, const TopoDS_Shape& a,
+    auto fuseJoin = [&solidVolume](double fuzzMm, const TopoDS_Shape& a,
                     const TopoDS_Shape& b, TopoDS_Shape* outShape, bool* built,
                                     std::string* failureReason) -> bool {
       BRepAlgoAPI_Fuse f(a, b);
       f.SetFuzzyValue(fuzzMm);
-      if (glue) f.SetGlue(BOPAlgo_GlueShift);
       f.Build();
       *built = f.IsDone();
       if (!*built) {
@@ -525,9 +484,8 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
       // cauldron.step data: a huge accumulated shape fused with a tiny,
       // near-flat bridge sliver came back as just the sliver, volume
       // matching it exactly) — checking this invariant here, as part of
-      // fuseJoin's own success contract, means the SAME retry ladder already
-      // used for invalid/disconnected results (looser fuzz, then glue mode)
-      // automatically also covers it, with no separate branch needed.
+      // fuseJoin's own success contract catches it directly, with no
+      // separate branch needed.
       // OCCT's accumulated volume properties drift by several ppm on the
       // large, faceted cauldron unions even when the returned shape is one
       // valid solid. Primitive panel/bridge joins keep the tighter 1 ppm
@@ -550,94 +508,21 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
       return n;
     };
 
-    // ─── Fast path: one N-ary fuse over the whole piece set ────────────────
-    // Arguments={piece0}, Tools={everything else} — ONE BRepAlgoAPI_Fuse
-    // call, ONE internal interference pass over the whole set, instead of
-    // N-1 sequential pairwise fuses each re-indexing a growing accumulator
-    // from scratch (BRepAlgoAPI_Fuse/BRepCheck_Analyzer/BRepGProp::
-    // VolumeProperties all re-derive whole-operand state on every call, with
-    // no memory of a previous call even when the operand IS that previous
-    // call's own output — see the performance investigation this came out
-    // of). Measured on real cauldron.step data: 2-6x faster than the
-    // sequential loop below when it succeeds. Uses the SAME tight->loose->
-    // glue fuzz escalation as the per-join loop below — confirmed
-    // empirically that the two real-fixture failures this fast path
-    // originally hit (before that escalation was added here) were fixed by
-    // that exact escalation, not by anything about doing it sequentially,
-    // so this is not a weaker check, just applied once globally instead of
-    // per join. On ANY failure (all three tiers), falls back to the proven
-    // sequential loop below completely unchanged — a rejected fast-path
-    // result is simply discarded, so this can only ever save time, never
-    // weaken correctness.
+    // Assemble the whole part by walking the panel/bridge graph directly: a
+    // join only ever happens between two nodes the manufacturing graph
+    // already says are in real contact (a bridge and its parent/child
+    // panel) — never a blind whole-set boolean asking OCCT to rediscover
+    // contacts across every piece at once. An earlier version of this
+    // function tried a whole-set N-ary fuse first and fell back to this
+    // graph walk only on failure; measured on real cauldron.step data the
+    // whole-set attempt failed on every long bend chain it was meant to
+    // speed up and cost more time than it ever saved (~46% slower overall:
+    // 12.9s vs 7.0s across cauldron's 4 resulting parts) — removed, this
+    // graph walk is now the only construction method (P3, single geometric
+    // solution; no-fallback policy — see this file's header).
     TopoDS_Shape currentShape;
-    bool naryOk = false;
+    bool constructionOk = false;
     {
-      TopTools_ListOfShape naryArgs, naryTools;
-      naryArgs.Append(orderedPieces[0]);
-      for (size_t i = 1; i < orderedPieces.size(); ++i) naryTools.Append(orderedPieces[i]);
-
-      double maxPieceVolume = 0.0;
-      for (const auto& piece : orderedPieces) {
-        maxPieceVolume = std::max(maxPieceVolume, solidVolume(piece));
-      }
-
-      auto tryNaryFuse = [&](double fuzzMm, bool glue) -> TopoDS_Shape {
-        BRepAlgoAPI_Fuse fuser;
-        fuser.SetArguments(naryArgs);
-        fuser.SetTools(naryTools);
-        fuser.SetFuzzyValue(fuzzMm);
-        if (glue) fuser.SetGlue(BOPAlgo_GlueShift);
-        fuser.Build();
-        if (!fuser.IsDone()) return TopoDS_Shape();
-        return fuser.Shape();
-      };
-      auto tryNaryFuseNested = [&]() -> TopoDS_Shape {
-        for (double fuzzMm : {kBooleanFuzzMm, kJoinRetryFuzzMm}) {
-          for (bool glue : {false, true}) {
-            TopoDS_Shape candidate = tryNaryFuse(fuzzMm, glue);
-            if (candidate.IsNull()) continue;
-            if (!BRepCheck_Analyzer(candidate).IsValid()) continue;
-            return candidate;
-          }
-        }
-        return TopoDS_Shape();
-      };
-      // Same union-volume invariant as fuseJoin's own contract above,
-      // generalized to N pieces: the result can never be smaller than the
-      // largest individual input piece (a property of union, not a
-      // tolerance) — catches the same "silently dropped operand" class of
-      // defect fuseJoin's own comment documents.
-      auto acceptNaryResult = [&](const TopoDS_Shape& shape) -> bool {
-        if (shape.IsNull() || !BRepCheck_Analyzer(shape).IsValid()) return false;
-        if (HasDegenerateFace(shape)) return false;
-        int n = shape.ShapeType() == TopAbs_SOLID ? 1 : countSolids(shape);
-        if (n != 1) return false;
-        constexpr double kVolumeRelTol = 1e-6;
-        return solidVolume(shape) >= maxPieceVolume * (1.0 - kVolumeRelTol);
-      };
-
-      currentShape = tryNaryFuseNested();
-      naryOk = acceptNaryResult(currentShape);
-      if (naryOk && currentShape.ShapeType() != TopAbs_SOLID) {
-        TopoDS_Solid theSolid;
-        for (TopExp_Explorer ex(currentShape, TopAbs_SOLID); ex.More(); ex.Next()) {
-          theSolid = TopoDS::Solid(ex.Current());
-        }
-        currentShape = theSolid;
-      }
-      if (naryOk) {
-        ShapeFix_ShapeTolerance toleranceFix;
-        toleranceFix.LimitTolerance(currentShape, 0.0, kJoinRetryFuzzMm);
-      }
-    }
-
-    // The whole-set Boolean is only an optimization. Real imported parts can
-    // contain long chains whose single OCCT interference pass returns no
-    // shape, even though each known panel/bridge contact is constructible.
-    // Reassemble that same graph through validated contact joins; this is not
-    // a degraded result or a partial fallback: every node must be consumed,
-    // every join must produce one solid, and the operation still fails closed.
-    if (!naryOk) {
       struct FuseNode {
         TopoDS_Shape shape;
         std::vector<std::string> ids;
@@ -670,24 +555,9 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
         // constructing each bridge. The final panel/bridge union must rely on
         // its own strict topology, connectivity, and volume checks: cauldron
         // contains legitimate sub-0.01 mm facet edges at this stage.
-        bool valid = fuseJoin(kBooleanFuzzMm, false, a.shape, b.shape, &joined, &built,
+        bool valid = fuseJoin(kBooleanFuzzMm, a.shape, b.shape, &joined, &built,
                               &failureReason);
         if (valid && countSolids(joined) != 1) valid = false;
-        if (!valid) {
-          valid = fuseJoin(kJoinRetryFuzzMm, false, a.shape, b.shape, &joined, &built,
-                           &failureReason);
-          if (valid && countSolids(joined) != 1) valid = false;
-        }
-        if (!valid) {
-          valid = fuseJoin(kBooleanFuzzMm, true, a.shape, b.shape, &joined, &built,
-                           &failureReason);
-          if (valid && countSolids(joined) != 1) valid = false;
-        }
-        if (!valid) {
-          valid = fuseJoin(kJoinRetryFuzzMm, true, a.shape, b.shape, &joined, &built,
-                           &failureReason);
-          if (valid && countSolids(joined) != 1) valid = false;
-        }
         if (!valid || joined.IsNull()) {
           result.errorCode = "GE_CONSTRUCTION_FAILED";
           result.message = "validated contact fuse failed joining " + DescribeIds(a.ids) +
@@ -765,8 +635,8 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
         const bool isSolid = currentShape.ShapeType() == TopAbs_SOLID;
         const bool isValid = BRepCheck_Analyzer(currentShape).IsValid();
         const int solidCount = countSolids(currentShape);
-        naryOk = isSolid && isValid && solidCount == 1;
-        if (!naryOk) {
+        constructionOk = isSolid && isValid && solidCount == 1;
+        if (!constructionOk) {
           result.errorCode = "GE_CONSTRUCTION_FAILED";
           result.message = "balanced assembly final node invalid (shapeType=" +
                            std::to_string(currentShape.ShapeType()) + ", valid=" +
@@ -779,13 +649,13 @@ ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const Evaluate
                            std::to_string(nodes.size()) + ", edges=" +
                            std::to_string(edges.size()) + ")";
         }
-        naryOk = false;
+        constructionOk = false;
       }
     }
 
     // Strict policy: a complete, validated assembly is required. A failed
     // graph assembly is never returned as a plausible partial model.
-    if (!naryOk) {
+    if (!constructionOk) {
       result.errorCode = "GE_CONSTRUCTION_FAILED";
       if (result.message.empty()) {
         result.message =

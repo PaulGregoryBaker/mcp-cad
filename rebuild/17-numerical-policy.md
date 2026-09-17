@@ -51,17 +51,17 @@ fixed rather than tunable:
 | Constant | Value | Why it's fixed, not N11 |
 |---|---|---|
 | `WINDING` | CCW (shoelace sign) for outlines, CW for holes | A convention, not a measurement — there's no "looser" or "tighter" winding (12-domain-notes §2; 14 §5). |
-| `BOOLEAN_FUZZ_MM` | `1e-5` | Kernel-internal noise floor (Port C/D, 16). The v1 bug (0.15 mm silently discarding ~50% of volume once kerf detail existed) is exactly what happens when this is treated as tunable. **Scales with the smallest feature present, not part size** — see §2.1. |
+| `BOOLEAN_FUZZ_MM` | `1e-3` | Kernel-internal noise floor (Port C/D, 16). The v1 bug (0.15 mm silently discarding ~50% of volume once kerf detail existed) is exactly what happens when this is treated as tunable. **Scales with the smallest feature present, not part size** — see §2.1. Fixed at 1e-3 mm (1 micron), not 1e-5: resolution is meaningful only relative to the project's working unit, and this project works in millimetres (metres are impractical for sheet-metal-scale parts) — 1e-3 mm is the floor's real value under that unit choice, not an arbitrary loosening. |
 | `COLLINEARITY_EPSILON` | fixed, small (cross-product-based) | Used by the region-clipping algorithm (14 §2.1/OPEN-D2.6) to detect degenerate/near-zero-area slivers. Purely a numerical-robustness constant. |
 | `ZERO_LENGTH_EPSILON_MM` | fixed, small | Detects degenerate edges/hinges during import reconciliation (13 §6) and outline editing (K2). |
 | `MERGE_EDGE_ALIGNMENT_TOLERANCE_MM` | ~2 mm (v1 evidence) | The adjacency gate for "close enough to share a bend edge" during `merge_bodies_with_bend` (14 §2.1.2). Stays fixed — `OPEN-17.1` resolved (§7): this is genuinely an import-noise floor, not a judgment call, once it isn't also asked to decide which of two rigid-transform hypotheses is true (that's a different, tighter, `kCoplanarLinearToleranceMm`-class decision — see `step_reconciliation.cc`'s `kSelfConsistencyToleranceMm`, rebuild/20-bend-bridge-geometry.md Ch. 6d). |
 
 ### 2.1 Why boolean fuzz is a *relative*, not absolute, constant
 
-`BOOLEAN_FUZZ_MM` is not literally "always exactly 1e-5 mm regardless of geometry" —
+`BOOLEAN_FUZZ_MM` is not literally "always exactly 1e-3 mm regardless of geometry" —
 v1's own lesson (12-domain-notes §2) was that a fixed-too-coarse value silently ate
 real feature detail. The policy: fuzz tolerance is derived as
-`min(1e-5, smallestFeatureDimension × relativeFactor)` — i.e., it never exceeds a
+`min(1e-3, smallestFeatureDimension × relativeFactor)` — i.e., it never exceeds a
 small absolute ceiling, but shrinks further when the geometry itself contains
 features smaller than that ceiling (a kerf notch, a small hole near a boolean seam).
 This is a *numerical robustness* rule (how do we avoid destroying real detail), not a
