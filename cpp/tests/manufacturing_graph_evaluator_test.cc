@@ -1114,6 +1114,202 @@ TEST_CASE("GraphEvaluator: duplicate incoming bends on one region panel is rejec
   CHECK(result.errorCode == EvaluateErrorCode::kTreeCycleDetected);
 }
 
+TEST_CASE("GraphEvaluator: a bend not reachable from the root is rejected, not silently skipped",
+          "[translation][errors]") {
+  PartGraphSpec graph;
+  graph.partId = "bad";
+  graph.rootRegionPanelId = "seg0";
+  graph.outline.outer = {{0, 0}, {300, 0}, {300, 50}, {0, 50}};
+  graph.thicknessMm = 1.0;
+  BendSpec b0;
+  b0.id = "b0";
+  b0.parentRegionPanelId = "seg0";
+  b0.childRegionPanelId = "seg1";
+  b0.hingeA = {100, 50};
+  b0.hingeB = {100, 0};
+  b0.angleDeg = 90;
+  BendSpec orphan = b0;
+  orphan.id = "orphan";
+  orphan.parentRegionPanelId = "detached";  // no bend leads to "detached"
+  orphan.childRegionPanelId = "seg2";
+  orphan.hingeA = {200, 50};
+  orphan.hingeB = {200, 0};
+  graph.bends = {b0, orphan};
+
+  EvaluateResult result = Evaluate(graph);
+  REQUIRE_FALSE(result.ok);
+  CHECK(result.errorCode == EvaluateErrorCode::kDanglingBendReference);
+}
+
+// RerootAt must not move any panel: re-rooting a chain at its far end, with
+// the new root anchored at its own original pose, reproduces every panel's
+// pose and 3D bottom face exactly.
+TEST_CASE("RerootAt: every panel keeps its world pose and 3D faces", "[translation][reroot]") {
+  for (double radius : {0.0, 2.0}) {
+    CAPTURE(radius);
+    PartGraphSpec graph;
+    graph.partId = "chain";
+    graph.rootRegionPanelId = "seg0";
+    graph.outline.outer = {{0, 0}, {300, 0}, {300, 50}, {0, 50}};
+    graph.thicknessMm = 1.0;
+    graph.anchor.transform = Transform3::Translation(7, -3, 11);
+    BendSpec b0;
+    b0.id = "b0";
+    b0.parentRegionPanelId = "seg0";
+    b0.childRegionPanelId = "seg1";
+    b0.hingeA = {100, 50};
+    b0.hingeB = {100, 0};
+    b0.angleDeg = 90;
+    b0.radiusMm = radius;
+    b0.kFactor = 0.44;
+    BendSpec b1 = b0;
+    b1.id = "b1";
+    b1.parentRegionPanelId = "seg1";
+    b1.childRegionPanelId = "seg2";
+    b1.hingeA = {200, 50};
+    b1.hingeB = {200, 0};
+    b1.angleDeg = -60;
+    graph.bends = {b0, b1};
+
+    EvaluateResult before = Evaluate(graph);
+    REQUIRE(before.ok);
+
+    RerootResult reroot = RerootAt(graph.bends, "seg0", "seg2");
+    REQUIRE(reroot.ok);
+    PartGraphSpec rerooted = graph;
+    rerooted.bends = reroot.bends;
+    rerooted.rootRegionPanelId = "seg2";
+    for (const auto& p : before.panels) {
+      if (p.regionPanelId == "seg2") rerooted.anchor.transform = p.pose;
+    }
+    EvaluateResult after = Evaluate(rerooted);
+    REQUIRE(after.ok);
+    REQUIRE(after.panels.size() == before.panels.size());
+
+    for (const auto& pb : before.panels) {
+      CAPTURE(pb.regionPanelId);
+      const RegionPanelLayout* pa = nullptr;
+      for (const auto& p : after.panels) {
+        if (p.regionPanelId == pb.regionPanelId) pa = &p;
+      }
+      REQUIRE(pa != nullptr);
+      for (int i = 0; i < 9; ++i) CHECK(pa->pose.r[i] == Approx(pb.pose.r[i]).margin(1e-9));
+      for (int i = 0; i < 3; ++i) CHECK(pa->pose.t[i] == Approx(pb.pose.t[i]).margin(1e-9));
+      // Same ring, same winding; a panel between two bends may start its
+      // ring at a different vertex once its incoming bend changes.
+      const size_t n = pb.bottomFace.size();
+      REQUIRE(pa->bottomFace.size() == n);
+      auto same = [](const Point3& a, const Point3& b) {
+        return std::fabs(a.x - b.x) < 1e-9 && std::fabs(a.y - b.y) < 1e-9 && std::fabs(a.z - b.z) < 1e-9;
+      };
+      size_t offset = n;
+      for (size_t k = 0; k < n; ++k) {
+        if (same(pa->bottomFace[k], pb.bottomFace[0])) offset = k;
+      }
+      REQUIRE(offset < n);
+      for (size_t i = 0; i < n; ++i) {
+        CHECK(same(pa->bottomFace[(offset + i) % n], pb.bottomFace[i]));
+      }
+    }
+  }
+}
+
+// FlipPart describes the same physical part from the other side of the sheet:
+// every panel's solid, and every bend's true pivot axis, must be unchanged.
+TEST_CASE("FlipPart: the same solid, seen from the other side of the sheet", "[translation][flip]") {
+  for (double radius : {0.0, 2.0}) {
+    CAPTURE(radius);
+    PartGraphSpec graph;
+    graph.partId = "chain";
+    graph.rootRegionPanelId = "seg0";
+    graph.outline.outer = {{0, 0}, {300, 0}, {300, 50}, {0, 50}};
+    graph.outline.circleHoles = {{{40, 25}, 5.0}};
+    graph.thicknessMm = 1.5;
+    graph.anchor.transform = Transform3::RotationAboutAxis({3, 4, 5}, {0.3, 0.8, 0.5}, 37.0);
+    BendSpec b0;
+    b0.id = "b0";
+    b0.parentRegionPanelId = "seg0";
+    b0.childRegionPanelId = "seg1";
+    b0.hingeA = {100, 50};
+    b0.hingeB = {100, 0};
+    b0.angleDeg = 90;
+    b0.radiusMm = radius;
+    b0.kFactor = 0.44;
+    BendSpec b1 = b0;
+    b1.id = "b1";
+    b1.parentRegionPanelId = "seg1";
+    b1.childRegionPanelId = "seg2";
+    b1.hingeA = {200, 50};
+    b1.hingeB = {200, 0};
+    b1.angleDeg = -60;
+    graph.bends = {b0, b1};
+
+    EvaluateResult before = Evaluate(graph);
+    REQUIRE(before.ok);
+    const PartGraphSpec flipped = FlipPart(graph);
+    EvaluateResult after = Evaluate(flipped);
+    REQUIRE(after.ok);
+    REQUIRE(after.panels.size() == before.panels.size());
+
+    Transform3 m = Transform3::Identity();
+    m.r[0] = -1.0;
+    m.r[8] = -1.0;
+    m.t[2] = graph.thicknessMm;
+    auto samePoint = [](const Point3& a, const Point3& b) {
+      return std::fabs(a.x - b.x) < 1e-9 && std::fabs(a.y - b.y) < 1e-9 && std::fabs(a.z - b.z) < 1e-9;
+    };
+
+    for (const auto& pb : before.panels) {
+      CAPTURE(pb.regionPanelId);
+      const RegionPanelLayout* pa = nullptr;
+      for (const auto& p : after.panels) {
+        if (p.regionPanelId == pb.regionPanelId) pa = &p;
+      }
+      REQUIRE(pa != nullptr);
+      const Transform3 expected = pb.pose.Compose(m);
+      for (int i = 0; i < 9; ++i) CHECK(pa->pose.r[i] == Approx(expected.r[i]).margin(1e-9));
+      for (int i = 0; i < 3; ++i) CHECK(pa->pose.t[i] == Approx(expected.t[i]).margin(1e-9));
+      // New bottom face == old top face (same points; winding reversed by the mirror).
+      REQUIRE(pa->bottomFace.size() == pb.topFace.size());
+      for (const auto& p : pa->bottomFace) {
+        bool found = false;
+        for (const auto& q : pb.topFace) found = found || samePoint(p, q);
+        CHECK(found);
+      }
+    }
+
+    // Each bend's true pivot axis is the same physical line.
+    auto Cross3 = [](const Point3& a, const Point3& b) {
+      return Point3{a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+    };
+    REQUIRE(after.bridges.size() == before.bridges.size());
+    for (const auto& bb : before.bridges) {
+      CAPTURE(bb.bendId);
+      const BridgeLayout* ba = nullptr;
+      for (const auto& b : after.bridges) {
+        if (b.bendId == bb.bendId) ba = &b;
+      }
+      REQUIRE(ba != nullptr);
+      const Point3 d = Cross3(bb.pivotAxisWorld, ba->pivotAxisWorld);
+      CHECK(std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z) < 1e-9);  // parallel
+      const Point3 off{ba->pivotOriginWorld.x - bb.pivotOriginWorld.x, ba->pivotOriginWorld.y - bb.pivotOriginWorld.y,
+                       ba->pivotOriginWorld.z - bb.pivotOriginWorld.z};
+      const Point3 perp = Cross3(off, bb.pivotAxisWorld);
+      CHECK(std::sqrt(perp.x * perp.x + perp.y * perp.y + perp.z * perp.z) < 1e-9);  // on the same line
+    }
+  }
+}
+
+TEST_CASE("RerootAt: a new root outside the tree is a typed error", "[translation][reroot]") {
+  BendSpec b0;
+  b0.id = "b0";
+  b0.parentRegionPanelId = "seg0";
+  b0.childRegionPanelId = "seg1";
+  RerootResult reroot = RerootAt({b0}, "seg0", "elsewhere");
+  REQUIRE_FALSE(reroot.ok);
+  CHECK(reroot.errorCode == EvaluateErrorCode::kDanglingBendReference);
+}
+
 // ─── Transform3 primitives, tested directly ─────────────────────────────────
 
 TEST_CASE("Transform3: identity composed with anything is a no-op", "[translation][transform]") {

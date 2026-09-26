@@ -727,8 +727,27 @@ Napi::Object WriteMapToFlatResult(Napi::Env env, const MapToFlatResult& result) 
   return obj;
 }
 
+Napi::Object WriteOutlineRef(Napi::Env env, const translation::OutlineRef& ref) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("edgeIndex", Napi::Number::New(env, ref.edgeIndex));
+  obj.Set("t", Napi::Number::New(env, ref.t));
+  return obj;
+}
+
+translation::OutlineRef ReadOutlineRef(const Napi::Object& obj) {
+  translation::OutlineRef ref;
+  ref.edgeIndex = obj.Get("edgeIndex").As<Napi::Number>().Int32Value();
+  ref.t = obj.Get("t").As<Napi::Number>().DoubleValue();
+  return ref;
+}
+
 Napi::Object WriteContactRegion(Napi::Env env, const translation::ContactRegion& region) {
   Napi::Object obj = Napi::Object::New(env);
+  obj.Set("flipped", Napi::Boolean::New(env, region.flipped));
+  obj.Set("aStart", WriteOutlineRef(env, region.aStart));
+  obj.Set("aEnd", WriteOutlineRef(env, region.aEnd));
+  obj.Set("bStart", WriteOutlineRef(env, region.bStart));
+  obj.Set("bEnd", WriteOutlineRef(env, region.bEnd));
   obj.Set("aRunStart", WritePoint2(env, region.aRunStart));
   obj.Set("aRunEnd", WritePoint2(env, region.aRunEnd));
   obj.Set("bRunStart", WritePoint2(env, region.bRunStart));
@@ -765,6 +784,7 @@ Napi::Object WriteReconcileOutlinesResult(Napi::Env env, const ReconcileOutlines
   obj.Set("combinedOutline", WritePoint2Array(env, result.combinedOutline));
   obj.Set("hingeA", WritePoint2(env, result.hingeA));
   obj.Set("hingeB", WritePoint2(env, result.hingeB));
+  obj.Set("carriedB", WritePoint2Array(env, result.carriedB));
   return obj;
 }
 
@@ -796,6 +816,19 @@ Napi::Object WritePartGraphSpec(Napi::Env env, const PartGraphSpec& graph) {
   obj.Set("rootRegionPanelId", Napi::String::New(env, graph.rootRegionPanelId));
   Napi::Object outlineObj = Napi::Object::New(env);
   outlineObj.Set("outer", WritePoint2Array(env, graph.outline.outer));
+  Napi::Array polyHolesArr = Napi::Array::New(env, graph.outline.polygonHoles.size());
+  for (size_t i = 0; i < graph.outline.polygonHoles.size(); ++i) {
+    polyHolesArr.Set(static_cast<uint32_t>(i), WritePoint2Array(env, graph.outline.polygonHoles[i]));
+  }
+  outlineObj.Set("polygonHoles", polyHolesArr);
+  Napi::Array circleHolesArr = Napi::Array::New(env, graph.outline.circleHoles.size());
+  for (size_t i = 0; i < graph.outline.circleHoles.size(); ++i) {
+    Napi::Object hole = Napi::Object::New(env);
+    hole.Set("center", WritePoint2(env, graph.outline.circleHoles[i].center));
+    hole.Set("radiusMm", Napi::Number::New(env, graph.outline.circleHoles[i].radiusMm));
+    circleHolesArr.Set(static_cast<uint32_t>(i), hole);
+  }
+  outlineObj.Set("circleHoles", circleHolesArr);
   obj.Set("outline", outlineObj);
   Napi::Array bendsArr = Napi::Array::New(env, graph.bends.size());
   for (size_t i = 0; i < graph.bends.size(); ++i) bendsArr.Set(i, WriteBendSpec(env, graph.bends[i]));
@@ -922,20 +955,66 @@ Napi::Value MapPointToFlatBinding(const Napi::CallbackInfo& info) {
 
 Napi::Value DetectContactBinding(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  if (info.Length() < 2 || !info[0].IsArray() || !info[1].IsArray()) {
-    Napi::TypeError::New(
-        env, "detectContact(panelsA: ContactPanelCandidate[], panelsB: ContactPanelCandidate[])")
+  if (info.Length() < 4 || !info[0].IsArray() || !info[1].IsArray() || !info[2].IsArray() ||
+      !info[3].IsArray()) {
+    Napi::TypeError::New(env,
+                         "detectContact(outlineA: Point2[], panelsA: ContactPanelCandidate[], "
+                         "outlineB: Point2[], panelsB: ContactPanelCandidate[])")
         .ThrowAsJavaScriptException();
     return env.Undefined();
   }
   try {
+    std::vector<Point2> outlineA = ReadPoint2Array(info[0].As<Napi::Array>());
     std::vector<translation::ContactPanelCandidate> panelsA =
-        ReadContactPanelCandidateArray(info[0].As<Napi::Array>());
-    std::vector<translation::ContactPanelCandidate> panelsB =
         ReadContactPanelCandidateArray(info[1].As<Napi::Array>());
+    std::vector<Point2> outlineB = ReadPoint2Array(info[2].As<Napi::Array>());
+    std::vector<translation::ContactPanelCandidate> panelsB =
+        ReadContactPanelCandidateArray(info[3].As<Napi::Array>());
 
-    translation::DetectContactResult result = translation::DetectContact(panelsA, panelsB);
+    translation::DetectContactResult result = translation::DetectContact(outlineA, panelsA, outlineB, panelsB);
     return WriteDetectContactResult(env, result);
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
+Napi::Value FlipPartBinding(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsObject()) {
+    Napi::TypeError::New(env, "flipPart(graph: PartGraphSpec)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    return WritePartGraphSpec(env, translation::FlipPart(ReadPartGraphSpec(info[0].As<Napi::Object>())));
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
+Napi::Value RerootBendsBinding(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 3 || !info[0].IsArray() || !info[1].IsString() || !info[2].IsString()) {
+    Napi::TypeError::New(env, "rerootBends(bends: BendSpec[], oldRoot: string, newRoot: string)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    Napi::Array arr = info[0].As<Napi::Array>();
+    std::vector<BendSpec> bends;
+    bends.reserve(arr.Length());
+    for (uint32_t i = 0; i < arr.Length(); ++i) bends.push_back(ReadBendSpec(arr.Get(i).As<Napi::Object>()));
+    translation::RerootResult result = translation::RerootAt(
+        bends, info[1].As<Napi::String>().Utf8Value(), info[2].As<Napi::String>().Utf8Value());
+    Napi::Object obj = Napi::Object::New(env);
+    obj.Set("ok", Napi::Boolean::New(env, result.ok));
+    obj.Set("errorCode", Napi::String::New(env, ErrorCodeToString(result.errorCode)));
+    obj.Set("message", Napi::String::New(env, result.message));
+    Napi::Array out = Napi::Array::New(env, result.bends.size());
+    for (size_t i = 0; i < result.bends.size(); ++i) out.Set(i, WriteBendSpec(env, result.bends[i]));
+    obj.Set("bends", out);
+    return obj;
   } catch (const std::exception& e) {
     Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
     return env.Undefined();
@@ -944,24 +1023,25 @@ Napi::Value DetectContactBinding(const Napi::CallbackInfo& info) {
 
 Napi::Value ReconcileOutlinesBinding(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  if (info.Length() < 6 || !info[0].IsArray() || !info[1].IsObject() || !info[2].IsObject() ||
-      !info[3].IsArray() || !info[4].IsObject() || !info[5].IsObject()) {
+  if (info.Length() < 7 || !info[0].IsArray() || !info[1].IsObject() || !info[2].IsObject() ||
+      !info[3].IsArray() || !info[4].IsObject() || !info[5].IsObject() || !info[6].IsArray()) {
     Napi::TypeError::New(
-        env, "reconcileOutlines(outlineA: {x,y}[], edgeA0: {x,y}, edgeA1: {x,y}, "
-             "outlineB: {x,y}[], edgeB0: {x,y}, edgeB1: {x,y})")
+        env, "reconcileOutlines(outlineA: {x,y}[], a0: OutlineRef, a1: OutlineRef, "
+             "outlineB: {x,y}[], b0: OutlineRef, b1: OutlineRef, carryB: {x,y}[])")
         .ThrowAsJavaScriptException();
     return env.Undefined();
   }
   try {
     std::vector<Point2> outlineA = ReadPoint2Array(info[0].As<Napi::Array>());
-    Point2 edgeA0 = ReadPoint2(info[1].As<Napi::Object>());
-    Point2 edgeA1 = ReadPoint2(info[2].As<Napi::Object>());
+    translation::OutlineRef a0 = ReadOutlineRef(info[1].As<Napi::Object>());
+    translation::OutlineRef a1 = ReadOutlineRef(info[2].As<Napi::Object>());
     std::vector<Point2> outlineB = ReadPoint2Array(info[3].As<Napi::Array>());
-    Point2 edgeB0 = ReadPoint2(info[4].As<Napi::Object>());
-    Point2 edgeB1 = ReadPoint2(info[5].As<Napi::Object>());
+    translation::OutlineRef b0 = ReadOutlineRef(info[4].As<Napi::Object>());
+    translation::OutlineRef b1 = ReadOutlineRef(info[5].As<Napi::Object>());
+    std::vector<Point2> carryB = ReadPoint2Array(info[6].As<Napi::Array>());
 
     ReconcileOutlinesResult result =
-        translation::ReconcileOutlines(outlineA, edgeA0, edgeA1, outlineB, edgeB0, edgeB1);
+        translation::ReconcileOutlines(outlineA, a0, a1, outlineB, b0, b1, carryB);
     return WriteReconcileOutlinesResult(env, result);
   } catch (const std::exception& e) {
     Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
@@ -1578,6 +1658,8 @@ void RegisterTranslationMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("mapPointToFlat", Napi::Function::New(env, MapPointToFlatBinding));
   exports.Set("detectContact", Napi::Function::New(env, DetectContactBinding));
   exports.Set("reconcileOutlines", Napi::Function::New(env, ReconcileOutlinesBinding));
+  exports.Set("rerootBends", Napi::Function::New(env, RerootBendsBinding));
+  exports.Set("flipPart", Napi::Function::New(env, FlipPartBinding));
   exports.Set("splitPartAtBend", Napi::Function::New(env, SplitPartAtBendBinding));
   exports.Set("reconcilePieces", Napi::Function::New(env, ReconcilePiecesBinding));
   exports.Set("polygonUnion", Napi::Function::New(env, PolygonUnionBinding));

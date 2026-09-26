@@ -223,7 +223,7 @@ function selectContactRegion(
 
   const describe = (r: ContactRegion) =>
     `(region_panel_id_a=${r.regionPanelIdA}, region_panel_id_b=${r.regionPanelIdB}, ` +
-    `angle_deg=${r.angleDeg.toFixed(3)}, length_mm=${r.lengthMm.toFixed(3)})`;
+    `angle_deg=${r.angleDeg.toFixed(3)}, length_mm=${r.lengthMm.toFixed(3)}${r.flipped ? ', flipped' : ''})`;
 
   if (regionPanelIdA === undefined && regionPanelIdB === undefined) {
     throwError(
@@ -309,7 +309,7 @@ export function mergePartsWithBend(
     regionPanelId: p.regionPanelId,
   }));
 
-  const contact = geometryBinding.detectContact(panelsA, panelsB);
+  const contact = geometryBinding.detectContact(partA.outline, panelsA, partB.outline, panelsB);
   if (!contact.ok) {
     throwError(
       (contact.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
@@ -319,13 +319,31 @@ export function mergePartsWithBend(
   }
   const region = selectContactRegion(contact.regions, input.regionPanelIdA, input.regionPanelIdB);
 
+  // B as the seam needs it: for a flipped seam, the same physical part
+  // described from the other side of the sheet (C++ FlipPart) — the
+  // region's b* refs and angle are already in those terms.
+  const specBAsStored = toNapiPartGraphSpec(store.snapshotPart(input.partBId));
+  const specB = region.flipped ? geometryBinding.flipPart(specBAsStored) : specBAsStored;
+  const polygonHolesB = specB.outline.polygonHoles ?? [];
+  const circleHolesB = specB.outline.circleHoles ?? [];
+
+  // Everything else B owns in its own flat frame — its bends' hinges and its
+  // holes — must move with B's outline. The transform lives only in C++
+  // (reconcileOutlines' carryB); this just flattens and later un-flattens
+  // the points, in a fixed order.
+  const carryB: Point2[] = [];
+  for (const b of specB.bends) carryB.push(b.hingeA, b.hingeB);
+  for (const ring of polygonHolesB) carryB.push(...ring);
+  for (const h of circleHolesB) carryB.push(h.center);
+
   const reconciled = geometryBinding.reconcileOutlines(
     partA.outline,
-    region.aRunStart,
-    region.aRunEnd,
-    partB.outline,
-    region.bRunStart,
-    region.bRunEnd,
+    region.aStart,
+    region.aEnd,
+    specB.outline.outer,
+    region.bStart,
+    region.bEnd,
+    carryB,
   );
   if (!reconciled.ok) {
     throwError(
@@ -335,21 +353,24 @@ export function mergePartsWithBend(
     );
   }
 
-  // Which of A's own LIVE region panels the detected seam belongs to — a
-  // membership lookup via the one existing primitive that already answers
-  // "which region panel owns this flat-frame point" (regionOf, wrapped by
-  // mapPointToWorld), never re-derived here (constitution principle IV): the
-  // interval's own midpoint is a point ON the seam, on the SAME free edge
-  // whichever region panel it belongs to.
-  const seamMidpoint: Point2 = {
-    x: (region.aRunStart.x + region.aRunEnd.x) / 2,
-    y: (region.aRunStart.y + region.aRunEnd.y) / 2,
-  };
-  const seamOwner = mapPointToWorld(store, input.partAId, seamMidpoint, 0);
-  if (!seamOwner.ok || !seamOwner.regionPanelId) {
+  // Un-flatten carriedB in the same order it was built above.
+  const carried = reconciled.carriedB;
+  const bBendsInA = specB.bends.map((b, i) => ({ ...b, hingeA: carried[2 * i]!, hingeB: carried[2 * i + 1]! }));
+  let cursor = 2 * specB.bends.length;
+  const bHolesInA: Hole[] = [];
+  for (const ring of polygonHolesB) {
+    bHolesInA.push({ kind: 'polygon', ring: carried.slice(cursor, cursor + ring.length) });
+    cursor += ring.length;
+  }
+  for (const h of circleHolesB) bHolesInA.push({ kind: 'circle', center: carried[cursor++]!, radiusMm: h.radiusMm });
+
+  // The seam bend's child is B's contact panel, so B's tree must be rooted
+  // there (C++ RerootAt — flips the bends between B's old root and it).
+  const rerooted = geometryBinding.rerootBends(bBendsInA, specB.rootRegionPanelId, region.regionPanelIdB);
+  if (!rerooted.ok) {
     throwError(
-      ErrorCodes.GE_MERGE_INTERNAL_INCONSISTENCY,
-      seamOwner.message || 'detected seam does not resolve to a live region panel on part A',
+      (rerooted.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
+      rerooted.message || 'rerootBends failed',
       false,
     );
   }
@@ -360,7 +381,20 @@ export function mergePartsWithBend(
     combinedOutlineA: reconciled.combinedOutline,
     hingeA: reconciled.hingeA,
     hingeB: reconciled.hingeB,
-    parentRegionPanelIdOnA: seamOwner.regionPanelId,
+    // The panel pair detectContact measured the angle between — the seam
+    // bend must join exactly these two, or angleDeg means something else.
+    parentRegionPanelIdOnA: region.regionPanelIdA,
+    childRegionPanelIdOnB: region.regionPanelIdB,
+    bBendRewrites: rerooted.bends.map((b) => ({
+      bendId: b.id,
+      parentRegionPanelId: b.parentRegionPanelId,
+      childRegionPanelId: b.childRegionPanelId,
+      hingeA: b.hingeA,
+      hingeB: b.hingeB,
+      angleDeg: b.angleDeg,
+      bottomIsConcave: b.bottomIsConcave ?? null,
+    })),
+    bHolesInA,
     angleDeg: region.angleDeg,
     radiusMm: input.radiusMm,
     kFactor: input.kFactor,

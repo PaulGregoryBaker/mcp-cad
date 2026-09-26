@@ -61,6 +61,23 @@ export interface MergePartsWithBendInput {
   hingeA: Point2;
   hingeB: Point2;
   parentRegionPanelIdOnA: string;
+  /** B's region panel the seam touches — becomes the new bend's child. B's
+   * bend tree must already be re-rooted here (bBendRewrites). */
+  childRegionPanelIdOnB: string;
+  /** Every one of B's bends, rewritten into A's frame and re-rooted at
+   * childRegionPanelIdOnB (C++ flipPart when the seam is flipped,
+   * reconcileOutlines, rerootBends). */
+  bBendRewrites: Array<{
+    bendId: string;
+    parentRegionPanelId: string;
+    childRegionPanelId: string;
+    hingeA: Point2;
+    hingeB: Point2;
+    angleDeg: number;
+    bottomIsConcave: boolean | null;
+  }>;
+  /** B's holes, already moved into A's frame. */
+  bHolesInA: Hole[];
   angleDeg: number;
   radiusMm?: number;
   kFactor?: number;
@@ -275,11 +292,23 @@ export class GraphStore {
       );
     }
 
-    const bendId = randomUUID();
     const childRegionPanelId = randomUUID();
+    const child: RegionPanelRow = {
+      regionPanelId: childRegionPanelId,
+      partId: input.partId,
+      label: input.label ?? `region-${childRegionPanelId.slice(0, 8)}`,
+      kFactorOverride: null,
+      mergedIntoRegionPanelId: null,
+    };
+    this.regionPanels.set(childRegionPanelId, child);
+    return { bend: this.addBendRow(input, childRegionPanelId), childRegionPanel: child };
+  }
 
+  /** The one place a bend row is built — shared by createBendNode (new child
+   * panel) and mergePartsWithBend (existing child panel). */
+  private addBendRow(input: CreateBendNodeInput, childRegionPanelId: string): BendRow {
     const bend: BendRow = {
-      bendId,
+      bendId: randomUUID(),
       partId: input.partId,
       parentRegionPanelId: input.parentRegionPanelId,
       childRegionPanelId,
@@ -292,17 +321,8 @@ export class GraphStore {
       radiusMeasured: input.radiusMeasured ?? true,
       bendProcess: input.bendProcess ?? null,
     };
-    const child: RegionPanelRow = {
-      regionPanelId: childRegionPanelId,
-      partId: input.partId,
-      label: input.label ?? `region-${childRegionPanelId.slice(0, 8)}`,
-      kFactorOverride: null,
-      mergedIntoRegionPanelId: null,
-    };
-
-    this.bends.set(bendId, bend);
-    this.regionPanels.set(childRegionPanelId, child);
-    return { bend, childRegionPanel: child };
+    this.bends.set(bend.bendId, bend);
+    return bend;
   }
 
   /**
@@ -346,27 +366,71 @@ export class GraphStore {
       );
     }
 
+    // Validate everything before mutating anything.
+    const parent = this.regionPanels.get(input.parentRegionPanelIdOnA);
+    if (!parent || parent.partId !== input.partAId || parent.mergedIntoRegionPanelId !== null) {
+      throw new GraphStoreError(
+        `no live region panel ${input.parentRegionPanelIdOnA} on part ${input.partAId}`,
+        ErrorCodes.GRAPH_REGION_PANEL_NOT_FOUND,
+      );
+    }
+    const child = this.regionPanels.get(input.childRegionPanelIdOnB);
+    if (!child || child.partId !== input.partBId || child.mergedIntoRegionPanelId !== null) {
+      throw new GraphStoreError(
+        `no live region panel ${input.childRegionPanelIdOnB} on part ${input.partBId}`,
+        ErrorCodes.GRAPH_REGION_PANEL_NOT_FOUND,
+      );
+    }
+    const bBendIds = [...this.bends.values()].filter((b) => b.partId === input.partBId).map((b) => b.bendId);
+    const rewriteById = new Map(input.bBendRewrites.map((r) => [r.bendId, r]));
+    if (rewriteById.size !== bBendIds.length || !bBendIds.every((id) => rewriteById.has(id))) {
+      throw new GraphStoreError(
+        `bBendRewrites must cover exactly part ${input.partBId}'s ${bBendIds.length} bends`,
+        ErrorCodes.GE_MERGE_INTERNAL_INCONSISTENCY,
+      );
+    }
+    if (input.bBendRewrites.some((r) => r.childRegionPanelId === input.childRegionPanelIdOnB)) {
+      throw new GraphStoreError(
+        `region panel ${input.childRegionPanelIdOnB} still has an incoming bend inside part ` +
+          `${input.partBId} — B's tree was not re-rooted at the contact panel`,
+        ErrorCodes.GE_MERGE_INTERNAL_INCONSISTENCY,
+      );
+    }
+
     partA.outline = input.combinedOutlineA;
+    partA.holes = [...partA.holes, ...input.bHolesInA];
 
     for (const panel of this.regionPanels.values()) {
       if (panel.partId === input.partBId) panel.partId = input.partAId;
     }
     for (const bend of this.bends.values()) {
-      if (bend.partId === input.partBId) bend.partId = input.partAId;
+      if (bend.partId !== input.partBId) continue;
+      const r = rewriteById.get(bend.bendId)!;
+      bend.partId = input.partAId;
+      bend.parentRegionPanelId = r.parentRegionPanelId;
+      bend.childRegionPanelId = r.childRegionPanelId;
+      bend.hingeA = r.hingeA;
+      bend.hingeB = r.hingeB;
+      bend.angleDeg = r.angleDeg;
+      bend.bottomIsConcave = r.bottomIsConcave;
     }
     partB.mergedIntoPartId = input.partAId;
 
-    return this.createBendNode({
-      partId: input.partAId,
-      parentRegionPanelId: input.parentRegionPanelIdOnA,
-      hingeA: input.hingeA,
-      hingeB: input.hingeB,
-      angleDeg: input.angleDeg,
-      radiusMm: input.radiusMm,
-      kFactor: input.kFactor,
-      bottomIsConcave: input.bottomIsConcave,
-      radiusMeasured: input.radiusMeasured,
-    });
+    const bend = this.addBendRow(
+      {
+        partId: input.partAId,
+        parentRegionPanelId: input.parentRegionPanelIdOnA,
+        hingeA: input.hingeA,
+        hingeB: input.hingeB,
+        angleDeg: input.angleDeg,
+        radiusMm: input.radiusMm,
+        kFactor: input.kFactor,
+        bottomIsConcave: input.bottomIsConcave,
+        radiusMeasured: input.radiusMeasured,
+      },
+      input.childRegionPanelIdOnB,
+    );
+    return { bend, childRegionPanel: child };
   }
 
   /**

@@ -787,9 +787,25 @@ export interface NapiContactPanelCandidate {
   regionPanelId: string;
 }
 
+// A point on a part's outline by topology: outline[edgeIndex] + t *
+// (outline[edgeIndex+1] - outline[edgeIndex]); t == 0 is the vertex itself.
+export interface NapiOutlineRef {
+  edgeIndex: number;
+  t: number;
+}
+
 // One real, physically-disjoint contact interval between some panel of A and
-// some panel of B.
+// some panel of B. aStart/aEnd/bStart/bEnd are the seam ends by topology (what
+// reconcileOutlines takes); aRunStart.. are the same points as coordinates.
 export interface ContactRegion {
+  // B walks this seam the same way as A: B's sheet normal is reversed here.
+  // The merge must re-express B via flipPart first; the b* refs/points and
+  // angleDeg below are already in those flipped terms.
+  flipped: boolean;
+  aStart: NapiOutlineRef;
+  aEnd: NapiOutlineRef;
+  bStart: NapiOutlineRef;
+  bEnd: NapiOutlineRef;
   aRunStart: NapiPoint2;
   aRunEnd: NapiPoint2;
   bRunStart: NapiPoint2;
@@ -810,7 +826,7 @@ export interface ContactRegion {
 // GE_MERGE_NO_CONTACT or GE_MERGE_COPLANAR_SEAM.
 export interface DetectContactResult {
   ok: boolean;
-  errorCode: string; // "" | "GE_MERGE_NO_CONTACT" | "GE_MERGE_COPLANAR_SEAM" | "GE_MERGE_SELF_INTERSECTION" | "GE_MERGE_INTERNAL_INCONSISTENCY"
+  errorCode: string; // "" | "GE_MERGE_NO_CONTACT" | "GE_MERGE_COPLANAR_SEAM" | "GE_MERGE_INTERNAL_INCONSISTENCY"
   message: string;
   regions: ContactRegion[];
 }
@@ -828,6 +844,18 @@ export interface ReconcileOutlinesResult {
   combinedOutline: NapiPoint2[];
   hingeA: NapiPoint2;
   hingeB: NapiPoint2;
+  // carryB mapped into A's frame by the same transform that placed B's
+  // outline — same order and length as the carryB argument.
+  carriedB: NapiPoint2[];
+}
+
+// manufacturing_graph_evaluator.hpp's RerootAt: the same bends, same order,
+// with every bend on the old-root -> new-root path flipped.
+export interface RerootBendsResult {
+  ok: boolean;
+  errorCode: string; // "" | "GE_DANGLING_BEND_REFERENCE" | "GE_TREE_CYCLE_DETECTED"
+  message: string;
+  bends: NapiBendSpec[];
 }
 
 // part_split.hpp's SplitAtBendResult — the graph-level inverse of

@@ -84,13 +84,34 @@ struct ContactPanelCandidate {
 // one (never DetectContact's own decision — TASK_SPEC.md F1/F2's "edge choice
 // is never caller-supplied" is about DECIDING geometry, not about hiding real
 // candidates).
+// A point on a part's outline, by topology rather than by coordinate: the
+// point outline[edgeIndex] + t * (outline[edgeIndex+1] - outline[edgeIndex]).
+// t == 0 means exactly the vertex outline[edgeIndex]; 0 < t < 1 is strictly
+// inside that edge. Always normalized so t is in [0, 1).
+struct OutlineRef {
+  int edgeIndex = -1;
+  double t = 0.0;
+};
+
 struct ContactRegion {
-  // In EACH side's own local 2D frame (F) — exactly the (edgeA0, edgeA1,
-  // edgeB0, edgeB1) the old caller-supplied API took. Correspondence is
-  // physical: aRunStart and bRunEnd are the SAME real 3D point (and
-  // aRunEnd/bRunStart the same), matching the "opposite traversal order" rule
-  // ReconcileOutlines relies on — ReconcileOutlines re-derives this itself
-  // from the points, this is not a promise callers need to hand-verify.
+  // B walks this seam the same way A does: B's sheet normal is reversed
+  // relative to A here. The merge must first re-express B from the other
+  // side of the sheet (FlipPart, manufacturing_graph_evaluator.hpp); bStart/
+  // bEnd/bRunStart/bRunEnd and angleDeg below are ALREADY in those flipped
+  // terms (refs on FlipPart(B)'s outline, B's normal reversed).
+  bool flipped = false;
+  // The seam's two ends on each part's own outline, in A's forward-walk
+  // order. Physical correspondence: aStart and bEnd are the same real 3D
+  // point, as are aEnd and bStart (two CCW polygons sharing a boundary run
+  // traverse it in opposite directions) — exactly what ReconcileOutlines
+  // takes.
+  OutlineRef aStart;
+  OutlineRef aEnd;
+  OutlineRef bStart;
+  OutlineRef bEnd;
+  // The same four points as coordinates in each part's flat frame —
+  // derived from the refs above, for diagnostics and callers that need a
+  // location.
   Point2 aRunStart;
   Point2 aRunEnd;
   Point2 bRunStart;
@@ -115,15 +136,18 @@ struct DetectContactResult {
   std::vector<ContactRegion> regions;
 };
 
-// panelsA/panelsB: every region panel of each part, as its own ring (in that
-// part's shared flat frame F) + its own true world pose — never a single
-// whole-part (outline, anchor) pair, since a part with bends has no single
-// rigid transform that correctly places all of its material (see
-// ContactPanelCandidate's own doc comment). Tests every (panelA, panelB)
-// pair; edge choice among the resulting regions is never made here
-// (TASK_SPEC.md F1/F2) — that is the caller's decision (DetectContactResult's
-// own doc comment).
-DetectContactResult DetectContact(const std::vector<ContactPanelCandidate>& panelsA,
+// outlineA/outlineB: each part's whole stored flat outline (CCW, frame F).
+// panelsA/panelsB: every region panel of each part, as its own ring (a
+// region panel's rawOuter, whose vertices are outline vertices or hinge
+// endpoints on the outline) + its own true world pose — never a single
+// whole-part anchor, since a part with bends has no single rigid transform
+// that places all of its material. Only a panel's FREE edges (those lying on
+// the part's outline) can be a seam; hinge edges are internal. Tests every
+// (panelA, panelB) pair and returns every real region; choosing among them
+// is the caller's decision.
+DetectContactResult DetectContact(const std::vector<Point2>& outlineA,
+                                   const std::vector<ContactPanelCandidate>& panelsA,
+                                   const std::vector<Point2>& outlineB,
                                    const std::vector<ContactPanelCandidate>& panelsB);
 
 struct ReconcileOutlinesResult {
@@ -141,20 +165,22 @@ struct ReconcileOutlinesResult {
   // RIGHT (parent) side and B's spliced-in material on the LEFT (child) side.
   Point2 hingeA;
   Point2 hingeB;
+  // carryB mapped into A's frame by the exact rigid transform that placed
+  // outlineB into combinedOutline — same order, same length as carryB.
+  std::vector<Point2> carriedB;
 };
 
-// outlineA/outlineB: each part's own one stored flat outline (CCW). edgeA0/
-// edgeA1/edgeB0/edgeB1: DetectContact's own aRunStart/aRunEnd/bRunStart/
-// bRunEnd — real points ON each outline's own boundary (on an existing
-// vertex, or requiring a new vertex inserted mid-edge for an asymmetric seam;
-// either way this function locates/inserts them itself, no index is passed
-// in). radiusMm/kFactor/bottomIsConcave are NOT inputs here — this function
-// only produces the combined 2D outline; bend-allowance/k-factor accounting
-// happens the one existing way every other bend already gets it, via
-// createBendNode + evaluatePartGraph's ComputeBendGeometry, never
-// reimplemented here (TASK_SPEC.md F2b).
-ReconcileOutlinesResult ReconcileOutlines(const std::vector<Point2>& outlineA, const Point2& edgeA0,
-                                           const Point2& edgeA1, const std::vector<Point2>& outlineB,
-                                           const Point2& edgeB0, const Point2& edgeB1);
+// outlineA/outlineB: each part's own stored flat outline (CCW). a0/a1/b0/b1:
+// a ContactRegion's aStart/aEnd/bStart/bEnd — the seam ends by topology. A
+// mid-edge ref (t > 0) inserts exactly that point; a vertex ref uses the
+// vertex as-is. No coordinate search. radiusMm/kFactor/bottomIsConcave are
+// not inputs: bend-allowance accounting happens via the created bend.
+//
+// carryB: any other B-frame geometry that must move with B's outline (B's own
+// bend hinges, hole centres, hole vertices), mapped by the same transform.
+ReconcileOutlinesResult ReconcileOutlines(const std::vector<Point2>& outlineA, const OutlineRef& a0,
+                                           const OutlineRef& a1, const std::vector<Point2>& outlineB,
+                                           const OutlineRef& b0, const OutlineRef& b1,
+                                           const std::vector<Point2>& carryB = {});
 
 }  // namespace mcp_cad::translation

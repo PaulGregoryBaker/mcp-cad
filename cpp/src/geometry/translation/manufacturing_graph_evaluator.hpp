@@ -424,4 +424,32 @@ struct EvaluateResult {
 // exceptions crossing a module boundary that doesn't need them).
 EvaluateResult Evaluate(const PartGraphSpec& graph);
 
+struct RerootResult {
+  bool ok = false;
+  EvaluateErrorCode errorCode = EvaluateErrorCode::kNone;
+  std::string message;
+  std::vector<BendSpec> bends;  // same bends, same order; path bends flipped
+};
+
+// Re-roots a bend tree at `newRoot`: every bend on the path from `oldRoot`
+// down to `newRoot` is flipped (parent<->child, hingeA<->hingeB), so newRoot
+// ends up with no incoming bend. Every panel keeps the same pose: Evaluate's
+// pose walk folds the child about hingeA->hingeB by angleDeg, and reversing
+// both the axis and the parent/child roles gives the inverse rotation, so
+// angleDeg is unchanged. Bends off the path are untouched. Fails typed if
+// newRoot is not in oldRoot's tree.
+RerootResult RerootAt(const std::vector<BendSpec>& bends, const std::string& oldRoot,
+                      const std::string& newRoot);
+
+// The same physical part, described from the other side of the sheet: the
+// flat frame is mirrored (x -> -x) and the sheet normal reversed, so the old
+// top face becomes the new bottom. Every panel's solid stays exactly where it
+// was. With M: (x, y, z) -> (-x, y, T - z) — a proper rotation plus a shift
+// by the thickness T — the new anchor is anchor o M, and for every bend:
+// hinges are mirrored and swapped (child stays on the left), angleDeg is
+// negated (the hinge axis reverses, and R(-a, -theta) == R(a, theta)), and
+// bottomIsConcave is inverted (resolved first, then stored explicitly).
+// Outline and polygon holes are reversed to keep their winding.
+PartGraphSpec FlipPart(const PartGraphSpec& graph);
+
 }  // namespace mcp_cad::translation

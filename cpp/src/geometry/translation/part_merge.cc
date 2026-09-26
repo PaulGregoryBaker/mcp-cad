@@ -3,52 +3,38 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 
 namespace mcp_cad::translation {
 
 namespace {
 
-// Matches manufacturing_graph_evaluator.cc's own kPi — avoids relying on the
-// non-standard M_PI macro.
 constexpr double kPi = 3.14159265358979323846;
 
-// Internal consistency epsilon: points passed between this module's own two
-// functions (DetectContact's output, fed straight into ReconcileOutlines) are
-// derived from the SAME detected interval, so any gap here is float
-// round-trip noise, not a real-world tolerance.
+// Float noise only: two coordinates that came from the same stored value
+// (panel rings are copied from the part outline) are "the same point" within
+// this, and never anything farther apart.
 constexpr double kExactMatchEpsilonMm = 1e-6;
 
-// TASK_SPEC.md §8.4: the real-world contact-detection tolerance — how close
-// two independently-anchored parts' boundaries must be to call them "the same
-// seam." Reuses the same fixed constant/value this codebase already
-// established for this exact question (numerical-policy.ts's
-// MERGE_EDGE_ALIGNMENT_TOLERANCE_MM, matching v1 evidence and
-// step_reconciliation.cc's kPieceEdgeMatchToleranceMm precedent) — kept here
-// as its own named constant since this module has no dependency on the
-// TypeScript-side numerical-policy module, per 13 §8 ("no shared mutable
-// state" / no cross-language constant coupling for a pure C++ module).
+// The one real-world tolerance: how far apart two independently-anchored
+// parts' boundaries may be and still be the same physical seam
+// (numerical-policy.ts MERGE_EDGE_ALIGNMENT_TOLERANCE_MM). Used for exactly
+// two questions: is a B boundary point on A's panel line (in 3D, via A's
+// panel frame), and are A's and B's corners at a seam end the same corner.
 constexpr double kMergeContactToleranceMm = 2.0;
 
-// Below this angle magnitude, two touching planes are "the same plane" for
-// this tool's purposes — TASK_SPEC.md F7: a genuinely coplanar contact is
-// fuse_bodies' job (a flush absorb, no bend), not a degenerate zero-angle
-// bend here.
+// Below this dihedral angle a contact is a flush absorb (fuse_bodies), not a
+// fold (TASK_SPEC.md F7).
 constexpr double kCoplanarAngleEpsilonDeg = 1.0;
 
 Point2 Sub2(const Point2& a, const Point2& b) { return {a.x - b.x, a.y - b.y}; }
 double Cross2(const Point2& a, const Point2& b) { return a.x * b.y - a.y * b.x; }
 double Length2(const Point2& v) { return std::hypot(v.x, v.y); }
 double Dot2(const Point2& a, const Point2& b) { return a.x * b.x + a.y * b.y; }
-
-bool NearlyEqual2(const Point2& a, const Point2& b, double eps) {
-  return Length2(Sub2(a, b)) <= eps;
-}
-
+bool NearlyEqual2(const Point2& a, const Point2& b, double eps) { return Length2(Sub2(a, b)) <= eps; }
 Point2 Lerp2(const Point2& a, const Point2& b, double f) {
   return {a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f};
 }
-
-// ─── Point3/Transform3 helpers (DetectContact only) ─────────────────────────
 
 Point3 Sub3(const Point3& a, const Point3& b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
 double Dot3(const Point3& a, const Point3& b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
@@ -57,421 +43,392 @@ Point3 Cross3(const Point3& a, const Point3& b) {
 }
 double Length3(const Point3& v) { return std::sqrt(Dot3(v, v)); }
 
-// ─── DetectContact ───────────────────────────────────────────────────────────
+// ─── Outline references ─────────────────────────────────────────────────────
 
-// Locates p's position on `outline`'s own boundary, mutating it to insert a
-// new vertex if p falls strictly inside an existing edge rather than on an
-// existing vertex — TASK_SPEC.md F3's "insert a vertex where the interval's
-// endpoint falls mid-edge." Returns the index at which outline[index] == p
-// holds after the call, or -1 if p is not within perpTolMm of the boundary at
-// all (an internal-consistency failure — see kInternalInconsistency).
-//
-// Three DIFFERENT tolerance roles, deliberately kept separate:
-//  - vertexTolMm gates "is this already the SAME vertex" — must stay tight
-//    (kExactMatchEpsilonMm) even for real/noisy geometry, since the caller
-//    passes an EXACT copy of the original outline vertex whenever the
-//    boundary genuinely IS that vertex; a loose tolerance here would wrongly
-//    snap a real, distinct nearby feature onto it instead.
-//  - The along-edge RANGE check (is t within this edge's own [0,len]) MUST
-//    also stay tight (kExactMatchEpsilonMm, not perpTolMm): a point genuinely
-//    belongs to whichever edge's true [0,len] extent contains it, and two
-//    edges always share an endpoint — extending the range loosely lets a
-//    point that's actually 1-2mm PAST edge i's own end get wrongly claimed
-//    by edge i instead of the adjacent edge i+1 it truly falls on, purely
-//    because edge i happened to be checked first (confirmed live: a
-//    synthetic asymmetric-seam point 1mm inside the correct edge was claimed
-//    by the WRONG neighboring edge under a 2mm range tolerance, producing a
-//    non-consecutive edgeA0/edgeA1 pair downstream).
-//  - perpTolMm (kMergeContactToleranceMm) is the only place real-world slack
-//    belongs: how far the point may sit OFF the edge's true line, since the
-//    point itself was only ever computed to that precision by DetectContact.
-int LocateOrInsertVertex(std::vector<Point2>& outline, const Point2& p, double vertexTolMm,
-                          double perpTolMm) {
+Point2 RefPoint(const std::vector<Point2>& outline, const OutlineRef& r) {
+  const Point2& a = outline[static_cast<size_t>(r.edgeIndex)];
+  if (r.t == 0.0) return a;
+  return Lerp2(a, outline[(static_cast<size_t>(r.edgeIndex) + 1) % outline.size()], r.t);
+}
+
+bool PointOnSegment(const Point2& p, const Point2& a, const Point2& b) {
+  const Point2 d = Sub2(b, a);
+  const double len = Length2(d);
+  if (len < kExactMatchEpsilonMm) return NearlyEqual2(p, a, kExactMatchEpsilonMm);
+  const double along = Dot2(Sub2(p, a), d) / len;
+  if (along < -kExactMatchEpsilonMm || along > len + kExactMatchEpsilonMm) return false;
+  return std::fabs(Cross2(d, Sub2(p, a))) / len <= kExactMatchEpsilonMm;
+}
+
+// Where point p (known to lie on the outline boundary) sits, as a ref.
+// Vertices win over mid-edge so a vertex is always t == 0 on its own edge.
+std::optional<OutlineRef> RefOf(const std::vector<Point2>& outline, const Point2& p) {
   const size_t n = outline.size();
   for (size_t i = 0; i < n; ++i) {
-    if (NearlyEqual2(outline[i], p, vertexTolMm)) return static_cast<int>(i);
+    if (NearlyEqual2(outline[i], p, kExactMatchEpsilonMm)) return OutlineRef{static_cast<int>(i), 0.0};
   }
-  // Two adjacent edges share an endpoint, so a point near a corner can pass
-  // BOTH edges' t-range/perpendicular checks at once (e.g. sitting exactly
-  // on edge i+1's own line, but also within perpTolMm of edge i's line
-  // extended to its own shared endpoint) — evaluate every edge and take the
-  // one with the smallest perpendicular distance, not the first one found in
-  // index order, or a point can be wrongly claimed by its neighbor
-  // (confirmed live: this exact corner-adjacency case on a synthetic
-  // asymmetric-seam fixture).
-  int bestEdge = -1;
-  double bestPerpDist = perpTolMm;
   for (size_t i = 0; i < n; ++i) {
     const Point2& a = outline[i];
     const Point2& b = outline[(i + 1) % n];
-    const Point2 dir = Sub2(b, a);
-    const double len = Length2(dir);
-    if (len < 1e-9) continue;
-    const Point2 dHat{dir.x / len, dir.y / len};
-    const double t = Dot2(Sub2(p, a), dHat);
-    if (t < -kExactMatchEpsilonMm || t > len + kExactMatchEpsilonMm) continue;
-    const Point2 proj{a.x + dHat.x * t, a.y + dHat.y * t};
-    const double perpDist = Length2(Sub2(proj, p));
-    if (perpDist <= bestPerpDist) {
-      bestPerpDist = perpDist;
-      bestEdge = static_cast<int>(i);
-    }
+    if (!PointOnSegment(p, a, b)) continue;
+    const Point2 d = Sub2(b, a);
+    return OutlineRef{static_cast<int>(i), Dot2(Sub2(p, a), d) / Dot2(d, d)};
   }
-  if (bestEdge >= 0) {
-    const size_t insertAt = (static_cast<size_t>(bestEdge) + 1) % n;
-    if (insertAt == 0) {
-      outline.push_back(p);
-      return static_cast<int>(n);
-    }
-    outline.insert(outline.begin() + static_cast<long>(insertAt), p);
-    return static_cast<int>(insertAt);
-  }
-  return -1;
+  return std::nullopt;
 }
 
-// One physically-disjoint region where a run of B's boundary (already
-// verified to lie, both endpoints, within tolerance of A's z=0 plane) overlaps
-// a run of A's own boundary — TASK_SPEC.md §9 step 1's "walk both outlines'
-// boundaries to find the contact interval."
-struct FoundRegion {
-  Point2 aStart2D;  // A's local 2D frame — earlier along A's own CCW walk
-  Point2 aEnd2D;
-  Point2 bStartLocal;  // B's OWN local 2D frame, same physical points as aStart2D/aEnd2D
-  Point2 bEndLocal;
-  double lengthMm = 0.0;
-};
-
-// One (panelA, panelB) pair's own contact scan — exactly today's single-panel
-// DetectContact algorithm, unchanged, just scoped to one candidate pair
-// instead of a whole part and no longer computing the dihedral angle (the
-// caller does that once per FOUND region, using the OWNING pair's own poses —
-// ContactRegion's own doc comment). Appends every region this pair finds to
-// `outFound` (never just the best) and sets `outCoplanar` if this pair's B
-// panel lies entirely in this pair's A panel's own plane (F7) — the caller
-// aggregates that flag across every pair to decide the right "nothing found"
-// error message (kCoplanarSeam vs kNoContact).
-void DetectContactForPanelPair(const std::vector<Point2>& outlineA, const Transform3& anchorA,
-                                const std::vector<Point2>& outlineB, const Transform3& anchorB,
-                                std::vector<FoundRegion>& outFound, bool& outCoplanar) {
-  const size_t n = outlineA.size();
-  const size_t m = outlineB.size();
-
-  // Project every B vertex into A's own local 3D frame (13 §3.1's R, composed
-  // exactly as FuseCoplanarParts already does for the coplanar case).
-  const Transform3 bToA = anchorA.Inverse().Compose(anchorB);
-  std::vector<Point3> bInA(m);
-  for (size_t i = 0; i < m; ++i) {
-    bInA[i] = bToA.Apply({outlineB[i].x, outlineB[i].y, 0.0});
-  }
-
-  // F7: genuinely coplanar (every point of B lies in A's own plane) is
-  // fuse_bodies' job, not this tool's.
-  bool allCoplanar = true;
-  for (const auto& p : bInA) {
-    if (std::fabs(p.z) > kMergeContactToleranceMm) {
-      allCoplanar = false;
-      break;
+// A panel ring edge is FREE if it lies along the part's outline boundary
+// (both endpoints on the boundary, and its midpoint too — which rules out a
+// hinge chord whose two endpoints are boundary vertices but which cuts across
+// the interior). Hinge edges are internal and can never be a seam.
+std::vector<bool> FreeEdges(const std::vector<Point2>& ring, const std::vector<Point2>& outline) {
+  std::vector<bool> free(ring.size(), false);
+  for (size_t i = 0; i < ring.size(); ++i) {
+    const Point2& p = ring[i];
+    const Point2& q = ring[(i + 1) % ring.size()];
+    const Point2 mid = Lerp2(p, q, 0.5);
+    for (size_t k = 0; k < outline.size(); ++k) {
+      const Point2& a = outline[k];
+      const Point2& b = outline[(k + 1) % outline.size()];
+      if (PointOnSegment(mid, a, b)) {
+        free[i] = RefOf(outline, p).has_value() && RefOf(outline, q).has_value();
+        break;
+      }
     }
   }
-  if (allCoplanar) {
+  return free;
+}
+
+// ─── DetectContact ──────────────────────────────────────────────────────────
+
+struct FoundRegion {
+  Point2 aStart2D;  // A-panel frame (== A's flat frame F), A's forward-walk order
+  Point2 aEnd2D;
+  Point2 bStartLocal;  // B's flat frame: B's point at A's END (opposite order)
+  Point2 bEndLocal;    // B's point at A's START
+  double lengthMm = 0.0;
+  bool flipped = false;  // B walks the seam the same way as A (B's normal reversed)
+};
+
+// One (panelA, panelB) pair. Transforms B's panel ring into A's panel frame,
+// finds each straight run of B's FREE edges lying on A's panel plane, and
+// matches it against A's FREE edges collinear with it. Each seam end is the
+// INNER corner — the one both parts reach. The other part's closest vertex to
+// that corner (3D distance), if any lies within kMergeContactToleranceMm, is
+// the same physical corner, so each side keeps its own exact vertex.
+// Otherwise the other part gets that corner's position on its own real edge.
+void DetectContactForPanelPair(const std::vector<Point2>& ringA, const std::vector<bool>& freeA,
+                                const Transform3& poseA, const std::vector<Point2>& ringB,
+                                const std::vector<bool>& freeB, const Transform3& poseB,
+                                std::vector<FoundRegion>& outFound, bool& outCoplanar) {
+  const size_t n = ringA.size();
+  const size_t m = ringB.size();
+
+  const Transform3 bToA = poseA.Inverse().Compose(poseB);
+  std::vector<Point3> bInA(m);
+  for (size_t i = 0; i < m; ++i) bInA[i] = bToA.Apply({ringB[i].x, ringB[i].y, 0.0});
+
+  std::vector<bool> onPlane(m);
+  bool allOnPlane = true;
+  for (size_t i = 0; i < m; ++i) {
+    onPlane[i] = std::fabs(bInA[i].z) <= kMergeContactToleranceMm;
+    allOnPlane = allOnPlane && onPlane[i];
+  }
+  if (allOnPlane) {
     outCoplanar = true;
     return;
   }
 
-  // Group B's boundary into maximal runs of consecutive vertices lying (both
-  // endpoints of each edge) within tolerance of A's z=0 plane — each run is a
-  // candidate seam: a real physical panel touches another along a run of its
-  // OWN boundary vertices sitting exactly on the fold line, by construction
-  // (authored or STEP-imported), not merely crossing it at an isolated point
-  // (a crossing with no real run alongside it is a genuine non-touch, not a
-  // seam — same "positive-length overlap vs single-point touch" distinction
-  // this module's own SegmentsBadOverlap already relies on elsewhere).
-  std::vector<bool> zZero(m);
-  for (size_t i = 0; i < m; ++i) zZero[i] = std::fabs(bInA[i].z) <= kMergeContactToleranceMm;
-  std::vector<bool> edgeIsFlat(m);
-  for (size_t i = 0; i < m; ++i) edgeIsFlat[i] = zZero[i] && zZero[(i + 1) % m];
+  std::vector<bool> edgeOnPlane(m);
+  for (size_t i = 0; i < m; ++i) edgeOnPlane[i] = freeB[i] && onPlane[i] && onPlane[(i + 1) % m];
 
-  std::vector<std::pair<size_t, size_t>> runs;  // (startVertex, endVertex), walking B forward
-  {
-    size_t breakAt = m;
-    for (size_t i = 0; i < m; ++i) {
-      if (!edgeIsFlat[i]) {
-        breakAt = i;
-        break;
-      }
+  // Some vertex is off the plane, so some edge is not on it: start the walk
+  // just after one, so no run wraps across the walk's own start.
+  size_t start = 0;
+  while (edgeOnPlane[start]) ++start;
+  std::vector<std::pair<size_t, size_t>> runs;  // (first vertex, last vertex) walking B forward
+  for (size_t step = 1; step <= m;) {
+    const size_t i = (start + step) % m;
+    if (!edgeOnPlane[i]) {
+      ++step;
+      continue;
     }
-    if (breakAt == m) {
-      // Every edge is flat — B's boundary never leaves A's plane, yet not
-      // ALL of B's vertices were flat (else allCoplanar above would have
-      // caught it) — a self-contradiction given edgeIsFlat[i] requires BOTH
-      // endpoints flat for every i. Defensive only; cannot occur.
-      runs.push_back({0, m - 1});
-    } else {
-      size_t i = (breakAt + 1) % m;
-      while (i != breakAt) {
-        if (edgeIsFlat[i]) {
-          size_t runStart = i;
-          size_t runEnd = (i + 1) % m;
-          while (edgeIsFlat[runEnd]) {
-            runEnd = (runEnd + 1) % m;
-            i = (i + 1) % m;
-          }
-          runs.push_back({runStart, runEnd});
-          i = (i + 1) % m;
-        } else {
-          i = (i + 1) % m;
+    size_t last = i;
+    size_t edges = 0;
+    while (edgeOnPlane[(i + edges) % m]) {
+      ++edges;
+      last = (i + edges) % m;
+    }
+    runs.push_back({i, last});
+    step += edges;
+  }
+
+  // A seam is a straight line: split each on-plane run wherever it turns a
+  // corner (a vertex farther than the tolerance from the line so far).
+  auto xyB = [&](size_t k) { return Point2{bInA[k].x, bInA[k].y}; };
+  std::vector<std::pair<size_t, size_t>> straightRuns;
+  for (const auto& [r0, r1] : runs) {
+    size_t s = r0;
+    while (s != r1) {
+      size_t e = (s + 1) % m;
+      while (e != r1) {
+        const size_t next = (e + 1) % m;
+        const Point2 d = Sub2(xyB(next), xyB(s));
+        const double len = Length2(d);
+        bool straight = len > kExactMatchEpsilonMm;
+        for (size_t k = (s + 1) % m; straight && k != next; k = (k + 1) % m) {
+          straight = std::fabs(Cross2(d, Sub2(xyB(k), xyB(s)))) / len <= kMergeContactToleranceMm;
         }
+        if (!straight) break;
+        e = next;
       }
+      straightRuns.push_back({s, e});
+      s = e;
     }
   }
 
-  std::vector<FoundRegion> found;
-  for (const auto& run : runs) {
-    const Point2 runStart2D{bInA[run.first].x, bInA[run.first].y};
-    const Point2 runEnd2D{bInA[run.second].x, bInA[run.second].y};
-    const Point2 runDirRaw = Sub2(runEnd2D, runStart2D);
-    const double runLen = Length2(runDirRaw);
-    if (runLen < 1e-9) continue;  // degenerate (zero-length) run — not a real seam
-    const Point2 runDir{runDirRaw.x / runLen, runDirRaw.y / runLen};
+  for (const auto& [r0, r1] : straightRuns) {
+    const Point2 runStart = xyB(r0);
+    const Point2 runEnd = xyB(r1);
+    const double runLen = Length2(Sub2(runEnd, runStart));
+    if (runLen <= kExactMatchEpsilonMm) continue;
+    const Point2 runDir{(runEnd.x - runStart.x) / runLen, (runEnd.y - runStart.y) / runLen};
+    auto along = [&](const Point2& p) { return Dot2(Sub2(p, runStart), runDir); };
+    auto offLine = [&](const Point2& p) { return std::fabs(Cross2(runDir, Sub2(p, runStart))); };
 
-    // Accumulate A's own boundary coverage along this run's infinite line, as
-    // a 1D interval in the run's own [0, runLen] parametrization (a direction
-    // arbitrarily tied to B's own forward walk — NOT assumed to agree with
-    // A's own forward walk direction on this same physical line; the two
-    // CCW polygons meeting here traverse their shared boundary in OPPOSITE
-    // senses precisely when the seam is real, so they generally disagree —
-    // aForwardIsIncreasingT (below) resolves which is which).
+    // A's free edges collinear with the run and overlapping it, grouped by
+    // which way A walks them. Two CCW outlines sharing a seam walk it in
+    // opposite directions; A walking WITH B's run means B's sheet normal is
+    // reversed relative to A there (a flipped seam) — still a real contact.
+    struct Cover {
+      size_t edge;
+      double t1, t2;  // along-run params of ringA[edge], ringA[edge+1]
+    };
+    std::vector<Cover> againstRun, withRun;
+    for (size_t i = 0; i < n; ++i) {
+      if (!freeA[i]) continue;
+      const Point2& a1 = ringA[i];
+      const Point2& a2 = ringA[(i + 1) % n];
+      if (offLine(a1) > kMergeContactToleranceMm || offLine(a2) > kMergeContactToleranceMm) continue;
+      const double t1 = along(a1);
+      const double t2 = along(a2);
+      const double overlap = std::min(std::max(t1, t2), runLen) - std::max(std::min(t1, t2), 0.0);
+      if (overlap <= kExactMatchEpsilonMm) continue;
+      (t2 < t1 ? againstRun : withRun).push_back({i, t1, t2});
+    }
+
+    for (const bool flipped : {false, true}) {
+    const std::vector<Cover>& covers = flipped ? withRun : againstRun;
+    if (covers.empty()) continue;
+
     double aLo = std::numeric_limits<double>::infinity();
     double aHi = -std::numeric_limits<double>::infinity();
-    // The EXACT A-outline vertex that set aLo/aHi (bit-identical to
-    // outlineA's own stored data — never recomputed) — used below instead of
-    // reconstructing the point via a second, independent interpolation path,
-    // which would only agree with A's own stored value up to floating noise
-    // and (for real STEP-derived coordinates) real import-noise at the
-    // millimeter scale, not float epsilon (confirmed live against
-    // unequal_leg_bracket_90deg.stp: reconstructing via lerp caused
-    // ReconcileOutlines' own vertex-resolution to spuriously miss the exact
-    // A vertex it should have reused).
-    Point2 aLoPoint{};
-    Point2 aHiPoint{};
-    // A's OWN line (origin + direction, from whichever real A edge first
-    // qualified) — real STEP-reconciled geometry means A's true edge and B's
-    // true edge, even at the same physical seam, can genuinely disagree by
-    // up to kMergeContactToleranceMm (the same "sharp-corner footprint"
-    // precedent numerical-policy.ts's own MERGE_EDGE_ALIGNMENT_TOLERANCE_MM
-    // documents, and FuseCoplanarParts' own gap-closing already acts on) —
-    // when B's own run boundary is what limits the overlap (loClampedByB/
-    // hiClampedByRun below), the output point must be B's boundary point
-    // PROJECTED onto A's true line, never B's raw (possibly ~mm-off)
-    // coordinate used as if it were already exactly on A's boundary
-    // (confirmed live: unequal_leg_bracket_90deg.stp's real ~1mm A/B
-    // disagreement produced an aRunStart that matched neither part's actual
-    // stored edge before this fix).
-    Point2 aLineOrigin{};
-    Point2 aLineDirHat{};
-    bool anyACoverage = false;
-    bool aForwardIsIncreasingT = true;
-    // The edge that sets aLineOrigin/aLineDirHat is chosen by which
-    // qualifying edge has the GREATEST positive-length overlap with this
-    // run's own [0, runLen] window — never simply "whichever edge is
-    // first in outlineA's own array order" (the earlier design). A
-    // completely different physical feature (e.g. a fused protrusion's
-    // own edge) can pass the perpendicular-distance check by coincidence
-    // whenever it happens to run near-parallel to the seam's line,
-    // without actually being part of the same contact run — confirmed
-    // live (testcube.step, a fused Protrusion2): a wing edge overlapped
-    // this run's window by only 0.05mm (real STEP-fixture noise, not a
-    // rejection-worthy amount) while the TRUE seam edge overlapped it by
-    // the full ~150mm run length. Under "first found," the wing edge
-    // (checked first in array order) won by accident, and B's boundary
-    // got projected onto its own slightly-tilted line instead of the
-    // true seam's, landing the detected contact interval ~0.05mm off the
-    // panel's real corner and producing a spurious
-    // GE_MERGE_SELF_INTERSECTION. "Largest overlap wins" picks whichever
-    // edge is actually, overwhelmingly responsible for this run's A-side
-    // coverage, which a coincidental sliver from an unrelated edge can
-    // never outweigh.
-    double bestLineOverlapMm = 0.0;
-    for (size_t i = 0; i < n; ++i) {
-      const Point2& a1 = outlineA[i];
-      const Point2& a2 = outlineA[(i + 1) % n];
-      // Both endpoints must sit on the run's infinite line (perpendicular
-      // distance within tolerance) for this A edge to count as collinear
-      // coverage of the same seam.
-      auto perpDist = [&](const Point2& p) {
-        const Point2 v = Sub2(p, runStart2D);
-        const double along = Dot2(v, runDir);
-        const Point2 onLine{runStart2D.x + runDir.x * along, runStart2D.y + runDir.y * along};
-        return Length2(Sub2(onLine, p));
-      };
-      if (perpDist(a1) > kMergeContactToleranceMm || perpDist(a2) > kMergeContactToleranceMm) continue;
-      const double t1 = Dot2(Sub2(a1, runStart2D), runDir);
-      const double t2 = Dot2(Sub2(a2, runStart2D), runDir);
-      // This edge's own [t1,t2] extent must have a genuine positive-
-      // length overlap with the run's own [0, runLen] window — an edge
-      // that merely touches or misses that window entirely (its whole
-      // extent on one side) isn't coverage of THIS run at all, the same
-      // "positive-length overlap, not just a touch" distinction
-      // SegmentsBadOverlap (below) already relies on elsewhere.
-      const double edgeLo = std::min(t1, t2);
-      const double edgeHi = std::max(t1, t2);
-      const double coverageOverlap = std::min(edgeHi, runLen) - std::max(edgeLo, 0.0);
-      if (coverageOverlap <= kExactMatchEpsilonMm) continue;
-      if (t1 < aLo) { aLo = t1; aLoPoint = a1; }
-      if (t2 < aLo) { aLo = t2; aLoPoint = a2; }
-      if (t1 > aHi) { aHi = t1; aHiPoint = a1; }
-      if (t2 > aHi) { aHi = t2; aHiPoint = a2; }
-      anyACoverage = true;
-      if (coverageOverlap > bestLineOverlapMm) {
-        // A's own forward walk on THIS edge goes a1 -> a2; record whether
-        // that is increasing or decreasing t, to orient the final output,
-        // and this edge's own true line for the gap-closing projection above.
-        bestLineOverlapMm = coverageOverlap;
-        aForwardIsIncreasingT = t2 > t1;
-        aLineOrigin = a1;
-        const Point2 aDir = Sub2(a2, a1);
-        const double aDirLen = Length2(aDir);
-        aLineDirHat = aDirLen > 1e-9 ? Point2{aDir.x / aDirLen, aDir.y / aDirLen} : runDir;
-      }
+    size_t aLoVertex = 0, aHiVertex = 0;
+    for (const auto& c : covers) {
+      const size_t v1 = c.edge;
+      const size_t v2 = (c.edge + 1) % n;
+      if (c.t1 < aLo) { aLo = c.t1; aLoVertex = v1; }
+      if (c.t2 < aLo) { aLo = c.t2; aLoVertex = v2; }
+      if (c.t1 > aHi) { aHi = c.t1; aHiVertex = v1; }
+      if (c.t2 > aHi) { aHi = c.t2; aHiVertex = v2; }
     }
-    if (!anyACoverage) continue;
 
-    auto projectOntoALine = [&](const Point2& p) {
-      const double along = Dot2(Sub2(p, aLineOrigin), aLineDirHat);
-      return Point2{aLineOrigin.x + aLineDirHat.x * along, aLineOrigin.y + aLineDirHat.y * along};
+    // A's point at along-run param t, on the real A edge containing it.
+    auto aPointAt = [&](double t) -> std::optional<Point2> {
+      for (const auto& c : covers) {
+        const double lo = std::min(c.t1, c.t2);
+        const double hi = std::max(c.t1, c.t2);
+        if (t >= lo - kExactMatchEpsilonMm && t <= hi + kExactMatchEpsilonMm) {
+          return Lerp2(ringA[c.edge], ringA[(c.edge + 1) % n], (t - c.t1) / (c.t2 - c.t1));
+        }
+      }
+      return std::nullopt;
+    };
+    // B's point (in B's own frame) at along-run param t, on the real B edge.
+    auto bPointAt = [&](double t) -> std::optional<Point2> {
+      for (size_t k = r0; k != r1; k = (k + 1) % m) {
+        const size_t k2 = (k + 1) % m;
+        const double tk = along({bInA[k].x, bInA[k].y});
+        const double tk2 = along({bInA[k2].x, bInA[k2].y});
+        if (t >= tk - kExactMatchEpsilonMm && t <= tk2 + kExactMatchEpsilonMm && tk2 > tk) {
+          return Lerp2(ringB[k], ringB[k2], (t - tk) / (tk2 - tk));
+        }
+      }
+      return std::nullopt;
     };
 
-    const bool loClampedByB = aLo <= 0.0;
-    const bool hiClampedByRun = aHi >= runLen;
-    const double overlapLo = std::max(0.0, aLo);
-    const double overlapHi = std::min(runLen, aHi);
-    if (overlapHi - overlapLo <= kExactMatchEpsilonMm) continue;  // no positive-length overlap
+    // Candidate corners on each side, in A's panel frame (3D).
+    std::vector<size_t> bVerts;  // B ring indices along this run
+    for (size_t k = r0;; k = (k + 1) % m) {
+      bVerts.push_back(k);
+      if (k == r1) break;
+    }
+    std::vector<size_t> aVerts;  // A ring indices at the ends of covering edges
+    for (const auto& c : covers) {
+      aVerts.push_back(c.edge);
+      aVerts.push_back((c.edge + 1) % n);
+    }
+    auto aIn = [&](size_t i) { return Point3{ringA[i].x, ringA[i].y, 0.0}; };
+    auto closestWithinTolerance = [&](const std::vector<size_t>& verts, auto&& at,
+                                      const Point3& p) -> std::optional<size_t> {
+      std::optional<size_t> best;
+      double bestDist = kMergeContactToleranceMm;
+      for (size_t v : verts) {
+        const double d = Length3(Sub3(at(v), p));
+        if (d <= bestDist) {
+          bestDist = d;
+          best = v;
+        }
+      }
+      return best;
+    };
 
-    // The lo/hi boundary's own EXACT point on each side — B's own stored
-    // vertex, projected onto A's true line, when the run itself is the
-    // limiting factor; A's own stored vertex when A's material is shorter.
-    // B's own-frame point is always B's stored vertex when the run itself
-    // limits that boundary, otherwise lerped along B's own edge — this side
-    // never needs the gap-closing projection since it's already expressed in
-    // B's own frame by construction.
-    const Point2 loPointA = loClampedByB ? projectOntoALine(runStart2D) : aLoPoint;
-    const Point2 loPointB = loClampedByB ? outlineB[run.first] : Lerp2(outlineB[run.first], outlineB[run.second], overlapLo / runLen);
-    const Point2 hiPointA = hiClampedByRun ? projectOntoALine(runEnd2D) : aHiPoint;
-    const Point2 hiPointB = hiClampedByRun ? outlineB[run.second] : Lerp2(outlineB[run.first], outlineB[run.second], overlapHi / runLen);
+    struct End {
+      Point2 a, b;
+      bool ok = true;
+    };
+    // tA/aVertex: A's outermost covering corner at this end; tB/bVertex:
+    // B's run corner. The inner one (reached by both) is the seam end.
+    auto resolveEnd = [&](double tA, size_t aVertex, double tB, size_t bVertex, bool loEnd) {
+      End e;
+      const bool aInner = loEnd ? tA >= tB : tA <= tB;
+      if (aInner) {
+        e.a = ringA[aVertex];
+        if (auto k = closestWithinTolerance(bVerts, [&](size_t v) { return bInA[v]; }, aIn(aVertex))) {
+          e.b = ringB[*k];
+        } else if (auto b = bPointAt(tA)) {
+          e.b = *b;
+        } else {
+          e.ok = false;
+        }
+      } else {
+        e.b = ringB[bVertex];
+        if (auto k = closestWithinTolerance(aVerts, aIn, bInA[bVertex])) {
+          e.a = ringA[*k];
+        } else if (auto a = aPointAt(tB)) {
+          e.a = *a;
+        } else {
+          e.ok = false;
+        }
+      }
+      return e;
+    };
+    const End lo = resolveEnd(aLo, aLoVertex, 0.0, r0, /*loEnd=*/true);
+    const End hi = resolveEnd(aHi, aHiVertex, runLen, r1, /*loEnd=*/false);
+    // An end over a gap in A's coverage: A doesn't actually reach there.
+    if (!lo.ok || !hi.ok) continue;
+    const double seamLen = Length2(Sub2(hi.a, lo.a));
+    if (seamLen <= kExactMatchEpsilonMm || NearlyEqual2(hi.b, lo.b, kExactMatchEpsilonMm)) continue;
 
-    // tAStart/tAEnd: the interval's endpoints IN A's OWN forward-walk order
-    // (tAStart precedes tAEnd walking A forward) — swapped from lo/hi
-    // whenever A's forward direction runs opposite the run's own
-    // t-parametrization.
-    const Point2& aStartPoint = aForwardIsIncreasingT ? loPointA : hiPointA;
-    const Point2& aEndPoint = aForwardIsIncreasingT ? hiPointA : loPointA;
-    const Point2& bAtAEnd = aForwardIsIncreasingT ? hiPointB : loPointB;
-    const Point2& bAtAStart = aForwardIsIncreasingT ? loPointB : hiPointB;
-
+    // aStart is where A's own walk enters the seam; bStart is B's point at
+    // A's END (the physical correspondence ReconcileOutlines relies on).
     FoundRegion region;
-    region.aStart2D = aStartPoint;
-    region.aEnd2D = aEndPoint;
-    // B's own local point at the SAME physical location as aEnd2D/aStart2D —
-    // T(edgeB0)=edgeA1 means the point ReconcileOutlines will call "edgeB0"
-    // must be B's local point at A's LATER (aEnd2D) position, and "edgeB1" at
-    // A's EARLIER (aStart2D) position (part_merge.hpp's "opposite order" rule).
-    region.bStartLocal = bAtAEnd;
-    region.bEndLocal = bAtAStart;
-    region.lengthMm = overlapHi - overlapLo;
+    const End& aEntry = flipped ? lo : hi;
+    const End& aExit = flipped ? hi : lo;
+    region.aStart2D = aEntry.a;
+    region.aEnd2D = aExit.a;
+    region.bStartLocal = aExit.b;
+    region.bEndLocal = aEntry.b;
+    region.lengthMm = seamLen;
+    region.flipped = flipped;
     outFound.push_back(region);
+    }  // for flipped
   }
 }
 
 }  // namespace
 
-DetectContactResult DetectContact(const std::vector<ContactPanelCandidate>& panelsA,
+DetectContactResult DetectContact(const std::vector<Point2>& outlineA,
+                                   const std::vector<ContactPanelCandidate>& panelsA,
+                                   const std::vector<Point2>& outlineB,
                                    const std::vector<ContactPanelCandidate>& panelsB) {
   DetectContactResult result;
-  if (panelsA.empty() || panelsB.empty()) {
+  if (outlineA.size() < 3 || outlineB.size() < 3 || panelsA.empty() || panelsB.empty()) {
     result.errorCode = MergeErrorCode::kInternalInconsistency;
-    result.message = "both parts must have at least one panel candidate";
+    result.message = "both parts need an outline of at least 3 vertices and at least one panel";
     return result;
   }
-  for (const auto& panel : panelsA) {
-    if (panel.outline.size() < 3) {
-      result.errorCode = MergeErrorCode::kInternalInconsistency;
-      result.message = "panel " + panel.regionPanelId + " (part A) outline must have at least 3 vertices";
-      return result;
+  auto freeEdgesOf = [&](const std::vector<ContactPanelCandidate>& panels, const std::vector<Point2>& outline,
+                         const char* side, std::vector<std::vector<bool>>& out) -> bool {
+    for (const auto& panel : panels) {
+      if (panel.outline.size() < 3) {
+        result.errorCode = MergeErrorCode::kInternalInconsistency;
+        result.message = std::string("panel ") + panel.regionPanelId + " (part " + side +
+                         ") outline must have at least 3 vertices";
+        return false;
+      }
+      out.push_back(FreeEdges(panel.outline, outline));
     }
-  }
-  for (const auto& panel : panelsB) {
-    if (panel.outline.size() < 3) {
-      result.errorCode = MergeErrorCode::kInternalInconsistency;
-      result.message = "panel " + panel.regionPanelId + " (part B) outline must have at least 3 vertices";
-      return result;
-    }
-  }
+    return true;
+  };
+  std::vector<std::vector<bool>> freeA, freeB;
+  if (!freeEdgesOf(panelsA, outlineA, "A", freeA) || !freeEdgesOf(panelsB, outlineB, "B", freeB)) return result;
 
-  // A real assembly can have multiple simultaneous genuine contacts (two
-  // different panel pairs each touching along their own seam) — every
-  // (panelA, panelB) pair is tested independently and EVERY real region any
-  // pair finds is kept (TASK_SPEC.md §8.3 phase 2: no longer picking one
-  // "best" region here — that was hiding real candidates from the caller,
-  // never DetectContact's own decision to make, TASK_SPEC.md F1/F2).
+  // B's outline as FlipPart (manufacturing_graph_evaluator.hpp) re-expresses
+  // it: reversed and mirrored, so vertex i becomes vertex n-1-i.
+  const size_t nB = outlineB.size();
+  std::vector<Point2> flippedOutlineB(outlineB.rbegin(), outlineB.rend());
+  for (auto& p : flippedOutlineB) p.x = -p.x;
+  auto flippedRef = [nB](const OutlineRef& r) {
+    const size_t e = static_cast<size_t>(r.edgeIndex);
+    if (r.t == 0.0) return OutlineRef{static_cast<int>(nB - 1 - e), 0.0};
+    return OutlineRef{static_cast<int>((2 * nB - 2 - e) % nB), 1.0 - r.t};
+  };
+
   bool sawCoplanarPair = false;
-  for (const auto& panelA : panelsA) {
-    for (const auto& panelB : panelsB) {
+  for (size_t ia = 0; ia < panelsA.size(); ++ia) {
+    const auto& panelA = panelsA[ia];
+    for (size_t ib = 0; ib < panelsB.size(); ++ib) {
+      const auto& panelB = panelsB[ib];
       std::vector<FoundRegion> pairFound;
       bool pairCoplanar = false;
-      DetectContactForPanelPair(panelA.outline, panelA.pose, panelB.outline, panelB.pose, pairFound,
-                                 pairCoplanar);
+      DetectContactForPanelPair(panelA.outline, freeA[ia], panelA.pose, panelB.outline, freeB[ib], panelB.pose,
+                                 pairFound, pairCoplanar);
       if (pairCoplanar) sawCoplanarPair = true;
 
       for (const auto& fr : pairFound) {
-        // Signed dihedral angle: the rotation, about axis (hingeB_world -
-        // hingeA_world) — the SAME axis convention manufacturing_graph_
-        // evaluator.cc's own pose walk uses (RotationAboutAxis(hingeAWorld,
-        // axis, angleDeg)) — that carries THIS PAIR's A-panel plane normal
-        // onto its B-panel plane normal. Using each panel's own real pose
-        // (never a part-level root anchor) is exactly the fix this
-        // multi-panel generalization exists for — a non-root panel's true
-        // plane normal only comes from its own cascaded pose.
-        //
-        // hingeA/hingeB here MUST match the REAL BendRow's own hingeA/hingeB
-        // — ReconcileOutlines sets bend.hingeA = edgeA1 (= aRunEnd) and
-        // bend.hingeB = edgeA0 (= aRunStart), reversed from aRunStart/aRunEnd's
-        // own order (part_merge.hpp's "opposite order" rule) — using
-        // aRunStart/aRunEnd directly here would compute the angle about the
-        // OPPOSITE axis direction, silently flipping mountain/valley on every
-        // fold (confirmed live: this exact bug against
-        // unequal_leg_bracket_90deg.stp, a ~30-100mm systematic bbox error
-        // matching the wrong-fold-direction signature exactly).
+        // Signed dihedral angle about the REAL bend's hinge axis (hingeA =
+        // aRunEnd -> hingeB = aRunStart, ReconcileOutlines' reversed order),
+        // the axis convention Evaluate's pose walk uses, from THIS pair's own
+        // panel poses. For a flipped seam, B's normal as FlipPart leaves it
+        // (reversed) — the fold the merge will actually create.
         const Point3 hingeAWorld = panelA.pose.Apply({fr.aEnd2D.x, fr.aEnd2D.y, 0.0});
         const Point3 hingeBWorld = panelA.pose.Apply({fr.aStart2D.x, fr.aStart2D.y, 0.0});
         Point3 axis = Sub3(hingeBWorld, hingeAWorld);
         const double axisLen = Length3(axis);
-        if (axisLen < 1e-9) continue;  // degenerate (zero-length) interval — cannot occur, defensive only
         axis = {axis.x / axisLen, axis.y / axisLen, axis.z / axisLen};
-
         const Point3 nA = panelA.pose.ApplyVector({0.0, 0.0, 1.0});
-        const Point3 nB = panelB.pose.ApplyVector({0.0, 0.0, 1.0});
-        const double angleRad = std::atan2(Dot3(Cross3(nA, nB), axis), Dot3(nA, nB));
-        const double angleDeg = angleRad * 180.0 / kPi;
-
-        // F7: a genuinely coplanar contact (angle ~= 0) is fuse_bodies' job
-        // (a flush absorb), not a fold — excluded from `regions`, same as
-        // the whole-pair coplanar check above, not a whole-call abort.
+        const double sign = fr.flipped ? -1.0 : 1.0;
+        const Point3 nB = panelB.pose.ApplyVector({0.0, 0.0, sign});
+        const double angleDeg = std::atan2(Dot3(Cross3(nA, nB), axis), Dot3(nA, nB)) * 180.0 / kPi;
         if (std::fabs(angleDeg) < kCoplanarAngleEpsilonDeg) {
           sawCoplanarPair = true;
           continue;
         }
 
+        const auto aStart = RefOf(outlineA, fr.aStart2D);
+        const auto aEnd = RefOf(outlineA, fr.aEnd2D);
+        const auto bStart = RefOf(outlineB, fr.bStartLocal);
+        const auto bEnd = RefOf(outlineB, fr.bEndLocal);
+        if (!aStart || !aEnd || !bStart || !bEnd) {
+          result.regions.clear();
+          result.errorCode = MergeErrorCode::kInternalInconsistency;
+          result.message = "a seam end found on a free panel edge of " + panelA.regionPanelId + "/" +
+                           panelB.regionPanelId + " is not on its part's outline";
+          return result;
+        }
+
         ContactRegion region;
-        // aStart2D/aEnd2D are already in A's own forward-walk order (the
-        // aForwardIsIncreasingT resolution inside DetectContactForPanelPair).
-        // bStartLocal/bEndLocal are already the physically-corresponding B
-        // points in the "opposite order" ReconcileOutlines' T(edgeB0)=edgeA1
-        // convention requires (part_merge.hpp) — bStartLocal sits at
-        // aEnd2D's location, bEndLocal at aStart2D's.
-        region.aRunStart = fr.aStart2D;
-        region.aRunEnd = fr.aEnd2D;
-        region.bRunStart = fr.bStartLocal;
-        region.bRunEnd = fr.bEndLocal;
+        region.flipped = fr.flipped;
+        region.aStart = *aStart;
+        region.aEnd = *aEnd;
+        region.bStart = fr.flipped ? flippedRef(*bStart) : *bStart;
+        region.bEnd = fr.flipped ? flippedRef(*bEnd) : *bEnd;
+        const std::vector<Point2>& bOutline = fr.flipped ? flippedOutlineB : outlineB;
+        region.aRunStart = RefPoint(outlineA, region.aStart);
+        region.aRunEnd = RefPoint(outlineA, region.aEnd);
+        region.bRunStart = RefPoint(bOutline, region.bStart);
+        region.bRunEnd = RefPoint(bOutline, region.bEnd);
         region.angleDeg = angleDeg;
         region.lengthMm = fr.lengthMm;
         region.regionPanelIdA = panelA.regionPanelId;
@@ -488,13 +445,11 @@ DetectContactResult DetectContact(const std::vector<ContactPanelCandidate>& pane
                         "this is a flush absorb (fuse_bodies), not a fold";
     } else {
       result.errorCode = MergeErrorCode::kNoContact;
-      result.message =
-          "no real boundary contact found between the two parts' own anchors, within " +
-          std::to_string(kMergeContactToleranceMm) + "mm";
+      result.message = "no real boundary contact found between the two parts' panels, within " +
+                        std::to_string(kMergeContactToleranceMm) + "mm";
     }
     return result;
   }
-
   result.ok = true;
   return result;
 }
@@ -530,13 +485,9 @@ struct Rigid2 {
   }
 };
 
-// True if segments (p1,p2) and (p3,p4) meet anywhere OTHER than a single
-// point at one of the two designated splice vertices (allowed0/allowed1 —
-// edgeA0/edgeA1). A proper crossing is always bad; a collinear overlap of
-// positive length is always bad EVEN IF it touches a splice vertex too
-// (adjacent edges at a splice vertex must diverge immediately, not run on
-// top of each other); touching at exactly one point is only fine if that
-// point is a splice vertex.
+// True if segments (p1,p2) and (p3,p4) meet anywhere other than a single
+// point at one of the two splice vertices. A proper crossing, or a collinear
+// overlap of positive length, is always bad.
 bool SegmentsBadOverlap(const Point2& p1, const Point2& p2, const Point2& p3, const Point2& p4,
                          const Point2& allowed0, const Point2& allowed1) {
   constexpr double kOrientEps = 1e-9;
@@ -547,12 +498,9 @@ bool SegmentsBadOverlap(const Point2& p1, const Point2& p2, const Point2& p3, co
 
   const bool collinear = std::fabs(d1) < kOrientEps && std::fabs(d2) < kOrientEps;
   if (!collinear) {
-    // General position: a proper interior crossing is always bad.
     if (((d1 > 0) != (d2 > 0)) && d1 != 0 && d2 != 0 && ((d3 > 0) != (d4 > 0)) && d3 != 0 && d4 != 0) {
       return true;
     }
-    // Otherwise check for a touch (one segment's endpoint landing on the
-    // other) — bad unless it's exactly a designated splice vertex.
     if (std::fabs(d1) < kOrientEps && OnSegmentInclusive(p1, p2, p3) && !NearlyOnAllowedPoint(p3, allowed0, allowed1)) return true;
     if (std::fabs(d2) < kOrientEps && OnSegmentInclusive(p1, p2, p4) && !NearlyOnAllowedPoint(p4, allowed0, allowed1)) return true;
     if (std::fabs(d3) < kOrientEps && OnSegmentInclusive(p3, p4, p1) && !NearlyOnAllowedPoint(p1, allowed0, allowed1)) return true;
@@ -560,189 +508,136 @@ bool SegmentsBadOverlap(const Point2& p1, const Point2& p2, const Point2& p3, co
     return false;
   }
 
-  // Collinear: project all 4 points onto (p1,p2)'s own direction and compare
-  // 1D intervals — this is the only reliable way to distinguish "overlaps
-  // along a positive length" (always bad) from "touches at one point"
-  // (fine only at a splice vertex).
   const Point2 dir = Sub2(p2, p1);
   const double dirLen = Length2(dir);
   if (dirLen < 1e-9) return false;
   const Point2 dHat{dir.x / dirLen, dir.y / dirLen};
-  const double t1 = 0.0;
-  const double t2 = dirLen;
   const double t3 = Dot2(Sub2(p3, p1), dHat);
   const double t4 = Dot2(Sub2(p4, p1), dHat);
-  const double lo1 = std::min(t1, t2), hi1 = std::max(t1, t2);
-  const double lo2 = std::min(t3, t4), hi2 = std::max(t3, t4);
-  const double overlapLo = std::max(lo1, lo2);
-  const double overlapHi = std::min(hi1, hi2);
-  if (overlapHi - overlapLo < -kExactMatchEpsilonMm) return false;  // no overlap at all
-  if (overlapHi - overlapLo > kExactMatchEpsilonMm) return true;    // positive-length overlap
-  // Touches at (approximately) a single point — fine only at a splice vertex.
+  const double overlapLo = std::max(0.0, std::min(t3, t4));
+  const double overlapHi = std::min(dirLen, std::max(t3, t4));
+  if (overlapHi - overlapLo < -kExactMatchEpsilonMm) return false;
+  if (overlapHi - overlapLo > kExactMatchEpsilonMm) return true;
   Point2 touchPoint{p1.x + dHat.x * overlapLo, p1.y + dHat.y * overlapLo};
   return !NearlyOnAllowedPoint(touchPoint, allowed0, allowed1);
 }
 
+bool ValidRef(const OutlineRef& r, size_t n) {
+  return r.edgeIndex >= 0 && static_cast<size_t>(r.edgeIndex) < n && r.t >= 0.0 && r.t < 1.0;
+}
+
+// `outline` with any mid-edge refs' points inserted; idx0/idx1 are the two
+// refs' vertex indices in the returned ring.
+std::vector<Point2> WithRefVertices(const std::vector<Point2>& outline, const OutlineRef& r0,
+                                    const OutlineRef& r1, size_t& idx0, size_t& idx1) {
+  std::vector<Point2> out;
+  out.reserve(outline.size() + 2);
+  for (size_t e = 0; e < outline.size(); ++e) {
+    out.push_back(outline[e]);
+    if (static_cast<size_t>(r0.edgeIndex) == e && r0.t == 0.0) idx0 = out.size() - 1;
+    if (static_cast<size_t>(r1.edgeIndex) == e && r1.t == 0.0) idx1 = out.size() - 1;
+    std::vector<std::pair<double, int>> mids;
+    if (static_cast<size_t>(r0.edgeIndex) == e && r0.t > 0.0) mids.push_back({r0.t, 0});
+    if (static_cast<size_t>(r1.edgeIndex) == e && r1.t > 0.0) mids.push_back({r1.t, 1});
+    std::sort(mids.begin(), mids.end());
+    for (const auto& [t, which] : mids) {
+      out.push_back(Lerp2(outline[e], outline[(e + 1) % outline.size()], t));
+      (which == 0 ? idx0 : idx1) = out.size() - 1;
+    }
+  }
+  return out;
+}
+
 }  // namespace
 
-ReconcileOutlinesResult ReconcileOutlines(const std::vector<Point2>& outlineAIn, const Point2& edgeA0,
-                                           const Point2& edgeA1, const std::vector<Point2>& outlineBIn,
-                                           const Point2& edgeB0, const Point2& edgeB1) {
+ReconcileOutlinesResult ReconcileOutlines(const std::vector<Point2>& outlineAIn, const OutlineRef& a0,
+                                           const OutlineRef& a1, const std::vector<Point2>& outlineBIn,
+                                           const OutlineRef& b0, const OutlineRef& b1,
+                                           const std::vector<Point2>& carryB) {
   ReconcileOutlinesResult result;
-
-  std::vector<Point2> outlineA = outlineAIn;
-  std::vector<Point2> outlineB = outlineBIn;
-
-  // Insert (or find) all four points first — an insertion can shift the
-  // index of a point already located earlier in this same outline, so every
-  // index is re-resolved (a cheap find-only scan, since all four points
-  // already exist by then) after all insertions are done, rather than
-  // trusted from its own first call.
-  //
-  // vertexTolMm stays kExactMatchEpsilonMm (tight): DetectContact passes an
-  // EXACT copy of the original outline vertex whenever the boundary genuinely
-  // IS that vertex — a loose match here would wrongly snap a real, distinct
-  // nearby feature onto it instead (confirmed live on a synthetic asymmetric-
-  // seam fixture: an unrelated corner 1mm away was wrongly reused). edgeTolMm
-  // uses kMergeContactToleranceMm: the mid-edge insertion path's point IS
-  // only known to that precision (real STEP-derived coordinates carry real
-  // import-noise at this scale, numerical-policy.ts's own
-  // MERGE_EDGE_ALIGNMENT_TOLERANCE_MM precedent) — confirmed live against
-  // unequal_leg_bracket_90deg.stp needing this slack.
-  if (LocateOrInsertVertex(outlineA, edgeA0, kExactMatchEpsilonMm, kMergeContactToleranceMm) < 0 ||
-      LocateOrInsertVertex(outlineA, edgeA1, kExactMatchEpsilonMm, kMergeContactToleranceMm) < 0 ||
-      LocateOrInsertVertex(outlineB, edgeB0, kExactMatchEpsilonMm, kMergeContactToleranceMm) < 0 ||
-      LocateOrInsertVertex(outlineB, edgeB1, kExactMatchEpsilonMm, kMergeContactToleranceMm) < 0) {
+  if (!ValidRef(a0, outlineAIn.size()) || !ValidRef(a1, outlineAIn.size()) || !ValidRef(b0, outlineBIn.size()) ||
+      !ValidRef(b1, outlineBIn.size())) {
     result.errorCode = MergeErrorCode::kInternalInconsistency;
-    result.message = "detected contact points do not lie on their own outline's boundary";
+    result.message = "seam reference out of range for its outline";
     return result;
   }
+
+  size_t kFinalU = 0, a1IdxU = 0, jFinalU = 0, b1IdxU = 0;
+  const std::vector<Point2> outlineA = WithRefVertices(outlineAIn, a0, a1, kFinalU, a1IdxU);
+  const std::vector<Point2> outlineB = WithRefVertices(outlineBIn, b0, b1, jFinalU, b1IdxU);
   const size_t n = outlineA.size();
   const size_t m = outlineB.size();
-  const int kFinal = LocateOrInsertVertex(outlineA, edgeA0, kExactMatchEpsilonMm, kMergeContactToleranceMm);
-  const int a1Idx = LocateOrInsertVertex(outlineA, edgeA1, kExactMatchEpsilonMm, kMergeContactToleranceMm);
-  const int jFinal = LocateOrInsertVertex(outlineB, edgeB0, kExactMatchEpsilonMm, kMergeContactToleranceMm);
-  const int b1Idx = LocateOrInsertVertex(outlineB, edgeB1, kExactMatchEpsilonMm, kMergeContactToleranceMm);
+  if (kFinalU == a1IdxU || jFinalU == b1IdxU) {
+    result.errorCode = MergeErrorCode::kInternalInconsistency;
+    result.message = "degenerate (zero-length) seam";
+    return result;
+  }
+  const Point2 edgeA0 = outlineA[kFinalU];
+  const Point2 edgeA1 = outlineA[a1IdxU];
+  const Point2 edgeB0 = outlineB[jFinalU];
+  const Point2 edgeB1 = outlineB[b1IdxU];
 
-  // edgeA0/edgeA1 (and edgeB0/edgeB1) need not be literally adjacent: a real
-  // outline can carry extra vertices strictly between them — a collinear
-  // subdivision point (e.g. a relief-cut midpoint) or a genuine small corner
-  // (e.g. a staggered-seam step left over from an earlier fuse_bodies union)
-  // — and both are equally real material sitting exactly on the interval
-  // DetectContact identified as the shared seam. Whatever lies strictly
-  // between the two resolved indices is, by construction, part of that
-  // vanishing seam (about to be replaced by the fold), not a reason to
-  // reject the merge. See the combining-loop split below (kFinal/a1Idx
-  // ordering) and inSeamArc, which every downstream use of
-  // kFinal/a1Idx/jFinal/b1Idx must respect instead of assuming a fixed +1
-  // offset — an earlier attempt at this generalization used a single
-  // `for (i = a1Idx; i < n; ++i)` loop that assumed a1Idx always comes AFTER
-  // kFinal in array order; when the seam instead wraps across the outline's
-  // own physical start/end boundary (kFinal resolves near n-1, a1Idx
-  // resolves near 0 — exactly what LocateOrInsertVertex's own
-  // insertAt==0 -> push_back branch produces), that assumption is false and
-  // the loop re-walks part of A's outline a second time, corrupting the
-  // result with duplicate vertices (confirmed live: reproduced a 17-vertex
-  // outline that was literally A's 5 vertices emitted twice, which the
-  // downstream region-panel evaluator turned into a visible extra panel).
-  // The two-branch split below handles both orderings explicitly instead of
-  // assuming one.
+  // Each seam end may be a shared corner that A and B place up to
+  // kMergeContactToleranceMm apart, so the two seam lengths can differ by at
+  // most twice that; anything more means the refs don't describe one seam.
   const Point2 dA = Sub2(edgeA1, edgeA0);
   const Point2 dB = Sub2(edgeB1, edgeB0);
   const double lenA = Length2(dA);
   const double lenB = Length2(dB);
-  if (std::fabs(lenA - lenB) > kMergeContactToleranceMm) {
-    // The two lengths are derived from the SAME physical interval (via
-    // DetectContact) through two independent rigid maps — any real gap here
-    // is a bug in this module, not a caller-triggerable mismatch (unlike the
-    // old caller-supplied-edges design, TASK_SPEC.md F3 explicitly supports
-    // unequal edge lengths at the OUTLINE level; this checks the two
-    // sub-interval lengths, which must always agree).
+  if (std::fabs(lenA - lenB) > 2.0 * kMergeContactToleranceMm) {
     result.errorCode = MergeErrorCode::kInternalInconsistency;
-    result.message = "resolved seam lengths disagree between A and B (" + std::to_string(lenA) + "mm vs " +
+    result.message = "seam lengths disagree between A and B (" + std::to_string(lenA) + "mm vs " +
                       std::to_string(lenB) + "mm)";
     return result;
   }
-  if (lenA < 1e-9) {
-    result.errorCode = MergeErrorCode::kInternalInconsistency;
-    result.message = "degenerate (zero-length) seam edge";
-    return result;
-  }
 
-  // T(edgeB0) = edgeA1, T(edgeB1) = edgeA0 — reversed correspondence, the one
-  // rule that makes two CCW polygons share a boundary edge validly (see
-  // part_merge.hpp).
-  const double thetaB = std::atan2(dB.y, dB.x);
-  const double thetaTarget = std::atan2(-dA.y, -dA.x);
-  const double rot = thetaTarget - thetaB;
+  // T(edgeB0) = edgeA1, T(edgeB1) = edgeA0 — two CCW polygons share a
+  // boundary edge in opposite directions.
+  const double rot = std::atan2(-dA.y, -dA.x) - std::atan2(dB.y, dB.x);
   Rigid2 xform;
   xform.cosT = std::cos(rot);
   xform.sinT = std::sin(rot);
   xform.pivot = edgeB0;
   xform.offset = edgeA1;
 
-  std::vector<Point2> transformedB;
-  transformedB.reserve(m);
-  for (const auto& v : outlineB) transformedB.push_back(xform.Apply(v));
+  // B as it lands in the combined outline: its two seam corners ARE A's.
+  std::vector<Point2> placedB;
+  placedB.reserve(m);
+  for (const auto& v : outlineB) placedB.push_back(xform.Apply(v));
+  placedB[jFinalU] = edgeA1;
+  placedB[b1IdxU] = edgeA0;
 
-  const size_t kFinalU = static_cast<size_t>(kFinal);
-  const size_t a1IdxU = static_cast<size_t>(a1Idx);
-  const size_t jFinalU = static_cast<size_t>(jFinal);
-  const size_t b1IdxU = static_cast<size_t>(b1Idx);
-
-  // True if walking forward (cyclically, mod `count`) from `start`, index i
-  // is reached strictly before `end` — i.e. i is one of the (possibly zero)
-  // vertices consumed by the vanishing seam between a resolved contact pair.
   auto inSeamArc = [](size_t i, size_t start, size_t end, size_t count) {
     return ((i + count - start) % count) < ((end + count - start) % count);
   };
 
+  // A's kept material runs from a1Idx forward to kFinal; B's from b1Idx
+  // forward to jFinal. Copy each exactly once, keeping A's own vertex order
+  // from index 0 when A's kept material wraps the array boundary.
   std::vector<Point2> combined;
-  combined.reserve(n + m - 2);
-  // Which side of the (kFinal, a1Idx) pair wraps depends on array order, not
-  // just adjacency: whenever a1Idx > kFinal, the vanishing seam is the
-  // simple range (kFinal, a1Idx) and A's KEPT material wraps around the
-  // array's own start/end boundary — copy it in the same two pieces the
-  // original (adjacency-only) code always used. Whenever a1Idx <= kFinal
-  // instead (the seam itself wraps across that boundary — e.g.
-  // LocateOrInsertVertex's insertAt==0 -> push_back path landed edgeA0 at
-  // the very end while edgeA1 resolved near the start), A's KEPT material is
-  // the single simple range [a1Idx, kFinal] and does NOT wrap — copying it
-  // as two separate pieces here would re-walk part of A's outline a second
-  // time (confirmed live: this exact bug produced a duplicate-vertex,
-  // corrupted outline that a downstream evaluator turned into a visible
-  // extra panel).
+  combined.reserve(n + m);
+  auto appendB = [&] {
+    for (size_t idx = (b1IdxU + 1) % m; idx != jFinalU; idx = (idx + 1) % m) combined.push_back(placedB[idx]);
+  };
   if (a1IdxU > kFinalU) {
     for (size_t i = 0; i <= kFinalU; ++i) combined.push_back(outlineA[i]);
-    for (size_t idx = (b1IdxU + 1) % m; idx != jFinalU; idx = (idx + 1) % m) {
-      combined.push_back(transformedB[idx]);
-    }
+    appendB();
     for (size_t i = a1IdxU; i < n; ++i) combined.push_back(outlineA[i]);
   } else {
     for (size_t i = a1IdxU; i <= kFinalU; ++i) combined.push_back(outlineA[i]);
-    for (size_t idx = (b1IdxU + 1) % m; idx != jFinalU; idx = (idx + 1) % m) {
-      combined.push_back(transformedB[idx]);
-    }
+    appendB();
   }
 
-  // Self-intersection guard: A's edges (excluding every edge inside the
-  // vanishing [kFinal, a1Idx) arc) against B's transformed edges (excluding
-  // every edge inside the vanishing [jFinal, b1Idx) arc) — none of those
-  // edges survive into `combined` (see above), so checking them against the
-  // other side is meaningless. The only geometry allowed to touch is exactly
-  // the two splice vertices (edgeA0/edgeA1), and only as a single point —
-  // anything else (a proper crossing, or a collinear run of positive length
-  // even if it also touches a splice vertex) means the detected contact
-  // interval was wrong.
+  // Self-intersection guard on the geometry actually produced: A's kept
+  // edges against B's kept edges as placed. Only the two splice vertices may
+  // touch, and only at a single point.
   for (size_t i = 0; i < n; ++i) {
     if (inSeamArc(i, kFinalU, a1IdxU, n)) continue;
-    const Point2& a1 = outlineA[i];
-    const Point2& a2 = outlineA[(i + 1) % n];
+    const Point2& p1 = outlineA[i];
+    const Point2& p2 = outlineA[(i + 1) % n];
     for (size_t b = 0; b < m; ++b) {
       if (inSeamArc(b, jFinalU, b1IdxU, m)) continue;
-      const Point2& b1 = transformedB[b];
-      const Point2& b2 = transformedB[(b + 1) % m];
-      if (SegmentsBadOverlap(a1, a2, b1, b2, edgeA0, edgeA1)) {
+      if (SegmentsBadOverlap(p1, p2, placedB[b], placedB[(b + 1) % m], edgeA0, edgeA1)) {
         result.errorCode = MergeErrorCode::kMergeSelfIntersecting;
         result.message = "spliced outline would self-intersect — detected contact interval was wrong";
         return result;
@@ -752,10 +647,10 @@ ReconcileOutlinesResult ReconcileOutlines(const std::vector<Point2>& outlineAIn,
 
   result.ok = true;
   result.combinedOutline = std::move(combined);
-  // Reversed from the literal edgeA0->edgeA1 order — see part_merge.hpp's
-  // ReconcileOutlinesResult doc comment for why: A's own material (always
-  // LEFT of its own directed edge, CCW) must land on the RIGHT (parent) side
-  // of the bend the caller creates from this hinge.
+  result.carriedB.reserve(carryB.size());
+  for (const auto& p : carryB) result.carriedB.push_back(xform.Apply(p));
+  // Reversed from edgeA0->edgeA1 so A's material lands on the bend's parent
+  // (right) side and B's on the child (left) side.
   result.hingeA = edgeA1;
   result.hingeB = edgeA0;
   return result;

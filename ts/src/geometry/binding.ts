@@ -71,6 +71,8 @@ import type {
   MapToFlatResult,
   DetectContactResult,
   NapiContactPanelCandidate,
+  NapiOutlineRef,
+  RerootBendsResult,
   ReconcileOutlinesResult,
   SplitPartAtBendResult,
   NapiPanelPieceSpec,
@@ -345,19 +347,28 @@ export interface GeometryAddon {
   // region panel's own real pose (never a single part-level anchor — see
   // NapiContactPanelCandidate's own doc comment).
   detectContact?(
+    outlineA: NapiPoint2[],
     panelsA: NapiContactPanelCandidate[],
+    outlineB: NapiPoint2[],
     panelsB: NapiContactPanelCandidate[],
   ): DetectContactResult;
 
   // ── Phase 5 Slice 4: merge_bodies_with_bend outline reconciliation ────────
   reconcileOutlines?(
     outlineA: NapiPoint2[],
-    edgeA0: NapiPoint2,
-    edgeA1: NapiPoint2,
+    a0: NapiOutlineRef,
+    a1: NapiOutlineRef,
     outlineB: NapiPoint2[],
-    edgeB0: NapiPoint2,
-    edgeB1: NapiPoint2,
+    b0: NapiOutlineRef,
+    b1: NapiOutlineRef,
+    carryB: NapiPoint2[],
   ): ReconcileOutlinesResult;
+
+  rerootBends?(bends: NapiBendSpec[], oldRoot: string, newRoot: string): RerootBendsResult;
+
+  // manufacturing_graph_evaluator.hpp's FlipPart: the same physical part,
+  // described from the other side of the sheet.
+  flipPart?(graph: NapiPartGraphSpec): NapiPartGraphSpec;
 
   // ── split_part_at_bend: the graph-level inverse of merge_bodies_with_bend ──
   splitPartAtBend?(
@@ -1396,14 +1407,16 @@ export class GeometryBinding {
   }
 
   detectContact(
+    outlineA: NapiPoint2[],
     panelsA: NapiContactPanelCandidate[],
+    outlineB: NapiPoint2[],
     panelsB: NapiContactPanelCandidate[],
   ): DetectContactResult {
     if (!this.addon.detectContact) {
       throw new Error('Geometry addon does not expose detectContact');
     }
     try {
-      return this.addon.detectContact(panelsA, panelsB);
+      return this.addon.detectContact(outlineA, panelsA, outlineB, panelsB);
     } catch (err) {
       throw toStructuredError(err);
     }
@@ -1411,17 +1424,40 @@ export class GeometryBinding {
 
   reconcileOutlines(
     outlineA: NapiPoint2[],
-    edgeA0: NapiPoint2,
-    edgeA1: NapiPoint2,
+    a0: NapiOutlineRef,
+    a1: NapiOutlineRef,
     outlineB: NapiPoint2[],
-    edgeB0: NapiPoint2,
-    edgeB1: NapiPoint2,
+    b0: NapiOutlineRef,
+    b1: NapiOutlineRef,
+    carryB: NapiPoint2[],
   ): ReconcileOutlinesResult {
     if (!this.addon.reconcileOutlines) {
       throw new Error('Geometry addon does not expose reconcileOutlines');
     }
     try {
-      return this.addon.reconcileOutlines(outlineA, edgeA0, edgeA1, outlineB, edgeB0, edgeB1);
+      return this.addon.reconcileOutlines(outlineA, a0, a1, outlineB, b0, b1, carryB);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  flipPart(graph: NapiPartGraphSpec): NapiPartGraphSpec {
+    if (!this.addon.flipPart) {
+      throw new Error('Geometry addon does not expose flipPart');
+    }
+    try {
+      return this.addon.flipPart(graph);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  rerootBends(bends: NapiBendSpec[], oldRoot: string, newRoot: string): RerootBendsResult {
+    if (!this.addon.rerootBends) {
+      throw new Error('Geometry addon does not expose rerootBends');
+    }
+    try {
+      return this.addon.rerootBends(bends, oldRoot, newRoot);
     } catch (err) {
       throw toStructuredError(err);
     }

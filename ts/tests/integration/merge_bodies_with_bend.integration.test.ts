@@ -521,8 +521,18 @@ d('v2 merge_bodies_with_bend live regression: a fuse_bodies-produced outline wit
             // spurious 3rd (the visible extra-panel defect).
             expect(evalResult.panels.length).toBe(2);
 
+            // A seam end is a shared corner when the other part's closest
+            // vertex lies within the 2mm contact tolerance (testcube's own
+            // STEP geometry has a real 0.95mm thickness-footprint step
+            // there), so each of B's two seam corners may move up to 2mm
+            // along the seam onto A's. That changes area by at most
+            // 2 corners * 2mm * (B's reach, bounded by its bbox diagonal) / 2.
+            const outlineB = beforeEachMerge.parts.find((p) => p.partId === otherComp)!.outline;
+            const xs = outlineB.map((p) => p.x);
+            const ys = outlineB.map((p) => p.y);
+            const diagB = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
             const combinedArea = shoelaceArea(store.getPart(mergeResult.part_id)!.outline);
-            expect(combinedArea).toBeCloseTo(areaBeforeMerge + areaB, 1);
+            expect(Math.abs(combinedArea - (areaBeforeMerge + areaB))).toBeLessThanOrEqual(2 * 2.0 * diagB / 2);
 
             const constructResult = constructPart(store, mergeResult.part_id);
             expect(constructResult.ok, constructResult.message).toBe(true);

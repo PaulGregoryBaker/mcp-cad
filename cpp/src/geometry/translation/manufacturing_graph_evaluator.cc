@@ -1203,10 +1203,82 @@ TreeValidation ValidateTree(const PartGraphSpec& graph) {
       stack.push_back(bend->childRegionPanelId);
     }
   }
+  // Every bend must hang off the root's tree. A bend whose parent panel is
+  // never reached would otherwise be silently skipped by the pose walk,
+  // returning a partial layout as if it were the whole part.
+  for (const auto& bend : graph.bends) {
+    if (!visited.count(bend.parentRegionPanelId)) {
+      return {false, EvaluateErrorCode::kDanglingBendReference,
+              "bend " + bend.id + "'s parent region panel " + bend.parentRegionPanelId +
+                  " is not reachable from root region panel " + graph.rootRegionPanelId};
+    }
+  }
   return {true, EvaluateErrorCode::kNone, ""};
 }
 
 }  // namespace
+
+RerootResult RerootAt(const std::vector<BendSpec>& bends, const std::string& oldRoot,
+                      const std::string& newRoot) {
+  RerootResult result;
+  result.bends = bends;
+  std::unordered_map<std::string, size_t> incomingBend;
+  for (size_t i = 0; i < bends.size(); ++i) {
+    if (!incomingBend.emplace(bends[i].childRegionPanelId, i).second) {
+      result.errorCode = EvaluateErrorCode::kTreeCycleDetected;
+      result.message = "region panel " + bends[i].childRegionPanelId + " has more than one incoming bend";
+      return result;
+    }
+  }
+  std::vector<size_t> path;
+  std::string current = newRoot;
+  while (current != oldRoot) {
+    auto it = incomingBend.find(current);
+    if (it == incomingBend.end() || path.size() > bends.size()) {
+      result.errorCode = EvaluateErrorCode::kDanglingBendReference;
+      result.message = "region panel " + newRoot + " is not in the tree rooted at " + oldRoot;
+      return result;
+    }
+    path.push_back(it->second);
+    current = bends[it->second].parentRegionPanelId;
+  }
+  for (size_t i : path) {
+    BendSpec& b = result.bends[i];
+    std::swap(b.parentRegionPanelId, b.childRegionPanelId);
+    std::swap(b.hingeA, b.hingeB);
+  }
+  result.ok = true;
+  return result;
+}
+
+PartGraphSpec FlipPart(const PartGraphSpec& graph) {
+  auto mirror = [](const Point2& p) { return Point2{-p.x, p.y}; };
+  PartGraphSpec out = graph;
+
+  out.outline.outer.assign(graph.outline.outer.rbegin(), graph.outline.outer.rend());
+  for (auto& p : out.outline.outer) p = mirror(p);
+  for (auto& ring : out.outline.polygonHoles) {
+    std::reverse(ring.begin(), ring.end());
+    for (auto& p : ring) p = mirror(p);
+  }
+  for (auto& hole : out.outline.circleHoles) hole.center = mirror(hole.center);
+
+  for (auto& b : out.bends) {
+    const bool concave = BottomIsConcave(b);
+    const Point2 hingeA = b.hingeA;
+    b.hingeA = mirror(b.hingeB);
+    b.hingeB = mirror(hingeA);
+    b.angleDeg = -b.angleDeg;
+    b.bottomIsConcave = !concave;
+  }
+
+  Transform3 m = Transform3::Identity();
+  m.r[0] = -1.0;
+  m.r[8] = -1.0;
+  m.t[2] = graph.thicknessMm;
+  out.anchor.transform = graph.anchor.transform.Compose(m);
+  return out;
+}
 
 EvaluateResult Evaluate(const PartGraphSpec& graph) {
   EvaluateResult result;

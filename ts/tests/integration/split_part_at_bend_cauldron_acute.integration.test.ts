@@ -185,7 +185,7 @@ d('[v2] split_part_at_bend on cauldron.step real acute bend (live-app regression
     }));
 
     let touchingSiblingId: string | undefined;
-    let firstRegion: { regionPanelIdA: string; regionPanelIdB: string } | undefined;
+    let firstRegion: { regionPanelIdA: string; regionPanelIdB: string; flipped: boolean } | undefined;
     for (const candidateId of everyLivePartId) {
       const candidateLayout = evaluatePart(store, candidateId);
       if (!candidateLayout.ok) continue;
@@ -194,7 +194,12 @@ d('[v2] split_part_at_bend on cauldron.step real acute bend (live-app regression
         pose: p.pose,
         regionPanelId: p.regionPanelId,
       }));
-      const contact = geometryBinding.detectContact(childPanels, candidatePanels);
+      const contact = geometryBinding.detectContact(
+        store.getPart(childPartId)!.outline,
+        childPanels,
+        store.getPart(candidateId)!.outline,
+        candidatePanels,
+      );
       if (contact.ok && contact.regions.length > 0) {
         touchingSiblingId = candidateId;
         firstRegion = contact.regions[0]!;
@@ -206,10 +211,23 @@ d('[v2] split_part_at_bend on cauldron.step real acute bend (live-app regression
       'the split-off child must have a real sibling it physically touches on some panel',
     ).toBeDefined();
 
-    // The real geometry here touches along MORE than one region at once (a
-    // genuine multi-seam contact, per the user's own report) — merge_bodies_
-    // with_bend correctly refuses to guess which one and requires an explicit
-    // selection (GE_MERGE_AMBIGUOUS_CONTACT); pick the first real candidate.
+    // B's own panels' solid corners (both faces), where they physically are
+    // before the merge — independent of which side of the sheet B's frame
+    // is described from (a flipped seam re-expresses B from the other side).
+    const cornersOf = (p: { bottomFace: { x: number; y: number; z: number }[]; topFace: { x: number; y: number; z: number }[] }) => [
+      ...p.bottomFace,
+      ...p.topFace,
+    ];
+    const bCornersBefore = new Map(
+      evaluatePart(store, touchingSiblingId!).panels.map((p) => [p.regionPanelId, cornersOf(p)]),
+    );
+    expect(bCornersBefore.size).toBeGreaterThan(1); // B really is multi-panel
+
+    // Without a pick, more than one real seam is an ambiguity, not a guess.
+    expect(() =>
+      dispatchGraphTool(store, 'merge_bodies_with_bend', { part_a_id: childPartId, part_b_id: touchingSiblingId }),
+    ).toThrow(/GE_MERGE_AMBIGUOUS_CONTACT|simultaneous contact regions/);
+
     const mergeResult = dispatchGraphTool(store, 'merge_bodies_with_bend', {
       part_a_id: childPartId,
       part_b_id: touchingSiblingId,
@@ -220,9 +238,35 @@ d('[v2] split_part_at_bend on cauldron.step real acute bend (live-app regression
     expect(mergeResult.part_id).toBe(childPartId);
     expect(mergeResult.bend_id).toBeTruthy();
 
-    // The merge must have actually happened, not just reported success.
     const mergedPart = store.getPart(childPartId)!;
     expect(mergedPart.outline.length).toBeGreaterThan(childOutlineLenBeforeMerge);
     expect(store.getPart(touchingSiblingId!)!.mergedIntoPartId).toBe(childPartId);
+
+    // Every one of B's panels is still part of the tree, and its solid sits
+    // where it physically was before the merge — to within the contact
+    // tolerance the seam itself was detected at (2mm).
+    const after = evaluatePart(store, childPartId);
+    expect(after.ok, after.message).toBe(true);
+    const afterById = new Map(after.panels.map((p) => [p.regionPanelId, cornersOf(p)]));
+    let worstMm = 0;
+    for (const [id, before] of bCornersBefore) {
+      const now = afterById.get(id);
+      expect(now, `B panel ${id} dropped out of the merged tree`).toBeDefined();
+      expect(now!.length).toBe(before.length);
+      for (const p of now!) {
+        const d = Math.min(...before.map((q) => Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z)));
+        worstMm = Math.max(worstMm, d);
+      }
+    }
+    console.log(`merged B: worst panel-corner displacement ${worstMm.toFixed(4)}mm (flipped=${firstRegion!.flipped})`);
+    expect(worstMm).toBeLessThan(2.0);
+
+    // And the merged part actually builds.
+    const constructed = constructPart(store, childPartId);
+    const manifold = geometryBinding.checkManifold(constructed.shellId) as unknown as {
+      isManifold?: boolean;
+      issues?: unknown;
+    };
+    expect(manifold.isManifold, JSON.stringify(manifold.issues)).toBe(true);
   });
 });
