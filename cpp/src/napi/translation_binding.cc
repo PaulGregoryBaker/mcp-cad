@@ -216,6 +216,24 @@ std::vector<Point2> ReadPoint2Array(const Napi::Array& arr) {
   return pts;
 }
 
+// ContactPanelCandidate is JS-facing as { outline: Point2[], pose: Transform3,
+// regionPanelId: string } — one entry per region panel of a part (part_merge.
+// hpp's ContactPanelCandidate doc comment: a part with no bends passes exactly
+// one candidate).
+std::vector<translation::ContactPanelCandidate> ReadContactPanelCandidateArray(const Napi::Array& arr) {
+  std::vector<translation::ContactPanelCandidate> panels;
+  panels.reserve(arr.Length());
+  for (uint32_t i = 0; i < arr.Length(); ++i) {
+    Napi::Object obj = arr.Get(i).As<Napi::Object>();
+    translation::ContactPanelCandidate panel;
+    panel.outline = ReadPoint2Array(obj.Get("outline").As<Napi::Array>());
+    panel.pose = ReadTransform3(obj.Get("pose").As<Napi::Object>());
+    panel.regionPanelId = obj.Get("regionPanelId").As<Napi::String>().Utf8Value();
+    panels.push_back(std::move(panel));
+  }
+  return panels;
+}
+
 BendSpec ReadBendSpec(const Napi::Object& bendObj) {
   BendSpec bend;
   bend.id = bendObj.Get("id").As<Napi::String>().Utf8Value();
@@ -709,17 +727,33 @@ Napi::Object WriteMapToFlatResult(Napi::Env env, const MapToFlatResult& result) 
   return obj;
 }
 
+Napi::Object WriteContactRegion(Napi::Env env, const translation::ContactRegion& region) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set("aRunStart", WritePoint2(env, region.aRunStart));
+  obj.Set("aRunEnd", WritePoint2(env, region.aRunEnd));
+  obj.Set("bRunStart", WritePoint2(env, region.bRunStart));
+  obj.Set("bRunEnd", WritePoint2(env, region.bRunEnd));
+  obj.Set("angleDeg", Napi::Number::New(env, region.angleDeg));
+  obj.Set("lengthMm", Napi::Number::New(env, region.lengthMm));
+  obj.Set("regionPanelIdA", Napi::String::New(env, region.regionPanelIdA));
+  obj.Set("regionPanelIdB", Napi::String::New(env, region.regionPanelIdB));
+  return obj;
+}
+
+Napi::Array WriteContactRegionArray(Napi::Env env, const std::vector<translation::ContactRegion>& regions) {
+  Napi::Array arr = Napi::Array::New(env, regions.size());
+  for (size_t i = 0; i < regions.size(); ++i) {
+    arr.Set(i, WriteContactRegion(env, regions[i]));
+  }
+  return arr;
+}
+
 Napi::Object WriteDetectContactResult(Napi::Env env, const translation::DetectContactResult& result) {
   Napi::Object obj = Napi::Object::New(env);
   obj.Set("ok", Napi::Boolean::New(env, result.ok));
   obj.Set("errorCode", Napi::String::New(env, MergeErrorCodeToString(result.errorCode)));
   obj.Set("message", Napi::String::New(env, result.message));
-  obj.Set("aRunStart", WritePoint2(env, result.aRunStart));
-  obj.Set("aRunEnd", WritePoint2(env, result.aRunEnd));
-  obj.Set("bRunStart", WritePoint2(env, result.bRunStart));
-  obj.Set("bRunEnd", WritePoint2(env, result.bRunEnd));
-  obj.Set("angleDeg", Napi::Number::New(env, result.angleDeg));
-  obj.Set("contactRegionCount", Napi::Number::New(env, result.contactRegionCount));
+  obj.Set("regions", WriteContactRegionArray(env, result.regions));
   return obj;
 }
 
@@ -888,22 +922,19 @@ Napi::Value MapPointToFlatBinding(const Napi::CallbackInfo& info) {
 
 Napi::Value DetectContactBinding(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  if (info.Length() < 4 || !info[0].IsArray() || !info[1].IsObject() || !info[2].IsArray() ||
-      !info[3].IsObject()) {
+  if (info.Length() < 2 || !info[0].IsArray() || !info[1].IsArray()) {
     Napi::TypeError::New(
-        env, "detectContact(outlineA: Point2[], anchorA: Transform3, outlineB: Point2[], "
-             "anchorB: Transform3)")
+        env, "detectContact(panelsA: ContactPanelCandidate[], panelsB: ContactPanelCandidate[])")
         .ThrowAsJavaScriptException();
     return env.Undefined();
   }
   try {
-    std::vector<Point2> outlineA = ReadPoint2Array(info[0].As<Napi::Array>());
-    Transform3 anchorA = ReadTransform3(info[1].As<Napi::Object>());
-    std::vector<Point2> outlineB = ReadPoint2Array(info[2].As<Napi::Array>());
-    Transform3 anchorB = ReadTransform3(info[3].As<Napi::Object>());
+    std::vector<translation::ContactPanelCandidate> panelsA =
+        ReadContactPanelCandidateArray(info[0].As<Napi::Array>());
+    std::vector<translation::ContactPanelCandidate> panelsB =
+        ReadContactPanelCandidateArray(info[1].As<Napi::Array>());
 
-    translation::DetectContactResult result =
-        translation::DetectContact(outlineA, anchorA, outlineB, anchorB);
+    translation::DetectContactResult result = translation::DetectContact(panelsA, panelsB);
     return WriteDetectContactResult(env, result);
   } catch (const std::exception& e) {
     Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();

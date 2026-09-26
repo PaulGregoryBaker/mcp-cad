@@ -30,6 +30,30 @@ double ShoelaceArea(const std::vector<Point2>& poly) {
   return sum / 2.0;
 }
 
+// DetectContact now takes every region panel of each part (rebuild live-app
+// regression 2026-09-22: a part's single (outline, anchor) only ever
+// describes its ROOT panel's real world position). Every test in this file
+// predates that change and only ever deals with a single flat, unbent panel
+// per side — this wraps the old single-panel call shape in the new one,
+// exactly the n=1 case part_merge.hpp's own ContactPanelCandidate doc
+// comment describes as "not special-cased."
+DetectContactResult DetectContactSingle(const std::vector<Point2>& outlineA, const Transform3& anchorA,
+                                         const std::vector<Point2>& outlineB, const Transform3& anchorB) {
+  return DetectContact({ContactPanelCandidate{outlineA, anchorA, "panelA"}},
+                        {ContactPanelCandidate{outlineB, anchorB, "panelB"}});
+}
+
+// The longest of every region DetectContact found — the old single-region
+// API always returned exactly this one; most tests below still only care
+// about "the" contact and use this to keep their old assertions unchanged.
+const ContactRegion& LongestRegion(const DetectContactResult& result) {
+  const ContactRegion* best = &result.regions.at(0);
+  for (const auto& region : result.regions) {
+    if (region.lengthMm > best->lengthMm) best = &region;
+  }
+  return *best;
+}
+
 }  // namespace
 
 TEST_CASE("DetectContact: two rectangles folded 90deg at an axis-aligned seam", "[part_merge]") {
@@ -47,20 +71,21 @@ TEST_CASE("DetectContact: two rectangles folded 90deg at an axis-aligned seam", 
   anchorB.r[6] = 0;  anchorB.r[7] = 1; anchorB.r[8] = 0;
   anchorB.t[0] = 10; anchorB.t[1] = 5; anchorB.t[2] = 0;
 
-  auto contact = DetectContact(outlineA, anchorA, outlineB, anchorB);
+  auto contact = DetectContactSingle(outlineA, anchorA, outlineB, anchorB);
   REQUIRE(contact.ok);
-  CHECK(contact.contactRegionCount == 1);
-  CHECK(Dist2(contact.aRunStart, {10, 0}) < 1e-6);
-  CHECK(Dist2(contact.aRunEnd, {10, 5}) < 1e-6);
-  CHECK(Dist2(contact.bRunStart, {0, 0}) < 1e-6);
-  CHECK(Dist2(contact.bRunEnd, {5, 0}) < 1e-6);
+  CHECK(contact.regions.size() == 1);
+  const ContactRegion& region = contact.regions[0];
+  CHECK(Dist2(region.aRunStart, {10, 0}) < 1e-6);
+  CHECK(Dist2(region.aRunEnd, {10, 5}) < 1e-6);
+  CHECK(Dist2(region.bRunStart, {0, 0}) < 1e-6);
+  CHECK(Dist2(region.bRunEnd, {5, 0}) < 1e-6);
   // A genuine fold was detected (magnitude 90 — this anchor's own rotation
   // direction, not asserted against a specific sign here; see the dedicated
   // sign-convention test below for that).
-  CHECK(std::fabs(std::fabs(contact.angleDeg) - 90.0) < 1e-6);
+  CHECK(std::fabs(std::fabs(region.angleDeg) - 90.0) < 1e-6);
 
-  auto result = ReconcileOutlines(outlineA, contact.aRunStart, contact.aRunEnd, outlineB, contact.bRunStart,
-                                   contact.bRunEnd);
+  auto result = ReconcileOutlines(outlineA, region.aRunStart, region.aRunEnd, outlineB, region.bRunStart,
+                                   region.bRunEnd);
   REQUIRE(result.ok);
   CHECK(result.combinedOutline.size() == outlineA.size() + outlineB.size() - 2);
   CHECK(Dist2(result.hingeA, {10, 5}) < 1e-9);
@@ -109,11 +134,13 @@ TEST_CASE("DetectContact: signed angleDeg matches RotationAboutAxis's own conven
   const double targetAngleDeg = 90.0;
   Transform3 anchorB = Transform3::RotationAboutAxis(hingeAWorld, axis, targetAngleDeg);
 
-  auto contact = DetectContact(outlineA, anchorA, outlineB, anchorB);
+  auto contact = DetectContactSingle(outlineA, anchorA, outlineB, anchorB);
   REQUIRE(contact.ok);
-  CHECK(contact.angleDeg == Approx(targetAngleDeg).margin(1e-6));
-  CHECK(Dist2(contact.aRunStart, {10, 0}) < 1e-6);
-  CHECK(Dist2(contact.aRunEnd, {10, 5}) < 1e-6);
+  REQUIRE(contact.regions.size() == 1);
+  const ContactRegion& region = contact.regions[0];
+  CHECK(region.angleDeg == Approx(targetAngleDeg).margin(1e-6));
+  CHECK(Dist2(region.aRunStart, {10, 0}) < 1e-6);
+  CHECK(Dist2(region.aRunEnd, {10, 5}) < 1e-6);
 }
 
 TEST_CASE("DetectContact: an asymmetric seam - B's edge covers only PART of A's longer edge",
@@ -137,16 +164,17 @@ TEST_CASE("DetectContact: an asymmetric seam - B's edge covers only PART of A's 
   anchorB.r[6] = 0;  anchorB.r[7] = 1; anchorB.r[8] = 0;
   anchorB.t[0] = 20; anchorB.t[1] = 4; anchorB.t[2] = 0;
 
-  auto contact = DetectContact(outlineA, anchorA, outlineB, anchorB);
+  auto contact = DetectContactSingle(outlineA, anchorA, outlineB, anchorB);
   REQUIRE(contact.ok);
-  CHECK(contact.contactRegionCount == 1);
+  CHECK(contact.regions.size() == 1);
+  const ContactRegion& region = contact.regions[0];
   // The detected interval is the sub-run [1,4] on A's edge — NOT the whole
   // [0,5] edge — since that's the actual overlap with B's shorter run.
-  CHECK(Dist2(contact.aRunStart, {20, 1}) < 1e-6);
-  CHECK(Dist2(contact.aRunEnd, {20, 4}) < 1e-6);
+  CHECK(Dist2(region.aRunStart, {20, 1}) < 1e-6);
+  CHECK(Dist2(region.aRunEnd, {20, 4}) < 1e-6);
 
-  auto result = ReconcileOutlines(outlineA, contact.aRunStart, contact.aRunEnd, outlineB, contact.bRunStart,
-                                   contact.bRunEnd);
+  auto result = ReconcileOutlines(outlineA, region.aRunStart, region.aRunEnd, outlineB, region.bRunStart,
+                                   region.bRunEnd);
   REQUIRE(result.ok);
   // A gains two new vertices (20,1) and (20,4) splitting its own right edge
   // (4 -> 6 vertices); B needs no insertion (its own edge0 endpoints (0,0)/
@@ -168,9 +196,56 @@ TEST_CASE("DetectContact: no real contact is a typed error", "[part_merge]") {
   Transform3 anchorB = Transform3::RotationAboutAxis({0, 0, 500}, {0, 1, 0}, 37.0);
   anchorB.t[2] += 500;
 
-  auto contact = DetectContact(outlineA, anchorA, outlineB, anchorB);
+  auto contact = DetectContactSingle(outlineA, anchorA, outlineB, anchorB);
   REQUIRE_FALSE(contact.ok);
   CHECK(contact.errorCode == MergeErrorCode::kNoContact);
+  CHECK(contact.regions.empty());
+}
+
+// Live-app regression (2026-09-22, cauldron.step): a real multi-bend part's
+// touching material can sit on a NON-ROOT region panel — that panel's true
+// world position only exists via its own cascaded pose
+// (manufacturing_graph_evaluator.cc's poseByRegionPanel), never via the
+// part's root anchor applied to its whole flat pattern. Confirmed live: a
+// panel genuinely 0.168mm from another part's boundary was reported ~450mm
+// apart because the wrong (root) plane was checked. This is a minimal,
+// hand-authored repro: part B has two candidate panels — its OWN root panel,
+// positioned far from A (no real contact there), and a non-root panel using
+// the exact same fold as the first test above (the one real contact). Real
+// per-panel search must find the contact on the non-root panel and ignore
+// the non-touching root panel, without the caller ever hinting which one to
+// check.
+TEST_CASE("DetectContact: contact on a non-root panel of a multi-panel part is found via that "
+ "panel's own pose, not the part's root anchor",
+          "[part_merge]") {
+  std::vector<Point2> outlineA = {{0, 0}, {10, 0}, {10, 5}, {0, 5}};
+
+  // B's root panel: a small square sitting 500mm away — real material of B,
+  // genuinely not touching A anywhere.
+  std::vector<Point2> outlineBRoot = {{0, 0}, {2, 0}, {2, 2}, {0, 2}};
+  Transform3 anchorBRoot = Transform3::Identity();
+  anchorBRoot.t[2] = 500;
+
+  // B's non-root panel: identical fold to "two rectangles folded 90deg" above
+  // — its own local edge0 (0,0)-(5,0) lands exactly on A's edge (10,0)-(10,5).
+  std::vector<Point2> outlineBChild = {{0, 0}, {5, 0}, {5, 8}, {0, 8}};
+  Transform3 anchorBChild;
+  anchorBChild.r[0] = 0;  anchorBChild.r[1] = 0; anchorBChild.r[2] = -1;
+  anchorBChild.r[3] = -1; anchorBChild.r[4] = 0; anchorBChild.r[5] = 0;
+  anchorBChild.r[6] = 0;  anchorBChild.r[7] = 1; anchorBChild.r[8] = 0;
+  anchorBChild.t[0] = 10; anchorBChild.t[1] = 5; anchorBChild.t[2] = 0;
+
+  auto contact = DetectContact({ContactPanelCandidate{outlineA, Transform3::Identity(), "panelA"}},
+                                {ContactPanelCandidate{outlineBRoot, anchorBRoot, "panelB_root"},
+                                 ContactPanelCandidate{outlineBChild, anchorBChild, "panelB_child"}});
+  REQUIRE(contact.ok);
+  REQUIRE(contact.regions.size() == 1);
+  const ContactRegion& region = contact.regions[0];
+  CHECK(region.regionPanelIdA == "panelA");
+  CHECK(region.regionPanelIdB == "panelB_child");
+  CHECK(Dist2(region.aRunStart, {10, 0}) < 1e-6);
+  CHECK(Dist2(region.aRunEnd, {10, 5}) < 1e-6);
+  CHECK(std::fabs(std::fabs(region.angleDeg) - 90.0) < 1e-6);
 }
 
 TEST_CASE("DetectContact: a genuinely coplanar pair is a typed error directing to fuse_bodies",
@@ -180,12 +255,13 @@ TEST_CASE("DetectContact: a genuinely coplanar pair is a typed error directing t
   Transform3 anchorA = Transform3::Identity();
   Transform3 anchorB = Transform3::Identity();  // same plane as A, just offset in X
 
-  auto contact = DetectContact(outlineA, anchorA, outlineB, anchorB);
+  auto contact = DetectContactSingle(outlineA, anchorA, outlineB, anchorB);
   REQUIRE_FALSE(contact.ok);
   CHECK(contact.errorCode == MergeErrorCode::kCoplanarSeam);
+  CHECK(contact.regions.empty());
 }
 
-TEST_CASE("DetectContact: two disjoint contact regions - the longer one is chosen deterministically",
+TEST_CASE("DetectContact: two disjoint contact regions on the same panel pair are both returned",
           "[part_merge]") {
   // A: a 10x10 plate, right edge (10,-5)-(10,5) one plain unbroken edge.
   // B (local, CCW): a rectangle with a notch cut into its own bottom edge —
@@ -194,8 +270,9 @@ TEST_CASE("DetectContact: two disjoint contact regions - the longer one is chose
   // tolerance, so the bridge is unambiguously NOT part of either contact
   // run) — a single flat (planar, as every part outline must be) polygon
   // that nonetheless touches A's plane along two physically disjoint
-  // stretches once folded, exactly the TASK_SPEC.md §8.3 phase-1 scenario:
-  // one real B, two disjoint contacts.
+  // stretches once folded: one real B, two disjoint real contacts, BOTH
+  // returned (TASK_SPEC.md §8.3 phase 2 — no longer picking one "best"
+  // region and discarding the other).
   std::vector<Point2> outlineA = {{0, -5}, {10, -5}, {10, 5}, {0, 5}};
   std::vector<Point2> outlineB = {{0, 0}, {2, 0}, {2, 10}, {3, 10}, {3, 0}, {7, 0}, {7, 13}, {0, 13}};
   Transform3 anchorA = Transform3::Identity();
@@ -208,15 +285,22 @@ TEST_CASE("DetectContact: two disjoint contact regions - the longer one is chose
   anchorB.r[6] = 0;  anchorB.r[7] = 1; anchorB.r[8] = 0;
   anchorB.t[0] = 10; anchorB.t[1] = 5; anchorB.t[2] = 0;
 
-  auto contact = DetectContact(outlineA, anchorA, outlineB, anchorB);
+  auto contact = DetectContactSingle(outlineA, anchorA, outlineB, anchorB);
   REQUIRE(contact.ok);
-  // Two disjoint regions found (the length-2 foot at local x in [0,2], the
-  // length-4 foot at local x in [3,7]) — the longer one (length 4) is chosen.
-  CHECK(contact.contactRegionCount == 2);
-  CHECK(Dist2(contact.aRunStart, {10, -2}) < 1e-6);
-  CHECK(Dist2(contact.aRunEnd, {10, 2}) < 1e-6);
-  CHECK(Dist2(contact.bRunStart, {3, 0}) < 1e-6);
-  CHECK(Dist2(contact.bRunEnd, {7, 0}) < 1e-6);
+  // Two disjoint regions found: the length-2 foot at local x in [0,2], the
+  // length-4 foot at local x in [3,7] — both present, neither discarded.
+  REQUIRE(contact.regions.size() == 2);
+
+  const ContactRegion& longer = LongestRegion(contact);
+  CHECK(Dist2(longer.aRunStart, {10, -2}) < 1e-6);
+  CHECK(Dist2(longer.aRunEnd, {10, 2}) < 1e-6);
+  CHECK(Dist2(longer.bRunStart, {3, 0}) < 1e-6);
+  CHECK(Dist2(longer.bRunEnd, {7, 0}) < 1e-6);
+  CHECK(longer.lengthMm == Approx(4.0).margin(1e-6));
+
+  const ContactRegion& shorter =
+      &longer == &contact.regions[0] ? contact.regions[1] : contact.regions[0];
+  CHECK(shorter.lengthMm == Approx(2.0).margin(1e-6));
 }
 
 // Live-app regression (2026-09-14): the EXACT real outlines/anchors captured
@@ -292,16 +376,17 @@ TEST_CASE("DetectContact+ReconcileOutlines: a fused protrusion's near-collinear 
   anchorB.r[6] = 0; anchorB.r[7] = 0; anchorB.r[8] = 1;
   anchorB.t[0] = -75; anchorB.t[1] = -75.00000000000001; anchorB.t[2] = 74.25;
 
-  auto contact = DetectContact(outlineA, anchorA, outlineB, anchorB);
+  auto contact = DetectContactSingle(outlineA, anchorA, outlineB, anchorB);
   REQUIRE(contact.ok);
-  CHECK(contact.contactRegionCount == 1);
+  CHECK(contact.regions.size() == 1);
+  const ContactRegion& region = contact.regions[0];
   // The detected interval now lands cleanly on A's own true seam edge
   // (0,0)-(150,0), not ~0.05-0.3mm off it.
-  CHECK(Dist2(contact.aRunStart, {0, 0}) < 1e-3);
-  CHECK(Dist2(contact.aRunEnd, {150, 0}) < 1e-3);
+  CHECK(Dist2(region.aRunStart, {0, 0}) < 1e-3);
+  CHECK(Dist2(region.aRunEnd, {150, 0}) < 1e-3);
 
-  auto result = ReconcileOutlines(outlineA, contact.aRunStart, contact.aRunEnd, outlineB, contact.bRunStart,
-                                   contact.bRunEnd);
+  auto result = ReconcileOutlines(outlineA, region.aRunStart, region.aRunEnd, outlineB, region.bRunStart,
+                                   region.bRunEnd);
   REQUIRE(result.ok);
   double areaA = std::fabs(ShoelaceArea(outlineA));
   double areaB = std::fabs(ShoelaceArea(outlineB));
@@ -351,17 +436,19 @@ TEST_CASE("ReconcileOutlines: live-app regression - B's outline carries a real v
   Transform3 anchorB = Transform3::Identity();
   anchorB.t[0] = -75; anchorB.t[1] = -75.00000000000001; anchorB.t[2] = 74.25;
 
-  auto contact = DetectContact(outlineA, anchorA, outlineB, anchorB);
+  auto contact = DetectContactSingle(outlineA, anchorA, outlineB, anchorB);
   REQUIRE(contact.ok);
+  REQUIRE(contact.regions.size() == 1);
+  const ContactRegion& region = contact.regions[0];
   // DetectContact itself succeeds — the bad B outline vertex (74.95, 0)
   // sitting between bRunStart and bRunEnd is real, in-tolerance seam
-  // material; DetectContact's own interval (longest-region) selection is
-  // not what's rejecting this case.
-  CHECK(Dist2(contact.bRunStart, {0, 0}) < 1e-6);
-  CHECK(Dist2(contact.bRunEnd, {150, 0}) < 1e-6);
+  // material; DetectContact's own interval selection is not what's
+  // rejecting this case.
+  CHECK(Dist2(region.bRunStart, {0, 0}) < 1e-6);
+  CHECK(Dist2(region.bRunEnd, {150, 0}) < 1e-6);
 
-  auto result = ReconcileOutlines(outlineA, contact.aRunStart, contact.aRunEnd, outlineB, contact.bRunStart,
-                                   contact.bRunEnd);
+  auto result = ReconcileOutlines(outlineA, region.aRunStart, region.aRunEnd, outlineB, region.bRunStart,
+                                   region.bRunEnd);
   // FIXED behavior: B's real vertex (74.95, 0), sitting strictly between
   // edgeB0=(0,0) and edgeB1=(150,0) in outlineB's own array order, is
   // absorbed into the vanishing seam instead of causing a rejection.

@@ -21,6 +21,7 @@ import type {
   MapToFlatResult,
   NapiPanelPieceSpec,
   NapiManufacturingProfile,
+  ContactRegion,
 } from '../../geometry/types';
 import type { GraphStore, PartGraphSnapshot } from './store';
 import type { BendRow, Hole, PartRow, Point2, RegionPanelRow } from './types';
@@ -195,6 +196,55 @@ export interface MergePartsWithBendInput {
    * side (e.g. reconcilePieces' own measured bend) should pass it through
    * explicitly rather than rely on the fallback. */
   bottomIsConcave?: boolean;
+  /** Selects a specific contact region when detectContact finds more than
+   * one real simultaneous contact (rebuild live-app regression 2026-09-22:
+   * a real assembly can touch along more than one seam at once) — both
+   * required together when given. Omitted when detectContact finds exactly
+   * one region (the common case); required when it finds more than one,
+   * since picking one silently would be exactly the kind of ambiguity the
+   * No-Fallback rule forbids resolving on the caller's behalf. */
+  regionPanelIdA?: string;
+  regionPanelIdB?: string;
+}
+
+/** Picks which of detectContact's regions this call acts on. Zero regions
+ * never reaches here (detectContact's own ok/regions invariant — see
+ * DetectContactResult's doc comment). Exactly one: no decision to make.
+ * More than one: a real ambiguity (TASK_SPEC.md §8.3 phase 2) — silently
+ * picking, e.g., the longest would hide the other real seam(s) from the
+ * caller entirely, so this requires an explicit selection instead of
+ * defaulting one. */
+function selectContactRegion(
+  regions: ContactRegion[],
+  regionPanelIdA: string | undefined,
+  regionPanelIdB: string | undefined,
+): ContactRegion {
+  if (regions.length === 1) return regions[0]!;
+
+  const describe = (r: ContactRegion) =>
+    `(region_panel_id_a=${r.regionPanelIdA}, region_panel_id_b=${r.regionPanelIdB}, ` +
+    `angle_deg=${r.angleDeg.toFixed(3)}, length_mm=${r.lengthMm.toFixed(3)})`;
+
+  if (regionPanelIdA === undefined && regionPanelIdB === undefined) {
+    throwError(
+      ErrorCodes.GE_MERGE_AMBIGUOUS_CONTACT,
+      `these two parts touch along ${regions.length} real, simultaneous contact regions — ` +
+        `pass region_panel_id_a/region_panel_id_b to pick one: ${regions.map(describe).join('; ')}`,
+      true,
+    );
+  }
+  const chosen = regions.find(
+    (r) => r.regionPanelIdA === regionPanelIdA && r.regionPanelIdB === regionPanelIdB,
+  );
+  if (!chosen) {
+    throwError(
+      ErrorCodes.GE_MERGE_AMBIGUOUS_CONTACT,
+      `no contact region matches region_panel_id_a=${regionPanelIdA}, ` +
+        `region_panel_id_b=${regionPanelIdB} — found: ${regions.map(describe).join('; ')}`,
+      true,
+    );
+  }
+  return chosen;
 }
 
 /**
@@ -241,7 +291,25 @@ export function mergePartsWithBend(
     );
   }
 
-  const contact = geometryBinding.detectContact(partA.outline, partA.anchor, partB.outline, partB.anchor);
+  // Every region panel of each part, as its own ring (already in that part's
+  // shared flat frame — see NapiContactPanelCandidate's own doc comment) plus
+  // its own true world pose — never the part's single root anchor, which
+  // only ever correctly places ROOT-panel material (rebuild live-app
+  // regression 2026-09-22: cauldron.step's real touching panels were on
+  // non-root panels and this silently reported no contact). A part with no
+  // bends has exactly one panel here — not special-cased, just the n=1 case.
+  const panelsA = layoutA.panels.map((p) => ({
+    outline: p.rawOuter,
+    pose: p.pose,
+    regionPanelId: p.regionPanelId,
+  }));
+  const panelsB = layoutB.panels.map((p) => ({
+    outline: p.rawOuter,
+    pose: p.pose,
+    regionPanelId: p.regionPanelId,
+  }));
+
+  const contact = geometryBinding.detectContact(panelsA, panelsB);
   if (!contact.ok) {
     throwError(
       (contact.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
@@ -249,14 +317,15 @@ export function mergePartsWithBend(
       true,
     );
   }
+  const region = selectContactRegion(contact.regions, input.regionPanelIdA, input.regionPanelIdB);
 
   const reconciled = geometryBinding.reconcileOutlines(
     partA.outline,
-    contact.aRunStart,
-    contact.aRunEnd,
+    region.aRunStart,
+    region.aRunEnd,
     partB.outline,
-    contact.bRunStart,
-    contact.bRunEnd,
+    region.bRunStart,
+    region.bRunEnd,
   );
   if (!reconciled.ok) {
     throwError(
@@ -273,8 +342,8 @@ export function mergePartsWithBend(
   // interval's own midpoint is a point ON the seam, on the SAME free edge
   // whichever region panel it belongs to.
   const seamMidpoint: Point2 = {
-    x: (contact.aRunStart.x + contact.aRunEnd.x) / 2,
-    y: (contact.aRunStart.y + contact.aRunEnd.y) / 2,
+    x: (region.aRunStart.x + region.aRunEnd.x) / 2,
+    y: (region.aRunStart.y + region.aRunEnd.y) / 2,
   };
   const seamOwner = mapPointToWorld(store, input.partAId, seamMidpoint, 0);
   if (!seamOwner.ok || !seamOwner.regionPanelId) {
@@ -292,7 +361,7 @@ export function mergePartsWithBend(
     hingeA: reconciled.hingeA,
     hingeB: reconciled.hingeB,
     parentRegionPanelIdOnA: seamOwner.regionPanelId,
-    angleDeg: contact.angleDeg,
+    angleDeg: region.angleDeg,
     radiusMm: input.radiusMm,
     kFactor: input.kFactor,
     bottomIsConcave: input.bottomIsConcave,

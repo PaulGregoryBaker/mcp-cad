@@ -219,6 +219,13 @@ export const ErrorCodes = {
   GE_MERGE_COPLANAR_SEAM: 'GE_MERGE_COPLANAR_SEAM',
   GE_MERGE_SELF_INTERSECTION: 'GE_MERGE_SELF_INTERSECTION',
   GE_MERGE_INTERNAL_INCONSISTENCY: 'GE_MERGE_INTERNAL_INCONSISTENCY',
+  // detectContact now returns EVERY real contact region across every panel
+  // pair (rebuild live-app regression 2026-09-22 — a part with bends can
+  // genuinely touch another part along more than one seam at once). More
+  // than one region with no caller-supplied disambiguation is an ambiguity,
+  // not a default to silently resolve (No-Fallback rule) — the caller must
+  // pick one via region_panel_id_a/region_panel_id_b.
+  GE_MERGE_AMBIGUOUS_CONTACT: 'GE_MERGE_AMBIGUOUS_CONTACT',
 
   // split_part_at_bend — the graph-level inverse of merge_bodies_with_bend,
   // within one part (part_split.hpp). Verbatim string matches for

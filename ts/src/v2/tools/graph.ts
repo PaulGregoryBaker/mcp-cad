@@ -125,7 +125,7 @@ export const graphToolDefinitions = [
   {
     name: 'merge_bodies_with_bend',
     description:
-      "Join two independently-authored parts into one, connected by a new bend at their own real, anchor-derived seam (docs/TASK_SPEC.md — no edge refs, no angle_deg: both are found from part_a's and part_b's own stored anchors, the same way fuse_bodies already finds its own coplanar seam). Not a distinct primitive: detects the real contact interval between the two parts' anchored outlines, reconciles B's outline into A's frame at that seam, re-parents B's rows onto A, then an ordinary create_node(bend, ...) with the detected angle. B is aliased via merged_into_part_id, never deleted. Fails with a typed error if the two parts don't actually touch (GE_MERGE_NO_CONTACT) or are genuinely coplanar (GE_MERGE_COPLANAR_SEAM — use fuse_bodies instead for a flush, no-bend absorb).",
+      "Join two independently-authored parts into one, connected by a new bend at their own real, anchor-derived seam (docs/TASK_SPEC.md — no edge refs, no angle_deg: both are found from every region panel of part_a and part_b, including panels reached through a part's own existing bends, not just its root anchor). Not a distinct primitive: detects every real contact interval between the two parts' panels, reconciles B's outline into A's frame at the chosen seam, re-parents B's rows onto A, then an ordinary create_node(bend, ...) with the detected angle. B is aliased via merged_into_part_id, never deleted. Fails with a typed error if the two parts don't actually touch anywhere (GE_MERGE_NO_CONTACT) or their only contact is genuinely coplanar (GE_MERGE_COPLANAR_SEAM — use fuse_bodies instead for a flush, no-bend absorb). If the two parts touch along MORE than one real seam at once, this fails with GE_MERGE_AMBIGUOUS_CONTACT listing every candidate (region_panel_id_a/b, angle_deg, length_mm) — retry passing region_panel_id_a/region_panel_id_b to pick one; nothing is picked automatically.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -138,6 +138,12 @@ export const graphToolDefinitions = [
           description:
             "Overrides the detected-angle-sign-derived mountain/valley pivot-side default (see BendRow.bottomIsConcave's own doc comment) — a caller that already knows the true pivot side should pass it explicitly; the sign-derived rule is a default, not an invariant.",
         },
+        region_panel_id_a: {
+          type: 'string',
+          description:
+            'Picks a specific contact region when the two parts touch along more than one real seam at once — pass together with region_panel_id_b, using the ids from a prior GE_MERGE_AMBIGUOUS_CONTACT error. Omit when there is only one real contact (the common case).',
+        },
+        region_panel_id_b: { type: 'string' },
       },
       required: ['part_a_id', 'part_b_id'],
     },
@@ -710,6 +716,8 @@ function handleMergeBodiesWithBend(
   const radiusMm = optNumber(args, 'radius_mm');
   const kFactor = optNumber(args, 'k_factor');
   const bottomIsConcave = optBoolean(args, 'bottom_is_concave');
+  const regionPanelIdA = optString(args, 'region_panel_id_a');
+  const regionPanelIdB = optString(args, 'region_panel_id_b');
 
   try {
     const { bend, childRegionPanel } = mergePartsWithBend(store, {
@@ -718,6 +726,8 @@ function handleMergeBodiesWithBend(
       radiusMm,
       kFactor,
       bottomIsConcave,
+      regionPanelIdA,
+      regionPanelIdB,
     });
     return {
       part_id: partAId,

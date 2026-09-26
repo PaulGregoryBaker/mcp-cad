@@ -50,37 +50,81 @@ enum class MergeErrorCode {
                             // check catching a bug, not a caller-triggerable outcome
 };
 
+// One candidate flat panel to test for contact — a part with bends has one of
+// these per region panel (rebuild live-app regression 2026-09-22: a part's
+// single stored (outline, anchor) only ever describes its ROOT panel's real
+// world position; a folded, non-root panel's true 3D position only exists via
+// that panel's own pose, manufacturing_graph_evaluator.cc's poseByRegionPanel
+// cascade — applying the part's root anchor to material beyond the root
+// silently checks the wrong plane and misses real contact entirely). A part
+// with no bends passes exactly one candidate (its root panel, pose == its own
+// anchor) — the single-panel case is not special-cased, just the n=1 case of
+// this loop.
+struct ContactPanelCandidate {
+  // This panel's own ring, in the part's shared flat-pattern frame (F) — a
+  // subring of the part's whole stored outline, e.g. a region panel's own
+  // rawOuter. Points here are ALREADY in F, not a separately-local frame:
+  // `pose` maps them straight to world, so a contact point found against this
+  // ring is directly usable against the part's full outline with no remap.
+  std::vector<Point2> outline;
+  // This panel's own true world pose (the cascade product, not the part's
+  // root anchor) — see the struct comment above.
+  Transform3 pose;
+  // Diagnostics only (ContactRegion::regionPanelIdA/B) — never consulted for
+  // geometry.
+  std::string regionPanelId;
+};
+
+// One real, physically-disjoint contact interval between some panel of A and
+// some panel of B — TASK_SPEC.md §8.3 phase 2 (deferred no longer): a real
+// assembly can have multiple simultaneous genuine contacts (e.g. two
+// different panel pairs each touching along their own seam), and silently
+// picking one used to hide that from the caller entirely. DetectContact
+// returns every one it finds; the caller decides what to do with more than
+// one (never DetectContact's own decision — TASK_SPEC.md F1/F2's "edge choice
+// is never caller-supplied" is about DECIDING geometry, not about hiding real
+// candidates).
+struct ContactRegion {
+  // In EACH side's own local 2D frame (F) — exactly the (edgeA0, edgeA1,
+  // edgeB0, edgeB1) the old caller-supplied API took. Correspondence is
+  // physical: aRunStart and bRunEnd are the SAME real 3D point (and
+  // aRunEnd/bRunStart the same), matching the "opposite traversal order" rule
+  // ReconcileOutlines relies on — ReconcileOutlines re-derives this itself
+  // from the points, this is not a promise callers need to hand-verify.
+  Point2 aRunStart;
+  Point2 aRunEnd;
+  Point2 bRunStart;
+  Point2 bRunEnd;
+  double angleDeg = 0.0;  // the real dihedral angle between THIS panel pair's planes, at this contact
+  double lengthMm = 0.0;
+  // Diagnostics: which panel of A/B this region came from — never consulted
+  // for geometry (ReconcileOutlines only ever needs the four points above).
+  std::string regionPanelIdA;
+  std::string regionPanelIdB;
+};
+
 struct DetectContactResult {
   bool ok = false;
   MergeErrorCode errorCode = MergeErrorCode::kNone;
   std::string message;
 
-  // The chosen contact interval, in EACH side's own local 2D frame — exactly
-  // the (edgeA0, edgeA1, edgeB0, edgeB1) the old caller-supplied API took,
-  // now derived from anchors instead. Correspondence is physical: aRunStart
-  // and bRunEnd are the SAME real 3D point (and aRunEnd/bRunStart the same),
-  // matching the "opposite traversal order" rule ReconcileOutlines relies on
-  // — ReconcileOutlines re-derives this itself from the points, this is not
-  // a promise callers need to hand-verify.
-  Point2 aRunStart;
-  Point2 aRunEnd;
-  Point2 bRunStart;
-  Point2 bRunEnd;
-  double angleDeg = 0.0;  // the real dihedral angle between A's and B's planes at the contact
-
-  // Diagnostics for TASK_SPEC.md §8.3 (phase 1: pick the longest deterministically,
-  // still surfaced here so a caller/test can confirm that's what happened;
-  // phase 2, deferred, will need this to build a real disambiguation error).
-  int contactRegionCount = 0;
+  // Every real contact region found, across every (panelA, panelB) pair —
+  // empty iff errorCode == kNoContact. No ordering is guaranteed beyond
+  // being deterministic for the same input (panel-pair discovery order);
+  // a caller that wants "the longest" sorts this itself.
+  std::vector<ContactRegion> regions;
 };
 
-// outlineA/outlineB: each part's own one stored flat outline (CCW), in its
-// own local 2D frame. anchorA/anchorB: each part's own real R (13 §3.1),
-// embedding that local flat frame into world — the ONLY input this function
-// uses to find the seam; edge choice is never caller-supplied (TASK_SPEC.md
-// F1/F2).
-DetectContactResult DetectContact(const std::vector<Point2>& outlineA, const Transform3& anchorA,
-                                   const std::vector<Point2>& outlineB, const Transform3& anchorB);
+// panelsA/panelsB: every region panel of each part, as its own ring (in that
+// part's shared flat frame F) + its own true world pose — never a single
+// whole-part (outline, anchor) pair, since a part with bends has no single
+// rigid transform that correctly places all of its material (see
+// ContactPanelCandidate's own doc comment). Tests every (panelA, panelB)
+// pair; edge choice among the resulting regions is never made here
+// (TASK_SPEC.md F1/F2) — that is the caller's decision (DetectContactResult's
+// own doc comment).
+DetectContactResult DetectContact(const std::vector<ContactPanelCandidate>& panelsA,
+                                   const std::vector<ContactPanelCandidate>& panelsB);
 
 struct ReconcileOutlinesResult {
   bool ok = false;

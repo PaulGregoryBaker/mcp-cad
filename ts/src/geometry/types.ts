@@ -769,21 +769,50 @@ export interface MapToFlatResult {
   residualMm: number;
 }
 
-// docs/TASK_SPEC.md §9 step 1 / part_merge.hpp's DetectContact — anchor-driven
-// seam detection for merge_bodies_with_bend: given each part's own real
-// anchor (never a caller-supplied edge), finds the one real contact interval
-// between them, in each side's own local 2D frame, plus the real dihedral
-// angle there. Feed straight into reconcileOutlines below.
-export interface DetectContactResult {
-  ok: boolean;
-  errorCode: string; // "" | "GE_MERGE_NO_CONTACT" | "GE_MERGE_COPLANAR_SEAM" | "GE_MERGE_SELF_INTERSECTION" | "GE_MERGE_INTERNAL_INCONSISTENCY"
-  message: string;
+// One candidate flat panel to test for contact — a part with bends has one of
+// these per region panel (rebuild live-app regression 2026-09-22: a part's
+// single stored (outline, anchor) only ever describes its ROOT panel's real
+// world position; a folded, non-root panel's true 3D position only exists via
+// that panel's own pose). A part with no bends passes exactly one candidate
+// (its root panel, pose == its own anchor).
+export interface NapiContactPanelCandidate {
+  // This panel's own ring, in the part's shared flat-pattern frame (F) — a
+  // subring of the part's whole stored outline (a region panel's own
+  // rawOuter). Already in F: `pose` maps it straight to world.
+  outline: NapiPoint2[];
+  // This panel's own true world pose (the bend-tree cascade, NOT the part's
+  // root anchor).
+  pose: NapiTransform3;
+  // Diagnostics only — never consulted for geometry.
+  regionPanelId: string;
+}
+
+// One real, physically-disjoint contact interval between some panel of A and
+// some panel of B.
+export interface ContactRegion {
   aRunStart: NapiPoint2;
   aRunEnd: NapiPoint2;
   bRunStart: NapiPoint2;
   bRunEnd: NapiPoint2;
   angleDeg: number;
-  contactRegionCount: number;
+  lengthMm: number;
+  regionPanelIdA: string;
+  regionPanelIdB: string;
+}
+
+// docs/TASK_SPEC.md §9 step 1 / part_merge.hpp's DetectContact — anchor-driven
+// seam detection for merge_bodies_with_bend: given every region panel of each
+// part (never a caller-supplied edge, never just the part's root anchor —
+// see NapiContactPanelCandidate's own doc comment), finds EVERY real contact
+// region between them, across every panel pair — a real assembly can have
+// multiple simultaneous genuine contacts, so nothing is picked or discarded
+// here (TASK_SPEC.md §8.3 phase 2). `regions` is empty iff errorCode is
+// GE_MERGE_NO_CONTACT or GE_MERGE_COPLANAR_SEAM.
+export interface DetectContactResult {
+  ok: boolean;
+  errorCode: string; // "" | "GE_MERGE_NO_CONTACT" | "GE_MERGE_COPLANAR_SEAM" | "GE_MERGE_SELF_INTERSECTION" | "GE_MERGE_INTERNAL_INCONSISTENCY"
+  message: string;
+  regions: ContactRegion[];
 }
 
 // rebuild/14-graph-schema.md §2.1.2 / part_merge.hpp — Phase 5 Slice 4. Pure

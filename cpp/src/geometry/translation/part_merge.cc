@@ -141,18 +141,20 @@ struct FoundRegion {
   double lengthMm = 0.0;
 };
 
-}  // namespace
-
-DetectContactResult DetectContact(const std::vector<Point2>& outlineA, const Transform3& anchorA,
-                                   const std::vector<Point2>& outlineB, const Transform3& anchorB) {
-  DetectContactResult result;
+// One (panelA, panelB) pair's own contact scan — exactly today's single-panel
+// DetectContact algorithm, unchanged, just scoped to one candidate pair
+// instead of a whole part and no longer computing the dihedral angle (the
+// caller does that once per FOUND region, using the OWNING pair's own poses —
+// ContactRegion's own doc comment). Appends every region this pair finds to
+// `outFound` (never just the best) and sets `outCoplanar` if this pair's B
+// panel lies entirely in this pair's A panel's own plane (F7) — the caller
+// aggregates that flag across every pair to decide the right "nothing found"
+// error message (kCoplanarSeam vs kNoContact).
+void DetectContactForPanelPair(const std::vector<Point2>& outlineA, const Transform3& anchorA,
+                                const std::vector<Point2>& outlineB, const Transform3& anchorB,
+                                std::vector<FoundRegion>& outFound, bool& outCoplanar) {
   const size_t n = outlineA.size();
   const size_t m = outlineB.size();
-  if (n < 3 || m < 3) {
-    result.errorCode = MergeErrorCode::kInternalInconsistency;
-    result.message = "both outlines must have at least 3 vertices";
-    return result;
-  }
 
   // Project every B vertex into A's own local 3D frame (13 §3.1's R, composed
   // exactly as FuseCoplanarParts already does for the coplanar case).
@@ -172,10 +174,8 @@ DetectContactResult DetectContact(const std::vector<Point2>& outlineA, const Tra
     }
   }
   if (allCoplanar) {
-    result.errorCode = MergeErrorCode::kCoplanarSeam;
-    result.message =
-        "part B lies entirely in part A's own plane — this is a flush absorb (fuse_bodies), not a fold";
-    return result;
+    outCoplanar = true;
+    return;
   }
 
   // Group B's boundary into maximal runs of consecutive vertices lying (both
@@ -378,83 +378,124 @@ DetectContactResult DetectContact(const std::vector<Point2>& outlineA, const Tra
     region.bStartLocal = bAtAEnd;
     region.bEndLocal = bAtAStart;
     region.lengthMm = overlapHi - overlapLo;
-    found.push_back(region);
+    outFound.push_back(region);
   }
+}
 
-  if (found.empty()) {
-    result.errorCode = MergeErrorCode::kNoContact;
-    result.message =
-        "no real boundary contact found between the two parts' own anchors, within " +
-        std::to_string(kMergeContactToleranceMm) + "mm";
-    return result;
-  }
+}  // namespace
 
-  // TASK_SPEC.md §8.3 phase 1: deterministically pick the longest region.
-  // Phase 2 (a caller-facing contact_point_hint + rich per-candidate
-  // geometry in the error) is deferred — contactRegionCount is surfaced now
-  // so a caller/test can already see when this placeholder rule fired.
-  size_t bestIdx = 0;
-  for (size_t i = 1; i < found.size(); ++i) {
-    if (found[i].lengthMm > found[bestIdx].lengthMm) bestIdx = i;
-  }
-  const FoundRegion& chosen = found[bestIdx];
-
-  // aStart2D/aEnd2D are already in A's own forward-walk order (the
-  // aForwardIsIncreasingT resolution above). bStartLocal/bEndLocal are
-  // already the physically-corresponding B points in the "opposite order"
-  // ReconcileOutlines' T(edgeB0)=edgeA1 convention requires (part_merge.hpp)
-  // — bStartLocal sits at aEnd2D's location, bEndLocal at aStart2D's.
-  result.ok = true;
-  result.aRunStart = chosen.aStart2D;
-  result.aRunEnd = chosen.aEnd2D;
-  result.bRunStart = chosen.bStartLocal;
-  result.bRunEnd = chosen.bEndLocal;
-  result.contactRegionCount = static_cast<int>(found.size());
-
-  // Signed dihedral angle: the rotation, about axis (hingeB_world -
-  // hingeA_world) — the SAME axis convention manufacturing_graph_evaluator.cc's
-  // own pose walk uses (RotationAboutAxis(hingeAWorld, axis, angleDeg)) — that
-  // carries A's own plane normal onto B's own plane normal. Using each
-  // panel's normal (rather than some other in-plane reference vector) as the
-  // rotated quantity is valid because a fold, by definition, rotates the
-  // child panel's plane (hence its normal) by exactly angleDeg about the
-  // hinge axis; using the normal also sidesteps needing to know which
-  // in-plane "left" direction to reference. Both normals are guaranteed
-  // perpendicular to the hinge axis (the axis lies IN both panels' own
-  // planes, by construction, since it is exactly their shared boundary run).
-  //
-  // hingeA/hingeB here MUST match the REAL BendRow's own hingeA/hingeB —
-  // ReconcileOutlines sets bend.hingeA = edgeA1 (= aRunEnd) and
-  // bend.hingeB = edgeA0 (= aRunStart), reversed from aRunStart/aRunEnd's own
-  // order (part_merge.hpp's "opposite order" rule) — using aRunStart/aRunEnd
-  // directly here would compute the angle about the OPPOSITE axis direction,
-  // silently flipping mountain/valley on every fold (confirmed live: this
-  // exact bug against unequal_leg_bracket_90deg.stp, a ~30-100mm systematic
-  // bbox error matching the wrong-fold-direction signature exactly).
-  const Point3 hingeAWorld = anchorA.Apply({result.aRunEnd.x, result.aRunEnd.y, 0.0});
-  const Point3 hingeBWorld = anchorA.Apply({result.aRunStart.x, result.aRunStart.y, 0.0});
-  Point3 axis = Sub3(hingeBWorld, hingeAWorld);
-  const double axisLen = Length3(axis);
-  if (axisLen < 1e-9) {
+DetectContactResult DetectContact(const std::vector<ContactPanelCandidate>& panelsA,
+                                   const std::vector<ContactPanelCandidate>& panelsB) {
+  DetectContactResult result;
+  if (panelsA.empty() || panelsB.empty()) {
     result.errorCode = MergeErrorCode::kInternalInconsistency;
-    result.message = "detected contact interval has zero length";
+    result.message = "both parts must have at least one panel candidate";
     return result;
   }
-  axis = {axis.x / axisLen, axis.y / axisLen, axis.z / axisLen};
+  for (const auto& panel : panelsA) {
+    if (panel.outline.size() < 3) {
+      result.errorCode = MergeErrorCode::kInternalInconsistency;
+      result.message = "panel " + panel.regionPanelId + " (part A) outline must have at least 3 vertices";
+      return result;
+    }
+  }
+  for (const auto& panel : panelsB) {
+    if (panel.outline.size() < 3) {
+      result.errorCode = MergeErrorCode::kInternalInconsistency;
+      result.message = "panel " + panel.regionPanelId + " (part B) outline must have at least 3 vertices";
+      return result;
+    }
+  }
 
-  const Point3 nA = anchorA.ApplyVector({0.0, 0.0, 1.0});
-  const Point3 nB = anchorB.ApplyVector({0.0, 0.0, 1.0});
-  const double angleRad = std::atan2(Dot3(Cross3(nA, nB), axis), Dot3(nA, nB));
-  result.angleDeg = angleRad * 180.0 / kPi;
+  // A real assembly can have multiple simultaneous genuine contacts (two
+  // different panel pairs each touching along their own seam) — every
+  // (panelA, panelB) pair is tested independently and EVERY real region any
+  // pair finds is kept (TASK_SPEC.md §8.3 phase 2: no longer picking one
+  // "best" region here — that was hiding real candidates from the caller,
+  // never DetectContact's own decision to make, TASK_SPEC.md F1/F2).
+  bool sawCoplanarPair = false;
+  for (const auto& panelA : panelsA) {
+    for (const auto& panelB : panelsB) {
+      std::vector<FoundRegion> pairFound;
+      bool pairCoplanar = false;
+      DetectContactForPanelPair(panelA.outline, panelA.pose, panelB.outline, panelB.pose, pairFound,
+                                 pairCoplanar);
+      if (pairCoplanar) sawCoplanarPair = true;
 
-  if (std::fabs(result.angleDeg) < kCoplanarAngleEpsilonDeg) {
-    result.ok = false;
-    result.errorCode = MergeErrorCode::kCoplanarSeam;
-    result.message = "the only real contact between these parts is genuinely coplanar (angle ~= 0) — "
-                      "this is a flush absorb (fuse_bodies), not a fold";
+      for (const auto& fr : pairFound) {
+        // Signed dihedral angle: the rotation, about axis (hingeB_world -
+        // hingeA_world) — the SAME axis convention manufacturing_graph_
+        // evaluator.cc's own pose walk uses (RotationAboutAxis(hingeAWorld,
+        // axis, angleDeg)) — that carries THIS PAIR's A-panel plane normal
+        // onto its B-panel plane normal. Using each panel's own real pose
+        // (never a part-level root anchor) is exactly the fix this
+        // multi-panel generalization exists for — a non-root panel's true
+        // plane normal only comes from its own cascaded pose.
+        //
+        // hingeA/hingeB here MUST match the REAL BendRow's own hingeA/hingeB
+        // — ReconcileOutlines sets bend.hingeA = edgeA1 (= aRunEnd) and
+        // bend.hingeB = edgeA0 (= aRunStart), reversed from aRunStart/aRunEnd's
+        // own order (part_merge.hpp's "opposite order" rule) — using
+        // aRunStart/aRunEnd directly here would compute the angle about the
+        // OPPOSITE axis direction, silently flipping mountain/valley on every
+        // fold (confirmed live: this exact bug against
+        // unequal_leg_bracket_90deg.stp, a ~30-100mm systematic bbox error
+        // matching the wrong-fold-direction signature exactly).
+        const Point3 hingeAWorld = panelA.pose.Apply({fr.aEnd2D.x, fr.aEnd2D.y, 0.0});
+        const Point3 hingeBWorld = panelA.pose.Apply({fr.aStart2D.x, fr.aStart2D.y, 0.0});
+        Point3 axis = Sub3(hingeBWorld, hingeAWorld);
+        const double axisLen = Length3(axis);
+        if (axisLen < 1e-9) continue;  // degenerate (zero-length) interval — cannot occur, defensive only
+        axis = {axis.x / axisLen, axis.y / axisLen, axis.z / axisLen};
+
+        const Point3 nA = panelA.pose.ApplyVector({0.0, 0.0, 1.0});
+        const Point3 nB = panelB.pose.ApplyVector({0.0, 0.0, 1.0});
+        const double angleRad = std::atan2(Dot3(Cross3(nA, nB), axis), Dot3(nA, nB));
+        const double angleDeg = angleRad * 180.0 / kPi;
+
+        // F7: a genuinely coplanar contact (angle ~= 0) is fuse_bodies' job
+        // (a flush absorb), not a fold — excluded from `regions`, same as
+        // the whole-pair coplanar check above, not a whole-call abort.
+        if (std::fabs(angleDeg) < kCoplanarAngleEpsilonDeg) {
+          sawCoplanarPair = true;
+          continue;
+        }
+
+        ContactRegion region;
+        // aStart2D/aEnd2D are already in A's own forward-walk order (the
+        // aForwardIsIncreasingT resolution inside DetectContactForPanelPair).
+        // bStartLocal/bEndLocal are already the physically-corresponding B
+        // points in the "opposite order" ReconcileOutlines' T(edgeB0)=edgeA1
+        // convention requires (part_merge.hpp) — bStartLocal sits at
+        // aEnd2D's location, bEndLocal at aStart2D's.
+        region.aRunStart = fr.aStart2D;
+        region.aRunEnd = fr.aEnd2D;
+        region.bRunStart = fr.bStartLocal;
+        region.bRunEnd = fr.bEndLocal;
+        region.angleDeg = angleDeg;
+        region.lengthMm = fr.lengthMm;
+        region.regionPanelIdA = panelA.regionPanelId;
+        region.regionPanelIdB = panelB.regionPanelId;
+        result.regions.push_back(region);
+      }
+    }
+  }
+
+  if (result.regions.empty()) {
+    if (sawCoplanarPair) {
+      result.errorCode = MergeErrorCode::kCoplanarSeam;
+      result.message = "the only real contact between these parts is genuinely coplanar (angle ~= 0) — "
+                        "this is a flush absorb (fuse_bodies), not a fold";
+    } else {
+      result.errorCode = MergeErrorCode::kNoContact;
+      result.message =
+          "no real boundary contact found between the two parts' own anchors, within " +
+          std::to_string(kMergeContactToleranceMm) + "mm";
+    }
     return result;
   }
 
+  result.ok = true;
   return result;
 }
 

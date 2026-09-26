@@ -34,7 +34,7 @@ import * as path from 'node:path';
 
 import { GraphStore } from '../../src/v2/graph/store';
 import { dispatchGraphTool } from '../../src/v2/tools/graph';
-import { constructPart } from '../../src/v2/graph/evaluate-client';
+import { constructPart, evaluatePart } from '../../src/v2/graph/evaluate-client';
 import { geometryBinding } from '../../src/geometry/binding';
 
 const ENABLED = process.env.SUITE_V2_DRIVER === '1';
@@ -140,4 +140,89 @@ d('[v2] split_part_at_bend on cauldron.step real acute bend (live-app regression
       expect(outlineSizes[1]).toBeGreaterThan(10);
     });
   }
+
+  // Live-app regression (2026-09-22): after splitting Component 2 at the
+  // reported bend, merging the split-off child ("Component 2 Part 1") with a
+  // sibling component ("Component 3") that visibly touches it in the 3D view
+  // failed with GE_MERGE_NO_CONTACT. Root cause: every "component" cauldron.
+  // step decomposes into is itself a real multi-bend body (8-32 bends each),
+  // and merge_bodies_with_bend's detectContact used to only ever check a
+  // part's ROOT panel (via its root anchor applied to the whole flat
+  // pattern) — real contact on a NON-root panel of the sibling was invisible
+  // to it. Fixed by testing every region panel of both parts, via each
+  // panel's own true (pose-cascaded) world position, not the part's root
+  // anchor. The real fixed geometry here also touches along THREE
+  // simultaneous regions at once (a real multi-seam contact) — exercising
+  // the companion fix (return every region, require an explicit pick when
+  // more than one is found, GE_MERGE_AMBIGUOUS_CONTACT) in the same test.
+  it('REGRESSION: merging the split-off child with the sibling component it really '
+    + 'touches (on a non-root panel, along multiple simultaneous seams) succeeds', () => {
+    const { store, partId: component2Id, bend } = findReportedBend(3);
+
+    const splitResult = dispatchGraphTool(store, 'split_part_at_bend', {
+      part_id: component2Id,
+      bend_id: bend.bendId,
+      keep_corner_on: 'parent',
+    }) as { part_id: string; new_part_ids: string[] };
+    const childPartId = splitResult.new_part_ids[0]!;
+    const childOutlineLenBeforeMerge = store.getPart(childPartId)!.outline.length;
+
+    // Find whichever OTHER live top-level part this split-off child actually,
+    // physically touches — ground truth via detectContact itself, over every
+    // region panel of each candidate, not a guess at which "Component N" the
+    // UI would have labeled it.
+    const everyLivePartId = store
+      .snapshotAll()
+      .parts.map((p) => p.partId)
+      .filter((id) => id !== childPartId && id !== splitResult.part_id && store.getPart(id)!.mergedIntoPartId === null);
+
+    const childLayout = evaluatePart(store, childPartId);
+    expect(childLayout.ok).toBe(true);
+    const childPanels = childLayout.panels.map((p) => ({
+      outline: p.rawOuter,
+      pose: p.pose,
+      regionPanelId: p.regionPanelId,
+    }));
+
+    let touchingSiblingId: string | undefined;
+    let firstRegion: { regionPanelIdA: string; regionPanelIdB: string } | undefined;
+    for (const candidateId of everyLivePartId) {
+      const candidateLayout = evaluatePart(store, candidateId);
+      if (!candidateLayout.ok) continue;
+      const candidatePanels = candidateLayout.panels.map((p) => ({
+        outline: p.rawOuter,
+        pose: p.pose,
+        regionPanelId: p.regionPanelId,
+      }));
+      const contact = geometryBinding.detectContact(childPanels, candidatePanels);
+      if (contact.ok && contact.regions.length > 0) {
+        touchingSiblingId = candidateId;
+        firstRegion = contact.regions[0]!;
+        break;
+      }
+    }
+    expect(
+      touchingSiblingId,
+      'the split-off child must have a real sibling it physically touches on some panel',
+    ).toBeDefined();
+
+    // The real geometry here touches along MORE than one region at once (a
+    // genuine multi-seam contact, per the user's own report) — merge_bodies_
+    // with_bend correctly refuses to guess which one and requires an explicit
+    // selection (GE_MERGE_AMBIGUOUS_CONTACT); pick the first real candidate.
+    const mergeResult = dispatchGraphTool(store, 'merge_bodies_with_bend', {
+      part_a_id: childPartId,
+      part_b_id: touchingSiblingId,
+      region_panel_id_a: firstRegion!.regionPanelIdA,
+      region_panel_id_b: firstRegion!.regionPanelIdB,
+    }) as { part_id: string; bend_id: string; child_region_panel_id: string };
+
+    expect(mergeResult.part_id).toBe(childPartId);
+    expect(mergeResult.bend_id).toBeTruthy();
+
+    // The merge must have actually happened, not just reported success.
+    const mergedPart = store.getPart(childPartId)!;
+    expect(mergedPart.outline.length).toBeGreaterThan(childOutlineLenBeforeMerge);
+    expect(store.getPart(touchingSiblingId!)!.mergedIntoPartId).toBe(childPartId);
+  });
 });
