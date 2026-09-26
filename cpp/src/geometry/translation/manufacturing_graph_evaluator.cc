@@ -898,8 +898,148 @@ CutEdgesResult BuildCutEdges(const std::vector<Point2>& ring, std::vector<BendCu
     if (std::fabs(crossPrev) < kGeometricEpsilon) {
       Point2 setbackShift = Sub2(cuts[ci].hingeA, cuts[ci].childShiftA);
       edges[prevA].from = Sub2(ring[prevA], setbackShift);
+    } else if (hingeAAt[prevA].empty() && hingeBAt[prevA].empty()) {
+      // ring[prevA] is neither collinear with the hinge (handled above) nor
+      // claimed by any OTHER bend's own hinge (checked here) — an ordinary
+      // angled edge of this panel's own shape (e.g. an angled tab) that
+      // happens to sit next to this hinge, isolated to this one bend by
+      // construction (two bends can only ever interact at a SHARED raw
+      // vertex, which the hingeAAt/hingeBAt check above already rules out).
+      // Left at its raw position while the hinge line beside it shifts by
+      // setback, this edge can cross back through the shifted hinge line —
+      // confirmed live (l_bracket_corner_90deg.stp, default_bend_radius_mm=
+      // 2: raw edge (203,100)->(201.5,200) left untouched while the hinge
+      // shifted from x=201.5 to x=203.5, producing a self-intersecting
+      // wallOuter and an invalid extruded solid). Correct it the same way
+      // the isA&&isB miter branch above corrects a shared corner: intersect
+      // this edge's own TRUE direction (ring[prevA] to ring[iA], unshifted)
+      // against the SHIFTED hinge line. A genuinely parallel edge (no
+      // intersection) leaves the raw coordinate untouched rather than
+      // guessing a replacement.
+      // Only correct when ring[prevA] actually falls inside the trimmed
+      // setback band (between the raw hinge line and the shifted line) —
+      // i.e. it's still on the hinge side of the childShiftA/B line. A
+      // vertex already past that line (deeper into the child's own body)
+      // needs no correction at all; applying the intersection unconditionally
+      // here previously mis-fired on ordinary, unrelated vertices (e.g. every
+      // BA=0 case, where childShiftA==hingeA and nothing should move).
+      double crossVsShift = Cross2(hDirA, Sub2(ring[prevA], cuts[ci].childShiftA));
+      // crossPrev > 0 is this bend's own "genuinely child-side of the raw
+      // hinge line" sign (established above: crossPrev's fabs()<eps branch
+      // is the collinear case, and every confirmed child-side vertex in
+      // this codebase's own tests has crossPrev on the SAME sign as the
+      // child's own raw material, independent of the bend's angle sign).
+      // Without this, crossVsShift alone can't tell "still-child, not yet
+      // past the setback line" apart from "genuinely parent territory that
+      // happens to sit on the same side of the shifted line by geometric
+      // coincidence" — confirmed live (the "child extends diagonally"
+      // diagnostic fixture: a wide sideways setback made the PARENT's own
+      // far corner test as "inside the band" too, and an earlier version of
+      // this walk silently ate two real parent vertices before stopping at
+      // the next bend's own claimed hingeB).
+      if (crossPrev > kGeometricEpsilon && crossVsShift < -kGeometricEpsilon) {
+        // ring[prevA] itself sits inside the band and must be dropped
+        // entirely, not corrected in place — confirmed live
+        // (l_bracket_corner_90deg.stp, radius=5: intersecting prevA's own
+        // OUTGOING edge toward the hinge produced a fabricated point,
+        // because that whole edge already lies fully inside the band; the
+        // true crossing is on the INCOMING edge instead, which can itself
+        // start from a vertex still inside the band — e.g. a short angled
+        // tab right before a wide setback). Walk backward, dropping every
+        // further unclaimed in-band vertex still genuinely on the child's
+        // own side of the raw hinge line, until reaching one that's
+        // already on the keep side, has crossed onto the parent's own side,
+        // or is claimed by another bend (the only place two bends can ever
+        // meet, per this file's own isolated-to-the-bend invariant) — then
+        // intersect THAT vertex's own forward edge (into the dropped run)
+        // against the shifted line, and skip the whole run.
+        size_t k = prevA;
+        while (true) {
+          size_t kPrev = (k + n - 1) % n;
+          bool claimed = !hingeAAt[kPrev].empty() || !hingeBAt[kPrev].empty();
+          double crossKPrevVsHinge = Cross2(hDirA, Sub2(ring[kPrev], cuts[ci].hingeA));
+          double crossKPrevVsShift = Cross2(hDirA, Sub2(ring[kPrev], cuts[ci].childShiftA));
+          bool stillChildSide = crossKPrevVsHinge > kGeometricEpsilon;
+          if (claimed || !stillChildSide || crossKPrevVsShift >= -kGeometricEpsilon || kPrev == iA) {
+            // TraceLoopFrom (below) only ever reads an edge's own `.from` --
+            // `.to` is never collected -- so the crossing point must be
+            // inserted as a brand-new edge's `.from`, the same pattern the
+            // isA&&isB/isB&&!isA step-edge branches above already use, not
+            // written onto an existing edge's unused `.to` field.
+            Point2 edgeDir = Sub2(ring[k], ring[kPrev]);
+            auto intersection = LineIntersect2(cuts[ci].childShiftA, hDirA, ring[kPrev], edgeDir);
+            if (intersection.has_value()) {
+              size_t stepIdx = edges.size();
+              edges.push_back({*intersection, cuts[ci].childShiftA, cuts[ci].bendId, childBridgeIdx[ci]});
+              edges[stepIdx].isTransitionStep = true;
+              edges[kPrev].next = stepIdx;
+            } else {
+              edges[kPrev].next = childBridgeIdx[ci];
+            }
+            break;
+          }
+          k = kPrev;
+        }
+      }
     }
     edges[prevA].next = childBridgeIdx[ci];
+  }
+
+  // Mirror of the prevA loop above, for the vertex immediately AFTER
+  // hingeB (the FIRST vertex of the child's own raw material once the
+  // bridge/loop resumes there — see childBridgeIdx's own construction
+  // above, `resumeAt = cut.iB`). The exact same gap exists on this side —
+  // confirmed live (tab_bracket_90deg.stp, radius=2: the vertex right
+  // after hingeB fell inside the setback band on the child's own near
+  // side, producing a self-intersecting wallOuter where the child's own
+  // bridge edge crossed back through an ordinary edge further along the
+  // ring).
+  for (size_t ci = 0; ci < cuts.size(); ++ci) {
+    if (childBridgeIdx[ci] == SIZE_MAX) continue;
+    if (cuts[ci].iB < 0) continue;
+    size_t iB = static_cast<size_t>(cuts[ci].iB);
+    if (hingeBAt[iB].size() > 1 && minSpanOf(hingeBAt[iB]) != ci) continue;
+    size_t nextB = (iB + 1) % n;
+    Point2 hDirB = Sub2(cuts[ci].hingeB, cuts[ci].hingeA);
+    double crossNext = Cross2(hDirB, Sub2(ring[nextB], cuts[ci].hingeB));
+    if (std::fabs(crossNext) < kGeometricEpsilon) {
+      // Collinear with the hinge line — the child's own wing continuing
+      // past hingeB — mirrors the prevA loop's own rigid-shift branch.
+      // TraceLoopFrom only reads an edge's own `.from`, and ring[nextB]'s
+      // own value is read via edges[nextB].from (not edges[iB].to, which is
+      // never collected) — so the correction belongs on edges[nextB].
+      Point2 setbackShift = Sub2(cuts[ci].hingeB, cuts[ci].childShiftB);
+      edges[nextB].from = Sub2(ring[nextB], setbackShift);
+    } else if (hingeAAt[nextB].empty() && hingeBAt[nextB].empty()) {
+      double crossVsShift = Cross2(hDirB, Sub2(ring[nextB], cuts[ci].childShiftB));
+      if (crossNext > kGeometricEpsilon && crossVsShift < -kGeometricEpsilon) {
+        size_t k = nextB;
+        while (true) {
+          size_t kNext = (k + 1) % n;
+          bool claimed = !hingeAAt[kNext].empty() || !hingeBAt[kNext].empty();
+          double crossKNextVsHinge = Cross2(hDirB, Sub2(ring[kNext], cuts[ci].hingeB));
+          double crossKNextVsShift = Cross2(hDirB, Sub2(ring[kNext], cuts[ci].childShiftB));
+          bool stillChildSide = crossKNextVsHinge > kGeometricEpsilon;
+          if (claimed || !stillChildSide || crossKNextVsShift >= -kGeometricEpsilon || kNext == iB) {
+            // Same fix as the prevA walk above: insert the crossing point as
+            // a brand-new edge's own `.from`, not onto edges[iB].to (unread
+            // by the trace).
+            Point2 edgeDir = Sub2(ring[k], ring[kNext]);
+            auto intersection = LineIntersect2(cuts[ci].childShiftB, hDirB, ring[kNext], edgeDir);
+            if (intersection.has_value()) {
+              size_t stepIdx = edges.size();
+              edges.push_back({*intersection, ring[kNext], cuts[ci].bendId, kNext});
+              edges[stepIdx].isTransitionStep = true;
+              edges[iB].next = stepIdx;
+            } else {
+              edges[iB].next = kNext;
+            }
+            break;
+          }
+          k = kNext;
+        }
+      }
+    }
   }
 
   CutEdgesResult result;

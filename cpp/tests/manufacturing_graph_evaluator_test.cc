@@ -2068,6 +2068,181 @@ TEST_CASE("GraphEvaluator: a free edge collinear with the hinge line keeps its o
   CHECK(foundTrueHingeB);
 }
 
+// Live bug (l_bracket_corner_90deg.stp @ default_bend_radius_mm=5,
+// docs/BUG_REPORT_complex_panel_bend_surfaces.md): a non-collinear child
+// vertex right next to hingeA (an ordinary angled tab edge, unclaimed by any
+// other bend) was left at its raw position while the hinge shifted by
+// setback past it, so the tab's own true edge crossed back through the
+// shifted hinge line -- a self-intersecting wallOuter and, downstream, an
+// invalid extruded solid ("invalid boolean topology" from the fuse). Fixed
+// in BuildCutEdges' prevA loop: a vertex still inside the trimmed setback
+// band (on the child's own side of the raw hinge, but not yet past the
+// shifted line) must be DROPPED, walking backward until reaching the true
+// boundary crossing -- not corrected in place by intersecting the wrong
+// (outgoing, already-inside-the-band) edge, which is what an earlier,
+// incomplete version of this fix did.
+TEST_CASE("GraphEvaluator: an angled tab immediately before hingeA, fully "
+          "inside the setback band, is dropped at the true incoming-edge "
+          "crossing -- not corrected in place",
+          "[translation][regression]") {
+  double thicknessMm = 1.5;
+  double radiusMm = 25.0;
+  double kFactor = 0.0;
+  double angleDeg = -90.0;
+
+  PartGraphSpec graph;
+  graph.partId = "tab_before_hingeA";
+  graph.rootRegionPanelId = "parent";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = Transform3::Identity();
+  // hingeA(20,200)->parent(0,200)->parent(0,0)->hingeB(20,0)->child(120,0)->
+  // child(120,100)->child tab tip(40,100)->back to hingeA. The tab tip
+  // (40,100) sits only 20mm from the hinge line (x=20) -- well inside the
+  // setback band once radius=25 pushes the shifted hinge line out to x=45 --
+  // and its own true edge (40,100)->hingeA(20,200) runs AWAY from the shift
+  // line (decreasing x), so intersecting it directly (the old, broken
+  // behavior) extrapolates backward into fabricated territory. The real
+  // crossing is on the INCOMING edge (120,100)->(40,100) instead.
+  graph.outline.outer = {
+      {20, 200}, {0, 200}, {0, 0}, {20, 0}, {120, 0}, {120, 100}, {40, 100},
+  };
+
+  BendSpec bend;
+  bend.id = "bend0";
+  bend.parentRegionPanelId = "parent";
+  bend.childRegionPanelId = "child";
+  bend.hingeA = {20, 200};
+  bend.hingeB = {20, 0};
+  bend.angleDeg = angleDeg;
+  bend.radiusMm = radiusMm;
+  bend.kFactor = kFactor;
+  graph.bends.push_back(bend);
+
+  EvaluateResult result = Evaluate(graph);
+  REQUIRE(result.ok);
+  REQUIRE(result.bridges.size() == 1);
+
+  const RegionPanelLayout* child = nullptr;
+  for (auto& p : result.panels) {
+    if (p.regionPanelId == "child") child = &p;
+  }
+  REQUIRE(child != nullptr);
+
+  double sb = radiusMm * std::tan(std::fabs(angleDeg) * kTestPi / 180.0 / 2.0);
+  Point2 expectedCrossing{20.0 + sb, 100.0};  // (45, 100)
+
+  double closestToCrossing = 1e18;
+  bool foundRawTabTip = false;
+  for (const auto& v : child->wallOuter) {
+    closestToCrossing =
+        std::min(closestToCrossing, std::hypot(v.x - expectedCrossing.x, v.y - expectedCrossing.y));
+    if (std::hypot(v.x - 40.0, v.y - 100.0) < 1e-6) foundRawTabTip = true;
+  }
+  INFO("closest wallOuter vertex to the true incoming-edge crossing ("
+       << expectedCrossing.x << "," << expectedCrossing.y << ") is " << closestToCrossing << "mm away");
+  CHECK(closestToCrossing < 1e-6);
+  CHECK_FALSE(foundRawTabTip);
+
+  // The resulting wallOuter must be a valid, non-self-intersecting polygon --
+  // the original bug's downstream symptom (extruding it produced an invalid
+  // solid).
+  size_t n = child->wallOuter.size();
+  bool selfIntersects = false;
+  for (size_t i = 0; i < n && !selfIntersects; ++i) {
+    Point2 a0 = child->wallOuter[i], a1 = child->wallOuter[(i + 1) % n];
+    for (size_t j = i + 2; j < n; ++j) {
+      if (i == 0 && j == n - 1) continue;
+      Point2 b0 = child->wallOuter[j], b1 = child->wallOuter[(j + 1) % n];
+      Point2 d1{a1.x - a0.x, a1.y - a0.y}, d2{b1.x - b0.x, b1.y - b0.y};
+      double denom = d1.x * d2.y - d1.y * d2.x;
+      if (std::fabs(denom) < 1e-9) continue;
+      double t = ((b0.x - a0.x) * d2.y - (b0.y - a0.y) * d2.x) / denom;
+      double u = ((b0.x - a0.x) * d1.y - (b0.y - a0.y) * d1.x) / denom;
+      if (t > 1e-9 && t < 1 - 1e-9 && u > 1e-9 && u < 1 - 1e-9) selfIntersects = true;
+    }
+  }
+  CHECK_FALSE(selfIntersects);
+}
+
+// Mirror of the test above, for the vertex immediately AFTER hingeB (the
+// symmetric gap fixed in BuildCutEdges' own nextB loop). Live bug
+// (tab_bracket_90deg.stp @ default_bend_radius_mm=2): the same self-
+// intersection, but on the other side of the hinge.
+TEST_CASE("GraphEvaluator: an angled tab immediately after hingeB, fully "
+          "inside the setback band, is dropped at the true incoming-edge "
+          "crossing -- not left at its raw position",
+          "[translation][regression]") {
+  double thicknessMm = 1.5;
+  double radiusMm = 25.0;
+  double kFactor = 0.0;
+  double angleDeg = -90.0;
+
+  PartGraphSpec graph;
+  graph.partId = "tab_after_hingeB";
+  graph.rootRegionPanelId = "parent";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = Transform3::Identity();
+  // hingeA(20,200)->parent(0,200)->parent(0,0)->hingeB(20,0)->child tab tip
+  // (40,100)->child(120,100)->child(120,200)->back to hingeA. Same tab-tip
+  // geometry as the prevA test above, mirrored onto hingeB's own side.
+  graph.outline.outer = {
+      {20, 200}, {0, 200}, {0, 0}, {20, 0}, {40, 100}, {120, 100}, {120, 200},
+  };
+
+  BendSpec bend;
+  bend.id = "bend0";
+  bend.parentRegionPanelId = "parent";
+  bend.childRegionPanelId = "child";
+  bend.hingeA = {20, 200};
+  bend.hingeB = {20, 0};
+  bend.angleDeg = angleDeg;
+  bend.radiusMm = radiusMm;
+  bend.kFactor = kFactor;
+  graph.bends.push_back(bend);
+
+  EvaluateResult result = Evaluate(graph);
+  REQUIRE(result.ok);
+  REQUIRE(result.bridges.size() == 1);
+
+  const RegionPanelLayout* child = nullptr;
+  for (auto& p : result.panels) {
+    if (p.regionPanelId == "child") child = &p;
+  }
+  REQUIRE(child != nullptr);
+
+  double sb = radiusMm * std::tan(std::fabs(angleDeg) * kTestPi / 180.0 / 2.0);
+  Point2 expectedCrossing{20.0 + sb, 100.0};  // (45, 100)
+
+  double closestToCrossing = 1e18;
+  bool foundRawTabTip = false;
+  for (const auto& v : child->wallOuter) {
+    closestToCrossing =
+        std::min(closestToCrossing, std::hypot(v.x - expectedCrossing.x, v.y - expectedCrossing.y));
+    if (std::hypot(v.x - 40.0, v.y - 100.0) < 1e-6) foundRawTabTip = true;
+  }
+  INFO("closest wallOuter vertex to the true incoming-edge crossing ("
+       << expectedCrossing.x << "," << expectedCrossing.y << ") is " << closestToCrossing << "mm away");
+  CHECK(closestToCrossing < 1e-6);
+  CHECK_FALSE(foundRawTabTip);
+
+  size_t n = child->wallOuter.size();
+  bool selfIntersects = false;
+  for (size_t i = 0; i < n && !selfIntersects; ++i) {
+    Point2 a0 = child->wallOuter[i], a1 = child->wallOuter[(i + 1) % n];
+    for (size_t j = i + 2; j < n; ++j) {
+      if (i == 0 && j == n - 1) continue;
+      Point2 b0 = child->wallOuter[j], b1 = child->wallOuter[(j + 1) % n];
+      Point2 d1{a1.x - a0.x, a1.y - a0.y}, d2{b1.x - b0.x, b1.y - b0.y};
+      double denom = d1.x * d2.y - d1.y * d2.x;
+      if (std::fabs(denom) < 1e-9) continue;
+      double t = ((b0.x - a0.x) * d2.y - (b0.y - a0.y) * d2.x) / denom;
+      double u = ((b0.x - a0.x) * d1.y - (b0.y - a0.y) * d1.x) / denom;
+      if (t > 1e-9 && t < 1 - 1e-9 && u > 1e-9 && u < 1 - 1e-9) selfIntersects = true;
+    }
+  }
+  CHECK_FALSE(selfIntersects);
+}
+
 // Live-app report (2026-09, testcube.step: Protrusion 1 fused onto "Component
 // 1 Part 1", then merge_bodies_with_bend against Component 2): the corner
 // where the fold meets a fuse_bodies seam renders as a cross with two
