@@ -529,6 +529,11 @@ export const graphToolDefinitions = [
         },
         sheet_width_mm: { type: 'number', description: 'Sheet width in mm (default: 2440)' },
         sheet_height_mm: { type: 'number', description: 'Sheet height in mm (default: 1220)' },
+        cutting_width_mm: { type: 'number', description: 'Kerf (mm); 0 < value <= tooling max. Default: config.yaml' },
+        safety_gap_mm: { type: 'number', description: 'Gap between parts (mm). Default: config.yaml' },
+        sheet_margin_mm: { type: 'number', description: 'Clear margin at the sheet edge (mm). Default: config.yaml' },
+        rotations_deg: { type: 'array', items: { type: 'number', enum: [0, 90, 180, 270] }, description: 'Allowed part rotations. Default: config.yaml' },
+        copies: { description: "A positive integer (copies of each part) or 'fill'." },
       },
       required: ['part_ids'],
     },
@@ -546,6 +551,12 @@ export const graphToolDefinitions = [
           minItems: 1,
         },
         format: { type: 'string', enum: ['dxf', 'step', 'pdf'] },
+        sheet_width_mm: { type: 'number', description: 'Sheet width in mm (default: 2440)' },
+        sheet_height_mm: { type: 'number', description: 'Sheet height in mm (default: 1220)' },
+        cutting_width_mm: { type: 'number', description: 'Kerf (mm); 0 < value <= tooling max. Default: config.yaml' },
+        safety_gap_mm: { type: 'number', description: 'Gap between parts (mm). Default: config.yaml' },
+        sheet_margin_mm: { type: 'number', description: 'Clear margin at the sheet edge (mm). Default: config.yaml' },
+        rotations_deg: { type: 'array', items: { type: 'number', enum: [0, 90, 180, 270] }, description: 'Allowed part rotations. Default: config.yaml' },
       },
       required: ['part_ids'],
     },
@@ -1254,13 +1265,32 @@ function handleSplitBodyByPlane(
 
 // ── Produce / async jobs (Slice 11) ──────────────────────────────────────────
 
+/**
+ * Per-call nesting settings (spec 010 FR-027): the project's NestingSettings
+ * override config.yaml's defaults for this call only. Anything omitted falls
+ * back to config.yaml (the server's defaults, not the project's).
+ */
+function nestingFor(args: Record<string, unknown>) {
+  const cfg = getNestingConfig();
+  const rotations = args['rotations_deg'];
+  return {
+    cfg,
+    sheetW: optNumber(args, 'sheet_width_mm') ?? 2440,
+    sheetH: optNumber(args, 'sheet_height_mm') ?? 1220,
+    cuttingWidthMm: optNumber(args, 'cutting_width_mm') ?? cfg.cuttingWidthMm,
+    safetyGapMm: optNumber(args, 'safety_gap_mm') ?? cfg.safetyGapMm,
+    sheetMarginMm: optNumber(args, 'sheet_margin_mm') ?? cfg.sheetMarginMm,
+    rotationsDeg: Array.isArray(rotations) ? (rotations as number[]) : cfg.rotationsDeg,
+  };
+}
+
 async function handleSimulateNesting(
   store: GraphStore,
   args: Record<string, unknown>,
 ): Promise<{ job_id: string }> {
   const partIds = requireStringArray(args, 'part_ids');
-  const sheetW = optNumber(args, 'sheet_width_mm') ?? 2440;
-  const sheetH = optNumber(args, 'sheet_height_mm') ?? 1220;
+  const nest = nestingFor(args);
+  const { cfg, sheetW, sheetH, cuttingWidthMm } = nest;
 
   for (const pid of partIds) {
     if (!store.getPart(pid)) {
@@ -1279,9 +1309,6 @@ async function handleSimulateNesting(
   } else if (rawCopies !== undefined) {
     throwError(ErrorCodes.INTERNAL_ERROR, "copies must be a positive integer or 'fill'", false);
   }
-
-  const cfg = getNestingConfig();
-  const cuttingWidthMm = optNumber(args, 'cutting_width_mm') ?? cfg.cuttingWidthMm;
 
   const jobId = v2JobQueue.enqueue(async () => {
     // Cutting-width validation runs inside the job so an invalid override
@@ -1310,10 +1337,10 @@ async function handleSimulateNesting(
     const result = geometryBinding.nestPolygons(inputs, sheetW, sheetH, {
       cuttingWidthMm,
       maxKerfWidthMm: cfg.maxKerfWidthMm,
-      safetyGapMm: cfg.safetyGapMm,
-      sheetMarginMm: cfg.sheetMarginMm,
+      safetyGapMm: nest.safetyGapMm,
+      sheetMarginMm: nest.sheetMarginMm,
       placementAccuracy: cfg.placementAccuracy,
-      rotationsDeg: cfg.rotationsDeg,
+      rotationsDeg: nest.rotationsDeg,
       copies,
     });
 
@@ -1354,6 +1381,7 @@ async function handleExportProductionPack(
 ): Promise<{ job_id: string }> {
   const partIds = requireStringArray(args, 'part_ids');
   const format = optString(args, 'format') ?? 'dxf';
+  const nest = nestingFor(args);
 
   for (const pid of partIds) {
     if (!store.getPart(pid)) {
@@ -1387,17 +1415,19 @@ async function handleExportProductionPack(
     });
 
     // A production pack is one copy of each part, nested deterministically on
-    // the default stock sheet (same 2440×1220 default as simulate_nesting).
-    // No sheet/copies args exist on this tool; the pack is the BOM set, not a
-    // fill-everything layout.
-    const cfg = getNestingConfig();
-    const result = geometryBinding.nestPolygons(inputs, 2440, 1220, {
-      cuttingWidthMm: cfg.cuttingWidthMm,
+    // the project's sheet (same per-call settings as simulate_nesting). The
+    // pack is the BOM set, not a fill-everything layout.
+    const { cfg } = nest;
+    if (nest.cuttingWidthMm <= 0 || nest.cuttingWidthMm > cfg.maxKerfWidthMm) {
+      throwError(ErrorCodes.NEST_INVALID_CUTTING_WIDTH, `cutting_width_mm must be > 0 and <= ${cfg.maxKerfWidthMm}`, false);
+    }
+    const result = geometryBinding.nestPolygons(inputs, nest.sheetW, nest.sheetH, {
+      cuttingWidthMm: nest.cuttingWidthMm,
       maxKerfWidthMm: cfg.maxKerfWidthMm,
-      safetyGapMm: cfg.safetyGapMm,
-      sheetMarginMm: cfg.sheetMarginMm,
+      safetyGapMm: nest.safetyGapMm,
+      sheetMarginMm: nest.sheetMarginMm,
       placementAccuracy: cfg.placementAccuracy,
-      rotationsDeg: cfg.rotationsDeg,
+      rotationsDeg: nest.rotationsDeg,
       copies: 1,
     });
 

@@ -22,6 +22,16 @@
 import { z } from 'zod';
 import { Point2Schema, Point3Schema, Transform3RowSchema, EdgeRefSchema } from './shared';
 
+/** Per-call nesting settings (spec 010 FR-027): the project's NestingSettings. */
+const NESTING_OVERRIDES = {
+  sheet_width_mm: z.number().gt(0).optional(),
+  sheet_height_mm: z.number().gt(0).optional(),
+  cutting_width_mm: z.number().optional(),
+  safety_gap_mm: z.number().min(0).optional(),
+  sheet_margin_mm: z.number().min(0).optional(),
+  rotations_deg: z.array(z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)])).min(1).optional(),
+};
+
 const ToolSchemas = {
   create_part: z.object({
     name: z.string().min(1),
@@ -189,8 +199,8 @@ const ToolSchemas = {
 
   simulate_nesting: z.object({
     part_ids: z.array(z.string()).min(1),
-    sheet_width_mm: z.number().optional(),
-    sheet_height_mm: z.number().optional(),
+    ...NESTING_OVERRIDES,
+    copies: z.union([z.number().int().min(1), z.literal('fill')]).optional(),
   }),
 
   // format is accepted here (matches the declared inputSchema) but the
@@ -201,6 +211,7 @@ const ToolSchemas = {
   export_production_pack: z.object({
     part_ids: z.array(z.string()).min(1),
     format: z.enum(['dxf', 'step', 'pdf']).optional(),
+    ...NESTING_OVERRIDES,
   }),
 
   get_job: z.object({
