@@ -132,6 +132,17 @@ describe('[persist] versioning', () => {
     };
     expect(actions.actions.map((a) => a.actor_kind)).toEqual(['human', 'agent']);
     expect(await codeOf(call(ctx, 'commit', { message: 'empty' }))).toBe('COMMIT_NOTHING_TO_COMMIT');
+
+    // A later commit lists only its own operations — by hash and by branch name.
+    await part(ctx, 'c');
+    await call(ctx, 'commit', { message: 'Third part' });
+    const h2 = (await readSessionResource(ctx, 'graph://history')) as { commits: Array<{ hash: string }> };
+    for (const ref of [h2.commits[0]!.hash, encodeURIComponent('wip/work')]) {
+      const later = (await readSessionResource(ctx, `graph://ref/${ref}/actions`)) as { actions: Array<{ tool: string }> };
+      expect(later.actions).toHaveLength(1);
+    }
+    const earlier = (await readSessionResource(ctx, `graph://ref/${h2.commits[1]!.hash}/actions`)) as { actions: unknown[] };
+    expect(earlier.actions).toHaveLength(2);
   });
 
   it('discard_changes returns to the last commit (including removing new tables/rows)', async () => {

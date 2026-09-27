@@ -557,10 +557,14 @@ export class DoltPersistence implements GraphPersistence {
       const db = quoteIdent(this.database);
       const at = await this.q(this.reader, `SELECT meta_value FROM ${db}.meta AS OF ? WHERE meta_key = 'committed_seq'`, [ref]);
       const hi = Number(at[0]?.['meta_value'] ?? 0);
-      const parent = await this.q(this.reader, `SELECT parent_hash FROM ${db}.dolt_commit_ancestors WHERE commit_hash = HASHOF(?) AND parent_index = 0`, [ref]).catch(() => []);
+      // A raw commit hash (32 base32 chars) is used as is; a branch name is
+      // resolved through dolt_branches. Failures are never swallowed: a wrong
+      // lower bound would list older commits' operations as this one's.
+      const hash = /^[0-9a-v]{32}$/.test(ref) ? ref : String((await this.q(this.reader, `SELECT hash FROM ${db}.dolt_branches WHERE name = ?`, [ref]))[0]?.['hash'] ?? '');
+      const parent = await this.q(this.reader, `SELECT parent_hash FROM ${db}.dolt_commit_ancestors WHERE commit_hash = ? AND parent_index = 0`, [hash]);
       let lo = 0;
       if (parent[0]?.['parent_hash']) {
-        const p = await this.q(this.reader, `SELECT meta_value FROM ${db}.meta AS OF ? WHERE meta_key = 'committed_seq'`, [String(parent[0]['parent_hash'])]).catch(() => []);
+        const p = await this.q(this.reader, `SELECT meta_value FROM ${db}.meta AS OF ? WHERE meta_key = 'committed_seq'`, [String(parent[0]['parent_hash'])]);
         lo = Number(p[0]?.['meta_value'] ?? 0);
       }
       rows = await this.q(
