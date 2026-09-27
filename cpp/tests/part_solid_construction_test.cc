@@ -760,6 +760,205 @@ TEST_CASE("ConstructPartSolid: a bend whose OWN hinge lands on a vertex already 
   CHECK(CountSolids(it->second.shape) == 1);
 }
 
+// ─── Re-root invariance: cauldron corner fan ─────────────────────────────────
+//
+// Live-app regression (2026-09-27, cauldron.step component 2):
+// merge_bodies_with_bend reroots part B at its contact panel (RerootAt), and
+// 23 of C2's 24 possible reroots then failed to construct — the merge
+// committed a part constructPart rejects (GE_BRIDGE_EDGE_NOT_FOUND / invalid
+// boolean topology). A region panel's shape is a property of the bend set,
+// not of which panel is root, so Evaluate must give every panel the same
+// wall and the same zone-edge tags whatever the root.
+//
+// Delta-reduced from C2's real graph (4 of its 23 bends, outline cut to 11
+// vertices, coordinates rounded to 1mm — the failure survives all three).
+// P12 is sandwiched: its bends b12 (in from P6) and b19 (out to P19) share
+// vertex (-2245,2915); b19, b18 (out to P18) and b22 (P18 out to P22) all
+// share vertex (-3518,1955). Rooted at P6 (the import root) it evaluates
+// correctly; rooted at P19, b12 loses its parent-side zone edge on P12 and
+// P12's wall traces P18's territory instead.
+namespace {
+
+PartGraphSpec MakeCauldronCornerFan() {
+  PartGraphSpec graph;
+  graph.partId = "cauldron-corner-fan";
+  graph.rootRegionPanelId = "P6";
+  graph.thicknessMm = 1.0;
+  graph.anchor.transform = Transform3::Identity();
+  graph.outline.outer = {
+      {-2245, 2915}, {-2334, 3037}, {-3610, 2074}, {-3518, 1955}, {-3665, 1985}, {-3961, 415},
+      {-3813, 389},  {-3372, 471},  {-3136, 1719}, {-2122, 2484}, {-1703, 2836},
+  };
+
+  auto MakeBend = [](const std::string& id, const std::string& parent, const std::string& child,
+                     Point2 hingeA, Point2 hingeB, double angleDeg) {
+    BendSpec bend;
+    bend.id = id;
+    bend.parentRegionPanelId = parent;
+    bend.childRegionPanelId = child;
+    bend.hingeA = hingeA;
+    bend.hingeB = hingeB;
+    bend.angleDeg = angleDeg;
+    bend.radiusMm = 3.0;
+    bend.kFactor = 0.0;
+    bend.bottomIsConcave = true;
+    return bend;
+  };
+
+  graph.bends = {
+      MakeBend("b12", "P6", "P12", {-2122, 2484}, {-2245, 2915}, -15.763371478239078),
+      MakeBend("b18", "P12", "P18", {-3136, 1719}, {-3518, 1955}, -15.763369238159997),
+      MakeBend("b19", "P12", "P19", {-3518, 1955}, {-2245, 2915}, -66.88735945755417),
+      MakeBend("b22", "P18", "P22", {-3813, 389}, {-3518, 1955}, -66.88712106002082),
+  };
+  return graph;
+}
+
+std::vector<std::string> AllRegionPanelIds(const PartGraphSpec& graph) {
+  std::vector<std::string> ids{graph.rootRegionPanelId};
+  for (const auto& b : graph.bends) ids.push_back(b.childRegionPanelId);
+  return ids;
+}
+
+PartGraphSpec RerootedAt(const PartGraphSpec& graph, const std::string& newRoot) {
+  RerootResult rerooted = RerootAt(graph.bends, graph.rootRegionPanelId, newRoot);
+  REQUIRE(rerooted.ok);
+  PartGraphSpec out = graph;
+  out.bends = rerooted.bends;
+  out.rootRegionPanelId = newRoot;
+  return out;
+}
+
+// A panel's wall as an order-free point set, so the same polygon traced from
+// a different start vertex still compares equal.
+std::vector<Point2> SortedWall(const RegionPanelLayout& panel) {
+  std::vector<Point2> pts = panel.wallOuter;
+  std::sort(pts.begin(), pts.end(),
+            [](const Point2& a, const Point2& b) { return a.x != b.x ? a.x < b.x : a.y < b.y; });
+  return pts;
+}
+
+// Same presence check part_solid_construction.cc's FindZoneEdges performs.
+bool HasZoneEdge(const RegionPanelLayout& panel, const std::string& bendId) {
+  size_t n = panel.wallOuter.size();
+  for (size_t i = 0; i < panel.wallEdgeBendId.size(); ++i) {
+    if (panel.wallEdgeBendId[i] != bendId || panel.wallEdgeIsTransitionStep[i]) continue;
+    Point2 a = panel.wallOuter[i];
+    Point2 b = panel.wallOuter[(i + 1) % n];
+    if (std::hypot(b.x - a.x, b.y - a.y) > 1e-9) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+TEST_CASE("GraphEvaluator: rerooting a cauldron corner fan leaves every panel's wall and "
+          "zone-edge tags unchanged",
+          "[translation][evaluator][reroot][regression]") {
+  PartGraphSpec graph = MakeCauldronCornerFan();
+  EvaluateResult base = Evaluate(graph);
+  REQUIRE(base.ok);
+  std::map<std::string, const RegionPanelLayout*> baseById;
+  for (const auto& p : base.panels) baseById[p.regionPanelId] = &p;
+
+  for (const std::string& root : AllRegionPanelIds(graph)) {
+    CAPTURE(root);
+    EvaluateResult layout = Evaluate(RerootedAt(graph, root));
+    REQUIRE(layout.ok);
+    REQUIRE(layout.panels.size() == base.panels.size());
+
+    for (const auto& bridge : layout.bridges) {
+      CAPTURE(bridge.bendId);
+      for (const auto& panel : layout.panels) {
+        if (panel.regionPanelId == bridge.parentRegionPanelId ||
+            panel.regionPanelId == bridge.childRegionPanelId) {
+          CAPTURE(panel.regionPanelId);
+          CHECK(HasZoneEdge(panel, bridge.bendId));
+        }
+      }
+    }
+
+    for (const auto& panel : layout.panels) {
+      CAPTURE(panel.regionPanelId);
+      std::vector<Point2> got = SortedWall(panel);
+      std::vector<Point2> want = SortedWall(*baseById.at(panel.regionPanelId));
+      REQUIRE(got.size() == want.size());
+      for (size_t i = 0; i < got.size(); ++i) {
+        CHECK(got[i].x == Approx(want[i].x).epsilon(0).margin(1e-6));
+        CHECK(got[i].y == Approx(want[i].y).epsilon(0).margin(1e-6));
+      }
+    }
+  }
+}
+
+TEST_CASE("ConstructPartSolid: a cauldron corner fan builds one valid solid from every root",
+          "[translation][construction][reroot][regression]") {
+  PartGraphSpec graph = MakeCauldronCornerFan();
+  for (const std::string& root : AllRegionPanelIds(graph)) {
+    CAPTURE(root);
+    PartGraphSpec rerooted = RerootedAt(graph, root);
+    EvaluateResult layout = Evaluate(rerooted);
+    REQUIRE(layout.ok);
+
+    GeometryState state;
+    ConstructPartSolidResult result = ConstructPartSolid(state, layout, rerooted.thicknessMm);
+    CAPTURE(result.message);
+    REQUIRE(result.ok);
+    auto it = state.solids.find(result.shellId);
+    REQUIRE(it != state.solids.end());
+    BRepCheck_Analyzer analyzer(it->second.shape);
+    CHECK(analyzer.IsValid());
+    CHECK(CountSolids(it->second.shape) == 1);
+  }
+}
+
+// Live-app regression (2026-09-27, cauldron.step component 2): import left 6
+// hinge endpoints up to 1.86e-7mm off the ring vertex they sit on. Evaluate
+// accepted them as ON the vertex (walls cut there) while the pose walk read
+// the raw coordinate, so walls and fold axes disagreed by that much at a
+// three-bend corner — enough to break the solid fuse on 2 of 20 merges. A
+// hinge endpoint within epsilon of a vertex must evaluate exactly as if it
+// were that vertex.
+TEST_CASE("GraphEvaluator: a hinge endpoint a sub-epsilon distance off its ring vertex "
+          "evaluates exactly as the vertex itself",
+          "[translation][evaluator][regression]") {
+  PartGraphSpec exact = MakeCauldronCornerFan();
+  PartGraphSpec nudged = exact;
+  for (auto& b : nudged.bends) {
+    if (b.id == "b19") b.hingeB = {b.hingeB.x + 2e-7, b.hingeB.y - 1e-7};
+  }
+
+  EvaluateResult want = Evaluate(exact);
+  EvaluateResult got = Evaluate(nudged);
+  REQUIRE(want.ok);
+  REQUIRE(got.ok);
+  REQUIRE(got.panels.size() == want.panels.size());
+  REQUIRE(got.bridges.size() == want.bridges.size());
+
+  for (size_t i = 0; i < want.panels.size(); ++i) {
+    const auto& w = want.panels[i];
+    const auto& g = got.panels[i];
+    CAPTURE(w.regionPanelId);
+    REQUIRE(g.regionPanelId == w.regionPanelId);
+    REQUIRE(g.wallOuter.size() == w.wallOuter.size());
+    for (size_t k = 0; k < w.wallOuter.size(); ++k) {
+      CHECK(g.wallOuter[k].x == Approx(w.wallOuter[k].x).epsilon(0).margin(1e-12));
+      CHECK(g.wallOuter[k].y == Approx(w.wallOuter[k].y).epsilon(0).margin(1e-12));
+    }
+    for (int k = 0; k < 9; ++k) CHECK(g.pose.r[k] == Approx(w.pose.r[k]).epsilon(0).margin(1e-12));
+    for (int k = 0; k < 3; ++k) CHECK(g.pose.t[k] == Approx(w.pose.t[k]).epsilon(0).margin(1e-9));
+  }
+  for (size_t i = 0; i < want.bridges.size(); ++i) {
+    CAPTURE(want.bridges[i].bendId);
+    CHECK(got.bridges[i].pivotOriginWorld.x == Approx(want.bridges[i].pivotOriginWorld.x).epsilon(0).margin(1e-9));
+    CHECK(got.bridges[i].pivotOriginWorld.y == Approx(want.bridges[i].pivotOriginWorld.y).epsilon(0).margin(1e-9));
+    CHECK(got.bridges[i].pivotOriginWorld.z == Approx(want.bridges[i].pivotOriginWorld.z).epsilon(0).margin(1e-9));
+    CHECK(got.bridges[i].pivotAxisWorld.x == Approx(want.bridges[i].pivotAxisWorld.x).epsilon(0).margin(1e-12));
+    CHECK(got.bridges[i].pivotAxisWorld.y == Approx(want.bridges[i].pivotAxisWorld.y).epsilon(0).margin(1e-12));
+    CHECK(got.bridges[i].pivotAxisWorld.z == Approx(want.bridges[i].pivotAxisWorld.z).epsilon(0).margin(1e-12));
+  }
+}
+
 // ─── Branching (multi-child parent) + real bend radius ──────────────────────
 //
 // docs/BUG_REPORT_nonzero_default_bend_radius_breaks_mesh_construction.md: a

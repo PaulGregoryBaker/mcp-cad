@@ -291,13 +291,21 @@ std::pair<std::vector<Point2>, std::vector<EffectiveHinge>> EnsureHingeVertices(
   std::vector<EffectiveHinge> effective;
   effective.reserve(graph.bends.size());
   for (const auto& bend : graph.bends) {
-    bool foundA = false, foundB = false;
+    // An endpoint accepted as lying ON a ring vertex IS that vertex from
+    // here on — every consumer (cuts, pose walk, bridges) must see the one
+    // exact point, the same as the crossing/collinear branches below, which
+    // already hand back ring points. Keeping the raw coordinate instead left
+    // walls and fold axes up to kGeometricEpsilon apart at a shared corner
+    // (live-app regression 2026-09-27, cauldron.step component 2: import
+    // hinges 1.86e-7mm off their vertex broke the solid fuse on 2 of 20
+    // merges).
+    std::optional<Point2> vertexA, vertexB;
     for (const auto& v : ring) {
-      if (NearlyEqual2Local(v, bend.hingeA)) foundA = true;
-      if (NearlyEqual2Local(v, bend.hingeB)) foundB = true;
+      if (!vertexA && NearlyEqual2Local(v, bend.hingeA)) vertexA = v;
+      if (!vertexB && NearlyEqual2Local(v, bend.hingeB)) vertexB = v;
     }
-    if (foundA || foundB) {
-      effective.push_back({bend.hingeA, bend.hingeB});
+    if (vertexA || vertexB) {
+      effective.push_back({vertexA.value_or(bend.hingeA), vertexB.value_or(bend.hingeB)});
       continue;
     }
 
@@ -676,6 +684,26 @@ CutEdgesResult BuildCutEdges(const std::vector<Point2>& ring, std::vector<BendCu
     }
     return best;
   };
+  // A shared vertex's cuts, innermost first. Consecutive entries bound one
+  // wedge of material at that vertex: the child of group[k+1] IS the parent
+  // of group[k] (the hinge lines fan out from the one point, so the region
+  // between two neighbouring lines is a single panel). Loops therefore chain
+  // each cut to its NEIGHBOUR in this order — never to the group's innermost
+  // or outermost cut, which only coincides with the neighbour when two cuts
+  // meet there. Which cuts are parent/child of which depends on where the
+  // tree is rooted; this order doesn't (live-app regression 2026-09-27,
+  // cauldron.step component 2: three hingeB cuts at one vertex, and after
+  // merge_bodies_with_bend rerooted the part, the outer cut's child loop
+  // jumped straight to the innermost cut's parent bridge — a grandchild's
+  // territory — skipping the middle cut's).
+  std::vector<std::vector<size_t>> hingeBNested(n), hingeANested(n);
+  for (size_t v = 0; v < n; ++v) {
+    hingeBNested[v] = hingeBAt[v];
+    hingeANested[v] = hingeAAt[v];
+    auto bySpan = [&](size_t a, size_t b) { return span[a] < span[b]; };
+    std::stable_sort(hingeBNested[v].begin(), hingeBNested[v].end(), bySpan);
+    std::stable_sort(hingeANested[v].begin(), hingeANested[v].end(), bySpan);
+  }
 
   std::vector<TaggedEdge> edges(n);
   for (size_t i = 0; i < n; ++i) {
@@ -728,12 +756,13 @@ CutEdgesResult BuildCutEdges(const std::vector<Point2>& ring, std::vector<BendCu
     // on all sides, sharing a vertex with the bend that reaches its own
     // subtree from outside), that main-loop edge was claimed by the inner
     // cut for ITS OWN, unrelated child material — this bend's own loop must
-    // instead chain directly into the inner cut's own parent bridge,
-    // bypassing the ring entirely.
+    // instead chain directly into the NEXT-inner cut's own parent bridge
+    // (see hingeBNested), bypassing the ring entirely.
     size_t resumeAt = cut.iB >= 0 ? static_cast<size_t>(cut.iB) : 0;
-    if (cut.iB >= 0 && hingeBAt[static_cast<size_t>(cut.iB)].size() > 1 &&
-        minSpanOf(hingeBAt[static_cast<size_t>(cut.iB)]) != ci) {
-      resumeAt = parentBridgeIdx[minSpanOf(hingeBAt[static_cast<size_t>(cut.iB)])];
+    if (cut.iB >= 0) {
+      const auto& nested = hingeBNested[static_cast<size_t>(cut.iB)];
+      auto pos = std::find(nested.begin(), nested.end(), ci);
+      if (pos != nested.begin() && pos != nested.end()) resumeAt = parentBridgeIdx[*(pos - 1)];
     }
     childBridgeIdx[ci] = edges.size();
     edges.push_back({cut.childShiftA, cut.childShiftB, cut.bendId, resumeAt});
@@ -759,13 +788,49 @@ CutEdgesResult BuildCutEdges(const std::vector<Point2>& ring, std::vector<BendCu
     // bend's own parent bridge was left with its default, never-overwritten
     // `next` whenever isB was also true here, since it used to be handled
     // only inside the isA-and-not-isB case below).
+    // Each nested cut closes into its NEXT-outer neighbour, not the group's
+    // outermost cut (see hingeBNested/hingeANested).
     if (isA) {
-      for (size_t inner : hingeAAt[v]) {
-        if (inner == outerA) continue;
-        edges[parentBridgeIdx[inner]].next =
-            childBridgeIdx[outerA] != SIZE_MAX
-                ? childBridgeIdx[outerA]
-                : (cuts[outerA].iB >= 0 ? static_cast<size_t>(cuts[outerA].iB) : v);
+      const auto& nested = hingeANested[v];
+      for (size_t k = 0; k + 1 < nested.size(); ++k) {
+        size_t outer = nested[k + 1];
+        edges[parentBridgeIdx[nested[k]]].next =
+            childBridgeIdx[outer] != SIZE_MAX
+                ? childBridgeIdx[outer]
+                : (cuts[outer].iB >= 0 ? static_cast<size_t>(cuts[outer].iB) : v);
+      }
+    }
+
+    // Corner of each wedge between two neighbouring nested cuts: the
+    // intersection of the outer cut's CHILD offset line and the inner cut's
+    // PARENT offset line — the same miter the isA&&isB branch below uses for
+    // two sibling cuts. Without this, a chained pair (one bend into the
+    // panel, one out of it) left a bevel between two separate offset points
+    // while the same corner seen as siblings got the miter, so the panel's
+    // shape changed with the tree's root. Parallel lines have no miter point
+    // and keep the two offset points, as before.
+    {
+      const auto& nestedB = hingeBNested[v];
+      for (size_t k = 1; k < nestedB.size(); ++k) {
+        size_t outer = nestedB[k], inner = nestedB[k - 1];
+        if (childBridgeIdx[outer] == SIZE_MAX) continue;  // directly adjacent: no bridge to chain
+        auto corner = LineIntersect2(cuts[outer].childShiftB, Sub2(cuts[outer].hingeB, cuts[outer].hingeA),
+                                     cuts[inner].parentShiftB, Sub2(cuts[inner].hingeB, cuts[inner].hingeA));
+        if (corner.has_value()) {
+          edges[childBridgeIdx[outer]].to = *corner;
+          edges[parentBridgeIdx[inner]].from = *corner;
+        }
+      }
+      const auto& nestedA = hingeANested[v];
+      for (size_t k = 0; k + 1 < nestedA.size(); ++k) {
+        size_t inner = nestedA[k], outer = nestedA[k + 1];
+        if (childBridgeIdx[outer] == SIZE_MAX) continue;  // directly adjacent: no bridge to chain
+        auto corner = LineIntersect2(cuts[inner].parentShiftA, Sub2(cuts[inner].hingeB, cuts[inner].hingeA),
+                                     cuts[outer].childShiftA, Sub2(cuts[outer].hingeB, cuts[outer].hingeA));
+        if (corner.has_value()) {
+          edges[parentBridgeIdx[inner]].to = *corner;
+          edges[childBridgeIdx[outer]].from = *corner;
+        }
       }
     }
 
@@ -1465,6 +1530,12 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
     childrenOf[bend.parentRegionPanelId].push_back(&bend);
   }
 
+  // The same ring-grounded hinges RegionOf's own cuts use (EnsureHingeVertices)
+  // — the fold axis and bridge must sit on exactly the line the walls were
+  // cut at, never on a separately-read raw coordinate a sub-epsilon distance
+  // away. Indexed like graph.bends.
+  const std::vector<EffectiveHinge> groundedHinges = EnsureHingeVertices(graph.outline.outer, graph).second;
+
   std::vector<std::string> queue{graph.rootRegionPanelId};
   size_t qi = 0;
   while (qi < queue.size()) {
@@ -1472,10 +1543,13 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
     const Transform3& parentPose = poseByRegionPanel.at(current);
     const Point2& parentShift = cumulativeShift.at(current);
     for (const auto* bend : childrenOf[current]) {
+      const EffectiveHinge& grounded = groundedHinges[static_cast<size_t>(bend - graph.bends.data())];
+      const Point2& bendHingeA = grounded.hingeA;
+      const Point2& bendHingeB = grounded.hingeB;
       // Left-hand normal of hingeA->hingeB — same convention/formula RegionOf's
       // own bend cuts use (14's fixed "child = left side" rule) — points toward
       // the child side.
-      Point2 hingeDir = Sub2(bend->hingeB, bend->hingeA);
+      Point2 hingeDir = Sub2(bendHingeB, bendHingeA);
       double hingeDirLen = Length2(hingeDir);
       Point2 nLeft{0.0, 0.0};
       if (hingeDirLen >= kGeometricEpsilon) {
@@ -1499,6 +1573,10 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
       // first one in a chain (parentShift is always zero for a root's own
       // first bend, which is exactly why no single-bend test caught this —
       // only a multi-bend chain's own closure could, and did).
+      // Deliberately the graph's OWN hinge span, not the ring-grounded one:
+      // this reported position is what clients read back as the bend's hinge
+      // (v2 graph resource), so it must keep the authored span. Only the
+      // LINE matters for the 3D axis below, which uses the grounded points.
       Point2 hingeAShifted{bend->hingeA.x + parentShift.x, bend->hingeA.y + parentShift.y};
       Point2 hingeBShifted{bend->hingeB.x + parentShift.x, bend->hingeB.y + parentShift.y};
 
@@ -1542,8 +1620,8 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
       // convex: rBottom->thicknessMm) — kept in sync with pivotZ's sign
       // above, not an independent choice.
       double sharpZ = concave ? 0.0 : graph.thicknessMm;
-      Point3 rawHingeA3{bend->hingeA.x, bend->hingeA.y, sharpZ};
-      Point3 rawHingeB3{bend->hingeB.x, bend->hingeB.y, sharpZ};
+      Point3 rawHingeA3{bendHingeA.x, bendHingeA.y, sharpZ};
+      Point3 rawHingeB3{bendHingeB.x, bendHingeB.y, sharpZ};
       Point3 sharpHingeAWorld = parentPose.Apply(rawHingeA3);
       Point3 sharpHingeBWorld = parentPose.Apply(rawHingeB3);
       Point3 sharpAxis = Normalize3(Sub3(sharpHingeBWorld, sharpHingeAWorld));
@@ -1556,10 +1634,10 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
           Transform3::RotationAboutAxis(sharpHingeAWorld, sharpAxis, bend->angleDeg);
       Transform3 childPose = worldFold.Compose(parentPose);
 
-      Point3 hingeA3{bend->hingeA.x + axisInPlaneOffset * nLeft.x,
-                      bend->hingeA.y + axisInPlaneOffset * nLeft.y, pivotZ};
-      Point3 hingeB3{bend->hingeB.x + axisInPlaneOffset * nLeft.x,
-                      bend->hingeB.y + axisInPlaneOffset * nLeft.y, pivotZ};
+      Point3 hingeA3{bendHingeA.x + axisInPlaneOffset * nLeft.x,
+                      bendHingeA.y + axisInPlaneOffset * nLeft.y, pivotZ};
+      Point3 hingeB3{bendHingeB.x + axisInPlaneOffset * nLeft.x,
+                      bendHingeB.y + axisInPlaneOffset * nLeft.y, pivotZ};
       Point3 hingeAWorld = parentPose.Apply(hingeA3);
       Point3 hingeBWorld = parentPose.Apply(hingeB3);
       Point3 axis = Normalize3(Sub3(hingeBWorld, hingeAWorld));
@@ -1597,8 +1675,8 @@ EvaluateResult Evaluate(const PartGraphSpec& graph) {
       bridge.setbackMm = axisInPlaneOffset;
       bridge.nLeftWorld = nLeftWorld;
       bridge.childNLeftWorld = worldFold.ApplyVector(bridge.nLeftWorld);
-      bridge.rawHingeA = bend->hingeA;
-      bridge.rawHingeB = bend->hingeB;
+      bridge.rawHingeA = bendHingeA;
+      bridge.rawHingeB = bendHingeB;
       bridge.nLeftFlat = nLeft;
       result.bridges.push_back(std::move(bridge));
     }

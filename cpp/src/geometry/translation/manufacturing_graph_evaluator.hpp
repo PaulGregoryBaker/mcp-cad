@@ -382,8 +382,10 @@ struct BridgeLayout {
   double setbackMm = 0.0;
   Point3 nLeftWorld;
   Point3 childNLeftWorld;
-  // The TRUE, un-widened hinge line (bend->hingeA/hingeB, straight from the
-  // graph — deliberately NOT `hingeA`/`hingeB` above, which are the shifted
+  // The TRUE, un-widened hinge line (the bend's hinge grounded on the ring by
+  // EnsureHingeVertices — the exact points RegionOf's own cuts use, on the
+  // same line as the graph's bend->hingeA/hingeB — deliberately NOT
+  // `hingeA`/`hingeB` above, which are the shifted
   // flat-pattern-position fact) plus the flat-frame (pre-pose) left-hand
   // normal used to derive it. Only the LINE these two points define is
   // meaningful (an exaggerated half-span, same caveat as `hingeA`/`hingeB`'s

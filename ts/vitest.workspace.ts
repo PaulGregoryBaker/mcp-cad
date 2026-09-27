@@ -62,6 +62,7 @@ export default defineWorkspace([
         'tests/integration/slice_11_async_jobs.integration.test.ts',
         'tests/integration/import_fixture_validation.integration.test.ts',
         'tests/integration/split_part_at_bend_cauldron_acute.integration.test.ts',
+        'tests/integration/merge_bodies_with_bend_constructible.integration.test.ts',
       ],
       env: { SUITE_V2_DRIVER: '1' },
       setupFiles: ['tests/setup/integration-reset.ts'],
