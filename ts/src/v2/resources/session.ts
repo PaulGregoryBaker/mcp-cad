@@ -45,6 +45,13 @@ export const sessionResourceTemplates = [
     mimeType: 'application/json',
   },
   {
+    uriTemplate: 'graph://import-sources',
+    name: 'import-sources',
+    description:
+      'The STEP files imported into this project (on the current branch or viewed revision), with where they were read from and when. Use reference_mesh to overlay one on the manufacturing graph.',
+    mimeType: 'application/json',
+  },
+  {
     uriTemplate: 'graph://ref/{ref}/actions',
     name: 'revision-actions',
     description:
@@ -54,13 +61,14 @@ export const sessionResourceTemplates = [
 ];
 
 const HISTORY = /^graph:\/\/history$/;
+const IMPORT_SOURCES = /^graph:\/\/import-sources$/;
 const ACTIONS = /^graph:\/\/ref\/([^/]+)\/actions$/;
 const REF_PARTS = /^graph:\/\/ref\/([^/]+)\/parts$/;
 const REF_MESH = /^graph:\/\/ref\/([^/]+)\/part\/([^/]+)\/mesh$/;
 const DIFF = /^graph:\/\/diff\/([^/]+)\/([^/]+)$/;
 
 export function matchesSessionResource(uri: string): boolean {
-  return HISTORY.test(uri) || uri.startsWith('graph://ref/') || DIFF.test(uri);
+  return HISTORY.test(uri) || IMPORT_SOURCES.test(uri) || uri.startsWith('graph://ref/') || DIFF.test(uri);
 }
 
 function validated<T>(schema: { safeParse: (d: unknown) => { success: boolean; error?: { message: string } } }, data: T, what: string): T {
@@ -77,6 +85,12 @@ export async function readSessionResource(ctx: SessionContext, uri: string): Pro
     const h = await bound.persistence.history(500);
     for (const c of h.commits) validated(HistoryCommitSchema, c, 'graph://history');
     return h;
+  }
+  if (IMPORT_SOURCES.test(uri)) {
+    const sources = await bound.persistence.readImportSources();
+    return {
+      sources: sources.map((s) => ({ import_source_id: s.import_source_id, file_path: s.file_path, imported_at: s.imported_at })),
+    };
   }
   const parts = REF_PARTS.exec(uri);
   if (parts) {

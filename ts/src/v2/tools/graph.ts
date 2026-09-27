@@ -32,6 +32,7 @@ import { storageToolDefinitions, handleListStorageAccounts, handleTestStorageAcc
 import { projectToolDefinitions, handleProjectTool, PROJECT_TOOL_NAMES } from './project';
 import { importPreviewToolDefinitions, handlePreviewImport } from './import-preview';
 import { handleConfiguredImport } from './import-configured';
+import { handleReferenceMesh, referenceMeshToolDefinitions } from './reference-mesh';
 import { persistMutation } from '../persistence/persist-mutation';
 import { SessionContext } from '../persistence/session';
 import { buildNestedSheetDxf, type NestedSheetPlacement } from '../resources/dxf';
@@ -576,6 +577,7 @@ export const graphToolDefinitions = [
   ...storageToolDefinitions,
   ...projectToolDefinitions,
   ...importPreviewToolDefinitions,
+  ...referenceMeshToolDefinitions,
 ].map(withActorProperty);
 
 /** Validates `args` against the tool's own schema (schemas/tools.ts) before
@@ -620,6 +622,7 @@ export async function dispatchSessionTool(
   if (name === 'import_part') {
     return handleConfiguredImport(ctx, args, optManufacturingProfile(args, 'profile'));
   }
+  if (name === 'reference_mesh') return handleReferenceMesh(ctx, args);
   if (MUTATING_TOOLS.has(name)) {
     ctx.requireBound();
     return persistMutation(ctx, name, args, () => dispatchGraphTool(ctx.store, name, args));

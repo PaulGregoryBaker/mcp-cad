@@ -220,6 +220,7 @@ const ToolSchemas = {
 
   // ─── Storage accounts (spec 010, R-014) — ids only, never credentials ───
   list_storage_accounts: z.object({}).strict(),
+  reference_mesh: z.object({ import_source_id: z.string().min(1) }),
   preview_import: z.object({
     file: z.string().min(1).optional(),
     preview_id: z.string().min(1).optional(),

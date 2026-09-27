@@ -34,6 +34,11 @@ export interface ImportSourceRow {
   measured_thickness_mm: number | null;
 }
 
+/** An import_source row as read back (spec 010 US5). */
+export interface StoredImportSource extends ImportSourceRow {
+  imported_at: string;
+}
+
 /** Raw state read from a branch or ref (validation happens in load.ts). */
 export interface RawLoad {
   rows: GraphRows;
@@ -116,6 +121,8 @@ export interface GraphPersistence {
   readAt(ref: string): Promise<RawLoad>;
   /** Just the project settings of the bound branch/ref (cheap; no graph rows). */
   readSettings(): Promise<ProjectSettingsRow>;
+  /** The import sources of the bound branch/ref, oldest first. */
+  readImportSources(): Promise<StoredImportSource[]>;
 
   status(): Promise<{ headCommit: string; dirty: boolean; uncommittedOps: number; unmergedCommits: number }>;
 

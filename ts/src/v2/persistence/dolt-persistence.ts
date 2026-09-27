@@ -37,6 +37,7 @@ import type {
   ProjectSettingsRow,
   RawLoad,
   SideWrites,
+  StoredImportSource,
 } from './port';
 
 const GRAPH_TABLES: GraphTable[] = ['part', 'part_ring', 'ring_vertex', 'feature', 'region_panel', 'bend'];
@@ -180,6 +181,29 @@ export class DoltPersistence implements GraphPersistence {
     }
     await this.useBranch(this._branch);
     return this.readSettingsFrom(this.writer, quoteIdent('project_settings'));
+  }
+
+  async readImportSources(): Promise<StoredImportSource[]> {
+    const cols = 'import_source_id, file_path, file_sha256, config, measured_thickness_mm, imported_at';
+    let rows: RowDataPacket[];
+    if (this._readOnlyRef !== null) {
+      rows = await this.q(
+        this.reader,
+        `SELECT ${cols} FROM ${quoteIdent(this.database)}.${quoteIdent('import_source')} AS OF ? ORDER BY imported_at, import_source_id`,
+        [this._readOnlyRef],
+      );
+    } else {
+      await this.useBranch(this._branch);
+      rows = await this.q(this.writer, `SELECT ${cols} FROM import_source ORDER BY imported_at, import_source_id`);
+    }
+    return rows.map((r) => ({
+      import_source_id: String(r['import_source_id']),
+      file_path: String(r['file_path']),
+      file_sha256: String(r['file_sha256']),
+      config: parseJson(r['config']) ?? {},
+      measured_thickness_mm: r['measured_thickness_mm'] === null ? null : Number(r['measured_thickness_mm']),
+      imported_at: new Date(r['imported_at'] as string | Date).toISOString(),
+    }));
   }
 
   async readCurrent(): Promise<RawLoad> {
