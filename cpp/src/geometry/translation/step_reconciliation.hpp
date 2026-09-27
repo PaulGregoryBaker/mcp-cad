@@ -155,8 +155,19 @@ struct ReconcilePiecesResult {
 // step_reconciliation.cc's final-stamp comment). An explicit 0.0 is a real
 // caller request for a sharp fold and is stamped literally — only the -1.0
 // sentinel, never a real radius, triggers the fallback.
+//
+// targetThicknessMm (spec 010 FR-019/R-009): when > 0 and different from the
+// measured thicknessMm, every output graph is re-stamped at the target while
+// keeping its root panel's material MID-plane where it was measured — the
+// sheet grows/shrinks symmetrically. Reconciliation itself (edge matching,
+// concave/convex pivot search) still runs at the measured thicknessMm, which
+// is what the pieces physically are. The root anchor is shifted by
+// (measured - target)/2 along its own normal; child panels ride along
+// rigidly, so their own mid-planes are preserved to within |delta|/2. A
+// sentinel default bend radius (-1.0) resolves to the target thickness.
 ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
                                        double thicknessMm,
-                                       double defaultBendRadiusMm = -1.0);
+                                       double defaultBendRadiusMm = -1.0,
+                                       double targetThicknessMm = -1.0);
 
 }  // namespace mcp_cad::translation

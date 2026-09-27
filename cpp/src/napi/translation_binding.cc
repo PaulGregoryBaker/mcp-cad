@@ -1263,7 +1263,7 @@ Napi::Value ReconcilePiecesBinding(const Napi::CallbackInfo& info) {
   if (info.Length() < 2 || !info[0].IsArray() || !info[1].IsNumber()) {
     Napi::TypeError::New(
         env, "reconcilePieces(pieces: PanelPieceSpec[], thicknessMm: number, "
-             "profile?: ManufacturingProfile)")
+             "profile?: ManufacturingProfile, targetThicknessMm?: number)")
         .ThrowAsJavaScriptException();
     return env.Undefined();
   }
@@ -1274,9 +1274,14 @@ Napi::Value ReconcilePiecesBinding(const Napi::CallbackInfo& info) {
     if (info.Length() >= 3 && info[2].IsObject()) {
       defaultBendRadiusMm = ReadProfile(info[2].As<Napi::Object>()).defaultBendRadiusMm;
     }
+    // Optional 4th arg (spec 010 R-009): chosen thickness, mid-plane kept.
+    double targetThicknessMm = -1.0;
+    if (info.Length() >= 4 && info[3].IsNumber()) {
+      targetThicknessMm = info[3].As<Napi::Number>().DoubleValue();
+    }
 
     ReconcilePiecesResult result =
-        translation::ReconcilePieces(pieces, thicknessMm, defaultBendRadiusMm);
+        translation::ReconcilePieces(pieces, thicknessMm, defaultBendRadiusMm, targetThicknessMm);
     return WriteReconcilePiecesResult(env, result);
   } catch (const std::exception& e) {
     Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();

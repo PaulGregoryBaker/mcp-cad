@@ -114,6 +114,8 @@ export interface GraphPersistence {
   readCurrent(): Promise<RawLoad>;
   /** Read any ref without moving the writer. */
   readAt(ref: string): Promise<RawLoad>;
+  /** Just the project settings of the bound branch/ref (cheap; no graph rows). */
+  readSettings(): Promise<ProjectSettingsRow>;
 
   status(): Promise<{ headCommit: string; dirty: boolean; uncommittedOps: number; unmergedCommits: number }>;
 

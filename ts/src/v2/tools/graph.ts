@@ -30,6 +30,8 @@ import { geometryBinding } from '../../geometry/binding';
 import { getNestingConfig } from '../../config/loader';
 import { storageToolDefinitions, handleListStorageAccounts, handleTestStorageAccount } from './storage';
 import { projectToolDefinitions, handleProjectTool, PROJECT_TOOL_NAMES } from './project';
+import { importPreviewToolDefinitions, handlePreviewImport } from './import-preview';
+import { handleConfiguredImport } from './import-configured';
 import { persistMutation } from '../persistence/persist-mutation';
 import { SessionContext } from '../persistence/session';
 import { buildNestedSheetDxf, type NestedSheetPlacement } from '../resources/dxf';
@@ -203,14 +205,18 @@ export const graphToolDefinitions = [
     inputSchema: {
       type: 'object',
       properties: {
-        file: { type: 'string', description: 'Path to a STEP file.' },
+        file: { type: 'string', description: 'Path to a STEP file (or pass preview_id from preview_import).' },
+        preview_id: { type: 'string', description: 'A preview_import preview_id: reuses its loaded solid.' },
+        config: {
+          type: 'object',
+          description:
+            'ImportConfig (spec 010): {scale:{preset,factor}, rotation:{xQuarterTurns,yQuarterTurns,zQuarterTurns}, recenter:{xy,z}, thicknessMm, materialId}. Parts are built at thicknessMm (a catalogue thickness for materialId) with the mid-surface of the measured sheet kept, and the project K-factor. Requires the project default material/thickness (IMPORT_DEFAULTS_MISSING). Writes an import_source row (re-importable as a reference mesh only).',
+        },
         angle_threshold_deg: {
           type: 'number',
           description:
             'Coplanarity threshold for panel-vs-bend face grouping (splitBodyByBends). Default 35; use a much tighter value (e.g. 0.5) for faceted/tessellated STEP exports where many nearly-coplanar triangles must merge without absorbing real fold boundaries.',
         },
-        max_thickness_mm: { type: 'number' },
-        default_thickness_mm: { type: 'number' },
         max_recursion_depth: { type: 'number' },
         profile: {
           type: 'object',
@@ -218,7 +224,7 @@ export const graphToolDefinitions = [
             "The org's manufacturing profile — {profile_id?, name?, rules?: {default_bend_radius_mm, min_bend_radius_factor, ...}}, same shape the findings/manufacturability resource's ManufacturingProfile uses. Defaults to the built-in sheet-metal default profile when omitted; that profile leaves default_bend_radius_mm unset, which reconcilePieces resolves to the part's own thickness_mm rather than a literal sharp fold — pass default_bend_radius_mm:0 explicitly for a genuinely sharp fold.",
         },
       },
-      required: ['file'],
+      required: ['config'],
     },
   },
   {
@@ -304,10 +310,14 @@ export const graphToolDefinitions = [
     inputSchema: {
       type: 'object',
       properties: {
-        file: { type: 'string', description: 'Path to a STEP file.' },
+        file: { type: 'string', description: 'Path to a STEP file (or pass preview_id from preview_import).' },
+        preview_id: { type: 'string', description: 'A preview_import preview_id: reuses its loaded solid.' },
+        config: {
+          type: 'object',
+          description:
+            'ImportConfig (spec 010): {scale:{preset,factor}, rotation:{xQuarterTurns,yQuarterTurns,zQuarterTurns}, recenter:{xy,z}, thicknessMm, materialId}. Parts are built at thicknessMm (a catalogue thickness for materialId) with the mid-surface of the measured sheet kept, and the project K-factor. Requires the project default material/thickness (IMPORT_DEFAULTS_MISSING). Writes an import_source row (re-importable as a reference mesh only).',
+        },
         angle_threshold_deg: { type: 'number' },
-        max_thickness_mm: { type: 'number' },
-        default_thickness_mm: { type: 'number' },
         max_recursion_depth: { type: 'number' },
       },
       required: ['file'],
@@ -554,6 +564,7 @@ export const graphToolDefinitions = [
   },
   ...storageToolDefinitions,
   ...projectToolDefinitions,
+  ...importPreviewToolDefinitions,
 ].map(withActorProperty);
 
 /** Validates `args` against the tool's own schema (schemas/tools.ts) before
@@ -595,6 +606,9 @@ export async function dispatchSessionTool(
 ): Promise<unknown> {
   validateToolArgs(name, args);
   if (PROJECT_TOOL_NAMES.has(name)) return handleProjectTool(ctx, name, args);
+  if (name === 'import_part') {
+    return handleConfiguredImport(ctx, args, optManufacturingProfile(args, 'profile'));
+  }
   if (MUTATING_TOOLS.has(name)) {
     ctx.requireBound();
     return persistMutation(ctx, name, args, () => dispatchGraphTool(ctx.store, name, args));
@@ -655,6 +669,8 @@ export function dispatchGraphTool(
       return handleGetJob(args);
     case 'list_storage_accounts':
       return handleListStorageAccounts();
+    case 'preview_import':
+      return handlePreviewImport(args);
     case 'test_storage_account':
       return handleTestStorageAccount(args);
     default:
@@ -868,16 +884,12 @@ function handleImportPart(
 } {
   const file = requireString(args, 'file');
   const angleThresholdDeg = optNumber(args, 'angle_threshold_deg');
-  const maxThicknessMm = optNumber(args, 'max_thickness_mm');
-  const defaultThicknessMm = optNumber(args, 'default_thickness_mm');
   const maxRecursionDepth = optNumber(args, 'max_recursion_depth');
   const profile = optManufacturingProfile(args, 'profile');
 
   try {
     const result = importPart(store, file, {
       angleThresholdDeg,
-      maxThicknessMm,
-      defaultThicknessMm,
       maxRecursionDepth,
       profile,
     });

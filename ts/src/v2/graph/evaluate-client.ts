@@ -871,6 +871,14 @@ export interface ImportPartOptions {
    * used here, stamped onto every reconciled bend (see
    * step_reconciliation.hpp's own header comment for why that's safe). */
   profile?: NapiManufacturingProfile;
+  /** Chosen sheet thickness (spec 010 FR-019). Omitted → the measured
+   * thickness. When it differs from the measurement, the mid-surface is kept
+   * (see importPartFromSolid). */
+  thicknessMm?: number;
+  materialId?: string;
+  kFactor?: number;
+  /** Part name for the main component (default: the file path). */
+  name?: string;
 }
 
 export interface ImportPartResult {
@@ -898,6 +906,8 @@ export interface ImportPartResult {
    * else references a store part except by id. Empty for fully-connected
    * fixtures. */
   componentPartIds: string[];
+  /** min panel thickness as measured on the solid, before any override. */
+  measuredThicknessMm: number;
 }
 
 /**
@@ -921,7 +931,21 @@ export function importPart(
 ): ImportPartResult {
   const solidId = geometryBinding.loadStep(filePath);
   geometryBinding.healGeometryEx(solidId, true, true);
+  return importPartFromSolid(store, solidId, { name: filePath, ...options });
+}
 
+/**
+ * The decompose → reconcile → materialise half of importPart, on an already
+ * loaded (and, for configured imports, transformed) solid. `options.name`
+ * names the main component; extra components/protrusions get `#component` /
+ * `#protrusion` suffixes (display names are the client's, via client_meta).
+ */
+export function importPartFromSolid(
+  store: GraphStore,
+  solidId: string,
+  options: ImportPartOptions & { name: string },
+): ImportPartResult {
+  const filePath = options.name;
   const split = geometryBinding.splitBodyByBends(
     solidId,
     options.angleThresholdDeg ?? 35,
@@ -984,8 +1008,11 @@ export function importPart(
   // INFLATED by neighboring material within the bleed margin (never
   // under-measured), so the true material thickness is never larger than
   // the smallest honestly-measured panel.
-  const thicknessMm = Math.min(...pieces.map((p) => p.thicknessMm));
-  const reconciled = geometryBinding.reconcilePieces(pieces, thicknessMm, options.profile);
+  const measuredThicknessMm = Math.min(...pieces.map((p) => p.thicknessMm));
+  const thicknessMm = options.thicknessMm ?? measuredThicknessMm;
+  // Reconcile at what was measured; the C++ side re-stamps the result at the
+  // chosen thickness about the measured mid-plane (spec 010 R-009).
+  const reconciled = geometryBinding.reconcilePieces(pieces, measuredThicknessMm, options.profile, options.thicknessMm);
   if (!reconciled.ok) {
     throwError(
       (reconciled.errorCode || ErrorCodes.INTERNAL_ERROR) as ErrorCode,
@@ -1005,6 +1032,8 @@ export function importPart(
       name: graph === reconciled.graphs[0] ? filePath : `${filePath}#component`,
       outline: graph.outline.outer,
       thicknessMm,
+      materialId: options.materialId,
+      kFactor: options.kFactor,
       anchor: graph.anchor?.transform,
     });
 
@@ -1027,7 +1056,10 @@ export function importPart(
         hingeB: bend.hingeB,
         angleDeg: bend.angleDeg,
         radiusMm: bend.radiusMm,
-        kFactor: bend.kFactor,
+        // A configured import sets the project K-factor on the part; its
+        // bends then inherit it rather than carrying reconcile's default as
+        // a per-bend override.
+        kFactor: options.kFactor !== undefined ? undefined : bend.kFactor,
         bottomIsConcave: bend.bottomIsConcave,
         radiusMeasured: bend.radiusMeasured,
       });
@@ -1075,6 +1107,8 @@ export function importPart(
       name: `${filePath}#protrusion`,
       outline: reconciledProtrusion.graph.outline.outer,
       thicknessMm,
+      materialId: options.materialId,
+      kFactor: options.kFactor,
       anchor: reconciledProtrusion.graph.anchor?.transform,
     });
     protrusionPartIds.push(protrusionPart.partId);
@@ -1088,6 +1122,7 @@ export function importPart(
     notes: reconciled.notes,
     protrusionPartIds,
     componentPartIds: allPartIds.slice(1),
+    measuredThicknessMm,
   };
 }
 

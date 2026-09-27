@@ -143,13 +143,7 @@ export class DoltPersistence implements GraphPersistence {
     const raw = {} as Record<GraphTable, Record<string, unknown>[]>;
     for (const t of GRAPH_TABLES) raw[t] = await this.q(conn, `SELECT * FROM ${from(t)}`);
     const meta = await this.q(conn, `SELECT part_id, doc FROM ${from('client_meta')}`);
-    const settingsRows = await this.q(conn, `SELECT manufacturing_profile, manufacturing_defaults, nesting FROM ${from('project_settings')} WHERE id = 1`);
-    const s = settingsRows[0];
-    const settings: ProjectSettingsRow = {
-      manufacturing_profile: parseJson(s?.['manufacturing_profile']),
-      manufacturing_defaults: parseJson(s?.['manufacturing_defaults']),
-      nesting: parseJson(s?.['nesting']),
-    };
+    const settings = await this.readSettingsFrom(conn, from('project_settings'));
     const clientMeta: ClientMetaRow[] = meta.map((m) => ({ part_id: String(m['part_id']), doc: parseJson(m['doc']) ?? {} }));
     const schemaVersion = asOf === null ? await appliedVersion(conn) : await schemaVersionAt(conn, this.database, asOf);
     return { rows: normaliseRows(raw), clientMeta, settings, schemaVersion };
@@ -168,6 +162,24 @@ export class DoltPersistence implements GraphPersistence {
     this._readOnlyRef = null;
     await this.writeSessionBranch(session);
     return { raw: await this.readTables(this.writer, null), schemaMigrated: results.some((r) => r.mode !== 'none') };
+  }
+
+  private async readSettingsFrom(conn: Connection, table: string): Promise<ProjectSettingsRow> {
+    const rows = await this.q(conn, `SELECT manufacturing_profile, manufacturing_defaults, nesting FROM ${table} WHERE id = 1`);
+    const s = rows[0];
+    return {
+      manufacturing_profile: parseJson(s?.['manufacturing_profile']),
+      manufacturing_defaults: parseJson(s?.['manufacturing_defaults']),
+      nesting: parseJson(s?.['nesting']),
+    };
+  }
+
+  async readSettings(): Promise<ProjectSettingsRow> {
+    if (this._readOnlyRef !== null) {
+      return this.readSettingsFrom(this.reader, `${quoteIdent(this.database)}.${quoteIdent('project_settings')} AS OF '${this._readOnlyRef.replace(/'/g, '')}'`);
+    }
+    await this.useBranch(this._branch);
+    return this.readSettingsFrom(this.writer, quoteIdent('project_settings'));
   }
 
   async readCurrent(): Promise<RawLoad> {

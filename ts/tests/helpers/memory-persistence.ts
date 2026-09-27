@@ -10,6 +10,7 @@ import type {
   CommitAuthor,
   GraphPersistence,
   HistoryResult,
+  ProjectSettingsRow,
   RawLoad,
   SideWrites,
 } from '../../src/v2/persistence/port';
@@ -25,8 +26,13 @@ export class MemoryPersistence implements GraphPersistence {
   readOnlyRef: string | null = null;
   readonly applied: Array<{ diff: RowDiff; side: SideWrites; action: ActionRecord }> = [];
 
+  settings: ProjectSettingsRow = { manufacturing_profile: null, manufacturing_defaults: null, nesting: null };
+
   private raw(): RawLoad {
-    return { rows: emptyRows(), clientMeta: [], settings: { manufacturing_profile: null, manufacturing_defaults: null, nesting: null }, schemaVersion: 0 };
+    return { rows: emptyRows(), clientMeta: [], settings: this.settings, schemaVersion: 0 };
+  }
+  async readSettings() {
+    return this.settings;
   }
   async open() {
     return { raw: this.raw(), schemaMigrated: false };

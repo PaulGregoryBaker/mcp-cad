@@ -56,11 +56,14 @@ const ToolSchemas = {
     bottom_is_concave: z.boolean().optional(),
   }),
 
+  // Spec 010: `{preview_id | file}` + `config` (the persistent path requires
+  // config — checked in import-configured.ts, which also validates it against
+  // the stored ImportConfig schema). The in-memory engine accepts `{file}`.
   import_part: z.object({
-    file: z.string().min(1),
+    file: z.string().min(1).optional(),
+    preview_id: z.string().min(1).optional(),
+    config: z.record(z.unknown()).optional(),
     angle_threshold_deg: z.number().optional(),
-    max_thickness_mm: z.number().optional(),
-    default_thickness_mm: z.number().optional(),
     max_recursion_depth: z.number().optional(),
     // Loose/best-effort on purpose, matching optManufacturingProfile's own
     // tolerance (tools/graph.ts): only the fields it recognizes are read,
@@ -206,6 +209,11 @@ const ToolSchemas = {
 
   // ─── Storage accounts (spec 010, R-014) — ids only, never credentials ───
   list_storage_accounts: z.object({}).strict(),
+  preview_import: z.object({
+    file: z.string().min(1).optional(),
+    preview_id: z.string().min(1).optional(),
+    config: z.record(z.unknown()).optional(),
+  }),
   test_storage_account: z.object({ account: z.string().min(1) }).strict(),
 
   // ─── Project lifecycle / versioning / settings (spec 010) ──────────────

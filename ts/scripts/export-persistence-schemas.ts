@@ -16,6 +16,7 @@
  * defect only the server's Zod schemas / invariants catch).
  */
 
+import { catalogueThicknesses } from '../src/v2/graph/thickness-catalogue';
 import * as fs from 'fs';
 import * as path from 'path';
 import { zodToJsonSchema } from 'zod-to-json-schema';
@@ -234,4 +235,11 @@ for (const kind of Object.keys(samples) as PersistedKind[]) {
     write(path.join(dir, 'invalid', `${inv.name}.expect.json`), { layer: inv.layer, code: inv.code, client: inv.client ?? 'accept' });
   }
 }
+// The standard sheet-thickness catalogue import_part enforces
+// (IMPORT_THICKNESS_NOT_IN_CATALOGUE) — the client's picker must offer
+// exactly these values (spec 010 T063).
+write(
+  path.join(OUT, 'thickness_catalogue.json'),
+  Object.fromEntries((['mildSteel', 'stainlessSteel', 'aluminum'] as const).map((m) => [m, catalogueThicknesses(m)])),
+);
 console.log(`contract fixtures written to ${OUT}`);

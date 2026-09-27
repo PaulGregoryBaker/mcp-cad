@@ -389,6 +389,7 @@ export interface GeometryAddon {
     pieces: NapiPanelPieceSpec[],
     thicknessMm: number,
     profile?: NapiManufacturingProfile,
+    targetThicknessMm?: number,
   ): ReconcilePiecesResult;
 
   // ── Phase 5 Slice 6: fuse_bodies / remove_protrusions polygon boolean ─────
@@ -1488,16 +1489,20 @@ export class GeometryBinding {
     }
   }
 
+  /** `targetThicknessMm` (spec 010 R-009): re-stamp the result at a chosen
+   * thickness about the measured mid-plane; reconciliation still runs at the
+   * measured `thicknessMm`. */
   reconcilePieces(
     pieces: NapiPanelPieceSpec[],
     thicknessMm: number,
     profile?: NapiManufacturingProfile,
+    targetThicknessMm?: number,
   ): ReconcilePiecesResult {
     if (!this.addon.reconcilePieces) {
       throw new Error('Geometry addon does not expose reconcilePieces');
     }
     try {
-      return this.addon.reconcilePieces(pieces, thicknessMm, profile);
+      return this.addon.reconcilePieces(pieces, thicknessMm, profile, targetThicknessMm);
     } catch (err) {
       throw toStructuredError(err);
     }

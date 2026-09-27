@@ -213,7 +213,8 @@ bool HasSelfIntersection(const std::vector<Point2>& ring) {
 
 ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
                                        double thicknessMm,
-                                       double defaultBendRadiusMm) {
+                                       double defaultBendRadiusMm,
+                                       double targetThicknessMm) {
   ReconcilePiecesResult result;
   const size_t n = pieces.size();
   if (n < 1) {
@@ -1062,6 +1063,23 @@ ReconcilePiecesResult ReconcilePieces(const std::vector<PanelPieceSpec>& pieces,
   // result.graphs[0] is always the main component regardless of how many
   // leftover components were found.
   result.graphs.insert(result.graphs.begin(), result.graph);
+
+  // Re-stamp at the chosen thickness about the measured mid-plane (see the
+  // header comment on targetThicknessMm). Material occupies local z in
+  // [0, t] above the anchor plane, so the mid-plane is at t/2: shifting the
+  // anchor by (t_measured - t_target)/2 along its own z keeps it fixed.
+  if (targetThicknessMm > 0.0 && std::abs(targetThicknessMm - thicknessMm) > 1e-9) {
+    const Transform3 shift = Transform3::Translation(0.0, 0.0, (thicknessMm - targetThicknessMm) / 2.0);
+    auto restamp = [&](PartGraphSpec& g) {
+      g.anchor.transform = g.anchor.transform.Compose(shift);
+      g.thicknessMm = targetThicknessMm;
+      if (defaultBendRadiusMm < 0.0) {
+        for (auto& bend : g.bends) bend.radiusMm = targetThicknessMm;
+      }
+    };
+    for (auto& g : result.graphs) restamp(g);
+    restamp(result.graph);
+  }
   return result;
 }
 
