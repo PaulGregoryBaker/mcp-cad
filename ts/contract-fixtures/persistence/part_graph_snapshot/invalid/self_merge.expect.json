@@ -1,4 +1,5 @@
 {
   "layer": "invariant",
-  "code": "INV_MERGE_SELF"
+  "code": "INV_MERGE_SELF",
+  "client": "accept"
 }

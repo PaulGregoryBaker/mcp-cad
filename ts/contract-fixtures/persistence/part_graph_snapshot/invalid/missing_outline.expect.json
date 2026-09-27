@@ -1,4 +1,5 @@
 {
   "layer": "shape",
-  "code": "part.outline"
+  "code": "part.outline",
+  "client": "reject"
 }

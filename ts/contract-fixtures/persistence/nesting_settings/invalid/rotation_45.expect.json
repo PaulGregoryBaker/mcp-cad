@@ -1,4 +1,5 @@
 {
   "layer": "shape",
-  "code": "rotationsDeg"
+  "code": "rotationsDeg",
+  "client": "accept"
 }

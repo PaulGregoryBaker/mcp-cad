@@ -1,4 +1,5 @@
 {
   "layer": "shape",
-  "code": "actor_kind"
+  "code": "actor_kind",
+  "client": "reject"
 }

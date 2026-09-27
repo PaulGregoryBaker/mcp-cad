@@ -1,4 +1,5 @@
 {
   "layer": "shape",
-  "code": "part.thicknessMm"
+  "code": "part.thicknessMm",
+  "client": "accept"
 }

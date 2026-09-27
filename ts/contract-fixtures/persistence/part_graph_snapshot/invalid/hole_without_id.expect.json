@@ -1,4 +1,5 @@
 {
   "layer": "shape",
-  "code": "part.holes.0"
+  "code": "part.holes.0",
+  "client": "reject"
 }

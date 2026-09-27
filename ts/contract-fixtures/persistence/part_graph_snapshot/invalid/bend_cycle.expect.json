@@ -1,4 +1,5 @@
 {
   "layer": "invariant",
-  "code": "INV_BEND_TOPOLOGY"
+  "code": "INV_BEND_TOPOLOGY",
+  "client": "accept"
 }

@@ -1,4 +1,5 @@
 {
   "layer": "shape",
-  "code": "rotation.xQuarterTurns"
+  "code": "rotation.xQuarterTurns",
+  "client": "reject"
 }

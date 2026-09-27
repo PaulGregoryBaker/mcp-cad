@@ -1,4 +1,5 @@
 {
   "layer": "shape",
-  "code": "thicknessMm"
+  "code": "thicknessMm",
+  "client": "reject"
 }

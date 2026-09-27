@@ -8,7 +8,12 @@
  *   npm run schemas:export
  *
  * Each invalid sample has a sidecar <name>.expect.json:
- *   { "layer": "shape" | "invariant", "code": "<zod path prefix | INV_* code>" }
+ *   { "layer": "shape" | "invariant", "code": "<zod path prefix | INV_* code>",
+ *     "client": "reject" | "accept" }
+ * `client` says whether the client's own strict parser (presence + types,
+ * research R-013) must reject the document ("reject": a missing or ill-typed
+ * field) or may parse it ("accept": a value-range, unknown-key or structural
+ * defect only the server's Zod schemas / invariants catch).
  */
 
 import * as fs from 'fs';
@@ -19,7 +24,7 @@ import { PersistedSchemas, type PersistedKind } from '../src/v2/schemas/persiste
 const OUT = path.resolve(__dirname, '..', 'contract-fixtures', 'persistence');
 
 type Json = Record<string, unknown>;
-type Invalid = { name: string; doc: unknown; layer: 'shape' | 'invariant'; code: string };
+type Invalid = { name: string; doc: unknown; layer: 'shape' | 'invariant'; code: string; client?: 'reject' };
 
 const ID = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
@@ -127,10 +132,10 @@ const samples: Record<PersistedKind, { valid: Record<string, unknown>; invalid: 
       }),
     },
     invalid: [
-      { name: 'missing_outline', doc: mutate((s) => delete s.part.outline), layer: 'shape', code: 'part.outline' },
+      { name: 'missing_outline', doc: mutate((s) => delete s.part.outline), layer: 'shape', code: 'part.outline', client: 'reject' },
       { name: 'outline_two_points', doc: mutate((s) => (s.part.outline = s.part.outline.slice(0, 2))), layer: 'shape', code: 'part.outline' },
       { name: 'zero_thickness', doc: mutate((s) => (s.part.thicknessMm = 0)), layer: 'shape', code: 'part.thicknessMm' },
-      { name: 'hole_without_id', doc: mutate((s) => delete s.part.holes[0].holeId), layer: 'shape', code: 'part.holes.0' },
+      { name: 'hole_without_id', doc: mutate((s) => delete s.part.holes[0].holeId), layer: 'shape', code: 'part.holes.0', client: 'reject' },
       { name: 'unknown_key', doc: mutate((s) => (s.part.colour = 'red')), layer: 'shape', code: 'part' },
       { name: 'bend_negative_radius', doc: mutate((s) => (s.bends[0].radiusMm = -1)), layer: 'shape', code: 'bends.0.radiusMm' },
       { name: 'root_panel_missing', doc: mutate((s) => (s.part.rootRegionPanelId = ID(99))), layer: 'invariant', code: 'INV_ROOT_PANEL_MISSING' },
@@ -153,8 +158,9 @@ const samples: Record<PersistedKind, { valid: Record<string, unknown>; invalid: 
         doc: { manufacturing_profile: null, manufacturing_defaults: { ...defaults(), defaultMaterial: 'unobtainium' }, nesting: null },
         layer: 'shape',
         code: 'manufacturing_defaults.defaultMaterial',
+        client: 'reject',
       },
-      { name: 'missing_key', doc: { manufacturing_profile: null, nesting: null }, layer: 'shape', code: 'manufacturing_defaults' },
+      { name: 'missing_key', doc: { manufacturing_profile: null, nesting: null }, layer: 'shape', code: 'manufacturing_defaults', client: 'reject' },
     ],
   },
   nesting_settings: {
@@ -168,15 +174,16 @@ const samples: Record<PersistedKind, { valid: Record<string, unknown>; invalid: 
   import_config: {
     valid: { inch_x90_floor: importConfig(), custom_scale: { ...importConfig(), scale: { preset: 'custom', factor: 2.5 } } },
     invalid: [
-      { name: 'preset_factor_mismatch', doc: { ...importConfig(), scale: { preset: 'in', factor: 25 } }, layer: 'shape', code: 'scale' },
+      { name: 'preset_factor_mismatch', doc: { ...importConfig(), scale: { preset: 'in', factor: 25 } }, layer: 'shape', code: 'scale', client: 'reject' },
       {
         name: 'quarter_turns_4',
         doc: { ...importConfig(), rotation: { xQuarterTurns: 4, yQuarterTurns: 0, zQuarterTurns: 0 } },
         layer: 'shape',
         code: 'rotation.xQuarterTurns',
+        client: 'reject',
       },
-      { name: 'mirror_not_allowed', doc: { ...importConfig(), mirror: { x: true } }, layer: 'shape', code: '(root)' },
-      { name: 'missing_thickness', doc: withoutKey(importConfig(), 'thicknessMm'), layer: 'shape', code: 'thicknessMm' },
+      { name: 'mirror_not_allowed', doc: { ...importConfig(), mirror: { x: true } }, layer: 'shape', code: '(root)', client: 'reject' },
+      { name: 'missing_thickness', doc: withoutKey(importConfig(), 'thicknessMm'), layer: 'shape', code: 'thicknessMm', client: 'reject' },
     ],
   },
   action_log_entry: {
@@ -185,7 +192,7 @@ const samples: Record<PersistedKind, { valid: Record<string, unknown>; invalid: 
       system_migration: { seq: 4, at: '2026-09-27T12:01:00.000Z', actor_kind: 'system', actor_id: 'system', tool: 'migrate', delta_summary: { from: 2, to: 3 }, undone: false },
     },
     invalid: [
-      { name: 'bad_actor', doc: { seq: 1, at: 'x', actor_kind: 'robot', actor_id: '', tool: 't', delta_summary: {}, undone: false }, layer: 'shape', code: 'actor_kind' },
+      { name: 'bad_actor', doc: { seq: 1, at: 'x', actor_kind: 'robot', actor_id: '', tool: 't', delta_summary: {}, undone: false }, layer: 'shape', code: 'actor_kind', client: 'reject' },
     ],
   },
   history_commit: {
@@ -224,7 +231,7 @@ for (const kind of Object.keys(samples) as PersistedKind[]) {
   for (const [name, doc] of Object.entries(samples[kind].valid)) write(path.join(dir, 'valid', `${name}.json`), doc);
   for (const inv of samples[kind].invalid) {
     write(path.join(dir, 'invalid', `${inv.name}.json`), inv.doc);
-    write(path.join(dir, 'invalid', `${inv.name}.expect.json`), { layer: inv.layer, code: inv.code });
+    write(path.join(dir, 'invalid', `${inv.name}.expect.json`), { layer: inv.layer, code: inv.code, client: inv.client ?? 'accept' });
   }
 }
 console.log(`contract fixtures written to ${OUT}`);

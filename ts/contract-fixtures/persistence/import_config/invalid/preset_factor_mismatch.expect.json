@@ -1,4 +1,5 @@
 {
   "layer": "shape",
-  "code": "scale"
+  "code": "scale",
+  "client": "reject"
 }

@@ -1,4 +1,5 @@
 {
   "layer": "shape",
-  "code": "safetyGapMm"
+  "code": "safetyGapMm",
+  "client": "accept"
 }

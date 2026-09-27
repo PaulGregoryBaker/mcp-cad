@@ -1,4 +1,5 @@
 {
   "layer": "invariant",
-  "code": "INV_ROOT_PANEL_MISSING"
+  "code": "INV_ROOT_PANEL_MISSING",
+  "client": "accept"
 }

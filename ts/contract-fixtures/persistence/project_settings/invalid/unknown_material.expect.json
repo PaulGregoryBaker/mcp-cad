@@ -1,4 +1,5 @@
 {
   "layer": "shape",
-  "code": "manufacturing_defaults.defaultMaterial"
+  "code": "manufacturing_defaults.defaultMaterial",
+  "client": "reject"
 }

@@ -1,4 +1,5 @@
 {
   "layer": "shape",
-  "code": "bends.0.radiusMm"
+  "code": "bends.0.radiusMm",
+  "client": "accept"
 }

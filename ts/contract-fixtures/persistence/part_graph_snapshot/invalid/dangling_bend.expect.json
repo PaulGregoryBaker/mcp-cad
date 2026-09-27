@@ -1,4 +1,5 @@
 {
   "layer": "invariant",
-  "code": "INV_BEND_DANGLING"
+  "code": "INV_BEND_DANGLING",
+  "client": "accept"
 }
