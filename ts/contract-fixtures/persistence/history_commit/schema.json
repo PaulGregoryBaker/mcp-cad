@@ -1,0 +1,53 @@
+{
+  "$ref": "#/definitions/history_commit",
+  "definitions": {
+    "history_commit": {
+      "type": "object",
+      "properties": {
+        "hash": {
+          "type": "string",
+          "minLength": 1
+        },
+        "parents": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "date": {
+          "type": "string",
+          "minLength": 1
+        },
+        "author_name": {
+          "type": "string"
+        },
+        "author_email": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "op_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "agent_op_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "hash",
+        "parents",
+        "date",
+        "author_name",
+        "author_email",
+        "message",
+        "op_count",
+        "agent_op_count"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

@@ -5,6 +5,9 @@
 -- region_panel.merged_into_region_panel_id) have no FOREIGN KEY: MySQL/Dolt has no
 -- deferred constraints. They are enforced by graph/invariants.ts (R-013 layer 3).
 -- Geometric validity is never checked here (constitution principle IV).
+-- region_panel.order_key / bend.order_key (addendum to 14 §2): the evaluator
+-- is sensitive to bend-array order (hinge-vertex insertion, cut order), so the
+-- in-memory order is persisted with the same fractional keys as vertices.
 
 CREATE TABLE part (
   part_id VARCHAR(36) NOT NULL PRIMARY KEY,
@@ -62,6 +65,7 @@ CREATE TABLE region_panel (
   label VARCHAR(255) NOT NULL,
   k_factor_override DOUBLE NULL CHECK (k_factor_override IS NULL OR (k_factor_override >= 0 AND k_factor_override <= 1)),
   merged_into_region_panel_id VARCHAR(36) NULL,
+  order_key VARCHAR(64) NOT NULL,
   FOREIGN KEY (part_id) REFERENCES part (part_id) ON DELETE CASCADE
 );
 
@@ -78,6 +82,7 @@ CREATE TABLE bend (
   bottom_is_concave BOOLEAN NULL,
   radius_measured BOOLEAN NOT NULL,
   bend_process VARCHAR(64) NULL,
+  order_key VARCHAR(64) NOT NULL,
   FOREIGN KEY (part_id) REFERENCES part (part_id) ON DELETE CASCADE,
   FOREIGN KEY (parent_region_panel_id) REFERENCES region_panel (region_panel_id),
   FOREIGN KEY (child_region_panel_id) REFERENCES region_panel (region_panel_id)

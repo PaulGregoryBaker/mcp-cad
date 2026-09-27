@@ -101,6 +101,7 @@ export interface PanelDbRow {
   label: string;
   k_factor_override: number | null;
   merged_into_region_panel_id: string | null;
+  order_key: string;
 }
 export interface BendDbRow {
   bend_id: string;
@@ -114,6 +115,7 @@ export interface BendDbRow {
   bottom_is_concave: boolean | null;
   radius_measured: boolean;
   bend_process: string | null;
+  order_key: string;
 }
 
 export interface GraphRows {
@@ -156,6 +158,8 @@ export interface PartShadow {
   outlineRingId: string;
   rings: Map<string, VertexShadow>; // ring_id -> vertices
   holeKeys: Map<string, string>; // holeId -> hole_order_key
+  panelKeys: Map<string, string>; // region_panel_id -> order_key
+  bendKeys: Map<string, string>; // bend_id -> order_key
 }
 
 export type ShadowStore = Map<string, PartShadow>; // part_id -> shadow
@@ -244,7 +248,16 @@ export function alignRing(shadow: VertexShadow | undefined, pts: Point2[]): { sh
   return { shadow: { ids, keys, pts: pts.map((p) => ({ ...p })) }, fullRewrite: false };
 }
 
-function holeOrderKeys(holes: Hole[], previous: Map<string, string> | undefined): Map<string, string> {
+/**
+ * Order keys for an ordered list of ids, reusing each surviving id's previous
+ * key while the survivors are still in increasing key order (so appends and
+ * deletes touch only the rows they must); otherwise renumbers all.
+ */
+export function orderKeys(ids: string[], previous: Map<string, string> | undefined): Map<string, string> {
+  return holeOrderKeys(ids.map((id) => ({ holeId: id }) as Hole), previous);
+}
+
+function holeOrderKeys(holes: Array<Pick<Hole, 'holeId'>>, previous: Map<string, string> | undefined): Map<string, string> {
   const out = new Map<string, string>();
   // Reuse previous keys if the surviving holes are still in increasing key order.
   let lastKey = '';
@@ -315,6 +328,8 @@ export function snapshotToRows(snapshot: PartGraphSnapshot, previous: PartShadow
     outlineRingId: previous?.outlineRingId ?? randomUUID(),
     rings: new Map(),
     holeKeys: new Map(),
+    panelKeys: orderKeys(regionPanels.map((p) => p.regionPanelId), previous?.panelKeys),
+    bendKeys: orderKeys(bends.map((b) => b.bendId), previous?.bendKeys),
   };
 
   const addRing = (ringId: string, kind: 'outline' | 'hole', pts: Point2[], holeKey: string | null): void => {
@@ -355,6 +370,7 @@ export function snapshotToRows(snapshot: PartGraphSnapshot, previous: PartShadow
       label: p.label,
       k_factor_override: p.kFactorOverride,
       merged_into_region_panel_id: p.mergedIntoRegionPanelId,
+      order_key: shadow.panelKeys.get(p.regionPanelId)!,
     });
   }
   for (const b of bends) {
@@ -370,6 +386,7 @@ export function snapshotToRows(snapshot: PartGraphSnapshot, previous: PartShadow
       bottom_is_concave: b.bottomIsConcave,
       radius_measured: b.radiusMeasured,
       bend_process: b.bendProcess,
+      order_key: shadow.bendKeys.get(b.bendId)!,
     });
   }
   return { rows, shadow, fullRewriteRings };
@@ -456,7 +473,13 @@ export function rowsToSnapshots(rows: GraphRows): RowsToSnapshotsResult {
       problems.push({ table: 'part_ring', key: p.part_id, issue: `part has ${outlineRings.length} outline rings (expected 1)` });
       continue;
     }
-    const shadow: PartShadow = { outlineRingId: outlineRings[0]!.ring_id, rings: new Map(), holeKeys: new Map() };
+    const shadow: PartShadow = {
+      outlineRingId: outlineRings[0]!.ring_id,
+      rings: new Map(),
+      holeKeys: new Map(),
+      panelKeys: new Map(),
+      bendKeys: new Map(),
+    };
     const ringPoints = (ringId: string): Point2[] => {
       const vs = verticesByRing.get(ringId) ?? [];
       shadow.rings.set(ringId, { ids: vs.map((v) => v.vertex_id), keys: vs.map((v) => v.order_key), pts: vs.map((v) => ({ x: v.x, y: v.y })) });
@@ -490,14 +513,19 @@ export function rowsToSnapshots(rows: GraphRows): RowsToSnapshotsResult {
       schemaVersion: p.schema_version,
       mergedIntoPartId: p.merged_into_part_id,
     };
-    const regionPanels: RegionPanelRow[] = (panelsByPart.get(p.part_id) ?? []).map((r) => ({
+    const byKey = <T extends { order_key: string }>(a: T, b: T): number => (a.order_key < b.order_key ? -1 : a.order_key > b.order_key ? 1 : 0);
+    const panelRows = [...(panelsByPart.get(p.part_id) ?? [])].sort(byKey);
+    const bendRows = [...(bendsByPart.get(p.part_id) ?? [])].sort(byKey);
+    for (const r of panelRows) shadow.panelKeys.set(r.region_panel_id, r.order_key);
+    for (const b of bendRows) shadow.bendKeys.set(b.bend_id, b.order_key);
+    const regionPanels: RegionPanelRow[] = panelRows.map((r) => ({
       regionPanelId: r.region_panel_id,
       partId: r.part_id,
       label: r.label,
       kFactorOverride: r.k_factor_override,
       mergedIntoRegionPanelId: r.merged_into_region_panel_id,
     }));
-    const bends: BendRow[] = (bendsByPart.get(p.part_id) ?? []).map((b) => ({
+    const bends: BendRow[] = bendRows.map((b) => ({
       bendId: b.bend_id,
       partId: b.part_id,
       parentRegionPanelId: b.parent_region_panel_id,

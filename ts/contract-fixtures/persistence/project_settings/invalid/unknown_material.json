@@ -1,0 +1,12 @@
+{
+  "manufacturing_profile": null,
+  "manufacturing_defaults": {
+    "defaultMaterial": "unobtainium",
+    "defaultThicknessMm": 3,
+    "unitSystem": "metric",
+    "preferredBendProcesses": [
+      "airBend"
+    ]
+  },
+  "nesting": null
+}

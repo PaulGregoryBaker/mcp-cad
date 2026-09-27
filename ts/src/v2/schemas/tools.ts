@@ -183,26 +183,6 @@ const ToolSchemas = {
     }),
   }),
 
-  commit: z.object({
-    part_id: z.string().min(1),
-    message: z.string().min(1),
-  }),
-
-  restore: z.object({
-    part_id: z.string().min(1),
-    commit_hash: z.string().min(1),
-  }),
-
-  // Dispatchable today (dispatchGraphTool's switch has live cases) but absent
-  // from graphToolDefinitions entirely — added there too as part of this pass.
-  branch: z.object({
-    name: z.string().min(1),
-    from_commit: z.string().optional(),
-  }),
-
-  merge_branch: z.object({
-    source_branch: z.string().min(1),
-  }),
 
   simulate_nesting: z.object({
     part_ids: z.array(z.string()).min(1),
@@ -227,6 +207,42 @@ const ToolSchemas = {
   // ─── Storage accounts (spec 010, R-014) — ids only, never credentials ───
   list_storage_accounts: z.object({}).strict(),
   test_storage_account: z.object({ account: z.string().min(1) }).strict(),
+
+  // ─── Project lifecycle / versioning / settings (spec 010) ──────────────
+  create_project: z.object({ account: z.string().min(1), database: z.string().min(1), name: z.string().min(1).max(255) }).strict(),
+  drop_project: z.object({ account: z.string().min(1), database: z.string().min(1) }).strict(),
+  list_projects: z.object({ account: z.string().min(1) }).strict(),
+  open_project: z
+    .object({
+      account: z.string().min(1),
+      database: z.string().min(1),
+      author: z.object({ name: z.string().min(1).max(255), email: z.string().min(3).max(255) }).strict(),
+    })
+    .strict(),
+  refresh_project: z.object({}).strict(),
+  close_project: z.object({}).strict(),
+  branch_begin: z.object({ label: z.string().regex(/^[A-Za-z0-9._-]{1,64}$/), replace_existing: z.boolean().optional() }).strict(),
+  commit: z.object({ message: z.string().min(1).max(500) }).strict(),
+  discard_changes: z.object({}).strict(),
+  undo: z.object({}).strict(),
+  branch_merge: z.object({ message: z.string().min(1).max(500) }).strict(),
+  branch_discard: z.object({}).strict(),
+  checkout: z.object({ ref: z.string().min(1).max(255) }).strict(),
+  update_project_settings: z
+    .object({
+      manufacturing_profile: z.record(z.unknown()).nullable().optional(),
+      manufacturing_defaults: z.record(z.unknown()).nullable().optional(),
+      nesting: z.record(z.unknown()).nullable().optional(),
+      actor: z.object({ kind: z.enum(['human', 'agent']).optional(), id: z.string().optional() }).optional(),
+    })
+    .strict(),
+  update_client_meta: z
+    .object({
+      part_id: z.string().min(1),
+      doc: z.record(z.unknown()),
+      actor: z.object({ kind: z.enum(['human', 'agent']).optional(), id: z.string().optional() }).optional(),
+    })
+    .strict(),
 } as const;
 
 export type ToolName = keyof typeof ToolSchemas;

@@ -21,7 +21,8 @@ import {
 
 import { toStructuredError } from '../mcp/errors';
 import { GraphStore } from './graph/store';
-import { graphToolDefinitions, dispatchGraphTool } from './tools/graph';
+import { graphToolDefinitions, dispatchSessionTool } from './tools/graph';
+import { SessionContext } from './persistence/session';
 import {
   graphResourceTemplates,
   matchesGraphResource,
@@ -42,7 +43,11 @@ const GEOMETRY_RESOURCE_PATTERN = /^graph:\/\/part\/([^/]+)\/(mesh|boundary|flat
  * constructed at module load) so tests can drive a real Server instance
  * against a test-controlled store without spawning the stdio process.
  */
-export function createV2Server(store: GraphStore = new GraphStore()): Server {
+export function createV2Server(target: GraphStore | SessionContext = new SessionContext()): Server {
+  // One SessionContext per server (stdio = one client). A bare GraphStore is
+  // accepted for tests; it is wrapped, not bypassed — persistence rules apply.
+  const ctx = target instanceof SessionContext ? target : new SessionContext(target);
+  const store = ctx.store;
   const server = new Server(
     {
       name: 'mcp-cad-v2',
@@ -143,7 +148,7 @@ export function createV2Server(store: GraphStore = new GraphStore()): Server {
             'Tool call requires an explicit arguments object. Pass {} when no arguments are needed.',
           );
         }
-        const result = await dispatchGraphTool(store, request.params.name, toolArgs);
+        const result = await dispatchSessionTool(ctx, request.params.name, toolArgs);
         setImmediate(checkSubscriptionsForDrift);
         return {
           content: [{ type: 'text', text: redactSecrets(JSON.stringify(result)) }],
@@ -237,9 +242,9 @@ export function installStderrRedaction(): void {
 async function main(): Promise<void> {
   installStderrRedaction();
   installCrashGuards();
-  const store = new GraphStore();
-  startV2BlobServer(resolveV2BlobPort(), store);
-  const server = createV2Server(store);
+  const ctx = new SessionContext();
+  startV2BlobServer(resolveV2BlobPort(), ctx.store);
+  const server = createV2Server(ctx);
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

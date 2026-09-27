@@ -1,0 +1,12 @@
+{
+  "sheets": [],
+  "safetyGapMm": 2,
+  "sheetMarginMm": 5,
+  "cuttingWidthMm": 0.2,
+  "rotationsDeg": [
+    0,
+    90,
+    180,
+    270
+  ]
+}

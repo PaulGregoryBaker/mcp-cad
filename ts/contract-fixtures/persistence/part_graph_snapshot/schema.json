@@ -1,0 +1,418 @@
+{
+  "$ref": "#/definitions/part_graph_snapshot",
+  "definitions": {
+    "part_graph_snapshot": {
+      "type": "object",
+      "properties": {
+        "part": {
+          "type": "object",
+          "properties": {
+            "partId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "rootRegionPanelId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "outline": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "x",
+                  "y"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 3
+            },
+            "holes": {
+              "type": "array",
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "polygon"
+                      },
+                      "holeId": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
+                      },
+                      "ring": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "x": {
+                              "type": "number"
+                            },
+                            "y": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "x",
+                            "y"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "minItems": 3
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "holeId",
+                      "ring"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "circle"
+                      },
+                      "holeId": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
+                      },
+                      "center": {
+                        "type": "object",
+                        "properties": {
+                          "x": {
+                            "type": "number"
+                          },
+                          "y": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "x",
+                          "y"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "radiusMm": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "holeId",
+                      "center",
+                      "radiusMm"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            },
+            "anchor": {
+              "type": "object",
+              "properties": {
+                "r": {
+                  "type": "array",
+                  "minItems": 9,
+                  "maxItems": 9,
+                  "items": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                },
+                "t": {
+                  "type": "array",
+                  "minItems": 3,
+                  "maxItems": 3,
+                  "items": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "r",
+                "t"
+              ],
+              "additionalProperties": false
+            },
+            "materialId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "thicknessMm": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "kFactor": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "schemaVersion": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16
+            },
+            "mergedIntoPartId": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "partId",
+            "name",
+            "rootRegionPanelId",
+            "outline",
+            "holes",
+            "anchor",
+            "materialId",
+            "thicknessMm",
+            "kFactor",
+            "schemaVersion",
+            "mergedIntoPartId"
+          ],
+          "additionalProperties": false
+        },
+        "regionPanels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "regionPanelId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "partId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 255
+              },
+              "kFactorOverride": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "mergedIntoRegionPanelId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "regionPanelId",
+              "partId",
+              "label",
+              "kFactorOverride",
+              "mergedIntoRegionPanelId"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "bends": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "bendId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "partId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "parentRegionPanelId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "childRegionPanelId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "hingeA": {
+                "type": "object",
+                "properties": {
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "x",
+                  "y"
+                ],
+                "additionalProperties": false
+              },
+              "hingeB": {
+                "type": "object",
+                "properties": {
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "x",
+                  "y"
+                ],
+                "additionalProperties": false
+              },
+              "angleDeg": {
+                "type": "number"
+              },
+              "radiusMm": {
+                "type": "number",
+                "minimum": 0
+              },
+              "kFactorOverride": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "bottomIsConcave": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "radiusMeasured": {
+                "type": "boolean"
+              },
+              "bendProcess": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "bendId",
+              "partId",
+              "parentRegionPanelId",
+              "childRegionPanelId",
+              "hingeA",
+              "hingeB",
+              "angleDeg",
+              "radiusMm",
+              "kFactorOverride",
+              "bottomIsConcave",
+              "radiusMeasured",
+              "bendProcess"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "part",
+        "regionPanels",
+        "bends"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

@@ -25,6 +25,7 @@ import type { AddressInfo } from 'node:net';
 import { GraphStore } from '../../src/v2/graph/store';
 import { dispatchGraphTool } from '../../src/v2/tools/graph';
 import { readGraphResource } from '../../src/v2/resources/graph';
+import { memoryBoundContext } from '../helpers/memory-persistence';
 import { createV2Server } from '../../src/v2/server';
 import { startV2BlobServer } from '../../src/v2/blob-server';
 
@@ -100,7 +101,9 @@ d(
 
     beforeEach(async () => {
       store = new GraphStore();
-      server = createV2Server(store);
+      // The server's mutating tools are persistence-backed (spec 010): bind a
+      // test-only in-memory persistence so move_edge goes through the real path.
+      server = createV2Server(memoryBoundContext(store).ctx);
       client = new Client({ name: 'test-client', version: '0.0.0' });
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
       await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);

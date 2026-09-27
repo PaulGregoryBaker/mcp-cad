@@ -1,0 +1,17 @@
+{
+  "scale": {
+    "preset": "in",
+    "factor": 25.4
+  },
+  "rotation": {
+    "xQuarterTurns": 4,
+    "yQuarterTurns": 0,
+    "zQuarterTurns": 0
+  },
+  "recenter": {
+    "xy": true,
+    "z": "floor"
+  },
+  "thicknessMm": 3,
+  "materialId": "mildSteel"
+}

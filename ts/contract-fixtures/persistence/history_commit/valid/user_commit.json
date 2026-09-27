@@ -1,0 +1,12 @@
+{
+  "hash": "k3j2h1",
+  "parents": [
+    "a1b2c3"
+  ],
+  "date": "2026-09-27T12:05:00.000Z",
+  "author_name": "Pat Tester",
+  "author_email": "pat@example.test",
+  "message": "Add flange",
+  "op_count": 3,
+  "agent_op_count": 1
+}

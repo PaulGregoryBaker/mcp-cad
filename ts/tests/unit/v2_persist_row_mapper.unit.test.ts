@@ -85,6 +85,26 @@ describe('[persist] snapshot ⇄ rows', () => {
     expect(back.snapshots[0]!.part.holes.map((h) => h.holeId)).toEqual(s.part.holes.map((h) => h.holeId));
   });
 
+  it('panel and bend order survive any database row order (evaluator is order-sensitive)', () => {
+    const f = bentPlate();
+    const rows = snapshotToRows(f.store.snapshotPart(f.partId), undefined).rows;
+    rows.region_panel.reverse();
+    rows.bend.reverse();
+    rows.ring_vertex.reverse();
+    const back = rowsToSnapshots(rows);
+    expect(back.snapshots[0]).toEqual(f.store.snapshotPart(f.partId));
+  });
+
+  it('deleting a middle bend does not rewrite its siblings', () => {
+    const f = bentPlate();
+    const s = snapshotCopy(f.store, f.partId);
+    const first = snapshotToRows(s, undefined);
+    const shadow = rowsToSnapshots(first.rows).shadows.get(f.partId);
+    s.bends.shift();
+    const d = diffRows(first.rows, snapshotToRows(s, shadow).rows);
+    expect(counts(d)).toEqual({ upserts: {}, deletes: { bend: 1 } });
+  });
+
   it('a part without an outline ring is reported, not assembled', () => {
     const f = bentPlate();
     const rows = snapshotToRows(f.store.snapshotPart(f.partId), undefined).rows;

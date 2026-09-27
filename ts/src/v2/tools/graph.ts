@@ -24,12 +24,14 @@ import {
   generateReliefs,
   splitBodyByPlane,
 } from '../graph/evaluate-client';
-import { V2DoltStore, type V2DoltStoreOptions } from '../persistence/dolt-store';
 import { v2JobQueue } from '../jobs/queue';
 import { throwError, ErrorCodes, type ErrorCode } from '../../mcp/errors';
 import { geometryBinding } from '../../geometry/binding';
 import { getNestingConfig } from '../../config/loader';
 import { storageToolDefinitions, handleListStorageAccounts, handleTestStorageAccount } from './storage';
+import { projectToolDefinitions, handleProjectTool, PROJECT_TOOL_NAMES } from './project';
+import { persistMutation } from '../persistence/persist-mutation';
+import { SessionContext } from '../persistence/session';
 import { buildNestedSheetDxf, type NestedSheetPlacement } from '../resources/dxf';
 import {
   requireString,
@@ -50,6 +52,51 @@ import {
 } from './helpers';
 import { toolSchemaFor } from '../schemas/tools';
 import type { NapiManufacturingProfile } from '../../geometry/types';
+
+/**
+ * Graph-mutating tools (spec 010, research R-003). Through a SessionContext
+ * each runs inside persistMutation: written through to the bound project's
+ * working set with an action_log row, or rejected (PERSIST_NOT_BOUND /
+ * PERSIST_ON_MAIN / PERSIST_READ_ONLY_REF). Read-only tools
+ * (split_body_by_bends, simulate_nesting, export_production_pack, get_job)
+ * are not listed.
+ */
+export const MUTATING_TOOLS = new Set([
+  'create_part',
+  'create_node',
+  'merge_bodies_with_bend',
+  'import_part',
+  'fuse_bodies',
+  'update_node',
+  'delete_node',
+  'move_edge',
+  'split_part_at_bend',
+  'cut_panel',
+  'close_gap',
+  'add_flange',
+  'rip_edge',
+  'generate_reliefs',
+  'split_body_by_plane',
+]);
+
+/** Optional `actor` on every mutating tool: who performed it (human or AI agent). */
+function withActorProperty<T extends { name: string; inputSchema: { properties?: Record<string, unknown> } }>(def: T): T {
+  if (!MUTATING_TOOLS.has(def.name)) return def;
+  return {
+    ...def,
+    inputSchema: {
+      ...def.inputSchema,
+      properties: {
+        ...(def.inputSchema.properties ?? {}),
+        actor: {
+          type: 'object',
+          description: 'Who performed this edit (recorded in the project history). Default: the human user.',
+          properties: { kind: { type: 'string', enum: ['human', 'agent'] }, id: { type: 'string' } },
+        },
+      },
+    },
+  };
+}
 
 export const graphToolDefinitions = [
   {
@@ -458,57 +505,6 @@ export const graphToolDefinitions = [
     },
   },
   {
-    name: 'commit',
-    description:
-      'Record the current graph as a named version in Dolt (rebuild/15 §4.6, B5a). Saves the part\'s entire graph snapshot to the Dolt-backed v2_part table and creates a Dolt commit.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        part_id: { type: 'string' },
-        message: { type: 'string', description: 'Commit message' },
-      },
-      required: ['part_id', 'message'],
-    },
-  },
-  {
-    name: 'restore',
-    description:
-      'Reset this part\'s live working state in place to a prior Dolt commit (rebuild/15 §4.6, B5b) — same part_id, not a new one. This is also the rollback/discard operation (B5d): call commit() as a checkpoint before a sequence of edits, then restore(part_id, that_commit_hash) to discard them.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        part_id: { type: 'string' },
-        commit_hash: { type: 'string', description: 'Dolt commit hash to restore to' },
-      },
-      required: ['part_id', 'commit_hash'],
-    },
-  },
-  {
-    name: 'branch',
-    description:
-      'Create a named Dolt branch pointer (rebuild/15 §4.6, B5). Does not touch the in-memory GraphStore or any part\'s working state — a pure Dolt version-control operation.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        name: { type: 'string', description: 'Branch name' },
-        from_commit: { type: 'string', description: 'Commit hash to branch from; defaults to the current HEAD' },
-      },
-      required: ['name'],
-    },
-  },
-  {
-    name: 'merge_branch',
-    description:
-      'Merge a Dolt branch into the current branch (rebuild/15 §4.6, B5). A pure Dolt version-control operation, same scope note as branch above.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        source_branch: { type: 'string', description: 'Branch name to merge from' },
-      },
-      required: ['source_branch'],
-    },
-  },
-  {
     name: 'simulate_nesting',
     description:
       'Nest parts\' flat outlines on stock sheets (rebuild/15 §4.5, Phase 5 Slice 11). Async job — returns a job_id immediately; poll with get_job for the result.',
@@ -557,7 +553,8 @@ export const graphToolDefinitions = [
     },
   },
   ...storageToolDefinitions,
-];
+  ...projectToolDefinitions,
+].map(withActorProperty);
 
 /** Validates `args` against the tool's own schema (schemas/tools.ts) before
  * any handler runs — "receiving evaluates against the schema." A tool with
@@ -584,6 +581,33 @@ function validateToolArgs(name: string, args: Record<string, unknown>): void {
   }
 }
 
+/**
+ * Persistent dispatch — what the MCP server uses (spec 010). Lifecycle,
+ * versioning and settings tools need the session; every mutating tool is
+ * written through to storage via persistMutation. There is no in-memory
+ * fallback: without a bound project, mutating tools fail with
+ * PERSIST_NOT_BOUND (Principle IX).
+ */
+export async function dispatchSessionTool(
+  ctx: SessionContext,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  validateToolArgs(name, args);
+  if (PROJECT_TOOL_NAMES.has(name)) return handleProjectTool(ctx, name, args);
+  if (MUTATING_TOOLS.has(name)) {
+    ctx.requireBound();
+    return persistMutation(ctx, name, args, () => dispatchGraphTool(ctx.store, name, args));
+  }
+  return dispatchGraphTool(ctx.store, name, args);
+}
+
+/**
+ * In-memory dispatch against a bare GraphStore — the geometry engine with no
+ * persistence. Used by tests and by dispatchSessionTool itself; the MCP
+ * server never calls it directly. Project/versioning tools are unavailable
+ * here (they need a SessionContext).
+ */
 export function dispatchGraphTool(
   store: GraphStore,
   name: string,
@@ -623,14 +647,6 @@ export function dispatchGraphTool(
       return handleGenerateReliefs(store, args);
     case 'split_body_by_plane':
       return handleSplitBodyByPlane(store, args);
-    case 'commit':
-      return handleCommit(store, args);
-    case 'restore':
-      return handleRestore(store, args);
-    case 'branch':
-      return handleBranch(store, args);
-    case 'merge_branch':
-      return handleMergeBranch(store, args);
     case 'simulate_nesting':
       return handleSimulateNesting(store, args);
     case 'export_production_pack':
@@ -642,6 +658,13 @@ export function dispatchGraphTool(
     case 'test_storage_account':
       return handleTestStorageAccount(args);
     default:
+      if (PROJECT_TOOL_NAMES.has(name)) {
+        throwError(
+          ErrorCodes.PERSIST_NOT_BOUND,
+          `${name} needs a persistent session (dispatchSessionTool); this is the in-memory engine`,
+          false,
+        );
+      }
       throwError(ErrorCodes.INTERNAL_ERROR, `Unknown v2 tool: ${name}`, false);
   }
 }
@@ -1215,95 +1238,6 @@ function handleSplitBodyByPlane(
     }
     throw err;
   }
-}
-
-// ── Dolt persistence (Slice 10) ─────────────────────────────────────────────
-
-let doltStore: V2DoltStore | null = null;
-
-export function initDoltStore(options: V2DoltStoreOptions): V2DoltStore {
-  doltStore = new V2DoltStore(options);
-  return doltStore;
-}
-
-export async function connectDoltStore(): Promise<void> {
-  if (doltStore) await doltStore.connect();
-}
-
-export async function disconnectDoltStore(): Promise<void> {
-  if (doltStore) await doltStore.disconnect();
-}
-
-export function getDoltStore(): V2DoltStore | null {
-  return doltStore;
-}
-
-async function handleCommit(
-  store: GraphStore,
-  args: Record<string, unknown>,
-): Promise<{ commit_hash: string }> {
-  if (!doltStore) {
-    throwError(ErrorCodes.INTERNAL_ERROR, 'Dolt persistence is not configured', false);
-  }
-  const partId = requireString(args, 'part_id');
-  const message = requireString(args, 'message');
-
-  if (!store.getPart(partId)) {
-    throwError(ErrorCodes.GRAPH_PART_NOT_FOUND, `no part with id ${partId}`, false);
-  }
-
-  const snapshot = store.snapshotPart(partId);
-  await doltStore.savePart(partId, snapshot);
-  const hash = await doltStore.doltCommit(message);
-  return { commit_hash: hash };
-}
-
-async function handleRestore(
-  store: GraphStore,
-  args: Record<string, unknown>,
-): Promise<{ part_id: string }> {
-  if (!doltStore) {
-    throwError(ErrorCodes.INTERNAL_ERROR, 'Dolt persistence is not configured', false);
-  }
-  const partId = requireString(args, 'part_id');
-  const commitHash = requireString(args, 'commit_hash');
-
-  const snapshot = await doltStore.loadPartAtCommit(partId, commitHash);
-  if (!snapshot) {
-    throwError(
-      ErrorCodes.GRAPH_PART_NOT_FOUND,
-      `part ${partId} not found in commit ${commitHash}`,
-      true,
-    );
-  }
-
-  const restored = store.restorePart(snapshot);
-  return { part_id: restored.partId };
-}
-
-async function handleBranch(
-  _store: GraphStore,
-  args: Record<string, unknown>,
-): Promise<Record<string, never>> {
-  if (!doltStore) {
-    throwError(ErrorCodes.INTERNAL_ERROR, 'Dolt persistence is not configured', false);
-  }
-  const name = requireString(args, 'name');
-  const fromRef = optString(args, 'from_commit');
-  await doltStore.doltBranch(name, fromRef);
-  return {};
-}
-
-async function handleMergeBranch(
-  _store: GraphStore,
-  args: Record<string, unknown>,
-): Promise<Record<string, never>> {
-  if (!doltStore) {
-    throwError(ErrorCodes.INTERNAL_ERROR, 'Dolt persistence is not configured', false);
-  }
-  const branch = requireString(args, 'source_branch');
-  await doltStore.doltMerge(branch);
-  return {};
 }
 
 // ── Produce / async jobs (Slice 11) ──────────────────────────────────────────

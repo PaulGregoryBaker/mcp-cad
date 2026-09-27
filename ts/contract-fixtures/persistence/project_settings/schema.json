@@ -1,0 +1,194 @@
+{
+  "$ref": "#/definitions/project_settings",
+  "definitions": {
+    "project_settings": {
+      "type": "object",
+      "properties": {
+        "manufacturing_profile": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "minBendRadiusFactor": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "maxBendAngleDeg": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 180
+                },
+                "defaultBendRadiusMm": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "minHoleDiameterFactor": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "minHoleToBendClearanceMm": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "minHoleToEdgeClearanceMm": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "minHoleToHoleDistanceMm": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "minFlangeWidthFactor": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "minBendRadiusFactor",
+                "maxBendAngleDeg",
+                "defaultBendRadiusMm",
+                "minHoleDiameterFactor",
+                "minHoleToBendClearanceMm",
+                "minHoleToEdgeClearanceMm",
+                "minHoleToHoleDistanceMm",
+                "minFlangeWidthFactor"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "manufacturing_defaults": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "defaultMaterial": {
+                  "type": "string",
+                  "enum": [
+                    "mildSteel",
+                    "stainlessSteel",
+                    "aluminum"
+                  ]
+                },
+                "defaultThicknessMm": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "unitSystem": {
+                  "type": "string",
+                  "enum": [
+                    "metric",
+                    "imperial"
+                  ]
+                },
+                "preferredBendProcesses": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "airBend",
+                      "bottoming",
+                      "coining",
+                      "hemming",
+                      "rollBend",
+                      "grooving"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "unitSystem",
+                "preferredBendProcesses"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nesting": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "sheets": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "widthMm": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "heightMm": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "label": {
+                        "type": "string",
+                        "maxLength": 64
+                      }
+                    },
+                    "required": [
+                      "widthMm",
+                      "heightMm"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "minItems": 1
+                },
+                "safetyGapMm": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "sheetMarginMm": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "cuttingWidthMm": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "rotationsDeg": {
+                  "type": "array",
+                  "items": {
+                    "type": "number",
+                    "enum": [
+                      0,
+                      90,
+                      180,
+                      270
+                    ]
+                  },
+                  "minItems": 1
+                }
+              },
+              "required": [
+                "sheets",
+                "safetyGapMm",
+                "sheetMarginMm",
+                "cuttingWidthMm",
+                "rotationsDeg"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "manufacturing_profile",
+        "manufacturing_defaults",
+        "nesting"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

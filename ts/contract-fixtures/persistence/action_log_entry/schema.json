@@ -1,0 +1,51 @@
+{
+  "$ref": "#/definitions/action_log_entry",
+  "definitions": {
+    "action_log_entry": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "at": {
+          "type": "string",
+          "minLength": 1
+        },
+        "actor_kind": {
+          "type": "string",
+          "enum": [
+            "human",
+            "agent",
+            "system"
+          ]
+        },
+        "actor_id": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string",
+          "minLength": 1
+        },
+        "delta_summary": {
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "undone": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "seq",
+        "at",
+        "actor_kind",
+        "actor_id",
+        "tool",
+        "delta_summary",
+        "undone"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}
