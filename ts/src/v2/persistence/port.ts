@@ -115,7 +115,7 @@ export interface GraphPersistence {
   /** Read any ref without moving the writer. */
   readAt(ref: string): Promise<RawLoad>;
 
-  status(): Promise<{ headCommit: string; dirty: boolean; uncommittedOps: number }>;
+  status(): Promise<{ headCommit: string; dirty: boolean; uncommittedOps: number; unmergedCommits: number }>;
 
   /** One mutation: row diff + side writes + one action_log row, atomically. Returns the action seq. */
   applyChange(diff: RowDiff, side: SideWrites, action: ActionRecord): Promise<number>;

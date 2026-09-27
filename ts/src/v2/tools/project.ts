@@ -120,6 +120,7 @@ export interface OpenProjectResult {
   head_commit: string;
   dirty: boolean;
   uncommitted_ops: number;
+  unmerged_commits: number;
   schema_migrated: boolean;
   parts: Array<{ part_id: string; merged_into_part_id: string | null }>;
   settings: ProjectSettingsRow;
@@ -135,6 +136,7 @@ async function stateResult(ctx: SessionContext, loaded: { clientMeta: ClientMeta
     head_commit: st.headCommit,
     dirty: st.dirty,
     uncommitted_ops: st.uncommittedOps,
+    unmerged_commits: st.unmergedCommits,
     schema_migrated: schemaMigrated,
     parts: ctx.store.partIds().map((id) => ({ part_id: id, merged_into_part_id: ctx.store.getPart(id)!.mergedIntoPartId })),
     settings: loaded.settings,

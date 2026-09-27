@@ -38,7 +38,7 @@ export class MemoryPersistence implements GraphPersistence {
     return this.raw();
   }
   async status() {
-    return { headCommit: 'memory', dirty: this.applied.length > 0, uncommittedOps: this.applied.length };
+    return { headCommit: 'memory', dirty: this.applied.length > 0, uncommittedOps: this.applied.length, unmergedCommits: 0 };
   }
   async applyChange(diff: RowDiff, side: SideWrites, action: ActionRecord) {
     this.applied.push({ diff, side, action });

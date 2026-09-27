@@ -117,6 +117,7 @@ describe('[persist] versioning', () => {
     await part(ctx, 'b', { kind: 'agent', id: 'claude' });
     const r = await call(ctx, 'commit', { message: 'Two parts' });
     expect(r['ops']).toBe(2);
+    expect((await call(ctx, 'refresh_project'))['unmerged_commits']).toBe(1);
     expect(await commitCount(db, 'wip/work')).toBe(before + 1);
 
     const history = (await readSessionResource(ctx, 'graph://history')) as {

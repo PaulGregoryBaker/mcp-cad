@@ -193,14 +193,15 @@ export class DoltPersistence implements GraphPersistence {
     return Number(r[0]?.['meta_value'] ?? 0);
   }
 
-  async status(): Promise<{ headCommit: string; dirty: boolean; uncommittedOps: number }> {
-    if (this._readOnlyRef !== null) return { headCommit: this._readOnlyRef, dirty: false, uncommittedOps: 0 };
+  async status(): Promise<{ headCommit: string; dirty: boolean; uncommittedOps: number; unmergedCommits: number }> {
+    if (this._readOnlyRef !== null) return { headCommit: this._readOnlyRef, dirty: false, uncommittedOps: 0, unmergedCommits: 0 };
     await this.useBranch(this._branch);
     const head = await this.q(this.writer, "SELECT HASHOF('HEAD') AS h");
     const dirty = await isDirty(this.writer);
     const cs = await this.committedSeq();
     const ops = await this.q(this.writer, 'SELECT COUNT(*) AS n FROM action_log WHERE undone = FALSE AND seq > ?', [cs]);
-    return { headCommit: String(head[0]?.['h'] ?? ''), dirty, uncommittedOps: Number(ops[0]?.['n'] ?? 0) };
+    const unmergedCommits = this._branch === 'main' ? 0 : await this.unmergedCommits(this._branch);
+    return { headCommit: String(head[0]?.['h'] ?? ''), dirty, uncommittedOps: Number(ops[0]?.['n'] ?? 0), unmergedCommits };
   }
 
   // ─── Writes ───────────────────────────────────────────────────────────────
