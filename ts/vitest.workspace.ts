@@ -87,4 +87,28 @@ export default defineWorkspace([
       poolOptions: { forks: { singleFork: true } },
     },
   },
+  {
+    // Persistence (spec 010-dolt-graph-persistence): storage accounts, the
+    // normalised Dolt schema, write-through/undo/commit, and contract
+    // fixtures. Integration files start their own throwaway `dolt sql-server`
+    // (tests/helpers/dolt-harness.ts), so they need the `dolt` binary on PATH
+    // and more time than the default. Same single-fork rule as 'v2' because
+    // they drive the addon-backed GraphStore too.
+    extends: './vitest.config.ts',
+    test: {
+      name: 'persist',
+      include: [
+        'tests/unit/v2_persist*.unit.test.ts',
+        'tests/unit/v2_accounts*.unit.test.ts',
+        'tests/unit/v2_nesting_overrides.unit.test.ts',
+        'tests/integration/v2_persist*.integration.test.ts',
+        'tests/integration/v2_import*.integration.test.ts',
+        'tests/integration/v2_reference_mesh.integration.test.ts',
+      ],
+      testTimeout: 60_000,
+      hookTimeout: 60_000,
+      pool: 'forks',
+      poolOptions: { forks: { singleFork: true } },
+    },
+  },
 ]);

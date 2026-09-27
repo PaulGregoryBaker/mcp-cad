@@ -8,7 +8,7 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-migrations.cjs",
     "dev": "ts-node src/v2/server.ts",
     "start": "node dist/v2/server.js",
     "lint": "eslint src tests --ext .ts",
@@ -26,10 +26,14 @@
     "test:coverage": "vitest run --coverage",
     "dolt:check": "node -e \"const m=require('mysql2/promise');m.createConnection({host:process.env.DOLT_HOST||'127.0.0.1',port:+(process.env.DOLT_PORT||3306),user:'root',password:''}).then(c=>c.query('SELECT 1').then(()=>{console.log('Dolt reachable');c.end();})).catch(e=>{console.error('Dolt unreachable:',e.message);process.exit(1)})\"",
     "typecheck": "tsc --noEmit",
-    "prepare": "husky install"
+    "prepare": "husky install",
+    "account": "ts-node scripts/account-cli.ts",
+    "schemas:export": "ts-node scripts/export-persistence-schemas.ts",
+    "test:persist": "vitest run --project persist"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "@napi-rs/keyring": "2.1.0",
     "js-yaml": "^4.1.0",
     "mysql2": "^3.6.0",
     "polygon-clipping": "0.15.7",
@@ -54,7 +58,8 @@
     "prettier": "^3.2.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.4.0",
-    "vitest": "^1.2.0"
+    "vitest": "^1.2.0",
+    "zod-to-json-schema": "3.25.2"
   },
   "lint-staged": {
     "*.ts": [
