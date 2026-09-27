@@ -9,6 +9,7 @@
  * untouched.
  */
 
+import { randomUUID } from 'crypto';
 import { geometryBinding } from '../../geometry/binding';
 import { throwError, ErrorCodes, type ErrorCode, type ErrorOption } from '../../mcp/errors';
 import type {
@@ -418,12 +419,19 @@ export function mergePartsWithBend(
   const carried = reconciled.carriedB;
   const bBendsInA = specB.bends.map((b, i) => ({ ...b, hingeA: carried[2 * i]!, hingeB: carried[2 * i + 1]! }));
   let cursor = 2 * specB.bends.length;
+  // Hole identity survives the merge (spec 010, R-016): B's stored holes, in
+  // the same polygon-then-circle order toNapiPartGraphSpec emitted them.
+  const storedHolesB = store.getPart(input.partBId)?.holes ?? [];
+  const polygonIdsB = storedHolesB.filter((h) => h.kind === 'polygon').map((h) => h.holeId);
+  const circleIdsB = storedHolesB.filter((h) => h.kind === 'circle').map((h) => h.holeId);
   const bHolesInA: Hole[] = [];
-  for (const ring of polygonHolesB) {
-    bHolesInA.push({ kind: 'polygon', ring: carried.slice(cursor, cursor + ring.length) });
+  polygonHolesB.forEach((ring, i) => {
+    bHolesInA.push({ kind: 'polygon', holeId: polygonIdsB[i] ?? randomUUID(), ring: carried.slice(cursor, cursor + ring.length) });
     cursor += ring.length;
-  }
-  for (const h of circleHolesB) bHolesInA.push({ kind: 'circle', center: carried[cursor++]!, radiusMm: h.radiusMm });
+  });
+  circleHolesB.forEach((h, i) => {
+    bHolesInA.push({ kind: 'circle', holeId: circleIdsB[i] ?? randomUUID(), center: carried[cursor++]!, radiusMm: h.radiusMm });
+  });
 
   // The seam bend's child is B's contact panel, so B's tree must be rooted
   // there (C++ RerootAt — flips the bends between B's old root and it).
@@ -807,12 +815,12 @@ export function cutPanel(
       candidateRegions,
     );
     ({ ok, errorCode, message: errorMessage, regionIndex } = result);
-    hole = { kind: 'circle', center: circle.center, radiusMm: circle.radiusMm };
+    hole = { kind: 'circle', holeId: randomUUID(), center: circle.center, radiusMm: circle.radiusMm };
   } else {
     const ring = requirePolygonRing(input);
     const result = geometryBinding.preparePolygonCut(ring, candidateRegions);
     ({ ok, errorCode, message: errorMessage, regionIndex } = result);
-    hole = { kind: 'polygon', ring: result.canonicalRing };
+    hole = { kind: 'polygon', holeId: randomUUID(), ring: result.canonicalRing };
   }
 
   if (!ok) {
@@ -1697,7 +1705,7 @@ export function generateReliefs(store: GraphStore, input: GenerateReliefsInput):
     store.addCutHole({
       partId: input.partId,
       regionPanelId: targetPanel.regionPanelId,
-      hole: { kind: 'polygon', ring: result.canonicalRing },
+      hole: { kind: 'polygon', holeId: randomUUID(), ring: result.canonicalRing },
     });
   }
 }

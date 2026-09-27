@@ -44,10 +44,16 @@ export function identityTransform(): Transform3Row {
  * cut_panel.hpp before it's ever stored here. */
 export interface PolygonHole {
   kind: 'polygon';
+  /** Persistent identity (spec 010, R-016): minted once when the hole is
+   * created, carried through merges, never reused. The C++ addon never sees
+   * it (toNapiPartGraphSpec strips it). Maps to part_ring.ring_id. */
+  holeId: string;
   ring: Point2[];
 }
 export interface CircleHole {
   kind: 'circle';
+  /** Persistent identity (spec 010, R-016). Maps to feature.feature_id. */
+  holeId: string;
   center: Point2;
   radiusMm: number;
 }

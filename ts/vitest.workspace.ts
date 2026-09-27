@@ -65,7 +65,7 @@ export default defineWorkspace([
         'tests/integration/merge_bodies_with_bend_constructible.integration.test.ts',
       ],
       env: { SUITE_V2_DRIVER: '1' },
-      setupFiles: ['tests/setup/integration-reset.ts'],
+      setupFiles: ['tests/setup/integration-reset.ts', 'tests/setup/invariant-sweep.ts'],
       // Sequential, non-interleaved file execution: the C++ addon's
       // g_service singleton is process-scoped and accumulates state (shells,
       // snapshots) across calls, so concurrent files interleaving mid-test

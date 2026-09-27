@@ -76,6 +76,6 @@ export const FindingSchema = z.object({
  * kind=circle is an exact center+radius primitive, never tessellated;
  * kind=polygon's ring is winding-canonicalized before storage. */
 export const HoleSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('polygon'), ring: z.array(Point2Schema) }),
-  z.object({ kind: z.literal('circle'), center: Point2Schema, radiusMm: z.number() }),
+  z.object({ kind: z.literal('polygon'), holeId: z.string().min(1), ring: z.array(Point2Schema) }),
+  z.object({ kind: z.literal('circle'), holeId: z.string().min(1), center: Point2Schema, radiusMm: z.number() }),
 ]);

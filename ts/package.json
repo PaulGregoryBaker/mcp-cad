@@ -29,7 +29,8 @@
     "prepare": "husky install",
     "account": "ts-node scripts/account-cli.ts",
     "schemas:export": "ts-node scripts/export-persistence-schemas.ts",
-    "test:persist": "vitest run --project persist"
+    "test:persist": "vitest run --project persist",
+    "test:invariant-sweep": "node scripts/invariant-sweep.cjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

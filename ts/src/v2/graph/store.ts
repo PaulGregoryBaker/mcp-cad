@@ -869,6 +869,21 @@ export class GraphStore {
 
   /** Discards every current row and replaces them with a deep-cloned copy
    * of `snapshot` (from `snapshotAll()`) — the rollback half of that pair. */
+  /** Empties the store — every part, region panel and bend. Used when a
+   * project is opened, closed or reloaded (spec 010, R-005): the store only
+   * ever holds the one bound project's graph, so nothing leaks between
+   * projects (FR-005). */
+  clear(): void {
+    this.parts.clear();
+    this.regionPanels.clear();
+    this.bends.clear();
+  }
+
+  /** Every part id currently held (live and merged-away aliases). */
+  partIds(): string[] {
+    return [...this.parts.keys()];
+  }
+
   restoreAll(snapshot: { parts: PartRow[]; regionPanels: RegionPanelRow[]; bends: BendRow[] }): void {
     const clone = structuredClone(snapshot);
     this.parts.clear();

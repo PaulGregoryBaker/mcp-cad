@@ -139,7 +139,10 @@ d('[v2] cut_panel (Phase 5 Slice 9a) — success cases', () => {
     expect(result.region_panel_id).toBe(part.root_region_panel_id);
 
     const flat = readFlatPattern(store, part.part_id);
-    expect(flat.holes).toEqual([{ kind: 'circle', center: { x: 20, y: 30 }, radiusMm: 5.0 }]);
+    // holeId: persistent identity minted at cut time (spec 010, R-016).
+    expect(flat.holes).toEqual([
+      { kind: 'circle', holeId: expect.any(String), center: { x: 20, y: 30 }, radiusMm: 5.0 },
+    ]);
     const dxf = await fetchDxf(flat);
     expect(dxf).toContain('CIRCLE');
     expect(dxf).toContain('CUTS');
