@@ -32,6 +32,7 @@ import {
   ensureFlatPatternDxfBlobFresh,
 } from './resources/graph';
 import { startV2BlobServer } from './blob-server';
+import { matchesSessionResource, readSessionResource, sessionResourceTemplates } from './resources/session';
 import { redactSecrets } from './persistence/accounts';
 import { resolveV2BlobPort } from './blob-cache';
 
@@ -166,11 +167,20 @@ export function createV2Server(target: GraphStore | SessionContext = new Session
   // ─── Resource handlers ───────────────────────────────────────────────────
 
   server.setRequestHandler(ListResourceTemplatesRequestSchema, () => {
-    return { resourceTemplates: graphResourceTemplates };
+    return { resourceTemplates: [...graphResourceTemplates, ...sessionResourceTemplates] };
   });
 
-  server.setRequestHandler(ReadResourceRequestSchema, (request: { params: { uri: string } }) => {
+  server.setRequestHandler(ReadResourceRequestSchema, async (request: { params: { uri: string } }) => {
     const uri = request.params.uri;
+
+    if (matchesSessionResource(uri)) {
+      try {
+        const data = await readSessionResource(ctx, uri);
+        return { contents: [{ uri, mimeType: 'application/json', text: redactSecrets(JSON.stringify(data)) }] };
+      } catch (err) {
+        return { contents: [{ uri, mimeType: 'application/json', text: redactSecrets(JSON.stringify(toStructuredError(err))) }] };
+      }
+    }
 
     if (!matchesGraphResource(uri)) {
       return {

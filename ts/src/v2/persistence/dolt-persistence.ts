@@ -473,20 +473,11 @@ export class DoltPersistence implements GraphPersistence {
       await this.writeSessionBranch(ref);
       return { migrated: res.mode !== 'none' };
     }
-    const exists = await this.q(this.reader, `SELECT commit_hash FROM ${quoteIdent(this.database)}.dolt_log WHERE commit_hash = ?`, [ref]).catch(() => []);
-    const any = exists.length > 0 || (await this.commitExists(ref));
-    if (!any) throwError(ErrorCodes.REVISION_NOT_FOUND, `no branch or commit '${ref}'`, true);
+    // dolt_commits lists every commit in the database, on any branch.
+    const exists = await this.q(this.writer, `SELECT commit_hash FROM ${quoteIdent(`${this.database}/main`)}.dolt_commits WHERE commit_hash = ?`, [ref]);
+    if (exists.length === 0) throwError(ErrorCodes.REVISION_NOT_FOUND, `no branch or commit '${ref}'`, true);
     this._readOnlyRef = ref;
     return { migrated: false };
-  }
-
-  private async commitExists(ref: string): Promise<boolean> {
-    try {
-      const r = await this.q(this.reader, `SELECT HASHOF(?) AS h FROM ${quoteIdent(this.database)}.meta LIMIT 1`, [ref]);
-      return r.length > 0 && Boolean(r[0]?.['h']);
-    } catch {
-      return false;
-    }
   }
 
   // ─── History ──────────────────────────────────────────────────────────────
