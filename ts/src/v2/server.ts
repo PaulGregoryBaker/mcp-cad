@@ -31,6 +31,7 @@ import {
   ensureFlatPatternDxfBlobFresh,
 } from './resources/graph';
 import { startV2BlobServer } from './blob-server';
+import { redactSecrets } from './persistence/accounts';
 import { resolveV2BlobPort } from './blob-cache';
 
 const GEOMETRY_RESOURCE_PATTERN = /^graph:\/\/part\/([^/]+)\/(mesh|boundary|flat-pattern)$/;
@@ -145,12 +146,12 @@ export function createV2Server(store: GraphStore = new GraphStore()): Server {
         const result = await dispatchGraphTool(store, request.params.name, toolArgs);
         setImmediate(checkSubscriptionsForDrift);
         return {
-          content: [{ type: 'text', text: JSON.stringify(result) }],
+          content: [{ type: 'text', text: redactSecrets(JSON.stringify(result)) }],
         };
       } catch (err) {
         const structured = toStructuredError(err);
         return {
-          content: [{ type: 'text', text: JSON.stringify(structured) }],
+          content: [{ type: 'text', text: redactSecrets(JSON.stringify(structured)) }],
           isError: true,
         };
       }
@@ -184,12 +185,12 @@ export function createV2Server(store: GraphStore = new GraphStore()): Server {
     try {
       const data = readGraphResource(store, uri);
       return {
-        contents: [{ uri, mimeType: 'application/json', text: JSON.stringify(data) }],
+        contents: [{ uri, mimeType: 'application/json', text: redactSecrets(JSON.stringify(data)) }],
       };
     } catch (err) {
       const structured = toStructuredError(err);
       return {
-        contents: [{ uri, mimeType: 'application/json', text: JSON.stringify(structured) }],
+        contents: [{ uri, mimeType: 'application/json', text: redactSecrets(JSON.stringify(structured)) }],
       };
     }
   });
@@ -219,7 +220,22 @@ function installCrashGuards(): void {
   });
 }
 
+/**
+ * Spec 010 (R-014): every byte written to stderr passes through
+ * redactSecrets(). stderr is forwarded verbatim to the client's AI panel, and
+ * driver/network errors can echo connection details. stdout is the MCP
+ * protocol channel and only ever carries already-redacted responses (above).
+ */
+export function installStderrRedaction(): void {
+  const original = process.stderr.write.bind(process.stderr) as (...args: unknown[]) => boolean;
+  process.stderr.write = ((chunk: unknown, ...rest: unknown[]): boolean => {
+    const text = typeof chunk === 'string' ? chunk : Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
+    return original(redactSecrets(text), ...rest);
+  }) as typeof process.stderr.write;
+}
+
 async function main(): Promise<void> {
+  installStderrRedaction();
   installCrashGuards();
   const store = new GraphStore();
   startV2BlobServer(resolveV2BlobPort(), store);

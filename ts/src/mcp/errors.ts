@@ -119,6 +119,34 @@ export const ErrorCodes = {
   SEMANTIC_CONSTITUENT_NOT_FOUND: 'SEMANTIC_CONSTITUENT_NOT_FOUND',
   REVISION_NOT_FOUND: 'REVISION_NOT_FOUND',
 
+  // Graph persistence, storage accounts and versioning (spec 010-dolt-graph-persistence)
+  STORAGE_ACCOUNT_UNKNOWN: 'STORAGE_ACCOUNT_UNKNOWN',
+  STORAGE_ACCOUNT_UNREACHABLE: 'STORAGE_ACCOUNT_UNREACHABLE',
+  STORAGE_AUTH_FAILED: 'STORAGE_AUTH_FAILED',
+  STORAGE_SECRET_UNRESOLVED: 'STORAGE_SECRET_UNRESOLVED',
+  STORAGE_CONFIG_INVALID: 'STORAGE_CONFIG_INVALID',
+  PROJECT_DATABASE_EXISTS: 'PROJECT_DATABASE_EXISTS',
+  PROJECT_DATABASE_NAME_INVALID: 'PROJECT_DATABASE_NAME_INVALID',
+  PROJECT_DATABASE_NOT_FOUND: 'PROJECT_DATABASE_NOT_FOUND',
+  PERSIST_NOT_BOUND: 'PERSIST_NOT_BOUND',
+  PERSIST_PROJECT_OPEN: 'PERSIST_PROJECT_OPEN',
+  PERSIST_ON_MAIN: 'PERSIST_ON_MAIN',
+  PERSIST_READ_ONLY_REF: 'PERSIST_READ_ONLY_REF',
+  PERSIST_WRITE_FAILED: 'PERSIST_WRITE_FAILED',
+  PERSIST_CORRUPT_ROW: 'PERSIST_CORRUPT_ROW',
+  PERSIST_INVARIANT_VIOLATION: 'PERSIST_INVARIANT_VIOLATION',
+  PERSIST_SCHEMA_UNSUPPORTED: 'PERSIST_SCHEMA_UNSUPPORTED',
+  PERSIST_SCHEMA_MISMATCH: 'PERSIST_SCHEMA_MISMATCH',
+  PERSIST_MIGRATION_FAILED: 'PERSIST_MIGRATION_FAILED',
+  BRANCH_ALREADY_OPEN: 'BRANCH_ALREADY_OPEN',
+  BRANCH_NONE_OPEN: 'BRANCH_NONE_OPEN',
+  BRANCH_MERGE_CONFLICT: 'BRANCH_MERGE_CONFLICT',
+  COMMIT_NOTHING_TO_COMMIT: 'COMMIT_NOTHING_TO_COMMIT',
+  COMMIT_UNCOMMITTED_CHANGES: 'COMMIT_UNCOMMITTED_CHANGES',
+  UNDO_NOTHING_UNCOMMITTED: 'UNDO_NOTHING_UNCOMMITTED',
+  UNDO_BLOCKED_BY_MIGRATION: 'UNDO_BLOCKED_BY_MIGRATION',
+  SETTINGS_INVALID: 'SETTINGS_INVALID',
+
   // Manufacturing Graph errors (Feature 009-manufacturing-graph)
   NODE_ID_ALREADY_EXISTS: 'NODE_ID_ALREADY_EXISTS',
   NODE_NOT_FOUND: 'NODE_NOT_FOUND',
@@ -349,12 +377,19 @@ export interface StructuredError {
   /** Always present; empty when there is nothing to offer. */
   options: ErrorOption[];
   suggestedTool?: string;
+  /**
+   * Machine-readable context (e.g. invariant violations, the table/key of a
+   * corrupt row). Present only when a thrower supplies it. Always passed
+   * through redactSecrets() at the MCP boundary (spec 010, R-014).
+   */
+  details?: Record<string, unknown>;
 }
 
 /** Optional extras for makeError/throwError beyond the positional basics. */
 export interface ErrorExtras {
   title?: string;
   options?: ErrorOption[];
+  details?: Record<string, unknown>;
 }
 
 /**
@@ -395,7 +430,7 @@ export function makeError(
   suggestedTool?: string,
   extras: ErrorExtras = {},
 ): StructuredError {
-  return {
+  const err: StructuredError = {
     code,
     title: extras.title ?? defaultErrorTitle(code),
     message,
@@ -403,6 +438,8 @@ export function makeError(
     options: extras.options ?? [],
     suggestedTool,
   };
+  if (extras.details !== undefined) err.details = extras.details;
+  return err;
 }
 
 export function throwError(
@@ -436,6 +473,9 @@ export function toStructuredError(err: unknown): StructuredError {
         recoverable: Boolean(errObj.recoverable),
         options: Array.isArray(errObj.options) ? (errObj.options as ErrorOption[]) : [],
         suggestedTool: typeof errObj.suggestedTool === 'string' ? errObj.suggestedTool : undefined,
+        ...(errObj.details && typeof errObj.details === 'object'
+          ? { details: errObj.details as Record<string, unknown> }
+          : {}),
       };
     }
   }

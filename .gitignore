@@ -70,3 +70,5 @@ rebuild/spikes/
 
 # ─── debug files ─────────────────────────────────────────────────────────
 *.txt
+# ─── Storage accounts (spec 010) — machine/tenant-specific, no secrets but not shared
+ts/config/storage-accounts.yaml

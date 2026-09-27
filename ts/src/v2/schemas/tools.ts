@@ -223,6 +223,10 @@ const ToolSchemas = {
   get_job: z.object({
     job_id: z.string().min(1),
   }),
+
+  // ─── Storage accounts (spec 010, R-014) — ids only, never credentials ───
+  list_storage_accounts: z.object({}).strict(),
+  test_storage_account: z.object({ account: z.string().min(1) }).strict(),
 } as const;
 
 export type ToolName = keyof typeof ToolSchemas;

@@ -58,14 +58,11 @@ environmental:
   marine_grade: boolean            # Blocks adhesive/plastic fasteners
   high_vibration: boolean          # optional
   outdoor_exposed: boolean         # optional
-
-persistence:                       # optional — Dolt semantic persistence
-  driver: dolt                     # Only supported driver; omit block to disable persistence
-  host: 127.0.0.1                  # Default: 127.0.0.1
-  port: 3306                       # Default: 3306
-  database: string                 # e.g. "semantic_braai" — one DB per product
-  data_dir: ./state/dolt           # Directory for dolt sql-server data (default: ./state/dolt)
 ```
+
+> The former `persistence:` block has been **removed**. It is rejected at use
+> with migration instructions. Storage is configured through storage accounts
+> (below).
 
 ## Validation
 
@@ -132,14 +129,59 @@ environmental:
   fire_rated: false
   marine_grade: false
 
-# Optional — remove block if Dolt persistence is not in use
-persistence:
-  driver: dolt
-  host: 127.0.0.1
-  port: 3306
-  database: semantic_braai
-  data_dir: ./state/dolt/braai
 ```
+
+## Storage accounts (`storage-accounts.yaml`)
+
+Graph persistence (spec 010, `src/v2/persistence/README.md`) connects to Dolt
+through named **storage accounts**. Clients (Form·AI·tion) choose an account
+**by id** and a database name per project. **Credentials never pass through MCP
+tool calls.** They are resolved here, from a secret reference, and redacted
+from every log and error.
+
+- **Location**: `ts/config/storage-accounts.yaml`, or set `MCPCAD_ACCOUNTS` to
+  an absolute path. The file is git-ignored because it is machine- and
+  tenant-specific. It holds **no secrets**.
+- **Management**: use the account CLI rather than editing the file by hand:
+
+  ```powershell
+  npm run account -- add local --host 127.0.0.1 --port 3316 --user root --no-secret --prefix proj_
+  npm run account -- add acme --host dolt.acme.internal --user formaition_svc --secret-prompt --tls required --prefix acme_proj_
+  npm run account -- list            # never prints secrets
+  npm run account -- test acme
+  npm run account -- remove acme
+  ```
+
+```yaml
+storage_accounts:
+  - id: local                      # [a-z][a-z0-9_-]{0,31}, unique
+    driver: dolt                   # only supported driver
+    host: 127.0.0.1
+    port: 3316
+    user: root
+    secret_ref: null               # null = no password
+    tls: off                       # off | preferred | required (default off)
+    database_prefix: proj_         # project databases must start with this
+  - id: acme
+    driver: dolt
+    host: dolt.acme.internal
+    port: 3306
+    user: formaition_svc
+    secret_ref: keyring:formaition-mcp/acme   # or env:ACME_DOLT_PASSWORD, or file:C:/secure/acme.pw
+    tls: required
+    database_prefix: acme_proj_
+```
+
+`secret_ref` schemes:
+
+| Scheme | Resolves to |
+|---|---|
+| `keyring:<service>/<account>` | The OS credential store (Windows Credential Manager), via `@napi-rs/keyring`. `--secret-prompt` stores it here |
+| `env:<VAR>` | The environment variable `VAR` of the MCP process |
+| `file:<path>` | The file's contents, trimmed (protect it with file ACLs) |
+
+An unresolvable reference fails with `STORAGE_SECRET_UNRESOLVED`, which names
+the scheme and key, never a value.
 
 ## Nesting (`nesting:`)
 

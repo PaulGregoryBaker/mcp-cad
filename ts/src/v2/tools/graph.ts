@@ -29,6 +29,7 @@ import { v2JobQueue } from '../jobs/queue';
 import { throwError, ErrorCodes, type ErrorCode } from '../../mcp/errors';
 import { geometryBinding } from '../../geometry/binding';
 import { getNestingConfig } from '../../config/loader';
+import { storageToolDefinitions, handleListStorageAccounts, handleTestStorageAccount } from './storage';
 import { buildNestedSheetDxf, type NestedSheetPlacement } from '../resources/dxf';
 import {
   requireString,
@@ -555,6 +556,7 @@ export const graphToolDefinitions = [
       required: ['job_id'],
     },
   },
+  ...storageToolDefinitions,
 ];
 
 /** Validates `args` against the tool's own schema (schemas/tools.ts) before
@@ -635,6 +637,10 @@ export function dispatchGraphTool(
       return handleExportProductionPack(store, args);
     case 'get_job':
       return handleGetJob(args);
+    case 'list_storage_accounts':
+      return handleListStorageAccounts();
+    case 'test_storage_account':
+      return handleTestStorageAccount(args);
     default:
       throwError(ErrorCodes.INTERNAL_ERROR, `Unknown v2 tool: ${name}`, false);
   }

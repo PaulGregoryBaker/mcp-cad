@@ -149,13 +149,13 @@ export async function startDolt(): Promise<DoltHarness> {
 }
 
 /**
- * Writes a temporary MCP config with a single `test` storage account pointing
- * at the harness and sets MCPCAD_CONFIG to it. Returns a restore function.
- * (Used from T006 onward once `storage_accounts` exists in the config loader.)
+ * Writes a temporary storage-accounts file with a single `test` account
+ * pointing at the harness and sets MCPCAD_ACCOUNTS to it. Returns a restore
+ * function.
  */
 export function withTestAccount(h: DoltHarness, opts: { prefix?: string } = {}): () => void {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcpcad-cfg-'));
-  const cfgPath = path.join(dir, 'config.yaml');
+  const cfgPath = path.join(dir, 'storage-accounts.yaml');
   fs.writeFileSync(
     cfgPath,
     [
@@ -170,11 +170,11 @@ export function withTestAccount(h: DoltHarness, opts: { prefix?: string } = {}):
       '',
     ].join('\n'),
   );
-  const prev = process.env['MCPCAD_CONFIG'];
-  process.env['MCPCAD_CONFIG'] = cfgPath;
+  const prev = process.env['MCPCAD_ACCOUNTS'];
+  process.env['MCPCAD_ACCOUNTS'] = cfgPath;
   return () => {
-    if (prev === undefined) delete process.env['MCPCAD_CONFIG'];
-    else process.env['MCPCAD_CONFIG'] = prev;
+    if (prev === undefined) delete process.env['MCPCAD_ACCOUNTS'];
+    else process.env['MCPCAD_ACCOUNTS'] = prev;
     fs.rmSync(dir, { recursive: true, force: true });
   };
 }
