@@ -36,6 +36,7 @@ import { GraphStore } from '../../src/v2/graph/store';
 import { dispatchGraphTool } from '../../src/v2/tools/graph';
 import { constructPart, evaluatePart } from '../../src/v2/graph/evaluate-client';
 import { geometryBinding } from '../../src/geometry/binding';
+import { toStructuredError, type StructuredError } from '../../src/mcp/errors';
 
 const ENABLED = process.env.SUITE_V2_DRIVER === '1';
 const d = ENABLED ? describe : describe.skip;
@@ -223,17 +224,36 @@ d('[v2] split_part_at_bend on cauldron.step real acute bend (live-app regression
     );
     expect(bCornersBefore.size).toBeGreaterThan(1); // B really is multi-panel
 
-    // Without a pick, more than one real seam is an ambiguity, not a guess.
-    expect(() =>
-      dispatchGraphTool(store, 'merge_bodies_with_bend', { part_a_id: childPartId, part_b_id: touchingSiblingId }),
-    ).toThrow(/GE_MERGE_AMBIGUOUS_CONTACT|simultaneous contact regions/);
-
-    const mergeResult = dispatchGraphTool(store, 'merge_bodies_with_bend', {
-      part_a_id: childPartId,
-      part_b_id: touchingSiblingId,
+    // Without a pick, more than one real seam is an ambiguity, not a guess —
+    // reported with one self-contained option per seam (StructuredError's
+    // `options`): a complete merge call pinned to that seam, plus where the
+    // seam is, so the UI can offer a button per choice.
+    let ambiguous: StructuredError | undefined;
+    try {
+      dispatchGraphTool(store, 'merge_bodies_with_bend', { part_a_id: childPartId, part_b_id: touchingSiblingId });
+    } catch (err) {
+      ambiguous = toStructuredError(err);
+    }
+    expect(ambiguous?.code).toBe('GE_MERGE_AMBIGUOUS_CONTACT');
+    expect(ambiguous!.options.length).toBeGreaterThan(1);
+    for (const option of ambiguous!.options) {
+      expect(option.call.tool).toBe('merge_bodies_with_bend');
+      expect(option.call.arguments).toMatchObject({ part_a_id: childPartId, part_b_id: touchingSiblingId });
+      expect(option.display.button_text.length).toBeGreaterThan(0);
+      expect(option.display.highlight?.edges_world_mm?.[0]).toHaveLength(2);
+    }
+    const firstOption = ambiguous!.options[0]!;
+    expect(firstOption.call.arguments).toMatchObject({
       region_panel_id_a: firstRegion!.regionPanelIdA,
       region_panel_id_b: firstRegion!.regionPanelIdB,
-    }) as { part_id: string; bend_id: string; child_region_panel_id: string };
+    });
+
+    // Picking an option means running its call verbatim.
+    const mergeResult = dispatchGraphTool(store, firstOption.call.tool, firstOption.call.arguments) as {
+      part_id: string;
+      bend_id: string;
+      child_region_panel_id: string;
+    };
 
     expect(mergeResult.part_id).toBe(childPartId);
     expect(mergeResult.bend_id).toBeTruthy();

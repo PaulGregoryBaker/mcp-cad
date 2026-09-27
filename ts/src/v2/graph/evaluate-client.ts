@@ -10,7 +10,7 @@
  */
 
 import { geometryBinding } from '../../geometry/binding';
-import { throwError, ErrorCodes, type ErrorCode } from '../../mcp/errors';
+import { throwError, ErrorCodes, type ErrorCode, type ErrorOption } from '../../mcp/errors';
 import type {
   NapiPartGraphSpec,
   EvaluatePartGraphResult,
@@ -213,38 +213,95 @@ export interface MergePartsWithBendInput {
  * More than one: a real ambiguity (TASK_SPEC.md §8.3 phase 2) — silently
  * picking, e.g., the longest would hide the other real seam(s) from the
  * caller entirely, so this requires an explicit selection instead of
- * defaulting one. */
+ * defaulting one. The error carries one ErrorOption per candidate: a complete
+ * merge_bodies_with_bend call pinned to that seam, plus the seam's world
+ * position so a UI can show which one each option means. */
 function selectContactRegion(
   regions: ContactRegion[],
-  regionPanelIdA: string | undefined,
-  regionPanelIdB: string | undefined,
+  input: MergePartsWithBendInput,
+  poseOfPanelA: (regionPanelId: string) => NapiTransform3 | undefined,
 ): ContactRegion {
   if (regions.length === 1) return regions[0]!;
 
   const describe = (r: ContactRegion) =>
     `(region_panel_id_a=${r.regionPanelIdA}, region_panel_id_b=${r.regionPanelIdB}, ` +
     `angle_deg=${r.angleDeg.toFixed(3)}, length_mm=${r.lengthMm.toFixed(3)}${r.flipped ? ', flipped' : ''})`;
+  const options = regions.map((r, i) => contactRegionOption(r, i, input, poseOfPanelA(r.regionPanelIdA)));
+  const title = `Parts touch along ${regions.length} seams`;
 
-  if (regionPanelIdA === undefined && regionPanelIdB === undefined) {
+  if (input.regionPanelIdA === undefined && input.regionPanelIdB === undefined) {
     throwError(
       ErrorCodes.GE_MERGE_AMBIGUOUS_CONTACT,
       `these two parts touch along ${regions.length} real, simultaneous contact regions — ` +
         `pass region_panel_id_a/region_panel_id_b to pick one: ${regions.map(describe).join('; ')}`,
       true,
+      undefined,
+      { title, options },
     );
   }
   const chosen = regions.find(
-    (r) => r.regionPanelIdA === regionPanelIdA && r.regionPanelIdB === regionPanelIdB,
+    (r) => r.regionPanelIdA === input.regionPanelIdA && r.regionPanelIdB === input.regionPanelIdB,
   );
   if (!chosen) {
     throwError(
       ErrorCodes.GE_MERGE_AMBIGUOUS_CONTACT,
-      `no contact region matches region_panel_id_a=${regionPanelIdA}, ` +
-        `region_panel_id_b=${regionPanelIdB} — found: ${regions.map(describe).join('; ')}`,
+      `no contact region matches region_panel_id_a=${input.regionPanelIdA}, ` +
+        `region_panel_id_b=${input.regionPanelIdB} — found: ${regions.map(describe).join('; ')}`,
       true,
+      undefined,
+      { title, options },
     );
   }
   return chosen;
+}
+
+/** One GE_MERGE_AMBIGUOUS_CONTACT option: the caller's own merge call,
+ * echoed in full, pinned to region [r]. The seam is highlighted via A's side
+ * of it (aRunStart/aRunEnd are in A's shared flat frame, which the panel's
+ * world pose maps directly — same as DetectContact's own hinge placement). */
+function contactRegionOption(
+  r: ContactRegion,
+  index: number,
+  input: MergePartsWithBendInput,
+  poseA: NapiTransform3 | undefined,
+): ErrorOption {
+  const toWorld = (p: { x: number; y: number }, pose: NapiTransform3): [number, number, number] => {
+    const m = pose.r;
+    return [
+      m[0] * p.x + m[1] * p.y + pose.t[0],
+      m[3] * p.x + m[4] * p.y + pose.t[1],
+      m[6] * p.x + m[7] * p.y + pose.t[2],
+    ];
+  };
+  const lengthMm = Math.round(r.lengthMm);
+  return {
+    id: `contact-${index}`,
+    display: {
+      button_text: `Bend ${r.angleDeg.toFixed(1)}° · ${lengthMm} mm`,
+      description:
+        `Merge along the ${lengthMm} mm seam between panel ${r.regionPanelIdA.slice(0, 8)} ` +
+        `of part A and panel ${r.regionPanelIdB.slice(0, 8)} of part B, with a ` +
+        `${r.angleDeg.toFixed(1)}° bend${r.flipped ? ' (part B is flipped to meet it)' : ''}.`,
+      style: 'secondary',
+      highlight: {
+        part_ids: [input.partAId, input.partBId],
+        region_panel_ids: [r.regionPanelIdA, r.regionPanelIdB],
+        ...(poseA ? { edges_world_mm: [[toWorld(r.aRunStart, poseA), toWorld(r.aRunEnd, poseA)]] } : {}),
+      },
+    },
+    call: {
+      tool: 'merge_bodies_with_bend',
+      arguments: {
+        part_a_id: input.partAId,
+        part_b_id: input.partBId,
+        ...(input.radiusMm !== undefined ? { radius_mm: input.radiusMm } : {}),
+        ...(input.kFactor !== undefined ? { k_factor: input.kFactor } : {}),
+        ...(input.bottomIsConcave !== undefined ? { bottom_is_concave: input.bottomIsConcave } : {}),
+        region_panel_id_a: r.regionPanelIdA,
+        region_panel_id_b: r.regionPanelIdB,
+      },
+    },
+  };
 }
 
 /**
@@ -317,7 +374,11 @@ export function mergePartsWithBend(
       true,
     );
   }
-  const region = selectContactRegion(contact.regions, input.regionPanelIdA, input.regionPanelIdB);
+  const region = selectContactRegion(
+    contact.regions,
+    input,
+    (id) => panelsA.find((p) => p.regionPanelId === id)?.pose,
+  );
 
   // B as the seam needs it: for a flipped seam, the same physical part
   // described from the other side of the sheet (C++ FlipPart) — the

@@ -1,6 +1,7 @@
 /**
  * Structured error model for MCP-CAD.
- * All tool errors return { code, message, recoverable, suggested_tool }.
+ * All tool errors return { code, title, message, recoverable, options,
+ * suggestedTool? } — see StructuredError / ErrorOption below.
  * Constitution Principle VI: no unstructured throws reach the MCP boundary.
  *
  * Task: T037
@@ -303,11 +304,74 @@ export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
 
 // ─── Structured error type ───────────────────────────────────────────────────
 
+/**
+ * One self-contained way out of an error, offered to the user as a button.
+ * `display` is everything the user sees; `call` is exactly what runs when they
+ * pick it. A client executes `call` verbatim — it never patches or rebuilds
+ * the arguments, and needs no knowledge of the error code that produced it.
+ *
+ * Rules (enforced by tests/contracts/mcp-errors.contract.test.ts):
+ * - `call.tool` must be a real, registered MCP tool.
+ * - `call.arguments` is complete: every original argument echoed back, plus
+ *   whatever resolves the error.
+ * - Options on one error are alternatives — the user picks at most one.
+ * - Viewport hints live only in `display.highlight`, never in `arguments`.
+ */
+export interface ErrorOption {
+  /** Stable within this error, e.g. "contact-0". */
+  id: string;
+  display: {
+    button_text: string;
+    description: string;
+    style: 'primary' | 'secondary' | 'destructive';
+    /** When present, the client asks the user this before running `call`. */
+    confirm?: string;
+    /** Shown in the viewport while this option's button is hovered/focused. */
+    highlight?: {
+      part_ids?: string[];
+      region_panel_ids?: string[];
+      /** Polylines in world millimetres, one per highlighted edge/seam. */
+      edges_world_mm?: [number, number, number][][];
+    };
+  };
+  call: {
+    tool: string;
+    arguments: Record<string, unknown>;
+  };
+}
+
 export interface StructuredError {
   code: ErrorCode;
+  /** Short, user-facing heading — defaults to a humanised `code`. */
+  title: string;
   message: string;
   recoverable: boolean;
+  /** Always present; empty when there is nothing to offer. */
+  options: ErrorOption[];
   suggestedTool?: string;
+}
+
+/** Optional extras for makeError/throwError beyond the positional basics. */
+export interface ErrorExtras {
+  title?: string;
+  options?: ErrorOption[];
+}
+
+/**
+ * Default card title for a code: drops the domain prefix and sentence-cases
+ * the rest ("GE_MERGE_AMBIGUOUS_CONTACT" -> "Merge ambiguous contact"). Every
+ * error gets a title without touching each of the ~130 throw sites; the ones
+ * that matter to users pass a real one via ErrorExtras.
+ */
+export function defaultErrorTitle(code: string): string {
+  const words = code
+    .replace(/^(GE|MD|ACL|NEST|GRAPH|MFG|CONFIG|EXPORT)_/, '')
+    .toLowerCase()
+    .split('_')
+    .filter((w) => w.length > 0);
+  if (words.length === 0) return 'Error';
+  const text = words.join(' ');
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 // ─── McpToolError — carries a StructuredError as a thrown object ──────────────
@@ -329,8 +393,16 @@ export function makeError(
   message: string,
   recoverable: boolean,
   suggestedTool?: string,
+  extras: ErrorExtras = {},
 ): StructuredError {
-  return { code, message, recoverable, suggestedTool };
+  return {
+    code,
+    title: extras.title ?? defaultErrorTitle(code),
+    message,
+    recoverable,
+    options: extras.options ?? [],
+    suggestedTool,
+  };
 }
 
 export function throwError(
@@ -338,8 +410,9 @@ export function throwError(
   message: string,
   recoverable: boolean,
   suggestedTool?: string,
+  extras: ErrorExtras = {},
 ): never {
-  throw new McpToolError(makeError(code, message, recoverable, suggestedTool));
+  throw new McpToolError(makeError(code, message, recoverable, suggestedTool, extras));
 }
 
 /**
@@ -355,10 +428,13 @@ export function toStructuredError(err: unknown): StructuredError {
   if (err && typeof err === 'object' && 'code' in err && 'message' in err) {
     const errObj = err as Record<string, unknown>;
     if (typeof errObj.code === 'string') {
+      const code = (errObj.code as ErrorCode) ?? ErrorCodes.INTERNAL_ERROR;
       return {
-        code: (errObj.code as ErrorCode) ?? ErrorCodes.INTERNAL_ERROR,
+        code,
+        title: typeof errObj.title === 'string' ? errObj.title : defaultErrorTitle(code),
         message: String(errObj.message),
         recoverable: Boolean(errObj.recoverable),
+        options: Array.isArray(errObj.options) ? (errObj.options as ErrorOption[]) : [],
         suggestedTool: typeof errObj.suggestedTool === 'string' ? errObj.suggestedTool : undefined,
       };
     }
@@ -369,13 +445,12 @@ export function toStructuredError(err: unknown): StructuredError {
     try {
       const parsed = JSON.parse(err.message) as Record<string, unknown>;
       if (typeof parsed.code === 'string' && typeof parsed.message === 'string') {
-        return {
-          code: (parsed.code as ErrorCode) ?? ErrorCodes.INTERNAL_ERROR,
-          message: parsed.message,
-          recoverable: typeof parsed.recoverable === 'boolean' ? parsed.recoverable : false,
-          suggestedTool:
-            typeof parsed.suggestedTool === 'string' ? parsed.suggestedTool : undefined,
-        };
+        return makeError(
+          (parsed.code as ErrorCode) ?? ErrorCodes.INTERNAL_ERROR,
+          parsed.message,
+          typeof parsed.recoverable === 'boolean' ? parsed.recoverable : false,
+          typeof parsed.suggestedTool === 'string' ? parsed.suggestedTool : undefined,
+        );
       }
     } catch {
       // Not JSON; fall through
@@ -386,23 +461,15 @@ export function toStructuredError(err: unknown): StructuredError {
     /* v8 ignore next 7 */
     const errWithCode = err as Error & { code?: string };
     if (typeof errWithCode.code === 'string') {
-      return {
-        code: (errWithCode.code as ErrorCode) ?? ErrorCodes.INTERNAL_ERROR,
-        message: err.message,
-        recoverable: false,
-      };
+      return makeError(
+        (errWithCode.code as ErrorCode) ?? ErrorCodes.INTERNAL_ERROR,
+        err.message,
+        false,
+      );
     }
 
-    return {
-      code: ErrorCodes.INTERNAL_ERROR,
-      message: err.message,
-      recoverable: false,
-    };
+    return makeError(ErrorCodes.INTERNAL_ERROR, err.message, false);
   }
 
-  return {
-    code: ErrorCodes.INTERNAL_ERROR,
-    message: String(err),
-    recoverable: false,
-  };
+  return makeError(ErrorCodes.INTERNAL_ERROR, String(err), false);
 }
