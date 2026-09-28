@@ -1,0 +1,30 @@
+# Storage accounts (spec 010, R-014) — WHERE project databases may live and how
+# this server connects to them. Copy to storage-accounts.yaml (git-ignored), or
+# better: manage it with `npm run account -- add|list|test|remove`, which also
+# stores secrets in the OS keyring.
+#
+# No secret ever appears in this file: `secret_ref` only names where the secret
+# is (keyring:<service>/<account>, env:<VAR> or file:<path>). Secrets are never
+# accepted or returned through MCP tools.
+
+storage_accounts:
+  # The Form·AI·tion desktop app's own local Dolt server (started by the app
+  # on 127.0.0.1:3316 with a private DOLT_ROOT_PATH). No password.
+  - id: local
+    driver: dolt
+    host: 127.0.0.1
+    port: 3316
+    user: root
+    secret_ref: null
+    tls: 'off'
+    database_prefix: fa_
+
+  # A shared/remote Dolt server; its password lives in the OS keyring.
+  # - id: workshop
+  #   driver: dolt
+  #   host: dolt.example.internal
+  #   port: 3306
+  #   user: formaition
+  #   secret_ref: keyring:formaition-mcp/workshop
+  #   tls: required
+  #   database_prefix: ws_

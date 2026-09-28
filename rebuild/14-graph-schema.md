@@ -416,6 +416,57 @@ points at it. It versions, diffs, branches, and merges exactly like the outline
 polygon's containing region panel is later deleted (§2.1.1), the anchor follows the same
 I3e/K6 stale-anchor-then-re-anchor path as an I3a anchor would.
 
+## 2.5 Addendum — as implemented for Dolt persistence (spec 010, 2026-09)
+
+Form·AI·tion spec 010 (R-016) implements §2 as normalised Dolt tables:
+`ts/src/v2/persistence/migrations/001_graph_tables.sql` and `002_app_tables.sql`.
+Only the subset the v2 in-memory model populates exists today. `seam`,
+`semantic_*`, `anchor_feature` and `dimension_curation` arrive with their model.
+The following differ from, or add to, the tables above.
+
+**Ordering keys.** The evaluator is sensitive to array order (hinge-vertex
+insertion, cut order), so in-memory order is persisted as fractional,
+lexicographically sortable keys. Primary-key order is not relied on.
+- `ring_vertex.order_key` — `UNIQUE (ring_id, order_key)`. Vertices keep their
+  ids across edits: an edit inserts, updates or deletes only the vertices it
+  touched (an LCS alignment on exact coordinates), so a diff of two revisions
+  reports real changes.
+- `region_panel.order_key` and `bend.order_key`.
+- `hole_order_key` on `part_ring` (required when `kind = 'hole'`) and on
+  `feature` (required for `hole_circle`). It orders polygon and circle holes
+  together, as the model's single `holes` list.
+
+**`bend` extra columns.** These carry fields the v2 model already has:
+- `bottom_is_concave BOOLEAN NULL` — the fold side as measured at import; null = not measured.
+- `radius_measured BOOLEAN NOT NULL` — false when the radius is the profile default (import can't measure it).
+- `bend_process VARCHAR(64) NULL` — the app's bend-process id (e.g. `airBend`).
+- `k_factor_override` may be null. The part's `k_factor` then applies; 0 is a real K-factor, so the range is [0, 1].
+
+**`action_log` (N12) as implemented.**
+`(seq BIGINT AUTO_INCREMENT PK, at, actor_kind ENUM(human, agent, system),
+actor_id, tool, params JSON, delta_summary JSON, undo_delta JSON NULL, undone BOOLEAN)`.
+- `undo_delta` holds the inverse row changes of that one operation. It is null
+  only for `system` rows (migrations), which can't be undone.
+- `undone` marks an undone operation. Undone rows stay in the log, so the
+  timeline shows them struck through.
+- `meta.committed_seq` marks the last operation included in a commit, so the
+  operations of a revision are `seq ∈ (committed_seq at its first parent,
+  committed_seq at it]`.
+- Edits are never committed per operation: a revision is an explicit user
+  commit of the working set.
+
+**Application tables** (not part of the graph; `002_app_tables.sql`):
+- `client_meta(part_id, doc JSON)`: the client's presentation document per part, opaque to the server.
+- `project_settings`: manufacturing profile, defaults and nesting, validated by the server.
+- `import_source(file_path, file_sha256, config, measured_thickness_mm, imported_at)`: re-import as a reference mesh only, never to rebuild the graph.
+- `session_state`: `dolt_ignore`d, and lives only in `main`'s working set.
+
+**No foreign keys on circular references.** `part.root_region_panel_id`,
+`part.merged_into_part_id` and `region_panel.merged_into_region_panel_id` have
+no foreign key, because MySQL and Dolt have no deferred constraints. They are
+enforced by `graph/invariants.ts`, together with the other structural rules of
+§5. Geometric validity is never a storage constraint (constitution principle IV).
+
 ## 3. What is deliberately NOT here — and where it actually lives instead
 
 **The 2D↔3D mapping is not schema. It is not stored anywhere, ever, as data.** It is
