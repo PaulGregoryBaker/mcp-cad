@@ -4,6 +4,7 @@
  * fails at its declared layer with its declared code. The Form·AI·tion client
  * runs the mirror-image test over the same files.
  */
+import { catalogueThicknesses } from '../../src/v2/graph/thickness-catalogue';
 import * as fs from 'fs';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
@@ -14,9 +15,18 @@ import type { PartGraphSnapshot } from '../../src/v2/graph/store';
 const ROOT = path.resolve(__dirname, '..', '..', 'contract-fixtures', 'persistence');
 const read = (p: string): unknown => JSON.parse(fs.readFileSync(p, 'utf8'));
 
-const kinds = fs.existsSync(ROOT) ? (fs.readdirSync(ROOT) as PersistedKind[]) : [];
+// One directory per persisted kind; plain files at the root (e.g.
+// thickness_catalogue.json) are shared data checked by their own tests.
+const kinds = fs.existsSync(ROOT)
+  ? (fs.readdirSync(ROOT, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) as PersistedKind[])
+  : [];
 
 describe('[persist] contract fixtures', () => {
+  it('thickness_catalogue.json matches the catalogue import_part enforces', () => {
+    const cat = read(path.join(ROOT, 'thickness_catalogue.json')) as Record<string, number[]>;
+    for (const m of ['mildSteel', 'stainlessSteel', 'aluminum'] as const) expect(cat[m]).toEqual(catalogueThicknesses(m));
+  });
+
   it('exist (run `npm run schemas:export`)', () => {
     expect(kinds.length).toBeGreaterThanOrEqual(6);
   });
