@@ -1,0 +1,128 @@
+{
+  "schemaVersion": "0.1",
+  "id": "net-plus-with-tail-90-sharp",
+  "title": "Net closure: a plus-sign net with one arm extended by one face, 5 folds at 90°",
+  "level": "A",
+  "tier": "T3",
+  "inventory": [
+    "C14",
+    "C15"
+  ],
+  "toleranceProfile": "default",
+  "expectation": "pass",
+  "fixture": {
+    "kind": "authored",
+    "path": null
+  },
+  "params": {
+    "net": "net-plus-with-tail-90-sharp",
+    "faceSizeMm": 50,
+    "thicknessMm": 1,
+    "variant": "sharp"
+  },
+  "ops": [
+    {
+      "op": "author_net",
+      "faceSizeMm": 50,
+      "thicknessMm": 1,
+      "root": "F0",
+      "faces": {
+        "F0": [
+          0,
+          0
+        ],
+        "F1": [
+          0,
+          1
+        ],
+        "N": [
+          0,
+          2
+        ],
+        "L": [
+          -1,
+          1
+        ],
+        "R": [
+          1,
+          1
+        ],
+        "S": [
+          0,
+          -1
+        ]
+      },
+      "folds": [
+        {
+          "parent": "F0",
+          "child": "F1",
+          "angleDeg": 90
+        },
+        {
+          "parent": "F1",
+          "child": "N",
+          "angleDeg": 90
+        },
+        {
+          "parent": "F1",
+          "child": "L",
+          "angleDeg": 90
+        },
+        {
+          "parent": "F1",
+          "child": "R",
+          "angleDeg": 90
+        },
+        {
+          "parent": "F0",
+          "child": "S",
+          "angleDeg": 90
+        }
+      ]
+    },
+    {
+      "op": "construct"
+    }
+  ],
+  "oracles": [
+    {
+      "type": "net_closure",
+      "budgetKey": "closureMm",
+      "seams": [
+        [
+          "F0:E",
+          "R:S"
+        ],
+        [
+          "F0:W",
+          "L:S"
+        ],
+        [
+          "S:W",
+          "L:W"
+        ],
+        [
+          "S:S",
+          "N:N"
+        ],
+        [
+          "S:E",
+          "R:E"
+        ],
+        [
+          "N:E",
+          "R:N"
+        ],
+        [
+          "N:W",
+          "L:N"
+        ]
+      ]
+    },
+    {
+      "type": "structure",
+      "solidCount": 1,
+      "typedError": null
+    }
+  ]
+}

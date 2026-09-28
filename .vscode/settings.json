@@ -56,6 +56,11 @@
         "rollbacks",
         "speckit",
         "libnest"
-    ]
+    ],
+    "deepseek-copilot.debugMode": "metadata",
+    "github.copilot.chat.reviewSelection.instructions": [],
+    "github.copilot.chat.agentModels": {
+    "copilot-utility-small": "gpt-4o-mini"
+    }
 }
 

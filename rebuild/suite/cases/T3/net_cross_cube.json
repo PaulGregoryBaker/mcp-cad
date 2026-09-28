@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "0.1",
+  "id": "net-cross-cube-90-sharp",
+  "title": "Net closure: Latin-cross cube net, 5 folds at 90°, all 7 seams coincide (Paul's anchor case)",
+  "level": "A",
+  "tier": "T3",
+  "inventory": ["C14", "C15"],
+  "toleranceProfile": "default",
+  "expectation": "pass",
+  "fixture": { "kind": "authored", "path": null },
+  "params": {
+    "net": "cube-latin-cross",
+    "faceSizeMm": 50,
+    "thicknessMm": 1,
+    "variant": "sharp",
+    "$roles": "F0=bottom, F1=front, F2=top, F3=back, L=left, R=right (fold tree rooted at F0; F1 carries three folds — branching node)"
+  },
+  "ops": [
+    {
+      "op": "author_net",
+      "faceSizeMm": 50,
+      "thicknessMm": 1,
+      "root": "F0",
+      "faces": { "F0": [0, 0], "F1": [0, 1], "F2": [0, 2], "F3": [0, 3], "L": [-1, 1], "R": [1, 1] },
+      "folds": [
+        { "parent": "F0", "child": "F1", "angleDeg": 90 },
+        { "parent": "F1", "child": "F2", "angleDeg": 90 },
+        { "parent": "F2", "child": "F3", "angleDeg": 90 },
+        { "parent": "F1", "child": "L", "angleDeg": 90 },
+        { "parent": "F1", "child": "R", "angleDeg": 90 }
+      ]
+    },
+    { "op": "construct" }
+  ],
+  "oracles": [
+    {
+      "type": "net_closure",
+      "budgetKey": "closureMm",
+      "seams": [
+        ["F3:N", "F0:S"],
+        ["L:S", "F0:W"],
+        ["R:S", "F0:E"],
+        ["L:N", "F2:W"],
+        ["R:N", "F2:E"],
+        ["L:W", "F3:W"],
+        ["R:E", "F3:E"]
+      ]
+    },
+    { "type": "structure", "solidCount": 1, "typedError": null }
+  ]
+}

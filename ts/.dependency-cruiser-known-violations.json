@@ -1,0 +1,11 @@
+[
+  {
+    "type": "module",
+    "from": "src/geometry/numerical-policy.ts",
+    "to": "src/geometry/numerical-policy.ts",
+    "rule": {
+      "severity": "warn",
+      "name": "no-orphan-modules"
+    }
+  }
+]

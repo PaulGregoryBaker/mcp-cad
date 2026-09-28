@@ -136,16 +136,62 @@ export interface ApplyBendResult {
 }
 
 export interface NapiBendZoneSpec {
-  offsetMm: number;
+  /** Hinge-line start X in DXF-local coordinates. */
+  hingeX1: number;
+  /** Hinge-line start Y in DXF-local coordinates. */
+  hingeY1?: number;
+  /** Hinge-line end X in DXF-local coordinates. */
+  hingeX2: number;
+  /** Hinge-line end Y in DXF-local coordinates. */
+  hingeY2?: number;
   widthMm: number;
   angleDeg: number;
   innerRadiusMm: number;
   kFactor: number;
-  // Optional world-space fold frame used to place the rebuilt shell on the correct
-  // side (canonical +X → bendDir, canonical +Z → foldNormal). When omitted, C++
-  // falls back to deriving the placement frame from the reference shell's face.
-  foldNormalX?: number; foldNormalY?: number; foldNormalZ?: number;
-  bendDirX?: number; bendDirY?: number; bendDirZ?: number;
+  // World-space fold frame used to place the rebuilt shell on the correct side
+  // (canonical +X → bendDir, canonical +Z → foldNormal) — manufacturing-graph
+  // data only; there is no live-shell fallback.
+  foldNormalX?: number;
+  foldNormalY?: number;
+  foldNormalZ?: number;
+  bendDirX?: number;
+  bendDirY?: number;
+  bendDirZ?: number;
+  // World-space anchor: panel A's own oriented-bbox centre, computed from its
+  // stored panelFrame + flat extents + midplaneOffsetMm. The flat centroid of
+  // panel A's region in the merged DXF maps to this point.
+  hasAnchor?: boolean;
+  anchorX?: number;
+  anchorY?: number;
+  anchorZ?: number;
+  // How far Panel B's TRUE hinge edge sits inside its own flat pattern, past
+  // its near/glue edge — zero (default) when B's hinge IS its own DXF
+  // origin. Nonzero when B is a composite panel with material continuing
+  // past its hinge with A (e.g. a flange tab overhanging a wall's own bend
+  // line): B's DXF origin then sits at its far/free edge instead, and this
+  // tells the fold where the true pivot is within B's own flat extent.
+  bHingeOffsetMm?: number;
+}
+
+// Explicit placement frame for buildShellFromFlatPattern's coplanar (no bend
+// zones) path. world = origin + x*U + y*V + (z - t/2)*N + nCentreMm*N. All
+// values come from the manufacturing graph (a panel's stored panelFrame +
+// midplaneOffsetMm) — there is no live-shell fallback when hasFrame is false.
+export interface FlatPanelPlacement {
+  hasFrame: boolean;
+  originX: number;
+  originY: number;
+  originZ: number;
+  uX: number;
+  uY: number;
+  uZ: number;
+  vX: number;
+  vY: number;
+  vZ: number;
+  normalX: number;
+  normalY: number;
+  normalZ: number;
+  nCentreMm: number;
 }
 
 export interface BuildShellFromFlatPatternResult {
@@ -155,11 +201,25 @@ export interface BuildShellFromFlatPatternResult {
 // Oriented panel frame P(x): local (u, v, n) → world via origin + u*U + v*V + n*N.
 // uExtent/vExtent are the true in-plane flat dimensions (tilt-independent).
 export interface PanelFrameResult {
-  originX: number; originY: number; originZ: number;
-  uX: number; uY: number; uZ: number;
-  vX: number; vY: number; vZ: number;
-  normalX: number; normalY: number; normalZ: number;
-  uExtentMm: number; vExtentMm: number; thicknessMm: number;
+  originX: number;
+  originY: number;
+  originZ: number;
+  uX: number;
+  uY: number;
+  uZ: number;
+  vX: number;
+  vY: number;
+  vZ: number;
+  normalX: number;
+  normalY: number;
+  normalZ: number;
+  uExtentMm: number;
+  vExtentMm: number;
+  thicknessMm: number;
+  // Outer-wire boundary, already projected onto (u, v) and shifted local to
+  // origin — each point lies in [0,uExtentMm] x [0,vExtentMm]. Self-consistent
+  // by construction with origin/u/v/extents above.
+  ring: Array<{ x: number; y: number }>;
 }
 
 export interface NestPlacement {
@@ -267,8 +327,8 @@ export interface CloseGapResult {
 }
 
 export interface PanelValidationError {
-  code: string;     // e.g. "GE_PANEL_DISCONNECTED"
-  message: string;  // human-readable explanation
+  code: string; // e.g. "GE_PANEL_DISCONNECTED"
+  message: string; // human-readable explanation
 }
 
 export interface PanelValidationResult {
@@ -279,17 +339,10 @@ export interface PanelValidationResult {
 }
 
 // ── Assembly IDs ──────────────────────────────────────────────────────────────
-export type AssemblyId  = string;
+export type AssemblyId = string;
 export type ComponentId = string;
 
 // ── Boolean results ───────────────────────────────────────────────────────────
-export interface FuseResult {
-  solid_id: string;
-  disjoint: boolean;
-  rollback_token: string;
-  shape_history?: ShapeHistoryRecord[];
-}
-
 export interface CutResult {
   solid_id: string;
   rollback_token: string;
@@ -304,8 +357,12 @@ export interface IntersectResult {
 
 // ── Interrogation results ─────────────────────────────────────────────────────
 export interface BoundingBoxResult {
-  x_min: number; y_min: number; z_min: number;
-  x_max: number; y_max: number; z_max: number;
+  x_min: number;
+  y_min: number;
+  z_min: number;
+  x_max: number;
+  y_max: number;
+  z_max: number;
 }
 
 export interface MassPropertiesResult {
@@ -337,7 +394,7 @@ export interface FilletResult {
   rollback_token: string;
   shape_history?: ShapeHistoryRecord[];
 }
-export interface ChamferResult  extends FilletResult {}   // same shape
+export interface ChamferResult extends FilletResult {} // same shape
 export interface SimplifyResult extends FilletResult {}
 export interface OffsetShapeResult extends FilletResult {}
 
@@ -375,10 +432,22 @@ export interface AddInstanceResult {
 }
 
 export type LocationMatrix16 = [
-  number, number, number, number,
-  number, number, number, number,
-  number, number, number, number,
-  number, number, number, number
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
 ];
 
 export interface MateRigidResult {
@@ -405,6 +474,25 @@ export interface SheetMetalValidationResult {
   nominal_thickness: number;
   can_flatten: boolean;
   validation_errors: string[];
+}
+
+// Dominant Face Method: thickness = distance between the shape's single
+// largest planar face and its best anti-parallel, overlapping partner.
+export interface PanelThicknessResult {
+  ok: boolean;
+  thickness_mm: number;
+  midplane_offset_mm: number;
+  // The dominant face's own outward normal that midplane_offset_mm was
+  // projected onto — an arbitrary tie-break between a panel's two near-equal-
+  // area skins. Callers re-expressing the offset along a DIFFERENT reference
+  // normal (e.g. a panel frame's own N) must check
+  // dot(dominant_normal, theirNormal) and negate midplane_offset_mm when
+  // negative.
+  dominant_normal_x: number;
+  dominant_normal_y: number;
+  dominant_normal_z: number;
+  error_code: string;
+  message: string;
 }
 
 export interface GapSewResult {
@@ -434,10 +522,31 @@ export interface AlignmentResult {
 export interface SplitBodyByBendsResult {
   panel_ids: string[];
   panel_count: number;
-  panel_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>;
+  /** True material thickness per panel (parallel to panel_ids), measured at
+   * cut time from the panel's own outer/inner face-group pairing — NOT
+   * re-derived from the extracted solid's own vertex extent (getPanelFrame's
+   * thicknessMm), which inflates whenever real neighboring material (e.g. a
+   * zero-gap-fused flange) falls within the cutter geometry's own safety-
+   * margin bleed. See geometry_service.hpp's DecomposedByBendsResult. */
+  panel_thickness_mm: number[];
+  panel_bboxes: Array<{
+    x_min: number;
+    y_min: number;
+    z_min: number;
+    x_max: number;
+    y_max: number;
+    z_max: number;
+  }>;
   protrusion_ids: string[];
   protrusion_count: number;
-  protrusion_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>;
+  protrusion_bboxes: Array<{
+    x_min: number;
+    y_min: number;
+    z_min: number;
+    x_max: number;
+    y_max: number;
+    z_max: number;
+  }>;
   protrusion_parents: Array<{ protrusion_id: string; parent_panel_id: string | null }>;
   detected_mode: string;
   rollback_token: string;
@@ -447,7 +556,14 @@ export interface SplitBodyByBendsResult {
 export interface RemoveProtrusionsResult {
   cleaned_part_id: string;
   protrusion_ids: string[];
-  protrusion_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>;
+  protrusion_bboxes: Array<{
+    x_min: number;
+    y_min: number;
+    z_min: number;
+    x_max: number;
+    y_max: number;
+    z_max: number;
+  }>;
   protrusion_count: number;
   rollback_token: string;
   shape_history?: ShapeHistoryRecord[];
@@ -476,4 +592,464 @@ export interface ValidationReport {
     rule_count: number;
     execution_time_ms: number;
   };
+}
+
+// ── Phase 5 Slice 1: graph-authored construction (manufacturing_graph_evaluator) ──
+//
+// Mirrors cpp/src/geometry/translation/manufacturing_graph_evaluator.hpp and
+// part_solid_construction.hpp field-for-field (see cpp/src/napi/translation_binding.cc
+// for the exact marshaling). No geometric computation happens on the TS side
+// (constitution v2.0.0 principle IV) — these types only carry data in and out of
+// evaluatePartGraph/constructPartSolid.
+
+export interface NapiPoint2 {
+  x: number;
+  y: number;
+}
+
+export interface NapiPoint3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
+// Row-major 3x3 rotation (r, 9 elements) + translation (t, 3 elements) — the
+// same layout Transform3 itself uses in C++, so this is a direct field copy.
+export interface NapiTransform3 {
+  r: [number, number, number, number, number, number, number, number, number];
+  t: [number, number, number];
+}
+
+export interface NapiBendSpec {
+  id: string;
+  parentRegionPanelId: string;
+  childRegionPanelId: string;
+  hingeA: NapiPoint2;
+  hingeB: NapiPoint2;
+  angleDeg: number;
+  radiusMm?: number;
+  kFactor?: number;
+  // Overrides the angleDeg-sign-derived mountain/valley pivot-side
+  // classification (manufacturing_graph_evaluator.hpp's own BendSpec
+  // field doc comment has the full rationale). Unset: falls back to
+  // concave=(angleDeg<0).
+  bottomIsConcave?: boolean;
+  // true (default) if unset: radiusMm is a real, authored/confirmed value.
+  // false: step_reconciliation.cc produced this bend and radiusMm is a
+  // placeholder (0.0), not a measurement — see BendSpec::radiusMeasured's
+  // own doc comment (manufacturing_graph_evaluator.hpp).
+  radiusMeasured?: boolean;
+}
+
+export interface NapiCircleHole {
+  center: NapiPoint2;
+  radiusMm: number;
+}
+
+export interface NapiPartGraphSpec {
+  partId: string;
+  rootRegionPanelId: string;
+  // polygonHoles/circleHoles (Phase 5 Slice 9a): additive, optional — every
+  // pre-Slice-9a caller that omits them gets the C++ side's own empty
+  // default (translation_binding.cc's ReadPartGraphSpec).
+  outline: { outer: NapiPoint2[]; polygonHoles?: NapiPoint2[][]; circleHoles?: NapiCircleHole[] };
+  bends: NapiBendSpec[];
+  thicknessMm: number;
+  anchor?: { transform: NapiTransform3 };
+}
+
+export interface NapiRegionPanelLayout {
+  regionPanelId: string;
+  regionOuter: NapiPoint2[];
+  // The same clipped ring as regionOuter, before the 2D bend-allowance
+  // shift — what bottomFace/topFace/pose and solid-wall construction
+  // consume; regionOuter is the flat-pattern/DXF-only, shifted view. See
+  // manufacturing_graph_evaluator.hpp's own doc comment.
+  rawOuter: NapiPoint2[];
+  // The setback-trimmed ring solid-wall/bridge construction actually
+  // consumes (part_solid_construction.cc) — see wallEdgeBendId's own doc
+  // comment below.
+  wallOuter: NapiPoint2[];
+  bottomFace: NapiPoint3[];
+  topFace: NapiPoint3[];
+  pose: NapiTransform3;
+  // edgeBendId[i] names the bend whose zone the edge (regionOuter[i],
+  // regionOuter[i+1]) borders, or "" for a true outer boundary.
+  edgeBendId: string[];
+  // wallOuter's own per-edge bend tag (same convention as edgeBendId, but
+  // index-correlated with wallOuter) — this, together with
+  // wallEdgeIsTransitionStep, is exactly what part_solid_construction.cc's
+  // FindZoneEdges scans; a bend with no tagged, non-transition, non-zero-
+  // length edge here on EITHER its parent or child region panel is exactly
+  // what throws GE_BRIDGE_EDGE_NOT_FOUND at construct time.
+  wallEdgeBendId: string[];
+  // wallEdgeIsTransitionStep[i]: true if wallOuter edge i is a transition
+  // step (not a genuine bend-zone boundary) — FindZoneEdges skips these
+  // even when wallEdgeBendId[i] matches.
+  wallEdgeIsTransitionStep: boolean[];
+  // Phase 5 Slice 9a: holes belonging to THIS region panel (RegionOf's own
+  // containment assignment — see manufacturing_graph_evaluator.hpp).
+  regionPolygonHoles: NapiPoint2[][];
+  regionCircleHoles: NapiCircleHole[];
+  // Raw (pre-shift) counterparts of the two fields above — same relationship
+  // as rawOuter to regionOuter.
+  rawPolygonHoles: NapiPoint2[][];
+  rawCircleHoles: NapiCircleHole[];
+}
+
+export interface NapiBridgeLayout {
+  bendId: string;
+  parentRegionPanelId: string;
+  childRegionPanelId: string;
+  pivotOriginWorld: NapiPoint3;
+  pivotAxisWorld: NapiPoint3;
+  angleDeg: number;
+  // The bend's true 2D position — the CENTER of its own allowance zone,
+  // computed once in Evaluate(). This is the ONE fact any consumer that
+  // wants "where is this bend" should read; never a BendSpec's own raw
+  // hingeA/hingeB (see BridgeLayout's own doc comment,
+  // manufacturing_graph_evaluator.hpp).
+  hingeA: NapiPoint2;
+  hingeB: NapiPoint2;
+  // Setback + world-space directions ConstructPartSolid uses to derive each
+  // side's own tangent points from the REAL (already-clipped) edge points —
+  // see BridgeLayout's own doc comment (manufacturing_graph_evaluator.hpp)
+  // for why an absolute tangent position can't be precomputed in C++ and
+  // handed across as-is (hingeA/hingeB use an exaggerated half-span that
+  // doesn't match a real edge).
+  setbackMm: number;
+  nLeftWorld: NapiPoint3;
+  childNLeftWorld: NapiPoint3;
+  // The true, un-widened hinge line (only the LINE it defines is meaningful,
+  // never the exact positions — see BridgeLayout's own doc comment) plus its
+  // flat-frame left-hand normal, used by ConstructPartSolid to trim each
+  // panel's own wall solid back to its true tangent line before extruding.
+  rawHingeA: NapiPoint2;
+  rawHingeB: NapiPoint2;
+  nLeftFlat: NapiPoint2;
+}
+
+export interface EvaluatePartGraphResult {
+  ok: boolean;
+  errorCode: string; // "" | "GE_TREE_CYCLE_DETECTED" | "GE_BEND_SELF_REFERENCE" |
+  // "GE_DANGLING_BEND_REFERENCE" | "GE_REGION_CLIP_FAILED" | "GE_DEGENERATE_OUTLINE"
+  message: string;
+  panels: NapiRegionPanelLayout[];
+  bridges: NapiBridgeLayout[];
+}
+
+export interface ConstructPartSolidResult {
+  ok: boolean;
+  shellId: string;
+  errorCode: string; // "" | "GE_INVALID_LAYOUT" | "GE_EMPTY_LAYOUT" |
+  // "GE_INVALID_SHEET_METAL" | "GE_POLYGON_BUILD_FAILED" | "GE_EXTRUDE_FAILED" |
+  // "GE_BRIDGE_EDGE_NOT_FOUND" | "GE_BRIDGE_UNSUPPORTED_TOPOLOGY" |
+  // "GE_BRIDGE_BUILD_FAILED" | "GE_CONSTRUCTION_FAILED"
+  message: string;
+}
+
+// rebuild/13-translation-module-design.md §4/§5 — Phase 5 Slice 3.
+export interface MapToWorldResult {
+  ok: boolean;
+  errorCode: string; // "" | "GE_POINT_NOT_ON_PART" | "GE_INVALID_LAYOUT"
+  message: string;
+  point3d: NapiPoint3;
+  // Exactly one of these is non-empty on success.
+  regionPanelId: string;
+  bendId: string;
+}
+
+export interface MapToFlatResult {
+  ok: boolean;
+  errorCode: string; // "" | "GE_POINT_NOT_ON_PART" | "GE_INVALID_LAYOUT"
+  message: string;
+  point2d: NapiPoint2;
+  regionPanelId: string;
+  bendId: string;
+  residualMm: number;
+}
+
+// One candidate flat panel to test for contact — a part with bends has one of
+// these per region panel (rebuild live-app regression 2026-09-22: a part's
+// single stored (outline, anchor) only ever describes its ROOT panel's real
+// world position; a folded, non-root panel's true 3D position only exists via
+// that panel's own pose). A part with no bends passes exactly one candidate
+// (its root panel, pose == its own anchor).
+export interface NapiContactPanelCandidate {
+  // This panel's own ring, in the part's shared flat-pattern frame (F) — a
+  // subring of the part's whole stored outline (a region panel's own
+  // rawOuter). Already in F: `pose` maps it straight to world.
+  outline: NapiPoint2[];
+  // This panel's own true world pose (the bend-tree cascade, NOT the part's
+  // root anchor).
+  pose: NapiTransform3;
+  // Diagnostics only — never consulted for geometry.
+  regionPanelId: string;
+}
+
+// A point on a part's outline by topology: outline[edgeIndex] + t *
+// (outline[edgeIndex+1] - outline[edgeIndex]); t == 0 is the vertex itself.
+export interface NapiOutlineRef {
+  edgeIndex: number;
+  t: number;
+}
+
+// One real, physically-disjoint contact interval between some panel of A and
+// some panel of B. aStart/aEnd/bStart/bEnd are the seam ends by topology (what
+// reconcileOutlines takes); aRunStart.. are the same points as coordinates.
+export interface ContactRegion {
+  // B walks this seam the same way as A: B's sheet normal is reversed here.
+  // The merge must re-express B via flipPart first; the b* refs/points and
+  // angleDeg below are already in those flipped terms.
+  flipped: boolean;
+  aStart: NapiOutlineRef;
+  aEnd: NapiOutlineRef;
+  bStart: NapiOutlineRef;
+  bEnd: NapiOutlineRef;
+  aRunStart: NapiPoint2;
+  aRunEnd: NapiPoint2;
+  bRunStart: NapiPoint2;
+  bRunEnd: NapiPoint2;
+  angleDeg: number;
+  lengthMm: number;
+  regionPanelIdA: string;
+  regionPanelIdB: string;
+}
+
+// docs/TASK_SPEC.md §9 step 1 / part_merge.hpp's DetectContact — anchor-driven
+// seam detection for merge_bodies_with_bend: given every region panel of each
+// part (never a caller-supplied edge, never just the part's root anchor —
+// see NapiContactPanelCandidate's own doc comment), finds EVERY real contact
+// region between them, across every panel pair — a real assembly can have
+// multiple simultaneous genuine contacts, so nothing is picked or discarded
+// here (TASK_SPEC.md §8.3 phase 2). `regions` is empty iff errorCode is
+// GE_MERGE_NO_CONTACT or GE_MERGE_COPLANAR_SEAM.
+export interface DetectContactResult {
+  ok: boolean;
+  errorCode: string; // "" | "GE_MERGE_NO_CONTACT" | "GE_MERGE_COPLANAR_SEAM" | "GE_MERGE_INTERNAL_INCONSISTENCY"
+  message: string;
+  regions: ContactRegion[];
+}
+
+// rebuild/14-graph-schema.md §2.1.2 / part_merge.hpp — Phase 5 Slice 4. Pure
+// 2D outline reconciliation for merge_bodies_with_bend: given DetectContact's
+// own interval on each of two parts' outlines, returns the spliced combined
+// outline plus the shared hinge segment (in A's frame). No graph bookkeeping
+// (region panels, bends, re-parenting) happens here — that's
+// GraphStore.mergePartsWithBend's job, reusing this purely-geometric result.
+export interface ReconcileOutlinesResult {
+  ok: boolean;
+  errorCode: string; // "" | "GE_MERGE_SELF_INTERSECTION" | "GE_MERGE_INTERNAL_INCONSISTENCY"
+  message: string;
+  combinedOutline: NapiPoint2[];
+  hingeA: NapiPoint2;
+  hingeB: NapiPoint2;
+  // carryB mapped into A's frame by the same transform that placed B's
+  // outline — same order and length as the carryB argument.
+  carriedB: NapiPoint2[];
+}
+
+// manufacturing_graph_evaluator.hpp's RerootAt: the same bends, same order,
+// with every bend on the old-root -> new-root path flipped.
+export interface RerootBendsResult {
+  ok: boolean;
+  errorCode: string; // "" | "GE_DANGLING_BEND_REFERENCE" | "GE_TREE_CYCLE_DETECTED"
+  message: string;
+  bends: NapiBendSpec[];
+}
+
+// part_split.hpp's SplitAtBendResult — the graph-level inverse of
+// merge_bodies_with_bend's ReconcileOutlinesResult above, within one part.
+export interface SplitPartAtBendResult {
+  ok: boolean;
+  errorCode: string; // "" | "GE_SPLIT_HINGE_NOT_GROUNDED" | "GE_SPLIT_CORNER_ZONE_NOT_GROUNDED" | "GE_DEGENERATE_OUTLINE"
+  message: string;
+  parentOutline: NapiPoint2[];
+  childOutline: NapiPoint2[];
+  // The new child part's own anchor — exactly the childPose passed in,
+  // unchanged. See part_split.hpp's own SplitPartAtBend doc comment for why.
+  childAnchor: NapiTransform3;
+}
+
+// rebuild/13-translation-module-design.md §6 / step_reconciliation.hpp —
+// Phase 5 Slice 5. One kernel-measured flat panel piece — mirrors
+// PanelFrameResult's own shape exactly (world origin/u/v/normal + a CCW
+// ring already local to (u,v)), so getPanelFrame's own output can be
+// marshaled into this with no new kernel-side measurement.
+export interface NapiPanelPieceSpec {
+  origin: NapiPoint3;
+  uAxis: NapiPoint3;
+  vAxis: NapiPoint3;
+  normal: NapiPoint3;
+  ringLocal: NapiPoint2[];
+  thicknessMm: number;
+}
+
+// reconcilePieces' result: rootRegionPanelId and every BendSpec's parent/
+// childRegionPanelId in `graph` use temporary "piece{inputIndex}"
+// correlation ids. `graphs` holds one PartGraphSpec per connected component
+// (always populated; `graph` is the first/largest for backward compatibility).
+export interface ReconcilePiecesResult {
+  ok: boolean;
+  errorCode: string;
+  message: string;
+  graph: NapiPartGraphSpec;
+  graphs: NapiPartGraphSpec[];
+  // Non-fatal findings — e.g. an extra (non-tree) adjacency edge between
+  // two already-placed pieces, a real physical seam (14 §2) not auto-
+  // detected/driven this slice — reported, not silently dropped.
+  notes: string[];
+  // Parallel to graph.bends (same index, same order): each bend's hinge
+  // traced back to the ORIGINAL piece-local ring-edge index it came from
+  // (before flattening into the shared flat frame) — e.g. for driving
+  // merge_bodies_with_bend's own edge_a/edge_b refs against independently-
+  // created single-panel Parts built from the same input pieces.
+  pieceEdgeMatches: Array<{ parentEdgeIndex: number; childEdgeIndex: number }>;
+}
+
+// rebuild/06-plan.md Phase 5 Slice 6 / polygon_boolean.hpp. A general 2D
+// polygon union/difference — shared by GraphStore.fuseBodies (union) and
+// GraphStore.extractProtrusions (difference, subtracting a protrusion's
+// footprint from its host). Deliberately OCCT-backed under the hood (unlike
+// step_reconciliation/part_merge's pure math) — see polygon_boolean.hpp's
+// own header comment — but the TS-facing shape is still plain Point2 arrays
+// in and out. First-cut scope: the result must be exactly one simple closed
+// loop with no holes and no disjoint pieces, or this returns a typed error
+// rather than silently dropping a loop.
+export interface PolygonBooleanResult {
+  ok: boolean;
+  errorCode: string; // "" | "GE_POLYGON_DEGENERATE_INPUT" | "GE_POLYGON_BOOLEAN_FAILED" |
+  // "GE_POLYGON_MULTIPLE_LOOPS" | "GE_POLYGON_HAS_HOLES" | "GE_POLYGON_NOT_COPLANAR"
+  message: string;
+  outer: NapiPoint2[];
+}
+
+// ─── Irregular-shape nesting (rebuild/21-nesting-libnest2d.md) ───────────
+
+/** One part fed to the C++ nestPolygons solver. `outer`/`holes` are open rings
+ * (no duplicated closing vertex) in millimetres, matching the v2 graph's own
+ * Point2[] convention. */
+export interface NestCircleHole {
+  cx: number;
+  cy: number;
+  radiusMm: number;
+}
+
+export interface NestPolygonInputSpec {
+  id: string;
+  outer: NapiPoint2[];
+  holes: NapiPoint2[][];
+  circleHoles: NestCircleHole[];
+}
+
+export interface NestPolygonOptions {
+  cuttingWidthMm?: number;
+  maxKerfWidthMm?: number;
+  safetyGapMm?: number;
+  sheetMarginMm?: number;
+  placementAccuracy?: number;
+  rotationsDeg?: number[];
+  copies?: number; // explicit copy count of each part; -1 = fill mode
+}
+
+export interface NestPolygonPlacementResult {
+  id: string;
+  copyIndex: number;
+  sheetIndex: number;
+  x: number;
+  y: number;
+  rotationDeg: number;
+  outline: NapiPoint2[];      // transformed into the sheet frame
+  holes: NapiPoint2[][];      // transformed into the sheet frame
+  circleHoles: NestCircleHole[]; // transformed centres, sheet frame
+}
+
+export interface NestPolygonsResult {
+  ok: boolean;
+  errorCode: string; // "" | "NEST_INVALID_INPUT" | "NEST_INVALID_CUTTING_WIDTH" | "NEST_PART_EXCEEDS_SHEET"
+  message: string;
+  placements: NestPolygonPlacementResult[];
+  utilisationPct: number;
+  sheetsRequired: number;
+}
+
+// rebuild/06-plan.md Phase 5 Slice 9a / cut_panel.hpp. Validates a candidate
+// hole (circle or polygon) against a set of candidate region panel outlines
+// (each caller's own `regionOuter`) and returns which one (if any) fully
+// contains it. `canonicalRing` is populated only for the polygon variant
+// (winding-canonicalized to CW); the circle variant never tessellates —
+// center+radius passes straight through unchanged, this call only validates
+// containment.
+export interface CutPanelResult {
+  ok: boolean;
+  errorCode: string; // "" | "GE_DEGENERATE_OUTLINE" | "GE_CUT_HOLE_NOT_CONTAINED"
+  message: string;
+  canonicalRing: NapiPoint2[];
+  regionIndex: number;
+}
+
+// ─── Manufacturability Rules Engine (rebuild/06-plan.md, Phase 5 findings) ───
+
+/** One finding, as the addon literally hands it back — NOT the MCP contract
+ * shape yet. `recommendedFix.params` is a raw JSON string here
+ * (translation_binding.cc's WriteFinding: "paramsJson is a JSON string —
+ * parse on the TS side") — v2/graph/evaluate-client.ts's `evaluateFindings`
+ * is that TS side; it parses this into the real `Finding` type (15 §1's
+ * actual shape, `params: Record<string, unknown>`) before anything else
+ * sees it. Nothing outside evaluate-client.ts should use this raw type. */
+export interface NapiFinding {
+  code: string;
+  severity: 'error' | 'warning' | 'info';
+  message: string;
+  anchors: Array<{ kind: string; id: string }>;
+  recommendedFix: { tool: string; params: string } | null;
+}
+
+/** evaluateFindings NAPI return — always succeeds (never errors). */
+export interface EvaluateFindingsResult {
+  findings: NapiFinding[];
+}
+
+/** Thresholds for manufacturability rules. Every factor is × thicknessMm
+ * unless the field name says Mm (absolute). The C++ side has the same struct
+ * with the same defaults — this is the TS-facing marshaling shape. */
+export interface NapiManufacturingProfile {
+  profileId?: string;
+  name?: string;
+  rules?: {
+    minBendRadiusFactor?: number;
+    maxBendAngleDeg?: number;
+    defaultBendRadiusMm?: number;
+    minHoleDiameterFactor?: number;
+    minHoleToBendClearanceMm?: number;
+    minHoleToEdgeClearanceMm?: number;
+    minHoleToHoleDistanceMm?: number;
+    minFlangeWidthFactor?: number;
+  };
+}
+
+/** computeCloseGapDelta return — the 2D delta to apply via move_edge. */
+export interface CloseGapDeltaResult {
+  deltaX: number;
+  deltaY: number;
+  gapMm: number;
+}
+
+/** computeFlangeOutline return — extended outline + hinge for a new flange. */
+export interface FlangeOutlineResult {
+  newOutline: NapiPoint2[];
+  hingeA: NapiPoint2;
+  hingeB: NapiPoint2;
+}
+
+/** computeRipEdge return — outline with a gap replacing the ripped edge. */
+export interface NapiRipEdgeResult {
+  newOutline: NapiPoint2[];
+}
+
+/** computeSplitByPlane fragment — one clipped panel fragment. */
+export interface NapiPanelFragment {
+  regionPanelId: string;
+  positiveSide: boolean;
+  polygon: NapiPoint2[];
 }

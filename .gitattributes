@@ -1,0 +1,10 @@
+# Normalize line endings to LF in the repo regardless of core.autocrlf, so
+# Windows git operations (checkout/stash/pop) stop reintroducing CRLF into
+# source files tracked as LF (this caused repeated eslint/prettier breakage).
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.step binary
+*.stp binary

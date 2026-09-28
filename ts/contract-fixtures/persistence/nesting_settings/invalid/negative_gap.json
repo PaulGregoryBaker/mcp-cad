@@ -1,0 +1,18 @@
+{
+  "sheets": [
+    {
+      "widthMm": 2440,
+      "heightMm": 1220,
+      "label": "8x4"
+    }
+  ],
+  "safetyGapMm": -1,
+  "sheetMarginMm": 5,
+  "cuttingWidthMm": 0.2,
+  "rotationsDeg": [
+    0,
+    90,
+    180,
+    270
+  ]
+}

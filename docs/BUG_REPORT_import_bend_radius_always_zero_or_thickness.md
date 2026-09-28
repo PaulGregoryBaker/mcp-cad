@@ -1,0 +1,316 @@
+# Bug Report: reconciled bend radius is always exactly 0mm or exactly thickness — never a measured value — causing systematic `MIN_BEND_RADIUS` false positives on imports
+
+> **✅ RESOLVED 2026-08-09 (correcting 2026-08-07 — that fix's own root
+> cause was a misdiagnosis).** Paul pushed back after seeing the
+> `BEND_RADIUS_NOT_MEASURED` warning live: a bend's radius is a
+> manufacturing *decision*, not a measurement that can be "unknown" — the
+> imported shape is a guide, not gospel that must be preserved exactly.
+> When bends are the chosen manufacturing method, the system should default
+> a real decision and have the geometry precisely represent it, with
+> controls to change it — not stay mathematically sharp under an advisory
+> disclaimer. That's also what this project's own prior design intent
+> already required and the 2026-08-07 fix quietly stopped honoring:
+> `rebuild/13-translation-module-design.md` models bend radius as one
+> ordinary parameter of `w = θ(r + K·t)` (sharp is the documented *limit
+> case* `w→0`, not a separate mode), and `rebuild/11-acceptance-criteria.md`
+> AC-E.3 already requires the flat outline and 3D frame differ *only* by
+> the bend-allowance expansion for a bend's actual `(angle, radius, K)` —
+> i.e. whatever radius a bend carries, the whole representation must be
+> self-consistent from it, not frozen at whatever reconciliation happened
+> to measure.
+>
+> **The 2026-08-07 "1.53mm of silent distortion" finding was measured
+> against the wrong invariant.** It compared one *fixed* flat 2D point's
+> mapped 3D position at r=0 vs. r=1.5 — but changing a bend's radius is
+> *supposed* to move where a flat point ends up in 3D; that's what bending
+> is. The invariant that actually matters (AC-E.3) is whether the flat
+> layout and the 3D reconstruction agree with *each other* at a given
+> radius. Re-checked properly, live, on the same fixture
+> (`l_bracket_corner_90deg.stp`): forward/reverse round-trip error is
+> **0mm at every radius tested (0, 1, 1.5, 3mm)**. `Evaluate()`
+> (`manufacturing_graph_evaluator.cc`) already derives the flat zone width
+> and the 3D bridge from whatever radius is on a bend, together, correctly,
+> every time — it was never broken. Since `Evaluate()` is a pure function
+> of current graph state with no memory of history, this holds identically
+> whether the radius was set at import time or later via `update_node` —
+> the 2026-08-03 stamping mechanism reverted on 2026-08-07 was never
+> actually unsafe.
+>
+> **Fix**: restores substantially the 2026-08-03 mechanism (an org
+> `ManufacturingProfile.defaultBendRadiusMm`, threaded through
+> `import_part` → `reconcilePieces`, stamped onto every reconciled bend
+> *after* the r=0 self-consistency replay validates the reconciliation's
+> own topology — hinge, angle, which side is concave — none of which
+> depends on the eventual radius). `radiusMeasured` stays on `BendRow`, but
+> now purely as provenance metadata (system-default vs. human/AI-confirmed)
+> — `validation/rules/bend_radius.cc`'s `MIN_BEND_RADIUS` check no longer
+> reads it at all; a bend's actual `radiusMm` is checked uniformly
+> regardless of provenance. `BEND_RADIUS_NOT_MEASURED` is removed, not
+> repurposed — a sensible profile default now produces no finding at all,
+> and a genuinely unmanufacturable radius (defaulted or explicit) produces
+> a real `MIN_BEND_RADIUS`, because at that point it's checking an actual
+> decision against real constraints.
+>
+> This project's bug reports are a trusted record specifically because
+> they stay honest when an earlier entry turns out to be wrong — including
+> this one's own prior resolution. Earlier history (2026-08-03 through
+> 2026-08-07) kept below for context.
+>
+> **✅ RESOLVED 2026-08-07 (for real this time — see the caveat at the very
+> bottom) — SUPERSEDED, SEE ABOVE.** The 2026-08-03 fix below (stamping `profile.rules.
+> default_bend_radius_mm` onto every reconciled bend's `radiusMm`) is
+> **reverted**. It was found to have a serious, previously-unverified side
+> effect: `BottomRadiusMm`/`BendAllowanceMm`
+> (`manufacturing_graph_evaluator.cc`) use `radiusMm` to place the 3D pivot
+> axis and size the bend-zone's revolved bridge solid — not just report it.
+> Reconciliation's own self-consistency replay validates a reconciled graph
+> *only* at r=0; stamping a different radius in afterward, unvalidated,
+> meant every later read (mesh, boundary, DXF, hole positions, further
+> bends/fuses) reconstructed geometry that no longer matched the real,
+> as-scanned part.
+>
+> **Measured, empirically** (`l_bracket_corner_90deg.stp`, same flat 2D
+> shape, only `bend.radiusMm` changed 0 → 1.5 via `update_node` — no
+> re-import): a corner whose position is validated-true at r=0
+> (`x=201.5, z=-101.0`) moved to `x=203.0, z=-101.32` once the assumed
+> radius was applied — 1.53mm of silent distortion from one modest bend on
+> one fold, growing with angle/radius and compounding across multiple
+> bends. The 2026-08-03 fix traded a false-positive *validation message*
+> for a real, silent *geometry corruption* — worse, not better.
+>
+> **The actual fix** moves to the validation layer instead, where the
+> original report's own "option 2" pointed: `BendSpec`/`BendRow` gained a
+> new field, `radiusMeasured` (default `true`). `step_reconciliation.cc`
+> sets it `false` for every bend it produces (a flat-panel decomposition
+> genuinely can never measure a real fillet) and leaves `radiusMm` at
+> `0.0` permanently — the only value its own replay validates. Geometry
+> construction is unaffected by `radiusMeasured` at all; only
+> `validation/rules/bend_radius.cc`'s `MIN_BEND_RADIUS` check reads it: for
+> `radiusMeasured == false` bends it skips `MIN_BEND_RADIUS` (nothing real
+> to assert) and instead emits an advisory `BEND_RADIUS_NOT_MEASURED`
+> finding (severity `warning`) with a `recommendedFix` pointing at
+> `update_node` — preserving the DFM nudge without corrupting geometry.
+> `import_part`'s `profile` parameter is removed entirely (it no longer had
+> any effect once it stopped touching geometry). See the fix commit for the
+> full cross-language change (C++ struct/reconciliation/validation/NAPI +
+> TS types/store/evaluate-client/tools/resources + tests).
+>
+> **Caveat**: this closes the loop on the false positive without
+> corrupting geometry, but it does NOT give the client a way to record a
+> *real* confirmed bend radius from import — that still requires an
+> explicit `update_node(kind=bend, patch:{radius_mm})` call per bend after
+> import, same as before. If Form.AI.tion wants imported parts to show a
+> confirmed (not just assumed) radius automatically, that's a client-side
+> follow-up, not something this fix does on its own.
+>
+> Earlier history kept below for context.
+>
+> **🔴 REOPENED 2026-08-05.** Confirmed still reproducing in the live app
+> (Form.AI.tion, `006-manufacturing-graph-ui` branch): importing `testcube.step`
+> shows `R=0.0 mm` on every bend in the Manufacturing Graph panel, exactly the
+> original symptom.
+>
+> Root cause: the 2026-08-03 fix below only changed what `import_part`
+> *accepts* — a caller must now opt in with an explicit `profile.rules.
+> default_bend_radius_mm` for a nonzero radius to be stamped. It did not
+> change what `import_part` *does by default*, and no caller was updated to
+> actually supply one. `DEFAULT_MANUFACTURING_PROFILE.rules.
+> defaultBendRadiusMm` is still `0.0` (`ts/src/v2/graph/evaluate-client.ts:771`).
+> Form.AI.tion's `import_part` client (`lib/mcp/tools/import_part.dart`,
+> `ImportPartRequest`) has no `profile` field at all — `loadAssembly()`
+> (`lib/core/providers/mcp_session_provider.dart`) calls
+> `importPart.call(ImportPartRequest(file: filePath))` with no profile, every
+> time. So for the one real caller of this tool, behavior is provably
+> unchanged from before the fix: this was closed as "resolved" on the
+> strength of an opt-in escape hatch that nothing opts into.
+>
+> This isn't a request to re-litigate the geometry-model decision the
+> original report deliberately left open (measure a real fillet vs. assume a
+> manufacturable default vs. flag "modeled sharp" some other way) — just
+> flagging that whichever direction is chosen, closing the loop requires
+> either changing the *default* (not just what's accepted) or wiring a real
+> profile through from the client. Right now it's neither, so every import
+> still reports `radiusMm=0.0` and still trips `MIN_BEND_RADIUS`.
+>
+> Original resolution notes kept below for context.
+>
+> **✅ RESOLVED 2026-08-03.** Scoped per Paul's own steer during triage: the
+> assumed radius comes from the org's `ManufacturingProfile`
+> (`defaultBendRadiusMm`, absolute mm — the same mechanism
+> `evaluate_manufacturability`/`evaluateFindings` already uses), not a raw
+> ad-hoc tool parameter and not new settings-persistence infra.
+> `import_part` now accepts an optional `profile`, matching
+> `evaluateFindings`'s existing pattern exactly, defaulting to
+> `DEFAULT_MANUFACTURING_PROFILE` (`defaultBendRadiusMm: 0.0`, i.e. today's
+> behavior unchanged when omitted).
+>
+> **A real design bug was found while implementing this** (not in the
+> original report): `tryPivotZ`'s pivot search cannot be coupled to the
+> assumed radius — the search verifies against the piece's own TRUE
+> measured (always sharp, r=0) position, so a nonzero assumed radius would
+> make reconciliation of perfectly ordinary flush geometry spuriously fail.
+> Fixed by decoupling: the pivot search and Step 7's self-consistency
+> replay always run at r=0 (unchanged from before this fix); the profile's
+> `defaultBendRadiusMm` is stamped onto every bend in a separate pass
+> *after* that validation passes. This also fixes a second, independent bug
+> found in the same investigation: the old convex-branch value
+> (`radiusMm=thicknessMm`) never actually round-tripped through
+> `Evaluate()`'s own `BottomRadiusMm` formula (would recompute
+> `pivotZ=2×thicknessMm`, not `thicknessMm`) — silently masked by
+> `kSelfConsistencyToleranceMm`'s 2mm budget for typical thin material, but
+> a real latent defect. Both branches now agree at radiusMm=0 internally
+> before stamping.
+>
+> Verified against this report's own repro (`l_bracket_corner_90deg.stp`):
+> with no profile, `radiusMm=0.0` and `MIN_BEND_RADIUS` still trips
+> (unchanged); with `defaultBendRadiusMm=1.5`, `radiusMm=1.5` on every bend
+> and `MIN_BEND_RADIUS` passes. New C++ test confirms a nonzero default
+> doesn't perturb which pivot side reconciliation finds. Full C++ ctest (174
+> tests, same 3 pre-existing unrelated failures as baseline) and the
+> `import_part` TS integration suites pass, 0 regressions.
+
+**Status:** Resolved — see above; original report left unedited below
+**Date:** 2026-07-31
+**Component:** `cpp/src/geometry/translation/step_reconciliation.cc` (bend radius assignment,
+~line 616), interacting with the manufacturability rules engine's `MIN_BEND_RADIUS` check
+**Severity:** Medium-High (likely affects most real imported sheet-metal parts, not just
+`testcube.step` — every concave-pivot bend is guaranteed to fail this check)
+**Reported by:** Paul, from the live app — `testcube.step` shows manufacturing-error findings
+for bend radius too small on every fold.
+
+---
+
+## Summary
+
+`import_part`'s reconciliation never measures a bend's actual radius from the source STEP
+geometry. It only ever assigns one of exactly two hard-coded values, chosen by which of two
+*discrete* pivot points a fold's rigid rotation happens to fit:
+
+```cpp
+// step_reconciliation.cc:611-616
+// Radius matches the pivot: z=0 (concave, fold touches inner surface)
+// → radiusMm=0; z=thicknessMm (convex, fold offset from outer surface)
+// → radiusMm=thicknessMm. This is the geometric fold radius derived
+// from the measured piece positions, not a manufacturing constraint —
+// merge_bodies_with_bend applies its own >=thickness validation.
+bend.radiusMm = winner.bottomIsConcave ? 0.0 : thicknessMm;
+```
+
+For the (more common, in normal sheet metal) concave-pivot case, this is **always literally
+`0.0`** — never a smaller-but-nonzero measured fillet, never anything in between. Fed straight
+into the manufacturability rules engine's `MIN_BEND_RADIUS` check (any real minimum > 0mm),
+this is a **guaranteed failure for every concave-pivot bend on every import**, regardless of
+what the source part's true bend radius actually is.
+
+---
+
+## Reproduction
+
+Verified 2026-07-31 against `l_bracket_corner_90deg.stp` (a simple, stable 2-panel/1-bend
+fixture — chosen over `testcube.step` because the latter is currently hitting an unrelated,
+apparently-still-in-flux `GE_PANEL_FRAME_FAILED` face-tie-break issue on this build, see note
+at the end):
+
+```typescript
+const result = dispatchGraphTool(store, 'import_part', { file: 'l_bracket_corner_90deg.stp' });
+const full = readGraphResource(store, `graph://part/${result.part_id}/full`);
+// full.bends[0]: { radiusMm: 0.0, bottomIsConcave: true, angleDeg: -90.57... }
+// full.findings: [
+//   { code: 'MIN_BEND_RADIUS', severity: 'error',
+//     message: 'Bend ... radius 0.00 mm is below minimum 1.50 mm for this material
+//               (thickness 1.50 mm × factor 1.00)' },
+//   { code: 'MAX_BEND_ANGLE', severity: 'error',
+//     message: 'Bend ... angle -90.5701° is outside [0, 180]' },
+// ]
+```
+
+`testcube.step` (the fixture Paul actually saw this on) shows the same `MIN_BEND_RADIUS`
+pattern per the live app screenshot — same root cause, `radiusMm=0.0` on its concave-pivot
+folds.
+
+(The `MAX_BEND_ANGLE` finding alongside it looks like a separate, second issue — the angle
+convention producing a negative value outside the validated `[0, 180]` range — not investigated
+here since it wasn't what was asked about, flagging only so it's not mistaken for a
+side-effect of the radius fix.)
+
+---
+
+## Analysis — two possible readings, not distinguished here
+
+1. **The source STEP geometry genuinely has a sharp, zero-radius fold** (hand-modeled without a
+   fillet) — in which case `MIN_BEND_RADIUS` is arguably doing its job correctly: a truly sharp
+   crease isn't press-brake-manufacturable without *some* finite radius, and this is a real,
+   legitimate finding about the fixture as modeled.
+2. **The source geometry has a real, small fillet that the reconciliation can't see** — the fold
+   detector (`tryPivotZ`) only ever tests two *discrete* candidate pivots (z=0 or
+   z=thicknessMm), never fits or measures an actual intermediate radius from the piece
+   geometry. Any real fillet, however small, either gets silently collapsed to one of those two
+   exact values or (if neither pivot fits within tolerance) rejected entirely as
+   `kNonDevelopableFold` ("likely a curved/filleted fold, out of this slice's scope" — the
+   function's own comment, a few lines above the radius assignment). Genuine intermediate
+   radii are explicitly out of scope for this reconciliation model today.
+
+Either way, the practical consequence is the same: **every concave-pivot bend produced by
+`import_part` today reports `radiusMm=0.0` unconditionally** — not a measured "this part
+happens to have a sharp fold," but a structural fact of how this code works, for every part,
+every time. Whether that's individually correct per-fixture (reading 1) or systematically
+wrong (reading 2), the *validation* side treating it as a confirmed physical measurement
+rather than "this reconciliation model doesn't represent radius on this axis at all" seems
+worth reconsidering regardless of which reading applies to any given fixture.
+
+---
+
+## Impact
+
+- `MIN_BEND_RADIUS` will fire on essentially every imported part with a normal (concave)
+  fold direction — likely the majority of real sheet-metal imports, not an edge case specific
+  to `testcube.step`.
+- Makes the finding non-actionable as a DFM signal in its current form: the user has no way to
+  distinguish "your part genuinely has an unmanufacturable sharp crease" from "the importer
+  doesn't track radius on this fold direction at all."
+
+---
+
+## Possible directions (not proposing a specific fix — geometry-model decision)
+
+- Actually measure/fit a fold radius from the source geometry rather than only testing the two
+  discrete z=0/z=thickness pivots (the harder, more correct option — extends the reconciliation
+  model's scope, ties into the same "curved/filleted fold" gap already called out as
+  out-of-scope).
+- Or, keep the current sharp-fold-only model but stop feeding its placeholder `radiusMm=0.0`
+  into `MIN_BEND_RADIUS` as if it were a real measurement — e.g. a flag on reconciliation-
+  derived bends distinguishing "measured" from "modeled as sharp by construction," and either
+  skip the check or phrase the finding differently for those.
+- Or (least invasive, matches the fuse-tolerance fix's spirit): default concave-pivot radius to
+  something manufacturable (e.g. `thicknessMm`, same as the convex branch already does) instead
+  of `0.0`, on the assumption that a truly-intended-as-sharp fold is rare and most real parts
+  should be treated as needing *some* finite tooling radius unless explicitly authored otherwise.
+
+Flagging the tradeoff rather than picking one — this changes what the reconciliation claims to
+know about a fold's true radius, which seems like a call for whoever owns the manufacturability
+rules/reconciliation model design, not something to guess at here.
+
+---
+
+## Note: `testcube.step` currently also hits an unrelated import failure
+
+While reproducing, `testcube.step` itself failed to import at all on the current build with
+`GE_PANEL_FRAME_FAILED: getPanelFrame: 3 distinct candidate faces tie on extent ... and are
+also tied on outwardness ... refusing to guess` — appears related to very recent, still-
+uncommitted work in `cpp/src/geometry_service_shell.cc` and the recent
+`0187a08 fix: getPanelFrame face-selection tie-break` commit. Not the subject of this report
+(used `l_bracket_corner_90deg.stp` instead, which reproduces the same `MIN_BEND_RADIUS` pattern
+cleanly) — mentioning only so it isn't mistaken for a consequence of anything above, in case
+it's still being actively worked on.
+
+---
+
+## Links
+
+- Radius assignment: `cpp/src/geometry/translation/step_reconciliation.cc:568-616`
+  (`tryPivotZ`, the `bend.radiusMm = winner.bottomIsConcave ? 0.0 : thicknessMm` line)
+- `kNonDevelopableFold` (the "curved/filleted fold, out of scope" rejection path):
+  same file, ~line 590
+- `MIN_BEND_RADIUS` rule: C++ validation module (`cpp/src/geometry/validation/`, per the
+  manufacturability-rules-engine commit `73c7501`)
+- Fixture used for repro: `cpp/tests/fixtures/l_bracket_corner_90deg.stp`

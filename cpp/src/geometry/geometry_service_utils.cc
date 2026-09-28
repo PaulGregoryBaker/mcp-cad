@@ -26,6 +26,7 @@
 #include <functional>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <random>
 #include <set>
 #include <sstream>
@@ -617,6 +618,129 @@ SheetMetalValidationResult validateSheetMetalShape(const TopoDS_Shape& shape) {
     result.validationErrors.push_back("OCCT validation exception: " + std::string(e.GetMessageString()));
   }
 
+  return result;
+}
+
+// Dominant Face Method: the panel's thickness is the perpendicular distance
+// between its single largest planar face and that face's closest anti-
+// parallel, overlapping partner. Unlike validateSheetMetalShape's area-
+// weighted average across EVERY matched face pair in the shape, this looks at
+// exactly one pair — the dominant skin — so it can't be pulled off by a
+// secondary match (e.g. a small sliver face left behind where a panel was
+// split from a neighbor at a bend, which legitimately has its own much
+// smaller anti-parallel pair). No assumption is made about the panel's
+// orientation: the search is done in the dominant face's own normal
+// direction, so a rotated part measures identically to an axis-aligned one.
+//
+// Scoped to a SINGLE, ISOLATED panel/protrusion shell (i.e. call this after
+// splitting a part into its individual panels, not on the whole multi-panel
+// assembly beforehand). The overlap check alone cannot distinguish "this
+// face's own other skin" from "an unrelated internal structure that happens
+// to sit directly behind it at a different depth" — e.g. a recessed internal
+// plate a few mm beneath an outer wall, in an assembly with several
+// panels — both are anti-parallel and equally well-overlapping, just at
+// different distances. That ambiguity only disappears once each panel is its
+// own isolated shell with nothing else nearby to confuse the match.
+PanelThicknessResult measurePanelThickness(const TopoDS_Shape& shape) {
+  PanelThicknessResult result;
+
+  struct PlaneFaceInfo {
+    TopoDS_Face face;
+    double      area;
+    gp_Pnt      center;
+    gp_Vec      normal;
+  };
+
+  std::vector<PlaneFaceInfo> planeInfos;
+  for (TopExp_Explorer faceExp(shape, TopAbs_FACE); faceExp.More(); faceExp.Next()) {
+    const TopoDS_Face& face = TopoDS::Face(faceExp.Current());
+    Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
+    if (surf.IsNull() || !surf->IsKind(STANDARD_TYPE(Geom_Plane))) continue;
+
+    GProp_GProps fp;
+    BRepGProp::SurfaceProperties(face, fp);
+
+    PlaneFaceInfo info;
+    info.face   = face;
+    info.area   = fp.Mass();
+    info.center = faceCenter(face);
+    info.normal = faceOutwardNormal(face);
+    planeInfos.push_back(info);
+  }
+
+  if (planeInfos.empty()) {
+    result.errorCode = "GE_PANEL_NO_FLAT_FACES";
+    result.message   = "Shape has no planar faces.";
+    return result;
+  }
+
+  // The dominant face anchors the search — found by largest area, not by
+  // insertion order, so face-enumeration order from OCCT can't matter.
+  size_t dominantIdx = 0;
+  for (size_t i = 1; i < planeInfos.size(); ++i) {
+    if (planeInfos[i].area > planeInfos[dominantIdx].area) dominantIdx = i;
+  }
+  const PlaneFaceInfo& dominant = planeInfos[dominantIdx];
+
+  // Among anti-parallel, overlapping candidates, the TRUE thickness partner
+  // is always the CLOSEST one — not the largest-area one. This matters for a
+  // multi-wall assembly (e.g. a hollow box measured before being split into
+  // its individual panels): the box's FAR, opposite wall is also anti-
+  // parallel to the dominant face and can have a near-identical 2D footprint
+  // (a box's +X and -X walls share the same Y/Z extent), so an area-based
+  // score alone can't tell "this wall's own other skin" apart from "the far
+  // side of the box". Thickness is by definition the smallest such gap.
+  int    bestPartner = -1;
+  double bestDist    = std::numeric_limits<double>::max();
+  for (size_t j = 0; j < planeInfos.size(); ++j) {
+    if (j == dominantIdx) continue;
+
+    double dot = dominant.normal.Dot(planeInfos[j].normal);
+    if (dot >= -0.95) continue;  // not anti-parallel to the dominant face
+
+    gp_Vec diff(dominant.center, planeInfos[j].center);
+    double dist = std::abs(diff.Dot(dominant.normal));
+    if (dist < 1e-6) continue;  // degenerate/coincident
+
+    // Overlap check: the candidate's center, projected onto the dominant
+    // face's plane, must land close to the dominant face's own footprint —
+    // otherwise it's some unrelated anti-parallel face elsewhere on the part.
+    gp_Vec proj = diff - dominant.normal * diff.Dot(dominant.normal);
+    double projDist = proj.Magnitude();
+    double overlapThreshold = 2.0 * std::sqrt(dominant.area + planeInfos[j].area);
+    if (projDist >= overlapThreshold) continue;
+
+    // Area check: the TRUE other side of the dominant face's own main skin
+    // has comparable area to the dominant face itself (it's the same panel,
+    // viewed from the other side). A small local notch or recess — e.g. left
+    // behind where an attached feature (a flange) was split away from this
+    // panel — can be anti-parallel, well-overlapping, AND closer than the
+    // panel's real thickness, but its area is a small fraction of the
+    // dominant face's. Without this, "closest wins" picks that notch instead
+    // of the real thickness.
+    if (planeInfos[j].area < 0.5 * dominant.area) continue;
+
+    if (dist < bestDist) {
+      bestDist    = dist;
+      bestPartner = static_cast<int>(j);
+    }
+  }
+
+  if (bestPartner == -1) {
+    result.errorCode = "GE_PANEL_NO_PARALLEL_PAIR";
+    result.message   = "No anti-parallel partner face found for the dominant face.";
+    return result;
+  }
+
+  const double dominantOffset = gp_Vec(dominant.center.XYZ()).Dot(dominant.normal);
+  const double partnerOffset  = gp_Vec(planeInfos[bestPartner].center.XYZ()).Dot(dominant.normal);
+
+  result.ok               = true;
+  result.thicknessMm      = bestDist;
+  result.midplaneOffsetMm = (dominantOffset + partnerOffset) / 2.0;
+  result.dominantNormalX  = dominant.normal.X();
+  result.dominantNormalY  = dominant.normal.Y();
+  result.dominantNormalZ  = dominant.normal.Z();
   return result;
 }
 

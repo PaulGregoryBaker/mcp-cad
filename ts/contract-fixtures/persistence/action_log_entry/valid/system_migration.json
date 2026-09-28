@@ -1,0 +1,12 @@
+{
+  "seq": 4,
+  "at": "2026-09-27T12:01:00.000Z",
+  "actor_kind": "system",
+  "actor_id": "system",
+  "tool": "migrate",
+  "delta_summary": {
+    "from": 2,
+    "to": 3
+  },
+  "undone": false
+}

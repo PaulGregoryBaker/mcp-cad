@@ -5,12 +5,14 @@
  */
 
 #include <napi.h>
-#include "geometry_binding.cc"  // Include directly for single-TU NAPI build
+#include "geometry_binding.cc"      // Include directly for single-TU NAPI build
+#include "translation_binding.cc"   // Include directly for single-TU NAPI build
 
 namespace mcp_cad {
 
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
   RegisterGeometryMethods(env, exports);
+  RegisterTranslationMethods(env, exports);
   return exports;
 }
 

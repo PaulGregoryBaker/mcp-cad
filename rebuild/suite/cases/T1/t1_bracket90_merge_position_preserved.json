@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "0.1",
+  "id": "t1-bracket90-merge-position-preserved",
+  "title": "T1: l_bracket 90° two-panel merge — pre-merge mapped positions unchanged after merge",
+  "level": "C",
+  "tier": "T1",
+  "inventory": ["C03"],
+  "toleranceProfile": "default",
+  "expectation": "pass",
+  "fixture": { "kind": "step", "path": "cpp/tests/fixtures/l_bracket_corner_90deg.stp" },
+  "params": { "$harvests": "merge_orientation_preserved intent, upgraded from bbox to mapped-position probes (L4)" },
+  "ops": [
+    { "op": "import", "path": "cpp/tests/fixtures/l_bracket_corner_90deg.stp" },
+    { "op": "decompose" },
+    { "op": "merge_pair" }
+  ],
+  "oracles": [
+    {
+      "type": "position_preserved",
+      "budgetKey": "probeMm",
+      "$semantics": "Sample grid points on each panel pre-merge via map_2d_to_3d; after the merge the same 3D points must still lie on the composite (map_3d_to_2d succeeds, error_mm ≤ budget) and roundtrip back within budget."
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
-// NOTE: Multi-project test layers (unit/contract/integration/e2e) are defined in
+// NOTE: Multi-project test layers (unit/contract/v2) are defined in
 // vitest.workspace.ts via defineWorkspace(), not here. vitest@1.6.1 (the version
 // pinned in package.json/installed in node_modules) has no `test.projects` config
 // key — that API was added in a later Vitest major version. Each workspace entry
@@ -13,7 +13,7 @@ export default defineConfig({
       reporter: ['text', 'json', 'html', 'lcov'],
       reportsDirectory: './coverage',
       include: ['src/**/*.ts'],
-      exclude: ['src/**/*.d.ts', 'dist/**', 'src/index.ts'],
+      exclude: ['src/**/*.d.ts', 'dist/**'],
       thresholds: {
         global: {
           lines: 85,

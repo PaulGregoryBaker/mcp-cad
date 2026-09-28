@@ -1,0 +1,115 @@
+{
+  "part": {
+    "partId": "00000000-0000-4000-8000-000000000001",
+    "name": "Bracket",
+    "rootRegionPanelId": "00000000-0000-4000-8000-000000000010",
+    "outline": [
+      {
+        "x": 0,
+        "y": 0
+      },
+      {
+        "x": 100,
+        "y": 0
+      },
+      {
+        "x": 100,
+        "y": 60
+      },
+      {
+        "x": 0,
+        "y": 60
+      }
+    ],
+    "holes": [
+      {
+        "kind": "circle",
+        "holeId": "00000000-0000-4000-8000-000000000030",
+        "center": {
+          "x": 20,
+          "y": 20
+        },
+        "radiusMm": 4
+      },
+      {
+        "kind": "polygon",
+        "holeId": "00000000-0000-4000-8000-000000000031",
+        "ring": [
+          {
+            "x": 50,
+            "y": 10
+          },
+          {
+            "x": 50,
+            "y": 20
+          },
+          {
+            "x": 60,
+            "y": 20
+          }
+        ]
+      }
+    ],
+    "anchor": {
+      "r": [
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1
+      ],
+      "t": [
+        0,
+        0,
+        0
+      ]
+    },
+    "materialId": "mildSteel",
+    "thicknessMm": 2,
+    "kFactor": 0.33,
+    "schemaVersion": "0.1",
+    "mergedIntoPartId": null
+  },
+  "regionPanels": [
+    {
+      "regionPanelId": "00000000-0000-4000-8000-000000000010",
+      "partId": "00000000-0000-4000-8000-000000000001",
+      "label": "root",
+      "kFactorOverride": null,
+      "mergedIntoRegionPanelId": null
+    },
+    {
+      "regionPanelId": "00000000-0000-4000-8000-000000000011",
+      "partId": "00000000-0000-4000-8000-000000000001",
+      "label": "flange",
+      "kFactorOverride": 0.4,
+      "mergedIntoRegionPanelId": null
+    }
+  ],
+  "bends": [
+    {
+      "bendId": "00000000-0000-4000-8000-000000000020",
+      "partId": "00000000-0000-4000-8000-000000000001",
+      "parentRegionPanelId": "00000000-0000-4000-8000-000000000010",
+      "childRegionPanelId": "00000000-0000-4000-8000-000000000011",
+      "hingeA": {
+        "x": 0,
+        "y": 40
+      },
+      "hingeB": {
+        "x": 100,
+        "y": 40
+      },
+      "angleDeg": 90,
+      "radiusMm": 2,
+      "kFactorOverride": null,
+      "bottomIsConcave": null,
+      "radiusMeasured": true,
+      "bendProcess": "airBend"
+    }
+  ]
+}

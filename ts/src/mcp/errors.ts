@@ -1,6 +1,7 @@
 /**
  * Structured error model for MCP-CAD.
- * All tool errors return { code, message, recoverable, suggested_tool }.
+ * All tool errors return { code, title, message, recoverable, options,
+ * suggestedTool? } — see StructuredError / ErrorOption below.
  * Constitution Principle VI: no unstructured throws reach the MCP boundary.
  *
  * Task: T037
@@ -22,6 +23,11 @@ export const ErrorCodes = {
   GE_UNFOLD_FAILED: 'GE_UNFOLD_FAILED',
   GE_RELIEF_FAILED: 'GE_RELIEF_FAILED',
   GE_NEST_FAILED: 'GE_NEST_FAILED',
+
+  // Nesting errors (rebuild/21-nesting-libnest2d.md)
+  NEST_INVALID_INPUT: 'NEST_INVALID_INPUT',
+  NEST_INVALID_CUTTING_WIDTH: 'NEST_INVALID_CUTTING_WIDTH',
+  NEST_PART_EXCEEDS_SHEET: 'NEST_PART_EXCEEDS_SHEET',
   GE_SNAPSHOT_NOT_FOUND: 'GE_SNAPSHOT_NOT_FOUND',
   GE_RESTORE_FAILED: 'GE_RESTORE_FAILED',
 
@@ -113,6 +119,42 @@ export const ErrorCodes = {
   SEMANTIC_CONSTITUENT_NOT_FOUND: 'SEMANTIC_CONSTITUENT_NOT_FOUND',
   REVISION_NOT_FOUND: 'REVISION_NOT_FOUND',
 
+  // Graph persistence, storage accounts and versioning (spec 010-dolt-graph-persistence)
+  STORAGE_ACCOUNT_UNKNOWN: 'STORAGE_ACCOUNT_UNKNOWN',
+  STORAGE_ACCOUNT_UNREACHABLE: 'STORAGE_ACCOUNT_UNREACHABLE',
+  STORAGE_AUTH_FAILED: 'STORAGE_AUTH_FAILED',
+  STORAGE_SECRET_UNRESOLVED: 'STORAGE_SECRET_UNRESOLVED',
+  STORAGE_CONFIG_INVALID: 'STORAGE_CONFIG_INVALID',
+  PROJECT_DATABASE_EXISTS: 'PROJECT_DATABASE_EXISTS',
+  PROJECT_DATABASE_NAME_INVALID: 'PROJECT_DATABASE_NAME_INVALID',
+  PROJECT_DATABASE_NOT_FOUND: 'PROJECT_DATABASE_NOT_FOUND',
+  PERSIST_NOT_BOUND: 'PERSIST_NOT_BOUND',
+  PERSIST_PROJECT_OPEN: 'PERSIST_PROJECT_OPEN',
+  PERSIST_ON_MAIN: 'PERSIST_ON_MAIN',
+  PERSIST_READ_ONLY_REF: 'PERSIST_READ_ONLY_REF',
+  PERSIST_WRITE_FAILED: 'PERSIST_WRITE_FAILED',
+  PERSIST_CORRUPT_ROW: 'PERSIST_CORRUPT_ROW',
+  PERSIST_INVARIANT_VIOLATION: 'PERSIST_INVARIANT_VIOLATION',
+  PERSIST_SCHEMA_UNSUPPORTED: 'PERSIST_SCHEMA_UNSUPPORTED',
+  PERSIST_SCHEMA_MISMATCH: 'PERSIST_SCHEMA_MISMATCH',
+  PERSIST_MIGRATION_FAILED: 'PERSIST_MIGRATION_FAILED',
+  BRANCH_ALREADY_OPEN: 'BRANCH_ALREADY_OPEN',
+  BRANCH_NONE_OPEN: 'BRANCH_NONE_OPEN',
+  BRANCH_MERGE_CONFLICT: 'BRANCH_MERGE_CONFLICT',
+  COMMIT_NOTHING_TO_COMMIT: 'COMMIT_NOTHING_TO_COMMIT',
+  COMMIT_UNCOMMITTED_CHANGES: 'COMMIT_UNCOMMITTED_CHANGES',
+  UNDO_NOTHING_UNCOMMITTED: 'UNDO_NOTHING_UNCOMMITTED',
+  UNDO_BLOCKED_BY_MIGRATION: 'UNDO_BLOCKED_BY_MIGRATION',
+  SETTINGS_INVALID: 'SETTINGS_INVALID',
+  // Configured import (spec 010 US3/US5)
+  IMPORT_FILE_NOT_FOUND: 'IMPORT_FILE_NOT_FOUND',
+  IMPORT_READ_FAILED: 'IMPORT_READ_FAILED',
+  PREVIEW_EXPIRED: 'PREVIEW_EXPIRED',
+  IMPORT_DEFAULTS_MISSING: 'IMPORT_DEFAULTS_MISSING',
+  IMPORT_THICKNESS_NOT_IN_CATALOGUE: 'IMPORT_THICKNESS_NOT_IN_CATALOGUE',
+  IMPORT_SOURCE_MISSING: 'IMPORT_SOURCE_MISSING',
+  IMPORT_SOURCE_NOT_FOUND: 'IMPORT_SOURCE_NOT_FOUND',
+
   // Manufacturing Graph errors (Feature 009-manufacturing-graph)
   NODE_ID_ALREADY_EXISTS: 'NODE_ID_ALREADY_EXISTS',
   NODE_NOT_FOUND: 'NODE_NOT_FOUND',
@@ -146,6 +188,150 @@ export const ErrorCodes = {
   // Feature 012-accurate-coord-mapping
   GE_PANEL_FRAME_FAILED: 'GE_PANEL_FRAME_FAILED',
 
+  // Phase 5 Slice 1 — v2 graph-authored construction. The GE_* codes below are
+  // verbatim string matches for translation::EvaluateErrorCode /
+  // ConstructPartSolidResult.errorCode (manufacturing_graph_evaluator.hpp,
+  // part_solid_construction.hpp) — passed through unchanged, never re-derived,
+  // so there is exactly one place each code's meaning is defined (the C++
+  // header comments). The GRAPH_* codes are this store's own (ts/src/v2/graph).
+  GE_TREE_CYCLE_DETECTED: 'GE_TREE_CYCLE_DETECTED',
+  GE_BEND_SELF_REFERENCE: 'GE_BEND_SELF_REFERENCE',
+  GE_DANGLING_BEND_REFERENCE: 'GE_DANGLING_BEND_REFERENCE',
+  GE_REGION_CLIP_FAILED: 'GE_REGION_CLIP_FAILED',
+  GE_DEGENERATE_OUTLINE: 'GE_DEGENERATE_OUTLINE',
+  GE_INVALID_LAYOUT: 'GE_INVALID_LAYOUT',
+  GE_EMPTY_LAYOUT: 'GE_EMPTY_LAYOUT',
+  GE_POLYGON_BUILD_FAILED: 'GE_POLYGON_BUILD_FAILED',
+  // Phase 5 Slice 6 (fuse_bodies / remove_protrusions polygon_boolean.hpp).
+  GE_POLYGON_BOOLEAN_FAILED: 'GE_POLYGON_BOOLEAN_FAILED',
+  GE_POLYGON_HAS_HOLES: 'GE_POLYGON_HAS_HOLES',
+  GE_EXTRUDE_FAILED: 'GE_EXTRUDE_FAILED',
+  GE_BRIDGE_EDGE_NOT_FOUND: 'GE_BRIDGE_EDGE_NOT_FOUND',
+  GE_BRIDGE_UNSUPPORTED_TOPOLOGY: 'GE_BRIDGE_UNSUPPORTED_TOPOLOGY',
+  GE_BRIDGE_BUILD_FAILED: 'GE_BRIDGE_BUILD_FAILED',
+  GE_CONSTRUCTION_FAILED: 'GE_CONSTRUCTION_FAILED',
+  GRAPH_PART_NOT_FOUND: 'GRAPH_PART_NOT_FOUND',
+  GRAPH_REGION_PANEL_NOT_FOUND: 'GRAPH_REGION_PANEL_NOT_FOUND',
+  GRAPH_REGION_PANEL_ALIASED: 'GRAPH_REGION_PANEL_ALIASED',
+  // Phase 5 Slice 4: a part already absorbed by a prior merge_bodies_with_bend
+  // (mergedIntoPartId != null) can't be a merge participant again — mirrors
+  // GRAPH_REGION_PANEL_ALIASED one level up.
+  GRAPH_PART_ALIASED: 'GRAPH_PART_ALIASED',
+  // Phase 5 Slice 6: fuse_bodies' first-cut scope guard — part B must be a
+  // simple flat part (no bends of its own) to be fused onto another part.
+  // See rebuild/06-plan.md Slice 6's own deferred-scope note.
+  GRAPH_FUSE_PART_B_NOT_SIMPLE: 'GRAPH_FUSE_PART_B_NOT_SIMPLE',
+  // Phase 5 Slice 8: Graph CRUD completion (delete_node(kind=bend) = the
+  // panel-level merge, 14 §2.1.1; move_edge's vertex_range bounds check).
+  GRAPH_BEND_NOT_FOUND: 'GRAPH_BEND_NOT_FOUND',
+  GRAPH_INVALID_VERTEX_RANGE: 'GRAPH_INVALID_VERTEX_RANGE',
+  // split_part_at_bend: the given bend doesn't belong to the given part.
+  GRAPH_SPLIT_BEND_NOT_ON_PART: 'GRAPH_SPLIT_BEND_NOT_ON_PART',
+  // split_part_at_bend's first-cut scope: a part with holes isn't split yet
+  // (which side a hole belongs to after the cut isn't resolved) — same
+  // deferred-scope discipline as GRAPH_FUSE_PART_B_NOT_SIMPLE above.
+  GRAPH_SPLIT_HOLES_NOT_SUPPORTED: 'GRAPH_SPLIT_HOLES_NOT_SUPPORTED',
+  // Phase 5 Slice 9a: cut_panel — a candidate hole (circle or polygon) does
+  // not fit fully within any live region panel (cut_panel.hpp).
+  GE_CUT_HOLE_NOT_CONTAINED: 'GE_CUT_HOLE_NOT_CONTAINED',
+
+  // Phase 5 Slice 3 — point mapping (rebuild/13-translation-module-design.md §4/§5).
+  // Verbatim string matches for translation::MapErrorCode, same convention as
+  // the Slice 1 GE_* codes above.
+  GE_POINT_NOT_ON_PART: 'GE_POINT_NOT_ON_PART',
+
+  // Phase 5 Slice 4 — merge_bodies_with_bend (rebuild/14-graph-schema.md §2.1.2).
+  // Verbatim string matches for translation::MergeErrorCode
+  // (part_merge.hpp). Deliberately distinct from v1's similarly-named
+  // GE_MERGE_EDGE_MISALIGNED/GE_POINT_NOT_ON_PANEL above — same precedent as
+  // Slice 3's GE_POINT_NOT_ON_PART: a new module gets its own code rather
+  // than reusing a v1 code whose exact semantics/threshold belong to a
+  // different implementation. GE_INVALID_EDGE_REF is still used by
+  // resolveFreeEdge (close_gap, split_part_at_bend) — those tools still take
+  // caller-supplied edge refs; only merge_bodies_with_bend moved off them
+  // (docs/TASK_SPEC.md). GE_MERGE_EDGE_MISMATCH is retired — an unequal-length
+  // seam is a supported case now (TASK_SPEC.md F3), not a rejection.
+  GE_INVALID_EDGE_REF: 'GE_INVALID_EDGE_REF',
+  GE_MERGE_NO_CONTACT: 'GE_MERGE_NO_CONTACT',
+  GE_MERGE_COPLANAR_SEAM: 'GE_MERGE_COPLANAR_SEAM',
+  GE_MERGE_SELF_INTERSECTION: 'GE_MERGE_SELF_INTERSECTION',
+  GE_MERGE_INTERNAL_INCONSISTENCY: 'GE_MERGE_INTERNAL_INCONSISTENCY',
+  // detectContact now returns EVERY real contact region across every panel
+  // pair (rebuild live-app regression 2026-09-22 — a part with bends can
+  // genuinely touch another part along more than one seam at once). More
+  // than one region with no caller-supplied disambiguation is an ambiguity,
+  // not a default to silently resolve (No-Fallback rule) — the caller must
+  // pick one via region_panel_id_a/region_panel_id_b.
+  GE_MERGE_AMBIGUOUS_CONTACT: 'GE_MERGE_AMBIGUOUS_CONTACT',
+
+  // split_part_at_bend — the graph-level inverse of merge_bodies_with_bend,
+  // within one part (part_split.hpp). Verbatim string matches for
+  // translation::SplitErrorCode.
+  GE_SPLIT_HINGE_NOT_GROUNDED: 'GE_SPLIT_HINGE_NOT_GROUNDED',
+  GE_SPLIT_CORNER_ZONE_NOT_GROUNDED: 'GE_SPLIT_CORNER_ZONE_NOT_GROUNDED',
+  // childHintPoint (evaluate-client.ts's own centroid of the child region
+  // panel's true rawOuter) wasn't found inside either of this split's two
+  // candidate 2D chains — fails typed rather than silently guessing which
+  // side is really the child (part_split.hpp's own childHintPoint doc
+  // comment). A simple vertex-average centroid isn't guaranteed interior
+  // for every possible (non-convex) real panel shape; this is the backstop
+  // for when it isn't.
+  GE_SPLIT_CHILD_HINT_POINT_AMBIGUOUS: 'GE_SPLIT_CHILD_HINT_POINT_AMBIGUOUS',
+  // A DIFFERENT failure than the two codes above (which are part_split.cc's
+  // own 2D cut failing to ground THIS bend's hinge) — this one fires when
+  // the 2D cut itself succeeds, but leaves a DIFFERENT, still-live bend on
+  // one of the two resulting parts unable to ground its own zone against
+  // the reshaped outline (live-app regression 2026-09-16, cauldron.step: a
+  // narrow panel sandwiched between two bends — removing one via
+  // split_part_at_bend can leave the other's own zone ungroundable).
+  // part_split.hpp cuts one bend at a time with no knowledge of any other
+  // bend on the same ring (its own header comment) — this code is the
+  // safety net: never silently hand back a part that constructPartSolid
+  // would immediately fail on (GE_BRIDGE_EDGE_NOT_FOUND) with no warning.
+  GE_SPLIT_RESULT_NOT_CONSTRUCTIBLE: 'GE_SPLIT_RESULT_NOT_CONSTRUCTIBLE',
+
+  // split_body_by_plane (Phase 5 Slice 9b) — a distinct tool from
+  // split_part_at_bend above; own code rather than reusing GE_SPLIT_FAILED
+  // or either GE_SPLIT_* code above, which belong to that different
+  // implementation (same discipline as GE_INVALID_EDGE_REF's own doc
+  // comment). Thrown when the plane doesn't touch the part at all — every
+  // panel landed entirely on one side, so there is nothing to split.
+  GE_SPLIT_BY_PLANE_NO_INTERSECTION: 'GE_SPLIT_BY_PLANE_NO_INTERSECTION',
+
+  // Phase 5 Slice 5 — ingest STEP -> graph (rebuild/13-translation-module-
+  // design.md §6). Verbatim string matches for translation::ReconcileErrorCode
+  // (step_reconciliation.hpp).
+  GE_TOO_FEW_PIECES: 'GE_TOO_FEW_PIECES',
+  GE_DISCONNECTED_PIECES: 'GE_DISCONNECTED_PIECES',
+  // Named IMPORT_NOT_DEVELOPABLE in 15-mcp-contract.md's error taxonomy —
+  // shipped as GE_NON_DEVELOPABLE_FOLD instead, matching the GE_* naming
+  // convention every other error in this Slice 5 block uses (verbatim
+  // strings from step_reconciliation.hpp's ReconcileErrorCode). Naming
+  // drift only, not a behavior gap — left as-is rather than renamed, since
+  // this code is already shipped/tested and renaming now is pure churn.
+  GE_NON_DEVELOPABLE_FOLD: 'GE_NON_DEVELOPABLE_FOLD',
+  GE_RECONCILE_SELF_INTERSECTION: 'GE_RECONCILE_SELF_INTERSECTION',
+  // Caught by replaying the reconciled graph through the REAL Evaluate()
+  // pose chain, not just the reconciliation module's own math — catches
+  // input pieces that are each individually well-formed but mutually
+  // inconsistent about which physical surface they reference (found in
+  // practice: a bottom/top surface mismatch between getPanelFrame calls
+  // for different panels of the same decomposed part).
+  GE_DOWNSTREAM_POSE_MISMATCH: 'GE_DOWNSTREAM_POSE_MISMATCH',
+  // import_part's own orchestration-level errors (not from the pure
+  // reconciliation module itself — these cover the kernel-measurement steps
+  // around it: nothing survived removeProtrusions'/splitBodyByBends'
+  // panel classification, or the file path itself doesn't exist/isn't STEP).
+  GE_IMPORT_NO_PANELS_FOUND: 'GE_IMPORT_NO_PANELS_FOUND',
+
+  // v2 MCP-boundary schema validation (rebuild's "sending/receiving evaluate
+  // against the schema" pass). INVALID_TOOL_ARGS: a tool call's args failed
+  // its Zod schema (ts/src/v2/schemas/tools.ts) — the caller's mistake,
+  // recoverable. There is no equivalent "resource shape is wrong" code:
+  // that's this server's own bug, not the caller's, so it surfaces as
+  // INTERNAL_ERROR instead (see readGraphResource).
+  INVALID_TOOL_ARGS: 'INVALID_TOOL_ARGS',
+
   // Internal errors
   INTERNAL_ERROR: 'INTERNAL_ERROR',
 } as const;
@@ -154,11 +340,81 @@ export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
 
 // ─── Structured error type ───────────────────────────────────────────────────
 
+/**
+ * One self-contained way out of an error, offered to the user as a button.
+ * `display` is everything the user sees; `call` is exactly what runs when they
+ * pick it. A client executes `call` verbatim — it never patches or rebuilds
+ * the arguments, and needs no knowledge of the error code that produced it.
+ *
+ * Rules (enforced by tests/contracts/mcp-errors.contract.test.ts):
+ * - `call.tool` must be a real, registered MCP tool.
+ * - `call.arguments` is complete: every original argument echoed back, plus
+ *   whatever resolves the error.
+ * - Options on one error are alternatives — the user picks at most one.
+ * - Viewport hints live only in `display.highlight`, never in `arguments`.
+ */
+export interface ErrorOption {
+  /** Stable within this error, e.g. "contact-0". */
+  id: string;
+  display: {
+    button_text: string;
+    description: string;
+    style: 'primary' | 'secondary' | 'destructive';
+    /** When present, the client asks the user this before running `call`. */
+    confirm?: string;
+    /** Shown in the viewport while this option's button is hovered/focused. */
+    highlight?: {
+      part_ids?: string[];
+      region_panel_ids?: string[];
+      /** Polylines in world millimetres, one per highlighted edge/seam. */
+      edges_world_mm?: [number, number, number][][];
+    };
+  };
+  call: {
+    tool: string;
+    arguments: Record<string, unknown>;
+  };
+}
+
 export interface StructuredError {
   code: ErrorCode;
+  /** Short, user-facing heading — defaults to a humanised `code`. */
+  title: string;
   message: string;
   recoverable: boolean;
+  /** Always present; empty when there is nothing to offer. */
+  options: ErrorOption[];
   suggestedTool?: string;
+  /**
+   * Machine-readable context (e.g. invariant violations, the table/key of a
+   * corrupt row). Present only when a thrower supplies it. Always passed
+   * through redactSecrets() at the MCP boundary (spec 010, R-014).
+   */
+  details?: Record<string, unknown>;
+}
+
+/** Optional extras for makeError/throwError beyond the positional basics. */
+export interface ErrorExtras {
+  title?: string;
+  options?: ErrorOption[];
+  details?: Record<string, unknown>;
+}
+
+/**
+ * Default card title for a code: drops the domain prefix and sentence-cases
+ * the rest ("GE_MERGE_AMBIGUOUS_CONTACT" -> "Merge ambiguous contact"). Every
+ * error gets a title without touching each of the ~130 throw sites; the ones
+ * that matter to users pass a real one via ErrorExtras.
+ */
+export function defaultErrorTitle(code: string): string {
+  const words = code
+    .replace(/^(GE|MD|ACL|NEST|GRAPH|MFG|CONFIG|EXPORT)_/, '')
+    .toLowerCase()
+    .split('_')
+    .filter((w) => w.length > 0);
+  if (words.length === 0) return 'Error';
+  const text = words.join(' ');
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 // ─── McpToolError — carries a StructuredError as a thrown object ──────────────
@@ -180,8 +436,18 @@ export function makeError(
   message: string,
   recoverable: boolean,
   suggestedTool?: string,
+  extras: ErrorExtras = {},
 ): StructuredError {
-  return { code, message, recoverable, suggestedTool };
+  const err: StructuredError = {
+    code,
+    title: extras.title ?? defaultErrorTitle(code),
+    message,
+    recoverable,
+    options: extras.options ?? [],
+    suggestedTool,
+  };
+  if (extras.details !== undefined) err.details = extras.details;
+  return err;
 }
 
 export function throwError(
@@ -189,8 +455,9 @@ export function throwError(
   message: string,
   recoverable: boolean,
   suggestedTool?: string,
+  extras: ErrorExtras = {},
 ): never {
-  throw new McpToolError(makeError(code, message, recoverable, suggestedTool));
+  throw new McpToolError(makeError(code, message, recoverable, suggestedTool, extras));
 }
 
 /**
@@ -206,11 +473,17 @@ export function toStructuredError(err: unknown): StructuredError {
   if (err && typeof err === 'object' && 'code' in err && 'message' in err) {
     const errObj = err as Record<string, unknown>;
     if (typeof errObj.code === 'string') {
+      const code = (errObj.code as ErrorCode) ?? ErrorCodes.INTERNAL_ERROR;
       return {
-        code: (errObj.code as ErrorCode) ?? ErrorCodes.INTERNAL_ERROR,
+        code,
+        title: typeof errObj.title === 'string' ? errObj.title : defaultErrorTitle(code),
         message: String(errObj.message),
         recoverable: Boolean(errObj.recoverable),
+        options: Array.isArray(errObj.options) ? (errObj.options as ErrorOption[]) : [],
         suggestedTool: typeof errObj.suggestedTool === 'string' ? errObj.suggestedTool : undefined,
+        ...(errObj.details && typeof errObj.details === 'object'
+          ? { details: errObj.details as Record<string, unknown> }
+          : {}),
       };
     }
   }
@@ -220,13 +493,12 @@ export function toStructuredError(err: unknown): StructuredError {
     try {
       const parsed = JSON.parse(err.message) as Record<string, unknown>;
       if (typeof parsed.code === 'string' && typeof parsed.message === 'string') {
-        return {
-          code: (parsed.code as ErrorCode) ?? ErrorCodes.INTERNAL_ERROR,
-          message: parsed.message as string,
-          recoverable: typeof parsed.recoverable === 'boolean' ? parsed.recoverable : false,
-          suggestedTool:
-            typeof parsed.suggestedTool === 'string' ? parsed.suggestedTool : undefined,
-        };
+        return makeError(
+          (parsed.code as ErrorCode) ?? ErrorCodes.INTERNAL_ERROR,
+          parsed.message,
+          typeof parsed.recoverable === 'boolean' ? parsed.recoverable : false,
+          typeof parsed.suggestedTool === 'string' ? parsed.suggestedTool : undefined,
+        );
       }
     } catch {
       // Not JSON; fall through
@@ -237,23 +509,15 @@ export function toStructuredError(err: unknown): StructuredError {
     /* v8 ignore next 7 */
     const errWithCode = err as Error & { code?: string };
     if (typeof errWithCode.code === 'string') {
-      return {
-        code: (errWithCode.code as ErrorCode) ?? ErrorCodes.INTERNAL_ERROR,
-        message: err.message,
-        recoverable: false,
-      };
+      return makeError(
+        (errWithCode.code as ErrorCode) ?? ErrorCodes.INTERNAL_ERROR,
+        err.message,
+        false,
+      );
     }
 
-    return {
-      code: ErrorCodes.INTERNAL_ERROR,
-      message: err.message,
-      recoverable: false,
-    };
+    return makeError(ErrorCodes.INTERNAL_ERROR, err.message, false);
   }
 
-  return {
-    code: ErrorCodes.INTERNAL_ERROR,
-    message: String(err),
-    recoverable: false,
-  };
+  return makeError(ErrorCodes.INTERNAL_ERROR, String(err), false);
 }

@@ -1,13 +1,21 @@
 /**
  * TypeScript contract test: MCP error model.
  * Asserts every error code in Engineering-Design §3.4 returns
- * {code, message, recoverable, suggestedTool?}.
+ * {code, title, message, recoverable, options, suggestedTool?}.
  *
  * Task: T141
  */
 
 import { describe, it, expect } from 'vitest';
-import { ErrorCodes, makeError, toStructuredError, McpToolError } from '../../src/mcp/errors';
+import {
+  ErrorCodes,
+  makeError,
+  toStructuredError,
+  McpToolError,
+  defaultErrorTitle,
+  type ErrorOption,
+} from '../../src/mcp/errors';
+import { graphToolDefinitions } from '../../src/v2/tools/graph';
 
 describe('MCP Error Model Contract', () => {
   describe('makeError: creates well-formed StructuredError', () => {
@@ -120,6 +128,74 @@ describe('MCP Error Model Contract', () => {
         expect(typeof err.message).toBe('string');
         expect(typeof err.recoverable).toBe('boolean');
       }
+    });
+  });
+
+  describe('title and options: every error carries them', () => {
+    it('defaults title from the code and options to []', () => {
+      const err = makeError(ErrorCodes.GE_MERGE_AMBIGUOUS_CONTACT, 'm', true);
+      expect(err.title).toBe('Merge ambiguous contact');
+      expect(err.options).toEqual([]);
+    });
+
+    it('defaultErrorTitle never returns an empty string', () => {
+      for (const code of Object.values(ErrorCodes)) {
+        expect(defaultErrorTitle(code).length).toBeGreaterThan(0);
+      }
+    });
+
+    it('keeps an explicit title and options', () => {
+      const option: ErrorOption = {
+        id: 'o1',
+        display: { button_text: 'Fuse instead', description: 'd', style: 'primary' },
+        call: { tool: 'fuse_bodies', arguments: { part_a_id: 'a', part_b_id: 'b' } },
+      };
+      const err = makeError(ErrorCodes.GE_MERGE_COPLANAR_SEAM, 'm', true, undefined, {
+        title: 'Parts are coplanar',
+        options: [option],
+      });
+      expect(err.title).toBe('Parts are coplanar');
+      expect(err.options).toEqual([option]);
+    });
+
+    it('toStructuredError fills title/options on every path', () => {
+      const inputs = [
+        null,
+        'x',
+        new Error('plain'),
+        new Error('{"code":"GE_SOLID_NOT_FOUND","message":"m","recoverable":false}'),
+        { code: 'GE_HEAL_FAILED', message: 'm', recoverable: true },
+      ];
+      for (const input of inputs) {
+        const result = toStructuredError(input);
+        expect(result.title.length).toBeGreaterThan(0);
+        expect(Array.isArray(result.options)).toBe(true);
+      }
+    });
+
+    it('toStructuredError carries options through a POJO error', () => {
+      const pojo = makeError(ErrorCodes.GE_MERGE_AMBIGUOUS_CONTACT, 'm', true, undefined, {
+        title: 't',
+        options: [
+          {
+            id: 'contact-0',
+            display: { button_text: 'b', description: 'd', style: 'secondary' },
+            call: { tool: 'merge_bodies_with_bend', arguments: { part_a_id: 'a', part_b_id: 'b' } },
+          },
+        ],
+      });
+      expect(toStructuredError({ ...pojo })).toEqual(pojo);
+    });
+
+    it('option tools named in source are all registered v2 tools', async () => {
+      // Every `tool: '...'` inside an ErrorOption call must be callable.
+      const { readFileSync } = await import('node:fs');
+      const { join } = await import('node:path');
+      const src = readFileSync(join(__dirname, '../../src/v2/graph/evaluate-client.ts'), 'utf-8');
+      const named = [...src.matchAll(/call: \{\s*tool: '([a-z_]+)'/g)].map((m) => m[1]);
+      expect(named.length).toBeGreaterThan(0);
+      const registered = new Set(graphToolDefinitions.map((t) => t.name));
+      for (const tool of named) expect(registered.has(tool!)).toBe(true);
     });
   });
 });

@@ -1,0 +1,118 @@
+{
+  "$ref": "#/definitions/import_config",
+  "definitions": {
+    "import_config": {
+      "allOf": [
+        {
+          "type": "object",
+          "properties": {
+            "scale": {
+              "type": "object",
+              "properties": {
+                "preset": {
+                  "type": "string",
+                  "enum": [
+                    "mm",
+                    "cm",
+                    "m",
+                    "in",
+                    "ft",
+                    "custom"
+                  ]
+                },
+                "factor": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              },
+              "required": [
+                "preset",
+                "factor"
+              ],
+              "additionalProperties": false
+            },
+            "rotation": {
+              "type": "object",
+              "properties": {
+                "xQuarterTurns": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 3
+                },
+                "yQuarterTurns": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 3
+                },
+                "zQuarterTurns": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 3
+                }
+              },
+              "required": [
+                "xQuarterTurns",
+                "yQuarterTurns",
+                "zQuarterTurns"
+              ],
+              "additionalProperties": false
+            },
+            "recenter": {
+              "type": "object",
+              "properties": {
+                "xy": {
+                  "type": "boolean"
+                },
+                "z": {
+                  "type": "string",
+                  "enum": [
+                    "floor",
+                    "com",
+                    "none"
+                  ]
+                }
+              },
+              "required": [
+                "xy",
+                "z"
+              ],
+              "additionalProperties": false
+            },
+            "thicknessMm": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "materialId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          },
+          "required": [
+            "scale",
+            "rotation",
+            "recenter"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "thicknessMm": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "materialId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "thicknessMm",
+            "materialId"
+          ]
+        }
+      ]
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

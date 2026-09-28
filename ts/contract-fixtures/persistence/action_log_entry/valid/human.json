@@ -1,0 +1,13 @@
+{
+  "seq": 3,
+  "at": "2026-09-27T12:00:00.000Z",
+  "actor_kind": "human",
+  "actor_id": "pat@example.test",
+  "tool": "create_node",
+  "delta_summary": {
+    "parts": [
+      "00000000-0000-4000-8000-000000000001"
+    ]
+  },
+  "undone": false
+}

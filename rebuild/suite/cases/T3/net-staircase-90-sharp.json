@@ -1,0 +1,128 @@
+{
+  "schemaVersion": "0.1",
+  "id": "net-staircase-90-sharp",
+  "title": "Net closure: 2-2-2 staircase, 5 folds at 90°",
+  "level": "A",
+  "tier": "T3",
+  "inventory": [
+    "C14",
+    "C15"
+  ],
+  "toleranceProfile": "default",
+  "expectation": "pass",
+  "fixture": {
+    "kind": "authored",
+    "path": null
+  },
+  "params": {
+    "net": "net-staircase-90-sharp",
+    "faceSizeMm": 50,
+    "thicknessMm": 1,
+    "variant": "sharp"
+  },
+  "ops": [
+    {
+      "op": "author_net",
+      "faceSizeMm": 50,
+      "thicknessMm": 1,
+      "root": "A",
+      "faces": {
+        "A": [
+          0,
+          0
+        ],
+        "B": [
+          1,
+          0
+        ],
+        "C": [
+          1,
+          1
+        ],
+        "D": [
+          2,
+          1
+        ],
+        "E": [
+          2,
+          2
+        ],
+        "F": [
+          3,
+          2
+        ]
+      },
+      "folds": [
+        {
+          "parent": "A",
+          "child": "B",
+          "angleDeg": 90
+        },
+        {
+          "parent": "B",
+          "child": "C",
+          "angleDeg": 90
+        },
+        {
+          "parent": "C",
+          "child": "D",
+          "angleDeg": 90
+        },
+        {
+          "parent": "D",
+          "child": "E",
+          "angleDeg": 90
+        },
+        {
+          "parent": "E",
+          "child": "F",
+          "angleDeg": 90
+        }
+      ]
+    },
+    {
+      "op": "construct"
+    }
+  ],
+  "oracles": [
+    {
+      "type": "net_closure",
+      "budgetKey": "closureMm",
+      "seams": [
+        [
+          "A:S",
+          "F:N"
+        ],
+        [
+          "A:N",
+          "C:W"
+        ],
+        [
+          "A:W",
+          "E:N"
+        ],
+        [
+          "B:S",
+          "F:E"
+        ],
+        [
+          "B:E",
+          "D:S"
+        ],
+        [
+          "C:N",
+          "E:W"
+        ],
+        [
+          "D:E",
+          "F:S"
+        ]
+      ]
+    },
+    {
+      "type": "structure",
+      "solidCount": 1,
+      "typedError": null
+    }
+  ]
+}

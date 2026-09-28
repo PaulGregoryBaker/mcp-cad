@@ -1,0 +1,128 @@
+{
+  "schemaVersion": "0.1",
+  "id": "net-shift-lr-split-ends-90-sharp",
+  "title": "Net closure: side arms at opposite column ends, 5 folds at 90°",
+  "level": "A",
+  "tier": "T3",
+  "inventory": [
+    "C14",
+    "C15"
+  ],
+  "toleranceProfile": "default",
+  "expectation": "pass",
+  "fixture": {
+    "kind": "authored",
+    "path": null
+  },
+  "params": {
+    "net": "net-shift-lr-split-ends-90-sharp",
+    "faceSizeMm": 50,
+    "thicknessMm": 1,
+    "variant": "sharp"
+  },
+  "ops": [
+    {
+      "op": "author_net",
+      "faceSizeMm": 50,
+      "thicknessMm": 1,
+      "root": "F0",
+      "faces": {
+        "F0": [
+          0,
+          0
+        ],
+        "F1": [
+          0,
+          1
+        ],
+        "F2": [
+          0,
+          2
+        ],
+        "F3": [
+          0,
+          3
+        ],
+        "L": [
+          -1,
+          0
+        ],
+        "R": [
+          1,
+          3
+        ]
+      },
+      "folds": [
+        {
+          "parent": "F0",
+          "child": "F1",
+          "angleDeg": 90
+        },
+        {
+          "parent": "F1",
+          "child": "F2",
+          "angleDeg": 90
+        },
+        {
+          "parent": "F2",
+          "child": "F3",
+          "angleDeg": 90
+        },
+        {
+          "parent": "F0",
+          "child": "L",
+          "angleDeg": 90
+        },
+        {
+          "parent": "F3",
+          "child": "R",
+          "angleDeg": 90
+        }
+      ]
+    },
+    {
+      "op": "construct"
+    }
+  ],
+  "oracles": [
+    {
+      "type": "net_closure",
+      "budgetKey": "closureMm",
+      "seams": [
+        [
+          "F0:S",
+          "F3:N"
+        ],
+        [
+          "F0:E",
+          "R:N"
+        ],
+        [
+          "F1:E",
+          "R:E"
+        ],
+        [
+          "F1:W",
+          "L:N"
+        ],
+        [
+          "L:W",
+          "F2:W"
+        ],
+        [
+          "L:S",
+          "F3:W"
+        ],
+        [
+          "F2:E",
+          "R:S"
+        ]
+      ]
+    },
+    {
+      "type": "structure",
+      "solidCount": 1,
+      "typedError": null
+    }
+  ]
+}

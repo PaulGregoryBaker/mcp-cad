@@ -1,0 +1,828 @@
+#include "part_solid_construction.hpp"
+#include "../geometry_service_impl.hpp"
+#include "../geometry_service_utils.hpp"
+
+#include <BRepBuilderAPI_MakePolygon.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
+#include <BOPAlgo_GlueEnum.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepCheck_Analyzer.hxx>
+#include <ShapeFix_ShapeTolerance.hxx>
+#include <BRepGProp.hxx>
+#include <GProp_GProps.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepPrimAPI_MakeRevol.hxx>
+#include <ShapeUpgrade_UnifySameDomain.hxx>
+#include <TopoDS.hxx>
+#include <TopoDS_Shape.hxx>
+#include <TopoDS_Solid.hxx>
+#include <TopExp_Explorer.hxx>
+#include <gp_Ax1.hxx>
+#include <gp_Ax2.hxx>
+#include <gp_Circ.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Pnt.hxx>
+#include <gp_Trsf.hxx>
+#include <gp_Vec.hxx>
+#include <Standard_Failure.hxx>
+#include <TopTools_ListOfShape.hxx>
+
+#include <algorithm>
+#include <cmath>
+#include <unordered_map>
+
+namespace mcp_cad::translation {
+
+namespace {
+
+// Local, named numerical-robustness constant (constitution v2.0.0 principle V's
+// distinction: this never varies by project). Matches the corrected (post-
+// 0.15mm-bug) relative-fuzz value documented in rebuild/12-domain-notes.md §2 /
+// rebuild/17-numerical-policy.md §2.1.
+constexpr double kBooleanFuzzMm = 1e-5;
+constexpr double kPi = 3.14159265358979323846;
+
+// kJoinRetryFuzzMm: fallback fuzzy value tried only when the tight
+// kBooleanFuzzMm leaves a join's fuse result invalid. Root cause (verified
+// on real cauldron.step data): sub-micron floating-point noise (~2e-4mm at
+// this model's ~3000mm scale) accumulated through a long chained-bend pose
+// walk, not a real geometric feature — ShapeFix_Shape post-hoc healing was
+// tried and empirically does not touch this defect (the shape is already
+// one connected solid, not the free/disconnected sub-shapes it targets).
+// Sheet-metal fabrication can't hold better than ~0.1mm in practice, so
+// 1e-3mm stays ~100x under any achievable real tolerance, and ~150x below
+// the previously-documented 0.15mm value that discarded real kerf-notch
+// detail — retried once, only for the specific join that failed, so every
+// other join keeps the tight kBooleanFuzzMm untouched. Also used below by
+// HasDegenerateFace as the pipeline's own documented noise floor.
+constexpr double kJoinRetryFuzzMm = 1e-3;
+
+// A boolean-fuse sliver face is the fuse operator's OWN artifact: when two
+// operands meet at near-but-not-exactly-coincident geometry (e.g. a child
+// panel's own corner landing 0.001mm off the bend's own tangent line — real
+// numerical drift from the live fuse_bodies/merge_bodies_with_bend pipeline,
+// not something a synthetic round-number test ever reproduces),
+// BRepAlgoAPI_Fuse's fuzzy tolerance can carve out a face with an edge no
+// longer than that same tolerance, instead of welding the near-coincident
+// vertices together. BRepCheck_Analyzer still reports the result "valid" (a
+// sliver face is legal topology, just not real geometry), so neither
+// fuseJoin's nor acceptNaryResult's own existing checks (validity,
+// single-solid, union-volume) ever catch it.
+//
+// A pure area threshold can't tell this apart from a genuinely small but
+// real face (confirmed live: an area-based constant rejected a legitimate
+// ~0.004mm² bend-corner face in the N=5 pentagon tube test, whose area sits
+// BETWEEN the two live-bug sliver areas actually observed — proving area
+// alone isn't a valid signature at any threshold). The sliver is instead
+// identified by what created it: an edge whose length is on the order of
+// kJoinRetryFuzzMm, the pipeline's own already-documented noise floor for
+// real live-app coordinate drift — NOT scaled to whichever fuzzMm the
+// CURRENT fuse attempt happens to be using: a first attempt tried that
+// (fuzzMm-relative) scaling and it silently failed, because at the tight
+// kBooleanFuzzMm=1e-5 tier the scaled threshold (1e-4mm) fell BELOW the
+// live sliver's own edge length (0.000626mm) — the tight-tolerance result
+// then passed the check and got accepted immediately, and the retry tier
+// that would actually weld the sliver away never ran. A threshold fixed to
+// the pipeline's known noise floor regardless of tier avoids that: measured
+// on the live reproduction (part_solid_construction_test.cc's own "EXACT
+// live testcube.step corner geometry" test) the sliver's shortest edge was
+// 0.000626mm (0.06x kJoinRetryFuzzMm); measured on the pentagon test, the
+// legitimate face's shortest edge was 0.0305mm (30x) — a clean separation
+// at any tier. Checking for this explicitly, as another tier of the SAME
+// existing tight->loose->glue retry ladder, means a looser tolerance gets a
+// chance to weld the near-coincident vertices properly instead of leaving a
+// sliver.
+constexpr double kDegenerateEdgeLenNoiseFloorMultiple = 10.0;
+
+bool HasDegenerateFace(const TopoDS_Shape& shape) {
+  const double minAllowedEdgeLen = kDegenerateEdgeLenNoiseFloorMultiple * kJoinRetryFuzzMm;
+  for (TopExp_Explorer ex(shape, TopAbs_FACE); ex.More(); ex.Next()) {
+    for (TopExp_Explorer ee(ex.Current(), TopAbs_EDGE); ee.More(); ee.Next()) {
+      GProp_GProps edgeProps;
+      BRepGProp::LinearProperties(TopoDS::Edge(ee.Current()), edgeProps);
+      if (edgeProps.Mass() < minAllowedEdgeLen) return true;
+    }
+  }
+  return false;
+}
+
+gp_Trsf ToGpTrsf(const Transform3& t) {
+  gp_Trsf trsf;
+  trsf.SetValues(t.r[0], t.r[1], t.r[2], t.t[0], t.r[3], t.r[4], t.r[5], t.t[1], t.r[6], t.r[7],
+                 t.r[8], t.t[2]);
+  return trsf;
+}
+
+// Local, named numerical-robustness constant, shared by FindZoneEdges below
+// and the wall-solid trim section further down (see that section's own
+// header comment for why this file deliberately doesn't share code with
+// manufacturing_graph_evaluator.cc's own version of the same idea).
+constexpr double kClipEpsilon = 1e-9;
+
+// Locates every wallOuter edge of `panel` whose wallEdgeBendId matches
+// `bendId` — the parent panel's own zone-boundary quads, which the bridge's
+// revolve profiles are built from (one quad per edge; RegionOf's own tagging
+// pass already established that a bend's true zone can legitimately span
+// several edges — a faceted ring touching another faceted ring along more
+// than one facet — not just the single straight edge a simple rectangular
+// clip happens to yield). Deliberately wallOuter/wallEdgeBendId, NOT
+// rawOuter/edgeBendId: wallOuter is where RegionOf's own corner-miter
+// computation (a genuine two-line intersection at a vertex shared by two
+// bends) already lives — rawOuter's own vertices there are the raw,
+// zero-offset hinge point with no such correction. Reading tangent points
+// from rawOuter and re-deriving a per-bend setback offset independently
+// (this function's own prior behavior) silently ignored the OTHER bend's
+// contribution at a shared corner, producing a visible flat protrusion
+// instead of a shared rounded fold — confirmed live (testcube.step) and
+// root-caused directly at this level; see this function's own regression
+// test in manufacturing_graph_evaluator_test.cc.
+//
+// Transition-step edges (wallEdgeIsTransitionStep, RegionPanelLayout's own
+// doc comment) are also excluded here: flat connector material BuildCutEdges
+// inserts to bridge a free edge's own raw endpoint to its tangent-line
+// point, or two different bends' own near-corner points to each other --
+// never a genuine curved-zone boundary. Also revolving one produces a
+// degenerate sliver that can fail to fuse with the bend's real curved
+// surface (confirmed live: "fuse produced 2 disconnected solids" on a
+// partial-width seam, once this function started reading wallOuter instead
+// of the zero-offset rawOuter, where the SAME step trivially collapses to
+// zero length and was never picked up in the first place -- an earlier fix
+// attempt tried inferring this from the edge's own direction/length instead
+// of reading the explicit flag, and wrongly kept a real testcube.step
+// corner's own cross-bend connector, whose direction isn't purely along
+// either bend's own nLeft).
+//
+// Zero-length edges (RegionOf's clip can leave a duplicate-point,
+// zero-length edge tagged at a seam between two other bends) are also
+// skipped — they carry no real material, and a quad built from a
+// zero-length edge would be degenerate. Returned in `panel.wallOuter`'s own
+// winding order.
+std::vector<size_t> FindZoneEdges(const RegionPanelLayout& panel, const std::string& bendId) {
+  std::vector<size_t> found;
+  size_t n = panel.wallOuter.size();
+  for (size_t i = 0; i < panel.wallEdgeBendId.size(); ++i) {
+    if (panel.wallEdgeBendId[i] != bendId) continue;
+    if (panel.wallEdgeIsTransitionStep[i]) continue;
+    const Point2& a = panel.wallOuter[i];
+    const Point2& b = panel.wallOuter[(i + 1) % n];
+    double dx = b.x - a.x, dy = b.y - a.y;
+    if (dx * dx + dy * dy < kClipEpsilon * kClipEpsilon) continue;  // zero-length, skip
+    found.push_back(i);
+  }
+  return found;
+}
+
+// Short, bounded-length summary of which original panels/bends a contracted
+// fuse-tree node descends from, for actionable error messages (a node near
+// the root of a long chain can carry a very large id list).
+std::string DescribeIds(const std::vector<std::string>& ids) {
+  constexpr size_t kMaxShown = 5;
+  std::string out;
+  size_t shown = std::min(ids.size(), kMaxShown);
+  for (size_t i = 0; i < shown; ++i) {
+    if (i) out += ", ";
+    out += ids[i];
+  }
+  if (ids.size() > kMaxShown) {
+    out += " (+" + std::to_string(ids.size() - kMaxShown) + " more)";
+  }
+  return out;
+}
+
+}  // namespace
+
+ConstructPartSolidResult ConstructPartSolid(GeometryState& state, const EvaluateResult& layout,
+                                             double thicknessMm) {
+  ConstructPartSolidResult result;
+
+  if (!layout.ok) {
+    result.errorCode = "GE_INVALID_LAYOUT";
+    result.message = "cannot construct from a failed Evaluate() result";
+    return result;
+  }
+  if (layout.panels.empty()) {
+    result.errorCode = "GE_EMPTY_LAYOUT";
+    result.message = "no panels to construct";
+    return result;
+  }
+  if (thicknessMm <= 0.0) {
+    result.errorCode = "GE_INVALID_SHEET_METAL";
+    result.message = "thickness must be > 0";
+    return result;
+  }
+
+  try {
+    std::unordered_map<std::string, const RegionPanelLayout*> panelById;
+    for (const auto& panel : layout.panels) {
+      panelById[panel.regionPanelId] = &panel;
+    }
+
+    // Each panel becomes its own independently-thickened solid, placed via its
+    // already-computed pose (never re-derived here — see this file's header).
+    // The wall itself is built from `panel.wallOuter` — RegionOf's own
+    // setback-trimmed region — not `panel.rawOuter` (which stays the raw,
+    // zero-offset shape for its own separate consumers: bottomFace/topFace,
+    // point_mapping.cc, and this file's own bridge-construction loop below,
+    // which already adds setback on top of rawOuter's bottomFace/topFace
+    // explicitly — see RegionPanelLayout's own header comment). wallOuter's
+    // own edge lands where the bridge's tangent quad does, not out at the
+    // sharp-corner position an untrimmed wall would sit at.
+    std::unordered_map<std::string, TopoDS_Shape> panelSolidById;
+    for (const auto& panel : layout.panels) {
+      if (panel.wallOuter.size() < 3) {
+        result.errorCode = "GE_POLYGON_BUILD_FAILED";
+        result.message = "region panel " + panel.regionPanelId + " has fewer than 3 vertices";
+        return result;
+      }
+      BRepBuilderAPI_MakePolygon polyMaker;
+      for (const auto& v : panel.wallOuter) {
+        polyMaker.Add(gp_Pnt(v.x, v.y, 0.0));
+      }
+      polyMaker.Close();
+      if (!polyMaker.IsDone()) {
+        result.errorCode = "GE_POLYGON_BUILD_FAILED";
+        result.message = "failed to build a closed wire for region panel " + panel.regionPanelId;
+        return result;
+      }
+
+      BRepBuilderAPI_MakeFace faceMaker(polyMaker.Wire());
+      if (!faceMaker.IsDone()) {
+        result.errorCode = "GE_POLYGON_BUILD_FAILED";
+        result.message = "failed to build a face for region panel " + panel.regionPanelId;
+        return result;
+      }
+
+      // Phase 5 Slice 9a: punch each hole belonging to this panel (already
+      // resolved by RegionOf, never re-derived here) into the same face,
+      // before thickening — so the constructed 3D solid matches the flat
+      // pattern it was cut from exactly (constitution P3/L1: one geometric
+      // solution, never a solid that silently disagrees with its own flat
+      // pattern). Hole wires are stored/generated with the opposite winding
+      // from the outer wire, OCCT's own convention for a face's inner loops.
+      for (const auto& holeRing : panel.wallPolygonHoles) {
+        BRepBuilderAPI_MakePolygon holePolyMaker;
+        for (const auto& v : holeRing) {
+          holePolyMaker.Add(gp_Pnt(v.x, v.y, 0.0));
+        }
+        holePolyMaker.Close();
+        if (!holePolyMaker.IsDone()) {
+          result.errorCode = "GE_POLYGON_BUILD_FAILED";
+          result.message = "failed to build a hole wire for region panel " + panel.regionPanelId;
+          return result;
+        }
+        faceMaker.Add(holePolyMaker.Wire());
+      }
+      for (const auto& circleHole : panel.wallCircleHoles) {
+        // -Z axis direction winds the circle CW as seen from +Z, opposite the
+        // outer wire's CCW — a true circular wire, never tessellated.
+        gp_Circ circ(gp_Ax2(gp_Pnt(circleHole.center.x, circleHole.center.y, 0.0),
+                             gp_Dir(0.0, 0.0, -1.0)),
+                     circleHole.radiusMm);
+        BRepBuilderAPI_MakeEdge edgeMaker(circ);
+        if (!edgeMaker.IsDone()) {
+          result.errorCode = "GE_POLYGON_BUILD_FAILED";
+          result.message = "failed to build a circular hole edge for region panel " +
+                            panel.regionPanelId;
+          return result;
+        }
+        BRepBuilderAPI_MakeWire circleWireMaker(edgeMaker.Edge());
+        if (!circleWireMaker.IsDone()) {
+          result.errorCode = "GE_POLYGON_BUILD_FAILED";
+          result.message = "failed to build a circular hole wire for region panel " +
+                            panel.regionPanelId;
+          return result;
+        }
+        faceMaker.Add(circleWireMaker.Wire());
+      }
+
+      BRepPrimAPI_MakePrism prism(faceMaker.Face(), gp_Vec(0.0, 0.0, thicknessMm), true);
+      if (!prism.IsDone() || prism.Shape().IsNull()) {
+        result.errorCode = "GE_EXTRUDE_FAILED";
+        result.message = "failed to thicken region panel " + panel.regionPanelId;
+        return result;
+      }
+
+      gp_Trsf worldTrsf = ToGpTrsf(panel.pose);
+      BRepBuilderAPI_Transform placed(prism.Shape(), worldTrsf, /*Copy=*/true);
+      TopoDS_Shape panelSolid = placed.Shape();
+
+      panelSolidById[panel.regionPanelId] = panelSolid;
+    }
+
+    // Each bend contributes a real bridge solid: the tangent-preserving
+    // revolve between the parent's and child's true tangent quads
+    // (docs/BUG_REPORT_reconstructed_envelope_grows_with_bend_radius.md).
+    // No separate "collar" piece — the panel walls above are already
+    // trimmed back to their own true tangent line (RegionOf's own bend-cut
+    // extraction now does this at the source, in manufacturing_graph_
+    // evaluator.cc, rather than as a separate later pass), so the wall's own
+    // edge lands exactly where this revolve starts/ends, on both sides, with
+    // nothing left to fill. (A previous version of this
+    // fix used a flat collar to close the gap left by an UN-trimmed wall —
+    // once the wall trim landed, that collar became not just redundant but
+    // actively wrong: it kept using the wall's own OLD, untrimmed edge
+    // point as one of its corners, which sits farther from the axis than
+    // the true radius, so the collar itself protruded past the bend's real
+    // rounded surface — confirmed live, visually, in Form.AI.tion, and by
+    // the permanent regression test below that subtracts the bend's own
+    // true-radius cylinder and checks exactly two solids remain.)
+    std::unordered_map<std::string, TopoDS_Shape> bridgeSolidByBendId;
+    for (const auto& bridge : layout.bridges) {
+      auto parentIt = panelById.find(bridge.parentRegionPanelId);
+      if (parentIt == panelById.end()) {
+        result.errorCode = "GE_BRIDGE_EDGE_NOT_FOUND";
+        result.message = "bridge " + bridge.bendId + " references unknown parent region panel " +
+                          bridge.parentRegionPanelId;
+        return result;
+      }
+      const RegionPanelLayout& parent = *parentIt->second;
+      std::vector<size_t> parentEdges = FindZoneEdges(parent, bridge.bendId);
+      if (parentEdges.empty()) {
+        result.errorCode = "GE_BRIDGE_EDGE_NOT_FOUND";
+        result.message = "no zone-boundary edge tagged for bend " + bridge.bendId +
+                          " on region panel " + parent.regionPanelId;
+        return result;
+      }
+
+      auto parentChildIt = panelById.find(bridge.childRegionPanelId);
+      if (parentChildIt == panelById.end()) {
+        result.errorCode = "GE_BRIDGE_EDGE_NOT_FOUND";
+        result.message = "bridge " + bridge.bendId + " references unknown child region panel " +
+                          bridge.childRegionPanelId;
+        return result;
+      }
+      const RegionPanelLayout& child = *parentChildIt->second;
+
+      // Presence-only check: the child must border this bend SOMEWHERE, but
+      // its own edge(s) aren't used for geometry below — every bridge
+      // segment is built purely from the parent's own tangent quad, and the
+      // revolve produces the correctly-positioned child-side connection via
+      // rotation (the two are guaranteed coincident by construction — the
+      // pose walk derived the child's own pose from this SAME axis/angle).
+      if (FindZoneEdges(child, bridge.bendId).empty()) {
+        result.errorCode = "GE_BRIDGE_EDGE_NOT_FOUND";
+        result.message = "no zone-boundary edge tagged for bend " + bridge.bendId +
+                          " on region panel " + child.regionPanelId;
+        return result;
+      }
+
+      // One revolve segment per real tagged edge on the parent — a bend's
+      // true zone can legitimately span several edges (two faceted rings
+      // touching along more than one facet, not just the single straight
+      // edge a simple rectangular clip happens to yield), each fused
+      // together into this bend's own combined bridge solid below.
+      double angleRad0 = bridge.angleDeg * kPi / 180.0;
+      gp_Pnt axisOrigin(bridge.pivotOriginWorld.x, bridge.pivotOriginWorld.y,
+                         bridge.pivotOriginWorld.z);
+      gp_Dir axisDir0(bridge.pivotAxisWorld.x, bridge.pivotAxisWorld.y, bridge.pivotAxisWorld.z);
+      if (angleRad0 < 0.0) {
+        axisDir0.Reverse();
+        angleRad0 = -angleRad0;
+      }
+      gp_Ax1 axis(axisOrigin, axisDir0);
+
+      auto solidVolume = [](const TopoDS_Shape& shape) {
+        GProp_GProps props;
+        BRepGProp::VolumeProperties(shape, props);
+        return props.Mass();
+      };
+      auto tryFuseBridgeSegments = [&](const TopoDS_Shape& a, const TopoDS_Shape& b)
+          -> TopoDS_Shape {
+        for (double fuzzMm : {kBooleanFuzzMm, kJoinRetryFuzzMm}) {
+          for (bool glue : {false, true}) {
+            BRepAlgoAPI_Fuse segFuser(a, b);
+            segFuser.SetFuzzyValue(fuzzMm);
+            if (glue) segFuser.SetGlue(BOPAlgo_GlueShift);
+            segFuser.Build();
+            if (!segFuser.IsDone()) continue;
+
+            TopoDS_Shape fused = segFuser.Shape();
+            if (fused.IsNull() || !BRepCheck_Analyzer(fused).IsValid()) continue;
+            if (HasDegenerateFace(fused)) continue;
+
+            constexpr double kVolumeRelTol = 1e-6;
+            double maxInVolume = std::max(solidVolume(a), solidVolume(b));
+            if (solidVolume(fused) >= maxInVolume * (1.0 - kVolumeRelTol)) return fused;
+          }
+        }
+        return TopoDS_Shape();
+      };
+
+      TopoDS_Shape bridgeSolid;
+      bool bridgeSolidSet = false;
+      for (size_t i0 : parentEdges) {
+        size_t i1 = (i0 + 1) % parent.wallOuter.size();
+
+        // This edge's own tangent points, read directly from wallOuter's own
+        // already-correct posed geometry (RegionOf's own corner-miter
+        // computation, wherever this edge sits next to another bend's own
+        // zone, is already baked in here) — NOT re-derived via this bend's
+        // own setbackMm/nLeftWorld applied to the raw hinge corner, which is
+        // only correct away from a shared corner (see FindZoneEdges' own
+        // header comment).
+        Point3 parentTanB0 = parent.wallBottomFace[i0];
+        Point3 parentTanB1 = parent.wallBottomFace[i1];
+        Point3 parentTanT0 = parent.wallTopFace[i0];
+        Point3 parentTanT1 = parent.wallTopFace[i1];
+
+        // Tangent-preserving revolve of this edge's own quad —
+        // BRepPrimAPI_MakeRevol requires a non-negative angle in
+        // [0, 2*Pi]; a negative bend angle (valley fold) is realized by
+        // reversing the axis direction instead (RH-rule about -axis by
+        // +angle == RH-rule about +axis by -angle) — already folded into
+        // `axis` above, shared by every segment of this same bend.
+        BRepBuilderAPI_MakePolygon quadMaker;
+        quadMaker.Add(gp_Pnt(parentTanB0.x, parentTanB0.y, parentTanB0.z));
+        quadMaker.Add(gp_Pnt(parentTanB1.x, parentTanB1.y, parentTanB1.z));
+        quadMaker.Add(gp_Pnt(parentTanT1.x, parentTanT1.y, parentTanT1.z));
+        quadMaker.Add(gp_Pnt(parentTanT0.x, parentTanT0.y, parentTanT0.z));
+        quadMaker.Close();
+        if (!quadMaker.IsDone()) {
+          result.errorCode = "GE_BRIDGE_BUILD_FAILED";
+          result.message = "failed to build the zone-boundary quad wire for bend " + bridge.bendId;
+          return result;
+        }
+        BRepBuilderAPI_MakeFace quadFace(quadMaker.Wire());
+        if (!quadFace.IsDone()) {
+          result.errorCode = "GE_BRIDGE_BUILD_FAILED";
+          result.message = "failed to build the zone-boundary quad face for bend " + bridge.bendId;
+          return result;
+        }
+        BRepPrimAPI_MakeRevol revol(quadFace.Face(), axis, angleRad0, /*Copy=*/Standard_False);
+        if (!revol.IsDone() || revol.Shape().IsNull()) {
+          result.errorCode = "GE_BRIDGE_BUILD_FAILED";
+          result.message = "failed to revolve the bridge solid for bend " + bridge.bendId;
+          return result;
+        }
+
+        if (!bridgeSolidSet) {
+          bridgeSolid = revol.Shape();
+          bridgeSolidSet = true;
+          continue;
+        }
+        // Policy: a bend bridge is either fully assembled from its real zone
+        // segments or it is not accepted. This path retries the same
+        // tight->loose->glue tolerance ladder used elsewhere in this file for
+        // the real-world near-coincident-vertex case; a failed final join is
+        // still hard-failed, never silently accepted as a degraded result.
+        TopoDS_Shape fused = tryFuseBridgeSegments(bridgeSolid, revol.Shape());
+        if (fused.IsNull()) {
+          result.errorCode = "GE_BRIDGE_BUILD_FAILED";
+          result.message = "failed to fuse bridge segments together for bend " + bridge.bendId;
+          return result;
+        }
+        bridgeSolid = fused;
+      }
+      bridgeSolidByBendId[bridge.bendId] = bridgeSolid;
+    }
+
+    // Fuse in parent-panel -> bridge -> child-panel order (not "all panels
+    // then all bridges") — an un-bridged panel pair may not touch or overlap
+    // at all, so fusing two panels before their connecting bridge exists
+    // would spuriously report a disconnected result. `layout.panels[0]` is
+    // the root (Evaluate()'s own BFS always visits it first); walking
+    // `layout.bridges` in parent-before-child order (also guaranteed by that
+    // same BFS) interleaves each bridge between its parent and child panel
+    // correctly, including for a tree with branching, not just a straight
+    // chain.
+    std::vector<TopoDS_Shape> orderedPieces;
+    orderedPieces.reserve(layout.panels.size() + layout.bridges.size());
+    orderedPieces.push_back(panelSolidById.at(layout.panels[0].regionPanelId));
+    for (const auto& bridge : layout.bridges) {
+      orderedPieces.push_back(bridgeSolidByBendId.at(bridge.bendId));
+      orderedPieces.push_back(panelSolidById.at(bridge.childRegionPanelId));
+    }
+
+    auto solidVolume = [](const TopoDS_Shape& shape) {
+      GProp_GProps props;
+      BRepGProp::VolumeProperties(shape, props);
+      return props.Mass();
+    };
+    auto fuseJoin = [&solidVolume](double fuzzMm, bool glue, const TopoDS_Shape& a,
+                    const TopoDS_Shape& b, TopoDS_Shape* outShape, bool* built,
+                                    std::string* failureReason) -> bool {
+      BRepAlgoAPI_Fuse f(a, b);
+      f.SetFuzzyValue(fuzzMm);
+      if (glue) f.SetGlue(BOPAlgo_GlueShift);
+      f.Build();
+      *built = f.IsDone();
+      if (!*built) {
+        if (failureReason) *failureReason = "boolean build failed";
+        return false;
+      }
+      *outShape = f.Shape();
+      if (!BRepCheck_Analyzer(*outShape).IsValid()) {
+        if (failureReason) *failureReason = "invalid boolean topology";
+        return false;
+      }
+      // A fuse computes a set union, A∪B — its volume can never be LESS than
+      // either operand's own volume (a property of union, not a tolerance).
+      // BRepAlgoAPI_Fuse can still report IsDone()+valid while silently
+      // discarding one operand for a pathological pairing (confirmed on real
+      // cauldron.step data: a huge accumulated shape fused with a tiny,
+      // near-flat bridge sliver came back as just the sliver, volume
+      // matching it exactly) — checking this invariant here, as part of
+      // fuseJoin's own success contract, means the SAME retry ladder already
+      // used for invalid/disconnected results (looser fuzz, then glue mode)
+      // automatically also covers it, with no separate branch needed.
+      // OCCT's accumulated volume properties drift by several ppm on the
+      // large, faceted cauldron unions even when the returned shape is one
+      // valid solid. Primitive panel/bridge joins keep the tighter 1 ppm
+      // contract; accumulated joins use this bounded 10 ppm numerical floor.
+      constexpr double kVolumeRelTol = 1e-5;
+      double maxInVolume = std::max(solidVolume(a), solidVolume(b));
+      if (solidVolume(*outShape) < maxInVolume * (1.0 - kVolumeRelTol)) {
+        if (failureReason) {
+          *failureReason = "union volume decreased (a=" + std::to_string(solidVolume(a)) +
+                            ", b=" + std::to_string(solidVolume(b)) +
+                            ", out=" + std::to_string(solidVolume(*outShape)) + ")";
+        }
+        return false;
+      }
+      return true;
+    };
+    auto countSolids = [](const TopoDS_Shape& shape) {
+      int n = 0;
+      for (TopExp_Explorer ex(shape, TopAbs_SOLID); ex.More(); ex.Next()) ++n;
+      return n;
+    };
+
+    // ─── Fast path: one N-ary fuse over the whole piece set ────────────────
+    // Arguments={piece0}, Tools={everything else} — ONE BRepAlgoAPI_Fuse
+    // call, ONE internal interference pass over the whole set, instead of
+    // N-1 sequential pairwise fuses each re-indexing a growing accumulator
+    // from scratch (BRepAlgoAPI_Fuse/BRepCheck_Analyzer/BRepGProp::
+    // VolumeProperties all re-derive whole-operand state on every call, with
+    // no memory of a previous call even when the operand IS that previous
+    // call's own output — see the performance investigation this came out
+    // of). Measured on real cauldron.step data: 2-6x faster than the
+    // sequential loop below when it succeeds. Uses the SAME tight->loose->
+    // glue fuzz escalation as the per-join loop below — confirmed
+    // empirically that the two real-fixture failures this fast path
+    // originally hit (before that escalation was added here) were fixed by
+    // that exact escalation, not by anything about doing it sequentially,
+    // so this is not a weaker check, just applied once globally instead of
+    // per join. On ANY failure (all three tiers), falls back to the proven
+    // sequential loop below completely unchanged — a rejected fast-path
+    // result is simply discarded, so this can only ever save time, never
+    // weaken correctness.
+    TopoDS_Shape currentShape;
+    bool naryOk = false;
+    {
+      TopTools_ListOfShape naryArgs, naryTools;
+      naryArgs.Append(orderedPieces[0]);
+      for (size_t i = 1; i < orderedPieces.size(); ++i) naryTools.Append(orderedPieces[i]);
+
+      double maxPieceVolume = 0.0;
+      for (const auto& piece : orderedPieces) {
+        maxPieceVolume = std::max(maxPieceVolume, solidVolume(piece));
+      }
+
+      auto tryNaryFuse = [&](double fuzzMm, bool glue) -> TopoDS_Shape {
+        BRepAlgoAPI_Fuse fuser;
+        fuser.SetArguments(naryArgs);
+        fuser.SetTools(naryTools);
+        fuser.SetFuzzyValue(fuzzMm);
+        if (glue) fuser.SetGlue(BOPAlgo_GlueShift);
+        fuser.Build();
+        if (!fuser.IsDone()) return TopoDS_Shape();
+        return fuser.Shape();
+      };
+      auto tryNaryFuseNested = [&]() -> TopoDS_Shape {
+        for (double fuzzMm : {kBooleanFuzzMm, kJoinRetryFuzzMm}) {
+          for (bool glue : {false, true}) {
+            TopoDS_Shape candidate = tryNaryFuse(fuzzMm, glue);
+            if (candidate.IsNull()) continue;
+            if (!BRepCheck_Analyzer(candidate).IsValid()) continue;
+            return candidate;
+          }
+        }
+        return TopoDS_Shape();
+      };
+      // Same union-volume invariant as fuseJoin's own contract above,
+      // generalized to N pieces: the result can never be smaller than the
+      // largest individual input piece (a property of union, not a
+      // tolerance) — catches the same "silently dropped operand" class of
+      // defect fuseJoin's own comment documents.
+      auto acceptNaryResult = [&](const TopoDS_Shape& shape) -> bool {
+        if (shape.IsNull() || !BRepCheck_Analyzer(shape).IsValid()) return false;
+        if (HasDegenerateFace(shape)) return false;
+        int n = shape.ShapeType() == TopAbs_SOLID ? 1 : countSolids(shape);
+        if (n != 1) return false;
+        constexpr double kVolumeRelTol = 1e-6;
+        return solidVolume(shape) >= maxPieceVolume * (1.0 - kVolumeRelTol);
+      };
+
+      currentShape = tryNaryFuseNested();
+      naryOk = acceptNaryResult(currentShape);
+      if (naryOk && currentShape.ShapeType() != TopAbs_SOLID) {
+        TopoDS_Solid theSolid;
+        for (TopExp_Explorer ex(currentShape, TopAbs_SOLID); ex.More(); ex.Next()) {
+          theSolid = TopoDS::Solid(ex.Current());
+        }
+        currentShape = theSolid;
+      }
+      if (naryOk) {
+        ShapeFix_ShapeTolerance toleranceFix;
+        toleranceFix.LimitTolerance(currentShape, 0.0, kJoinRetryFuzzMm);
+      }
+    }
+
+    // The whole-set Boolean is only an optimization. Real imported parts can
+    // contain long chains whose single OCCT interference pass returns no
+    // shape, even though each known panel/bridge contact is constructible.
+    // Reassemble that same graph through validated contact joins; this is not
+    // a degraded result or a partial fallback: every node must be consumed,
+    // every join must produce one solid, and the operation still fails closed.
+    if (!naryOk) {
+      struct FuseNode {
+        TopoDS_Shape shape;
+        std::vector<std::string> ids;
+      };
+
+      std::vector<FuseNode> nodes;
+      std::unordered_map<std::string, int> panelNodeIndex;
+      std::unordered_map<std::string, int> bridgeNodeIndex;
+      for (const auto& panel : layout.panels) {
+        panelNodeIndex[panel.regionPanelId] = static_cast<int>(nodes.size());
+        nodes.push_back({panelSolidById.at(panel.regionPanelId), {panel.regionPanelId}});
+      }
+      for (const auto& bridge : layout.bridges) {
+        bridgeNodeIndex[bridge.bendId] = static_cast<int>(nodes.size());
+        nodes.push_back({bridgeSolidByBendId.at(bridge.bendId), {"bend:" + bridge.bendId}});
+      }
+
+      std::vector<std::pair<int, int>> edges;
+      for (const auto& bridge : layout.bridges) {
+        const int bridgeIndex = bridgeNodeIndex.at(bridge.bendId);
+        edges.push_back({bridgeIndex, panelNodeIndex.at(bridge.parentRegionPanelId)});
+        edges.push_back({bridgeIndex, panelNodeIndex.at(bridge.childRegionPanelId)});
+      }
+
+      auto joinNodes = [&](const FuseNode& a, const FuseNode& b, FuseNode* out) -> bool {
+        TopoDS_Shape joined;
+        bool built = false;
+        std::string failureReason;
+        // Bridge segment assembly has already rejected boolean slivers while
+        // constructing each bridge. The final panel/bridge union must rely on
+        // its own strict topology, connectivity, and volume checks: cauldron
+        // contains legitimate sub-0.01 mm facet edges at this stage.
+        bool valid = fuseJoin(kBooleanFuzzMm, false, a.shape, b.shape, &joined, &built,
+                              &failureReason);
+        if (valid && countSolids(joined) != 1) valid = false;
+        if (!valid) {
+          valid = fuseJoin(kJoinRetryFuzzMm, false, a.shape, b.shape, &joined, &built,
+                           &failureReason);
+          if (valid && countSolids(joined) != 1) valid = false;
+        }
+        if (!valid) {
+          valid = fuseJoin(kBooleanFuzzMm, true, a.shape, b.shape, &joined, &built,
+                           &failureReason);
+          if (valid && countSolids(joined) != 1) valid = false;
+        }
+        if (!valid) {
+          valid = fuseJoin(kJoinRetryFuzzMm, true, a.shape, b.shape, &joined, &built,
+                           &failureReason);
+          if (valid && countSolids(joined) != 1) valid = false;
+        }
+        if (!valid || joined.IsNull()) {
+          result.errorCode = "GE_CONSTRUCTION_FAILED";
+          result.message = "validated contact fuse failed joining " + DescribeIds(a.ids) +
+                           " with " + DescribeIds(b.ids) + " (" + failureReason + ")";
+          return false;
+        }
+        if (joined.ShapeType() != TopAbs_SOLID) {
+          TopoDS_Solid solid;
+          for (TopExp_Explorer ex(joined, TopAbs_SOLID); ex.More(); ex.Next()) {
+            solid = TopoDS::Solid(ex.Current());
+          }
+          if (solid.IsNull()) {
+            result.errorCode = "GE_CONSTRUCTION_FAILED";
+            result.message = "validated contact fuse did not produce one solid joining " +
+                             DescribeIds(a.ids) + " with " + DescribeIds(b.ids);
+            return false;
+          }
+          joined = solid;
+        }
+        out->shape = joined;
+        out->ids = a.ids;
+        out->ids.insert(out->ids.end(), b.ids.begin(), b.ids.end());
+        return true;
+      };
+
+      bool assemblyOk = true;
+      while (nodes.size() > 1 && !edges.empty()) {
+        std::vector<bool> matched(nodes.size(), false);
+        std::vector<std::pair<int, int>> pairs;
+        std::vector<bool> consumed(edges.size(), false);
+        for (size_t i = 0; i < edges.size(); ++i) {
+          const auto [a, b] = edges[i];
+          if (!matched[a] && !matched[b]) {
+            matched[a] = matched[b] = true;
+            pairs.push_back({a, b});
+            consumed[i] = true;
+          }
+        }
+        if (pairs.empty()) break;
+
+        std::vector<int> remap(nodes.size(), -1);
+        std::vector<FuseNode> nextNodes;
+        for (const auto [a, b] : pairs) {
+          FuseNode merged;
+          if (!joinNodes(nodes[a], nodes[b], &merged)) {
+            assemblyOk = false;
+            break;
+          }
+          remap[a] = remap[b] = static_cast<int>(nextNodes.size());
+          nextNodes.push_back(std::move(merged));
+        }
+        if (!assemblyOk) break;
+        for (size_t i = 0; i < nodes.size(); ++i) {
+          if (!matched[i]) {
+            remap[i] = static_cast<int>(nextNodes.size());
+            nextNodes.push_back(std::move(nodes[i]));
+          }
+        }
+        std::vector<std::pair<int, int>> nextEdges;
+        for (size_t i = 0; i < edges.size(); ++i) {
+          if (consumed[i]) continue;
+          const int nextA = remap[edges[i].first];
+          const int nextB = remap[edges[i].second];
+          // A contact edge becomes internal after its endpoints are merged.
+          // Retaining it would make the next matching round fuse a node with
+          // itself, which is neither a new geometric operation nor a valid
+          // graph edge.
+          if (nextA != nextB) nextEdges.push_back({nextA, nextB});
+        }
+        nodes = std::move(nextNodes);
+        edges = std::move(nextEdges);
+      }
+      if (assemblyOk && nodes.size() == 1) {
+        currentShape = nodes.front().shape;
+        const bool isSolid = currentShape.ShapeType() == TopAbs_SOLID;
+        const bool isValid = BRepCheck_Analyzer(currentShape).IsValid();
+        const int solidCount = countSolids(currentShape);
+        naryOk = isSolid && isValid && solidCount == 1;
+        if (!naryOk) {
+          result.errorCode = "GE_CONSTRUCTION_FAILED";
+          result.message = "balanced assembly final node invalid (shapeType=" +
+                           std::to_string(currentShape.ShapeType()) + ", valid=" +
+                           std::to_string(isValid) + ", solids=" + std::to_string(solidCount) + ")";
+        }
+      } else {
+        if (result.message.empty()) {
+          result.errorCode = "GE_CONSTRUCTION_FAILED";
+          result.message = "balanced assembly did not consume graph (nodes=" +
+                           std::to_string(nodes.size()) + ", edges=" +
+                           std::to_string(edges.size()) + ")";
+        }
+        naryOk = false;
+      }
+    }
+
+    // Strict policy: a complete, validated assembly is required. A failed
+    // graph assembly is never returned as a plausible partial model.
+    if (!naryOk) {
+      result.errorCode = "GE_CONSTRUCTION_FAILED";
+      if (result.message.empty()) {
+        result.message =
+            "construction rejected by no-fallback policy: complete fused assembly failed";
+      } else {
+        result.message = "construction rejected by no-fallback policy: " + result.message;
+      }
+      return result;
+    }
+
+    // Merge coplanar face fragments the fuse sequence leaves behind at internal
+    // seams — matches the existing fuseBodies() reference pattern exactly
+    // (unifyFaces=true, unifyEdges=false; geometry_service_booleans.cc).
+    ShapeUpgrade_UnifySameDomain unifier(currentShape, /*unifyEdges=*/Standard_False,
+                                          /*unifyFaces=*/Standard_True,
+                                          /*concatBSplines=*/Standard_False);
+    unifier.Build();
+    currentShape = unifier.Shape();
+
+    std::string id = generateUUID();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    if (currentShape.ShapeType() == TopAbs_SOLID) {
+      state.solids[id] = SolidState{id, currentShape};
+    } else {
+      state.shells[id] = ShellState{id, "", currentShape};
+    }
+
+    result.ok = true;
+    result.shellId = id;
+    return result;
+
+  } catch (const Standard_Failure& e) {
+    result.errorCode = "GE_CONSTRUCTION_FAILED";
+    result.message = std::string("part solid construction failed: ") + e.GetMessageString();
+    return result;
+  }
+}
+
+
+}  // namespace mcp_cad::translation

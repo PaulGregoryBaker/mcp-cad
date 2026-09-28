@@ -1,0 +1,107 @@
+{
+  "schemaVersion": "0.1",
+  "id": "c22-n4-up-rot000-sharp",
+  "title": "Polygon closure: N=4 (90° bends up), pose rot000, sharp folds",
+  "level": "A",
+  "tier": "T2",
+  "inventory": [
+    "C22"
+  ],
+  "toleranceProfile": "default",
+  "expectation": "pass",
+  "fixture": {
+    "kind": "authored",
+    "path": null
+  },
+  "params": {
+    "N": 4,
+    "bendDeg": 90,
+    "segmentLenMm": 60,
+    "widthMm": 40,
+    "thicknessMm": 1,
+    "bendDir": "up",
+    "variant": "sharp"
+  },
+  "ops": [
+    {
+      "op": "author_strip",
+      "N": 4,
+      "segmentLenMm": 60,
+      "widthMm": 40,
+      "thicknessMm": 1,
+      "bendDir": "up",
+      "pose": {
+        "rotDeg": 0,
+        "offsetMm": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "op": "construct"
+    },
+    {
+      "op": "map_strip_ends"
+    }
+  ],
+  "oracles": [
+    {
+      "type": "closure",
+      "budgetKey": "closureMm",
+      "checkpoints": [
+        {
+          "afterBend": 1,
+          "endCorners": [
+            [
+              60,
+              0,
+              180
+            ],
+            [
+              60,
+              40,
+              180
+            ]
+          ]
+        },
+        {
+          "afterBend": 2,
+          "endCorners": [
+            [
+              -60,
+              0,
+              60
+            ],
+            [
+              -60,
+              40,
+              60
+            ]
+          ]
+        },
+        {
+          "afterBend": 3,
+          "endCorners": [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              40,
+              0
+            ]
+          ]
+        }
+      ],
+      "finalCoincidentWithStart": true
+    },
+    {
+      "type": "structure",
+      "solidCount": 1,
+      "typedError": null
+    }
+  ]
+}

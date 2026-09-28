@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"C:/Projects/mcp-cad/cpp/src/napi/build/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

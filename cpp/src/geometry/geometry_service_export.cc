@@ -284,7 +284,6 @@ public:
         }
       }
 
-
       // If no planar faces, fall back to simple bounding box
       if (planarFacesWithArea.empty()) {
         Bnd_Box bbox;
@@ -1430,8 +1429,14 @@ public:
       }
     }
 
-    // Tessellate: 0.5 mm chord deviation, 0.3 rad angular deviation, parallel
-    BRepMesh_IncrementalMesh mesher(shape, 0.5, Standard_False, 0.3, Standard_True);
+    // Keep enough samples across small inside/outside bend radii. The previous
+    // 0.5 mm / 0.3 rad settings could reduce a narrow annular-sector bend to
+    // a visibly flat strip even though the source B-Rep still contained its
+    // analytic cylindrical faces.
+    constexpr double kMeshChordDeviationMm = 0.05;
+    constexpr double kMeshAngularDeviationRad = 0.1;
+    BRepMesh_IncrementalMesh mesher(shape, kMeshChordDeviationMm, Standard_False,
+                    kMeshAngularDeviationRad, Standard_True);
     mesher.Perform();
 
     std::vector<float> positions;

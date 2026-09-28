@@ -1,0 +1,38 @@
+{
+  "manufacturing_profile": {
+    "minBendRadiusFactor": 1,
+    "maxBendAngleDeg": 180,
+    "defaultBendRadiusMm": 1,
+    "minHoleDiameterFactor": 1,
+    "minHoleToBendClearanceMm": 2,
+    "minHoleToEdgeClearanceMm": 2,
+    "minHoleToHoleDistanceMm": 2,
+    "minFlangeWidthFactor": 2
+  },
+  "manufacturing_defaults": {
+    "defaultMaterial": "mildSteel",
+    "defaultThicknessMm": 3,
+    "unitSystem": "metric",
+    "preferredBendProcesses": [
+      "airBend"
+    ]
+  },
+  "nesting": {
+    "sheets": [
+      {
+        "widthMm": 2440,
+        "heightMm": 1220,
+        "label": "8x4"
+      }
+    ],
+    "safetyGapMm": 2,
+    "sheetMarginMm": 5,
+    "cuttingWidthMm": 0.2,
+    "rotationsDeg": [
+      0,
+      90,
+      180,
+      270
+    ]
+  }
+}

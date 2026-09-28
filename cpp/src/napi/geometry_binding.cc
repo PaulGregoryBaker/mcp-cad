@@ -424,36 +424,78 @@ Napi::Value BuildShellFromFlatPattern(const Napi::CallbackInfo& info) {
   Napi::Array zonesArr   = info[1].As<Napi::Array>();
   double thicknessMm     = info[2].As<Napi::Number>().DoubleValue();
 
-  std::string referenceShellId;
-  if (info.Length() >= 4 && info[3].IsString())
-    referenceShellId = info[3].As<Napi::String>().Utf8Value();
-
   std::vector<BendZoneSpec> bendZones;
   for (uint32_t i = 0; i < zonesArr.Length(); ++i) {
     Napi::Object obj = zonesArr.Get(i).As<Napi::Object>();
     BendZoneSpec bz;
-    bz.offsetMm     = obj.Get("offsetMm").As<Napi::Number>().DoubleValue();
-    bz.widthMm      = obj.Get("widthMm").As<Napi::Number>().DoubleValue();
-    bz.angleDeg     = obj.Get("angleDeg").As<Napi::Number>().DoubleValue();
-    bz.innerRadiusMm = obj.Get("innerRadiusMm").As<Napi::Number>().DoubleValue();
-    bz.kFactor      = obj.Get("kFactor").As<Napi::Number>().DoubleValue();
-    // Optional world-space fold frame (defaults to 0 → C++ uses legacy face frame).
     auto readOpt = [&](const char* key) -> double {
       Napi::Value v = obj.Get(key);
       return v.IsNumber() ? v.As<Napi::Number>().DoubleValue() : 0.0;
     };
+    bz.hingeX1     = readOpt("hingeX1");
+    bz.hingeY1     = readOpt("hingeY1");
+    bz.hingeX2     = readOpt("hingeX2");
+    bz.hingeY2     = readOpt("hingeY2");
+    bz.widthMm      = obj.Get("widthMm").As<Napi::Number>().DoubleValue();
+    bz.angleDeg     = obj.Get("angleDeg").As<Napi::Number>().DoubleValue();
+    bz.innerRadiusMm = obj.Get("innerRadiusMm").As<Napi::Number>().DoubleValue();
+    bz.kFactor      = obj.Get("kFactor").As<Napi::Number>().DoubleValue();
+    // World-space fold frame + anchor — manufacturing-graph data supplied by
+    // the caller. No live-shell fallback: if these are absent, the rebuilt
+    // shell is simply left unplaced (same as before when referenceShellId
+    // was omitted).
     bz.foldNormalX = readOpt("foldNormalX");
     bz.foldNormalY = readOpt("foldNormalY");
     bz.foldNormalZ = readOpt("foldNormalZ");
     bz.bendDirX    = readOpt("bendDirX");
     bz.bendDirY    = readOpt("bendDirY");
     bz.bendDirZ    = readOpt("bendDirZ");
+    Napi::Value hasAnchorV = obj.Get("hasAnchor");
+    bz.hasAnchor = hasAnchorV.IsBoolean() && hasAnchorV.As<Napi::Boolean>().Value();
+    bz.anchorX = readOpt("anchorX");
+    bz.anchorY = readOpt("anchorY");
+    bz.anchorZ = readOpt("anchorZ");
+    bz.bHingeOffsetMm = readOpt("bHingeOffsetMm");
+    bz.foldDirection = readOpt("foldDirection");
+    if (bz.foldDirection == 0.0) bz.foldDirection = 1.0; // default to far-end
+    bz.foldAxisX   = readOpt("foldAxisX");
+    bz.foldAxisY   = readOpt("foldAxisY");
+    bz.foldAxisZ   = readOpt("foldAxisZ");
+    Napi::Value hasHA = obj.Get("hasHingeAnchor");
+    bz.hasHingeAnchor = hasHA.IsBoolean() && hasHA.As<Napi::Boolean>().Value();
+    bz.hingeAnchorX = readOpt("hingeAnchorX");
+    bz.hingeAnchorY = readOpt("hingeAnchorY");
+    bz.hingeAnchorZ = readOpt("hingeAnchorZ");
     bendZones.push_back(bz);
+  }
+
+  FlatPanelPlacementSpec explicitPlacement;
+  if (info.Length() >= 4 && info[3].IsObject()) {
+    Napi::Object pf = info[3].As<Napi::Object>();
+    Napi::Value hasFrameV = pf.Get("hasFrame");
+    explicitPlacement.hasFrame = hasFrameV.IsBoolean() && hasFrameV.As<Napi::Boolean>().Value();
+    auto readPf = [&](const char* key) -> double {
+      Napi::Value v = pf.Get(key);
+      return v.IsNumber() ? v.As<Napi::Number>().DoubleValue() : 0.0;
+    };
+    explicitPlacement.originX = readPf("originX");
+    explicitPlacement.originY = readPf("originY");
+    explicitPlacement.originZ = readPf("originZ");
+    explicitPlacement.uX = readPf("uX");
+    explicitPlacement.uY = readPf("uY");
+    explicitPlacement.uZ = readPf("uZ");
+    explicitPlacement.vX = readPf("vX");
+    explicitPlacement.vY = readPf("vY");
+    explicitPlacement.vZ = readPf("vZ");
+    explicitPlacement.normalX = readPf("normalX");
+    explicitPlacement.normalY = readPf("normalY");
+    explicitPlacement.normalZ = readPf("normalZ");
+    explicitPlacement.nCentreMm = readPf("nCentreMm");
   }
 
   TRY_GEOMETRY(env, {
     BuildShellFromFlatPatternResult res =
-        svc().buildShellFromFlatPattern(dxfContent, bendZones, thicknessMm, referenceShellId);
+        svc().buildShellFromFlatPattern(dxfContent, bendZones, thicknessMm, explicitPlacement);
     if (!res.ok) {
       Napi::Error::New(env, res.errorCode + ": " + res.message).ThrowAsJavaScriptException();
       return env.Undefined();
@@ -494,6 +536,14 @@ Napi::Value GetPanelFrame(const Napi::CallbackInfo& info) {
     result.Set("uExtentMm", Napi::Number::New(env, res.uExtentMm));
     result.Set("vExtentMm", Napi::Number::New(env, res.vExtentMm));
     result.Set("thicknessMm", Napi::Number::New(env, res.thicknessMm));
+    Napi::Array ring = Napi::Array::New(env, res.ringLocal.size());
+    for (size_t i = 0; i < res.ringLocal.size(); ++i) {
+      Napi::Object pt = Napi::Object::New(env);
+      pt.Set("x", Napi::Number::New(env, res.ringLocal[i].first));
+      pt.Set("y", Napi::Number::New(env, res.ringLocal[i].second));
+      ring.Set(i, pt);
+    }
+    result.Set("ring", ring);
     return result;
   })
   return env.Undefined();
@@ -1101,6 +1151,10 @@ Napi::Value SplitBodyByBends(const Napi::CallbackInfo& info) {
     for (size_t i = 0; i < res.panelIds.size(); ++i)
       panelArr.Set(static_cast<uint32_t>(i), Napi::String::New(env, res.panelIds[i]));
 
+    Napi::Array panelThicknessArr = Napi::Array::New(env, res.panelThicknessMm.size());
+    for (size_t i = 0; i < res.panelThicknessMm.size(); ++i)
+      panelThicknessArr.Set(static_cast<uint32_t>(i), Napi::Number::New(env, res.panelThicknessMm[i]));
+
     Napi::Array protrusionArr = Napi::Array::New(env, res.protrusionIds.size());
     for (size_t i = 0; i < res.protrusionIds.size(); ++i)
       protrusionArr.Set(static_cast<uint32_t>(i), Napi::String::New(env, res.protrusionIds[i]));
@@ -1142,6 +1196,7 @@ Napi::Value SplitBodyByBends(const Napi::CallbackInfo& info) {
     }
 
     result.Set("panel_ids",           panelArr);
+    result.Set("panel_thickness_mm",  panelThicknessArr);
     result.Set("panel_bboxes",        serializeBboxes(res.panelBboxes));
     result.Set("protrusion_ids",      protrusionArr);
     result.Set("protrusion_bboxes",   serializeBboxes(res.protrusionBboxes));
@@ -1404,40 +1459,8 @@ Napi::Value ExploreTopology(const Napi::CallbackInfo& info) {
   return env.Undefined();
 }
 
-Napi::Value FuseBodies(const Napi::CallbackInfo& info) {
-  Napi::Env env = info.Env();
-  if (info.Length() < 2) {
-    Napi::TypeError::New(env, "fuseBodies(tools: Array<string>, fuzzyTolerance: number)").ThrowAsJavaScriptException();
-    return env.Undefined();
-  }
-  Napi::Array toolsArr = info[0].As<Napi::Array>();
-  std::vector<std::string> tools;
-  tools.reserve(toolsArr.Length());
-  for (uint32_t i = 0; i < toolsArr.Length(); ++i) {
-    tools.push_back(toolsArr.Get(i).As<Napi::String>().Utf8Value());
-  }
-  double fuzzyTolerance = info[1].As<Napi::Number>().DoubleValue();
-
-  TRY_GEOMETRY(env, {
-    FuseResult res = svc().fuseBodies(tools, fuzzyTolerance);
-    Napi::Object result = Napi::Object::New(env);
-    result.Set("solid_id",       Napi::String::New(env, res.solidId));
-    result.Set("disjoint",      Napi::Boolean::New(env, res.disjoint));
-    result.Set("rollback_token",  Napi::String::New(env, res.rollbackToken));
-    Napi::Array histArr = Napi::Array::New(env, res.shapeHistory.size());
-    for (size_t i = 0; i < res.shapeHistory.size(); ++i) {
-      Napi::Object rec = Napi::Object::New(env);
-      rec.Set("verdict",         Napi::String::New(env, res.shapeHistory[i].verdict));
-      rec.Set("original_id",     Napi::String::New(env, res.shapeHistory[i].originalId));
-      rec.Set("new_id",          Napi::String::New(env, res.shapeHistory[i].newId));
-      rec.Set("operation_label", Napi::String::New(env, res.shapeHistory[i].operationLabel));
-      histArr.Set(static_cast<uint32_t>(i), rec);
-    }
-    result.Set("shape_history", histArr);
-    return result;
-  })
-  return env.Undefined();
-}
+// FuseBodies (ShellId-based whole-solid fuse binding) was removed
+// 2026-08-26 — see geometry_service.hpp's own removal note.
 
 Napi::Value CutBodies(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
@@ -2032,6 +2055,29 @@ Napi::Value ValidateSheetMetal(const Napi::CallbackInfo& info) {
   return env.Undefined();
 }
 
+Napi::Value MeasurePanelThickness(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsString()) {
+    Napi::TypeError::New(env, "measurePanelThickness(shellId: string)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  std::string shellId = info[0].As<Napi::String>().Utf8Value();
+  TRY_GEOMETRY(env, {
+    PanelThicknessResult res = svc().measurePanelThickness(shellId);
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("ok", Napi::Boolean::New(env, res.ok));
+    result.Set("thickness_mm", Napi::Number::New(env, res.thicknessMm));
+    result.Set("midplane_offset_mm", Napi::Number::New(env, res.midplaneOffsetMm));
+    result.Set("dominant_normal_x", Napi::Number::New(env, res.dominantNormalX));
+    result.Set("dominant_normal_y", Napi::Number::New(env, res.dominantNormalY));
+    result.Set("dominant_normal_z", Napi::Number::New(env, res.dominantNormalZ));
+    result.Set("error_code", Napi::String::New(env, res.errorCode));
+    result.Set("message", Napi::String::New(env, res.message));
+    return result;
+  })
+  return env.Undefined();
+}
+
 Napi::Value ReconstructCurvedBends(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   if (info.Length() < 1 || !info[0].IsString()) {
@@ -2104,7 +2150,6 @@ void RegisterGeometryMethods(Napi::Env env, Napi::Object exports) {
   exports.Set("computeMassProperties", Napi::Function::New(env, ComputeMassProperties));
   exports.Set("measureDistance",       Napi::Function::New(env, MeasureDistance));
   exports.Set("exploreTopology",       Napi::Function::New(env, ExploreTopology));
-  exports.Set("fuseBodies",            Napi::Function::New(env, FuseBodies));
   exports.Set("cutBodies",             Napi::Function::New(env, CutBodies));
   exports.Set("intersectBodies",       Napi::Function::New(env, IntersectBodies));
 
@@ -2132,6 +2177,7 @@ void RegisterGeometryMethods(Napi::Env env, Napi::Object exports) {
   // Feature 007
   exports.Set("validateSheetMetal",    Napi::Function::New(env, ValidateSheetMetal));
   exports.Set("reconstructCurvedBends", Napi::Function::New(env, ReconstructCurvedBends));
+  exports.Set("measurePanelThickness", Napi::Function::New(env, MeasurePanelThickness));
 }
 
 }  // namespace mcp_cad

@@ -1,0 +1,167 @@
+{
+  "schemaVersion": "0.1",
+  "id": "c22-n8-down-rot030-sharp",
+  "title": "Polygon closure: N=8 (45° bends down), pose rot030, sharp folds",
+  "level": "A",
+  "tier": "T2",
+  "inventory": [
+    "C22"
+  ],
+  "toleranceProfile": "default",
+  "expectation": "pass",
+  "fixture": {
+    "kind": "authored",
+    "path": null
+  },
+  "params": {
+    "N": 8,
+    "bendDeg": 45,
+    "segmentLenMm": 60,
+    "widthMm": 40,
+    "thicknessMm": 1,
+    "bendDir": "down",
+    "variant": "sharp"
+  },
+  "ops": [
+    {
+      "op": "author_strip",
+      "N": 8,
+      "segmentLenMm": 60,
+      "widthMm": 40,
+      "thicknessMm": 1,
+      "bendDir": "down",
+      "pose": {
+        "rotDeg": 30,
+        "offsetMm": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "op": "construct"
+    },
+    {
+      "op": "map_strip_ends"
+    }
+  ],
+  "oracles": [
+    {
+      "type": "closure",
+      "budgetKey": "closureMm",
+      "checkpoints": [
+        {
+          "afterBend": 1,
+          "endCorners": [
+            [
+              356.984848098,
+              0,
+              -296.984848098
+            ],
+            [
+              356.984848098,
+              40,
+              -296.984848098
+            ]
+          ]
+        },
+        {
+          "afterBend": 2,
+          "endCorners": [
+            [
+              102.426406871,
+              0,
+              -402.426406871
+            ],
+            [
+              102.426406871,
+              40,
+              -402.426406871
+            ]
+          ]
+        },
+        {
+          "afterBend": 3,
+          "endCorners": [
+            [
+              -109.705627485,
+              0,
+              -314.558441227
+            ],
+            [
+              -109.705627485,
+              40,
+              -314.558441227
+            ]
+          ]
+        },
+        {
+          "afterBend": 4,
+          "endCorners": [
+            [
+              -180,
+              0,
+              -144.852813742
+            ],
+            [
+              -180,
+              40,
+              -144.852813742
+            ]
+          ]
+        },
+        {
+          "afterBend": 5,
+          "endCorners": [
+            [
+              -127.279220614,
+              0,
+              -17.573593129
+            ],
+            [
+              -127.279220614,
+              40,
+              -17.573593129
+            ]
+          ]
+        },
+        {
+          "afterBend": 6,
+          "endCorners": [
+            [
+              -42.426406871,
+              0,
+              17.573593129
+            ],
+            [
+              -42.426406871,
+              40,
+              17.573593129
+            ]
+          ]
+        },
+        {
+          "afterBend": 7,
+          "endCorners": [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              40,
+              0
+            ]
+          ]
+        }
+      ],
+      "finalCoincidentWithStart": true
+    },
+    {
+      "type": "structure",
+      "solidCount": 1,
+      "typedError": null
+    }
+  ]
+}

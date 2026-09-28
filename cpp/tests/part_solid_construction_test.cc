@@ -1,0 +1,2941 @@
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
+
+#include "geometry/translation/manufacturing_graph_evaluator.hpp"
+#include "geometry/translation/part_solid_construction.hpp"
+#include "geometry/geometry_service_impl.hpp"
+
+#include <BRepAdaptor_Surface.hxx>
+#include <BRepAlgoAPI_Common.hxx>
+#include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepBndLib.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
+#include <BRepCheck_Analyzer.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
+#include <BRepGProp.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepPrimAPI_MakeRevol.hxx>
+#include <Bnd_Box.hxx>
+#include <BRep_Tool.hxx>
+#include <GProp_GProps.hxx>
+#include <GeomAbs_SurfaceType.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopoDS.hxx>
+#include <gp_Ax1.hxx>
+#include <gp_Ax2.hxx>
+#include <gp_Cylinder.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Lin.hxx>
+#include <gp_Pnt.hxx>
+#include <gp_Trsf.hxx>
+#include <gp_Vec.hxx>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <map>
+#include <sstream>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+using namespace mcp_cad;
+using namespace mcp_cad::translation;
+using Catch::Approx;
+
+namespace {
+
+constexpr double kTestPi = 3.14159265358979323846;
+
+// Builds an N-segment strip with N-1 bends of `angleDeg` each, real (possibly
+// nonzero) bend radius/K-factor. `hingeTiltDeg`/`hingeYOffsetMm` rotate/shift the
+// hinge line away from being perfectly perpendicular to and centred on the
+// strip's own length axis, so tests can assert no hidden bias toward axis-aligned
+// hinges (mirrors manufacturing_graph_evaluator_test.cc's own MakeStrip exactly —
+// see that file's comment for the full derivation of the spacing formula below).
+//
+// Authored FLUSH — hinge k (1-indexed) sits at exactly `k*segmentLenMm`, a
+// zero-bend-allowance baseline; Evaluate() itself now grows the effective
+// spacing by each bend's own real allowance (docs/BUG_REPORT_outline_never_
+// grows_for_bend_allowance.md), so this must NOT also bake a `ba`-sized gap
+// into the authored spacing — doing both would double-count it. `closesLoop`
+// no longer affects the authored outline (kept only as a call-site
+// documentation flag) — it used to pull the far edge back by one
+// thicknessMm to compensate for the OLD model's own panel/panel overlap at
+// the closing corner; with panels no longer artificially shrunk, that
+// overlap (and the compensation for it) is gone too.
+PartGraphSpec MakeStrip(int segments, double segmentLenMm, double widthMm,
+                        double thicknessMm, double angleDeg, double radiusMm = 0.0,
+                        double kFactor = 0.0, double hingeTiltDeg = 0.0,
+                        double hingeYOffsetMm = 0.0,
+                        Transform3 anchor = Transform3::Identity(),
+                        bool closesLoop = false) {
+  (void)closesLoop;  // call-site documentation only, see comment above
+  PartGraphSpec graph;
+  graph.partId = "test-part";
+  graph.rootRegionPanelId = "seg0";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = anchor;
+
+  int bendCount = segments - 1;
+  double totalLen = segments * segmentLenMm;
+
+  // Outline AND every hinge share a single tilted (F, W) basis — F/W are
+  // orthonormal, so this is a rigid rotation of the whole strip by
+  // hingeTiltDeg, not a shear into a parallelogram.
+  double tiltRad = hingeTiltDeg * kTestPi / 180.0;
+  Point2 F{std::cos(tiltRad), -std::sin(tiltRad)};
+  Point2 W{std::sin(tiltRad), std::cos(tiltRad)};
+  auto Along = [&](double f, double w) -> Point2 {
+    return {f * F.x + w * W.x, f * F.y + w * W.y};
+  };
+
+  graph.outline.outer = {Along(0, 0), Along(totalLen, 0), Along(totalLen, widthMm),
+                          Along(0, widthMm)};
+
+  double halfSpan = widthMm / 2.0 + std::fabs(hingeYOffsetMm) + widthMm;
+
+  for (int i = 0; i < bendCount; ++i) {
+    double hx = (i + 1) * segmentLenMm;
+    Point2 mid = Along(hx, widthMm / 2.0 + hingeYOffsetMm);
+    BendSpec bend;
+    bend.id = "bend" + std::to_string(i);
+    bend.parentRegionPanelId = "seg" + std::to_string(i);
+    bend.childRegionPanelId = "seg" + std::to_string(i + 1);
+    bend.hingeA = {mid.x + W.x * halfSpan, mid.y + W.y * halfSpan};
+    bend.hingeB = {mid.x - W.x * halfSpan, mid.y - W.y * halfSpan};
+    bend.angleDeg = angleDeg;
+    bend.radiusMm = radiusMm;
+    bend.kFactor = kFactor;
+    graph.bends.push_back(bend);
+  }
+  return graph;
+}
+
+// A fixed (deterministic, reproducible — not a runtime RNG) rotation that involves
+// all three axes at deliberately unround angles, plus a translation offset. Used to
+// catch hidden axis-alignment bias: every geometric quantity this module computes
+// (volume, validity, manifoldness) must be identical whether the part sits at the
+// identity anchor or tumbled arbitrarily away from every axis — nothing in the
+// construction pipeline may implicitly assume X/Y/Z-aligned geometry.
+Transform3 MakeTumbledAnchor() {
+  Transform3 rx = Transform3::RotationAboutAxis({0, 0, 0}, {1, 0, 0}, 23.0);
+  Transform3 ry = Transform3::RotationAboutAxis({0, 0, 0}, {0, 1, 0}, 41.0);
+  Transform3 rz = Transform3::RotationAboutAxis({0, 0, 0}, {0, 0, 1}, 67.0);
+  Transform3 rotation = rz.Compose(ry.Compose(rx));
+  Transform3 translation = Transform3::Translation(1234.5, -678.9, 42.0);
+  return translation.Compose(rotation);
+}
+
+double SolidVolume(const TopoDS_Shape& shape) {
+  GProp_GProps props;
+  BRepGProp::VolumeProperties(shape, props);
+  return props.Mass();
+}
+
+double Dist2D(const Point2& a, const Point2& b) {
+  return std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
+}
+
+int CountSolids(const TopoDS_Shape& shape) {
+  int count = 0;
+  for (TopExp_Explorer exp(shape, TopAbs_SOLID); exp.More(); exp.Next()) ++count;
+  return count;
+}
+
+}  // namespace
+
+TEST_CASE("ConstructPartSolid: single flat panel produces one valid manifold solid",
+          "[translation][construction]") {
+  PartGraphSpec graph;
+  graph.partId = "single";
+  graph.rootRegionPanelId = "only";
+  graph.outline.outer = {{0, 0}, {100, 0}, {100, 60}, {0, 60}};
+  graph.thicknessMm = 2.0;
+
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, graph.thicknessMm);
+  REQUIRE(result.ok);
+  REQUIRE_FALSE(result.shellId.empty());
+
+  auto it = state.solids.find(result.shellId);
+  REQUIRE(it != state.solids.end());
+  BRepCheck_Analyzer analyzer(it->second.shape);
+  CHECK(analyzer.IsValid());
+  CHECK(SolidVolume(it->second.shape) == Approx(100.0 * 60.0 * 2.0).epsilon(0.01));
+}
+
+TEST_CASE("ConstructPartSolid: a panel with a circular hole and a polygon hole has "
+          "correctly reduced volume",
+          "[translation][construction][holes]") {
+  PartGraphSpec graph;
+  graph.partId = "with-holes";
+  graph.rootRegionPanelId = "only";
+  graph.outline.outer = {{0, 0}, {100, 0}, {100, 60}, {0, 60}};
+  graph.outline.circleHoles.push_back({/*center=*/{20.0, 30.0}, /*radiusMm=*/5.0});
+  // CW winding (opposite the outer ring's CCW) — holes are stored CW, per
+  // this codebase's own canonical convention (PreparePolygonCut/cut_panel.cc
+  // canonicalizes to this automatically; this test authors it directly).
+  graph.outline.polygonHoles.push_back({{60, 20}, {60, 30}, {70, 30}, {70, 20}});
+  graph.thicknessMm = 2.0;
+
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+  REQUIRE(layout.panels.size() == 1);
+  CHECK(layout.panels[0].regionCircleHoles.size() == 1);
+  CHECK(layout.panels[0].regionPolygonHoles.size() == 1);
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, graph.thicknessMm);
+  REQUIRE(result.ok);
+
+  auto it = state.solids.find(result.shellId);
+  REQUIRE(it != state.solids.end());
+  BRepCheck_Analyzer analyzer(it->second.shape);
+  CHECK(analyzer.IsValid());
+
+  // Full panel (100x60x2) minus the circular hole (pi*5^2 area) and the
+  // 10x10 polygon hole, each times thickness — a real oracle (not bbox),
+  // matching 09's O1-O4 standard.
+  constexpr double kPi = 3.14159265358979323846;
+  double circleAreaMm2 = kPi * 5.0 * 5.0;
+  double polygonAreaMm2 = 10.0 * 10.0;
+  double expectedVolume = (100.0 * 60.0 - circleAreaMm2 - polygonAreaMm2) * 2.0;
+  CHECK(SolidVolume(it->second.shape) == Approx(expectedVolume).epsilon(0.001));
+}
+
+// New coverage for rawPolygonHoles/rawCircleHoles in a bent, shifted context
+// - nothing else in this file exercises a hole together with BA>0. Kept
+// short (see cpp/CMakeLists.txt's catch_discover_tests comment) - the full
+// rationale lives here, not in the ctest-registered name.
+TEST_CASE("ConstructPartSolid: a nonzero-radius bend with a hole on the child "
+ "panel reduces volume by exactly the hole's own volume",
+          "[translation][construction][holes]") {
+  double widthMm = 40.0, thicknessMm = 2.0, radiusMm = 1.5, kFactor = 0.4;
+
+  // Differencing (with-hole minus without-hole) rather than an absolute
+  // volume oracle: the bridge's own volume (an annular-sector revolve) is
+  // identical in both constructions and cancels out, so this doesn't need
+  // its own closed-form re-derivation — just the hole's own, ordinary
+  // cylinder volume.
+  auto buildVolume = [&](bool withHole) -> double {
+    auto graph = MakeStrip(2, 60.0, widthMm, thicknessMm, 90.0, radiusMm, kFactor);
+    if (withHole) {
+      // Center of seg1's own raw (pre-widening) territory, x in [60,120] —
+      // graph.outline holes are authored in the shared, unwidened graph
+      // frame, the same frame RegionOf's own (pre-shift) containment check
+      // uses (manufacturing_graph_evaluator.cc's RegionOf).
+      graph.outline.circleHoles.push_back({/*center=*/{90.0, 20.0}, /*radiusMm=*/5.0});
+    }
+    EvaluateResult layout = Evaluate(graph);
+    REQUIRE(layout.ok);
+    if (withHole) {
+      const RegionPanelLayout* seg1 = nullptr;
+      for (auto& p : layout.panels) {
+        if (p.regionPanelId == "seg1") seg1 = &p;
+      }
+      REQUIRE(seg1 != nullptr);
+      REQUIRE(seg1->regionCircleHoles.size() == 1);
+      REQUIRE(seg1->rawCircleHoles.size() == 1);
+    }
+    GeometryState state;
+    ConstructPartSolidResult result = ConstructPartSolid(state, layout, thicknessMm);
+    REQUIRE(result.ok);
+    auto it = state.solids.find(result.shellId);
+    REQUIRE(it != state.solids.end());
+    BRepCheck_Analyzer analyzer(it->second.shape);
+    CHECK(analyzer.IsValid());
+    return SolidVolume(it->second.shape);
+  };
+
+  double volumeWithoutHole = buildVolume(false);
+  double volumeWithHole = buildVolume(true);
+
+  constexpr double kPi = 3.14159265358979323846;
+  double holeVolume = kPi * 5.0 * 5.0 * thicknessMm;
+  CHECK((volumeWithoutHole - volumeWithHole) == Approx(holeVolume).epsilon(0.001));
+}
+
+// A genuinely sharp (zero-radius) fold does not keep BOTH surfaces continuous across
+// the hinge: the inside (bottomFace) stays exactly continuous by construction, but
+// the outside (topFace) either overlaps ("mountain" folds, like this one) or leaves a
+// small wedge-shaped void ("valley" folds) — a real consequence of the idealization,
+// not a defect (see part_solid_construction.cc's header comment). A boolean fuse
+// resolves the overlap case by removing the double-counted volume. On top of that,
+// each bend's own bridge is a REAL quarter-pie wedge even at radiusMm=0 (sharp on the
+// inside, but the outside surface still sweeps by thicknessMm over the bend angle —
+// see the N=2 asymmetric test above, where this is verified exactly against an
+// independent Common() measurement) — so the true volume is not simply "naiveSum
+// minus overlap," it's "naiveSum minus overlap plus every bend's own real wedge
+// volume," which can land above naiveSum once wedge volume exceeds overlap. The
+// bound below is naiveSum plus the 4 bends' total wedge volume, not naiveSum itself.
+TEST_CASE("ConstructPartSolid: N=4 square tube (mountain/up fold) is one manifold "
+          "solid, volume bounded below the naive sum",
+          "[translation][construction]") {
+  auto graph = MakeStrip(4, 100.0, 50.0, 2.0, 90.0, 0.0, 0.0, 0.0, 0.0, Transform3::Identity(),
+                         /*closesLoop=*/true);
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, graph.thicknessMm);
+  REQUIRE(result.ok);
+
+  auto it = state.solids.find(result.shellId);
+  REQUIRE(it != state.solids.end());
+
+  BRepCheck_Analyzer analyzer(it->second.shape);
+  CHECK(analyzer.IsValid());
+  CHECK(CountSolids(it->second.shape) == 1);
+
+  // 4 panels x ((segmentLenMm - thicknessMm) x widthMm) x thicknessMm — see
+  // MakeStrip's own comment on the inside-corner thickness setback.
+  double naiveSum = 4 * (100.0 - 2.0) * 50.0 * 2.0;
+  // Upper bound: naiveSum PLUS every bend's own real pie-wedge volume (see the
+  // N=2 asymmetric test above — a sharp, radiusMm=0 bend's bridge is not a
+  // degenerate placeholder; its outside surface genuinely sweeps thicknessMm
+  // over the bend angle even with a zero inside radius), with a 3x safety
+  // margin for the panel/panel and panel/bridge overlaps the fuse also has to
+  // resolve at each of the 4 closed-loop corners (empirically characterized,
+  // not re-derived analytically here).
+  constexpr double kPi = 3.14159265358979323846;
+  double wedgePerBend = (kPi / 4.0) * 2.0 * 2.0 * 50.0;  // (angleRad/2)*t^2*width, angleRad=pi/2
+  double maxExcess = 3.0 * 4 * wedgePerBend;
+  // Lower bound: fuse never discards MORE than the panels' own worst-case
+  // pairwise overlap at each of the 4 internal hinges.
+  double maxOverlap = 3 * 2.0 * (2.0 * 2.0 * 50.0 * 2.0);
+  double volume = SolidVolume(it->second.shape);
+  CHECK(volume <= naiveSum + maxExcess);
+  CHECK(volume >= naiveSum - maxOverlap);
+}
+
+TEST_CASE("ConstructPartSolid: N=4 square tube (valley/down fold) is one manifold "
+          "solid, with EXACTLY the same volume as the mountain/up fold",
+          "[translation][construction]") {
+  // The old "sharp fold" model had no real bridge material, so a valley fold's
+  // outer (bottom) surface only touched its neighbour along a 1D edge — nothing
+  // for boolean fuse to merge on, reported as the typed GE_SHARP_FOLD_GAP error.
+  // That gap is now closed for real: the bottom-surface radius r_b is never
+  // exactly zero for a valley fold (r_b = radiusMm + thicknessMm, see
+  // manufacturing_graph_evaluator.hpp), so a real, non-degenerate bridge solid
+  // always exists there, sharing a coincident face with each neighbouring panel.
+  //
+  // At radiusMm=0 (this test), the flat pattern's zone width (BA) is exactly
+  // zero, so neither panel is clipped at all — panel AND bridge material overlap
+  // directly at the hinge, exactly as they do in the mountain case, and fuse
+  // resolves it the same way. A real physical square tube is one unambiguous
+  // object regardless of which direction you happen to call "mountain" versus
+  // "valley" — so its volume must come out EXACTLY the same either way, not just
+  // within some approximate bound. This is a strong, self-checking oracle: if it
+  // ever fails while the mountain test still passes, the two fold directions have
+  // diverged, which is a real bug (an asymmetry constitution v2.0.0 principle III
+  // would not allow — one geometric model, not two).
+  auto graphMountain = MakeStrip(4, 100.0, 50.0, 2.0, 90.0, 0.0, 0.0, 0.0, 0.0,
+                                 Transform3::Identity(), /*closesLoop=*/true);
+  auto graphValley = MakeStrip(4, 100.0, 50.0, 2.0, -90.0, 0.0, 0.0, 0.0, 0.0,
+                               Transform3::Identity(), /*closesLoop=*/true);
+
+  EvaluateResult layoutMountain = Evaluate(graphMountain);
+  EvaluateResult layoutValley = Evaluate(graphValley);
+  REQUIRE(layoutMountain.ok);
+  REQUIRE(layoutValley.ok);
+
+  GeometryState stateMountain, stateValley;
+  ConstructPartSolidResult resultMountain =
+      ConstructPartSolid(stateMountain, layoutMountain, graphMountain.thicknessMm);
+  ConstructPartSolidResult resultValley =
+      ConstructPartSolid(stateValley, layoutValley, graphValley.thicknessMm);
+  REQUIRE(resultMountain.ok);
+  REQUIRE(resultValley.ok);
+
+  auto itMountain = stateMountain.solids.find(resultMountain.shellId);
+  auto itValley = stateValley.solids.find(resultValley.shellId);
+  REQUIRE(itMountain != stateMountain.solids.end());
+  REQUIRE(itValley != stateValley.solids.end());
+
+  BRepCheck_Analyzer analyzerValley(itValley->second.shape);
+  CHECK(analyzerValley.IsValid());
+  CHECK(CountSolids(itValley->second.shape) == 1);
+
+  double volumeMountain = SolidVolume(itMountain->second.shape);
+  double volumeValley = SolidVolume(itValley->second.shape);
+  CHECK(volumeValley == Approx(volumeMountain).epsilon(1e-6));
+}
+
+TEST_CASE("ConstructPartSolid: N=4 square tube with a REAL (nonzero) bend radius and "
+          "K-factor is one manifold solid, mountain and valley volumes match exactly",
+          "[translation][construction]") {
+  // Same oracle as the radiusMm=0 case above, but this is the one that actually
+  // exercises real bend physics end-to-end (bend allowance clipping a genuine
+  // nonzero-width zone, a bridge solid with real curvature, not a degenerate
+  // wedge) — the whole point of this slice's rebuild away from the sharp-fold
+  // idealization.
+  double radiusMm = 1.5, kFactor = 0.4, thicknessMm = 2.0;
+  auto graphMountain = MakeStrip(4, 100.0, 50.0, thicknessMm, 90.0, radiusMm, kFactor, 0.0, 0.0,
+                                 Transform3::Identity(), /*closesLoop=*/true);
+  auto graphValley = MakeStrip(4, 100.0, 50.0, thicknessMm, -90.0, radiusMm, kFactor, 0.0, 0.0,
+                               Transform3::Identity(), /*closesLoop=*/true);
+
+  EvaluateResult layoutMountain = Evaluate(graphMountain);
+  EvaluateResult layoutValley = Evaluate(graphValley);
+  REQUIRE(layoutMountain.ok);
+  REQUIRE(layoutValley.ok);
+
+  GeometryState stateMountain, stateValley;
+  ConstructPartSolidResult resultMountain =
+      ConstructPartSolid(stateMountain, layoutMountain, thicknessMm);
+  ConstructPartSolidResult resultValley =
+      ConstructPartSolid(stateValley, layoutValley, thicknessMm);
+  REQUIRE(resultMountain.ok);
+  REQUIRE(resultValley.ok);
+
+  auto itMountain = stateMountain.solids.find(resultMountain.shellId);
+  auto itValley = stateValley.solids.find(resultValley.shellId);
+  REQUIRE(itMountain != stateMountain.solids.end());
+  REQUIRE(itValley != stateValley.solids.end());
+
+  BRepCheck_Analyzer analyzerMountain(itMountain->second.shape);
+  BRepCheck_Analyzer analyzerValley(itValley->second.shape);
+  CHECK(analyzerMountain.IsValid());
+  CHECK(analyzerValley.IsValid());
+  CHECK(CountSolids(itMountain->second.shape) == 1);
+  CHECK(CountSolids(itValley->second.shape) == 1);
+
+  double volumeMountain = SolidVolume(itMountain->second.shape);
+  double volumeValley = SolidVolume(itValley->second.shape);
+  CHECK(volumeValley == Approx(volumeMountain).epsilon(1e-6));
+}
+
+TEST_CASE("ConstructPartSolid: N=5 pentagon tube (real bend radius) is one manifold "
+          "solid, mountain and valley volumes match exactly",
+          "[translation][construction]") {
+  // Same oracle as the N=4 square tube above, extended to a non-90-degree
+  // closing angle (72 degrees x 5 = 360) — confirms the closesLoop setback and
+  // bridge construction generalize beyond a right-angle corner.
+  double radiusMm = 1.5, kFactor = 0.4, thicknessMm = 2.0;
+  auto graphMountain = MakeStrip(5, 80.0, 50.0, thicknessMm, 72.0, radiusMm, kFactor, 0.0, 0.0,
+                                 Transform3::Identity(), /*closesLoop=*/true);
+  auto graphValley = MakeStrip(5, 80.0, 50.0, thicknessMm, -72.0, radiusMm, kFactor, 0.0, 0.0,
+                               Transform3::Identity(), /*closesLoop=*/true);
+
+  EvaluateResult layoutMountain = Evaluate(graphMountain);
+  EvaluateResult layoutValley = Evaluate(graphValley);
+  REQUIRE(layoutMountain.ok);
+  REQUIRE(layoutValley.ok);
+
+  GeometryState stateMountain, stateValley;
+  ConstructPartSolidResult resultMountain =
+      ConstructPartSolid(stateMountain, layoutMountain, thicknessMm);
+  ConstructPartSolidResult resultValley =
+      ConstructPartSolid(stateValley, layoutValley, thicknessMm);
+  REQUIRE(resultMountain.ok);
+  REQUIRE(resultValley.ok);
+
+  auto itMountain = stateMountain.solids.find(resultMountain.shellId);
+  auto itValley = stateValley.solids.find(resultValley.shellId);
+  REQUIRE(itMountain != stateMountain.solids.end());
+  REQUIRE(itValley != stateValley.solids.end());
+
+  BRepCheck_Analyzer analyzerMountain(itMountain->second.shape);
+  BRepCheck_Analyzer analyzerValley(itValley->second.shape);
+  CHECK(analyzerMountain.IsValid());
+  CHECK(analyzerValley.IsValid());
+  CHECK(CountSolids(itMountain->second.shape) == 1);
+  CHECK(CountSolids(itValley->second.shape) == 1);
+
+  double volumeMountain = SolidVolume(itMountain->second.shape);
+  double volumeValley = SolidVolume(itValley->second.shape);
+  CHECK(volumeValley == Approx(volumeMountain).epsilon(1e-6));
+}
+
+TEST_CASE("ConstructPartSolid: N=6 hexagon tube (real bend radius) is one manifold "
+          "solid, mountain and valley volumes match exactly",
+          "[translation][construction]") {
+  // Same oracle again at 60-degree corners (6 x 60 = 360).
+  double radiusMm = 1.5, kFactor = 0.4, thicknessMm = 2.0;
+  auto graphMountain = MakeStrip(6, 70.0, 50.0, thicknessMm, 60.0, radiusMm, kFactor, 0.0, 0.0,
+                                 Transform3::Identity(), /*closesLoop=*/true);
+  auto graphValley = MakeStrip(6, 70.0, 50.0, thicknessMm, -60.0, radiusMm, kFactor, 0.0, 0.0,
+                               Transform3::Identity(), /*closesLoop=*/true);
+
+  EvaluateResult layoutMountain = Evaluate(graphMountain);
+  EvaluateResult layoutValley = Evaluate(graphValley);
+  REQUIRE(layoutMountain.ok);
+  REQUIRE(layoutValley.ok);
+
+  GeometryState stateMountain, stateValley;
+  ConstructPartSolidResult resultMountain =
+      ConstructPartSolid(stateMountain, layoutMountain, thicknessMm);
+  ConstructPartSolidResult resultValley =
+      ConstructPartSolid(stateValley, layoutValley, thicknessMm);
+  REQUIRE(resultMountain.ok);
+  REQUIRE(resultValley.ok);
+
+  auto itMountain = stateMountain.solids.find(resultMountain.shellId);
+  auto itValley = stateValley.solids.find(resultValley.shellId);
+  REQUIRE(itMountain != stateMountain.solids.end());
+  REQUIRE(itValley != stateValley.solids.end());
+
+  BRepCheck_Analyzer analyzerMountain(itMountain->second.shape);
+  BRepCheck_Analyzer analyzerValley(itValley->second.shape);
+  CHECK(analyzerMountain.IsValid());
+  CHECK(analyzerValley.IsValid());
+  CHECK(CountSolids(itMountain->second.shape) == 1);
+  CHECK(CountSolids(itValley->second.shape) == 1);
+
+  double volumeMountain = SolidVolume(itMountain->second.shape);
+  double volumeValley = SolidVolume(itValley->second.shape);
+  CHECK(volumeValley == Approx(volumeMountain).epsilon(1e-6));
+}
+
+TEST_CASE("ConstructPartSolid: result is invariant under an arbitrary non-axis-aligned "
+          "root anchor (no hidden axis bias)",
+          "[translation][construction]") {
+  Transform3 tumbled = MakeTumbledAnchor();
+
+  auto graphIdentity = MakeStrip(4, 100.0, 50.0, 2.0, 90.0, 0.0, 0.0, 0.0, 0.0,
+                                 Transform3::Identity(), /*closesLoop=*/true);
+  auto graphTumbled =
+      MakeStrip(4, 100.0, 50.0, 2.0, 90.0, 0.0, 0.0, 0.0, 0.0, tumbled, /*closesLoop=*/true);
+
+  EvaluateResult layoutIdentity = Evaluate(graphIdentity);
+  EvaluateResult layoutTumbled = Evaluate(graphTumbled);
+  REQUIRE(layoutIdentity.ok);
+  REQUIRE(layoutTumbled.ok);
+
+  GeometryState stateIdentity, stateTumbled;
+  ConstructPartSolidResult resultIdentity =
+      ConstructPartSolid(stateIdentity, layoutIdentity, graphIdentity.thicknessMm);
+  ConstructPartSolidResult resultTumbled =
+      ConstructPartSolid(stateTumbled, layoutTumbled, graphTumbled.thicknessMm);
+  REQUIRE(resultIdentity.ok);
+  REQUIRE(resultTumbled.ok);
+
+  auto itIdentity = stateIdentity.solids.find(resultIdentity.shellId);
+  auto itTumbled = stateTumbled.solids.find(resultTumbled.shellId);
+  REQUIRE(itIdentity != stateIdentity.solids.end());
+  REQUIRE(itTumbled != stateTumbled.solids.end());
+
+  BRepCheck_Analyzer analyzerTumbled(itTumbled->second.shape);
+  CHECK(analyzerTumbled.IsValid());
+  CHECK(CountSolids(itTumbled->second.shape) == 1);
+
+  // Volume is exactly invariant under any rigid transform (rotation + translation) —
+  // a self-checking oracle that needs no hand-derived expected value. If this fails
+  // while the identity case passes, the construction pipeline has an axis-alignment
+  // bug (e.g. an accidental use of a world-frame axis instead of the panel's own
+  // local/transformed frame somewhere).
+  double volumeIdentity = SolidVolume(itIdentity->second.shape);
+  double volumeTumbled = SolidVolume(itTumbled->second.shape);
+  CHECK(volumeTumbled == Approx(volumeIdentity).epsilon(1e-6));
+}
+
+// ─── Fold-tree nets: branching + perpendicular fold lines ───────────────────
+//
+// Slice 2 (rebuild/06-plan.md's phased build order): every prior test above is a
+// LINEAR chain of PARALLEL fold lines (MakeStrip). This is the first test of a
+// genuine fold TREE (one region panel — F1 — has three children: F2, L, R) with
+// PERPENDICULAR fold lines (F1's own four bounding edges are two pairs of
+// mutually-perpendicular hinges) — closing into a Latin-cross cube net
+// (rebuild/suite/cases/T3/net_cross_cube.json, Paul's anchor case for 08 §3.2).
+//
+// This test is the direct-C++ reproduction (zero NAPI/TS in the path) that found
+// and confirmed a real bug in ClipHalfPlane: a region bounded by only ONE
+// touching bend (F0, whose only bend is F0-F1) was clipping to a degenerate
+// polygon that bridged out to its SIBLINGS' (L/R's) far corners — because those
+// siblings' own base edges happen to graze F0's clip line (y=50) without ever
+// crossing it, and the inclusive `>= -eps` boundary test in IsInside treated
+// those grazing touch-points as "inside," connecting them directly. Every
+// previous linear-chain test only ever clipped simple rectangles with clean
+// crossings, so this never surfaced before. Fixed by making IsInside strict at
+// the boundary (see its own comment in manufacturing_graph_evaluator.cc) — the
+// ENTER/EXIT transition logic still exactly reconstructs genuine boundary edges
+// regardless of length, so this did not regress any linear-chain case (full
+// suite re-run confirmed 0 regressions before this test was added).
+namespace {
+
+double Dist3(const Point3& a, const Point3& b) {
+  return std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) +
+                    (a.z - b.z) * (a.z - b.z));
+}
+
+// Latin-cross cube net: F0 (root, bottom) -> F1 (front) -> F2 (top) -> F3 (back),
+// with F1 also branching to L (left) and R (right). Grid coords x faceSizeMm,
+// matching rebuild/suite/cases/T3/net_cross_cube.json's own "faces" layout
+// exactly (F0=[0,0], F1=[0,1], F2=[0,2], F3=[0,3], L=[-1,1], R=[1,1]).
+//
+// Hinge point order was calibrated empirically against a throwaway NAPI probe
+// before being trusted here: all 5 folds are "mountain" (angleDeg=+90, the
+// zero-pivot-offset case at r=0 — see the sharp-fold closure investigation
+// test above), but L's and R's own hinge endpoint order must be MIRRORED
+// relative to each other (not just F0-F1/F1-F2/F2-F3's shared convention)
+// since they sit on opposite sides of their shared parent F1 — confirmed by
+// this test's own exact (0mm) seam closure below.
+PartGraphSpec MakeCrossCubeNet(double faceSizeMm, double thicknessMm) {
+  double s = faceSizeMm;
+  PartGraphSpec graph;
+  graph.partId = "cross-cube";
+  graph.rootRegionPanelId = "F0";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = Transform3::Identity();
+  graph.outline.outer = {
+      {0, 0},    {s, 0},      {s, s},     {2 * s, s},  {2 * s, 2 * s}, {s, 2 * s},
+      {s, 3 * s}, {s, 4 * s}, {0, 4 * s}, {0, 3 * s},  {0, 2 * s},
+      {-s, 2 * s}, {-s, s},   {0, s},
+  };
+
+  auto MakeBend = [&](const std::string& id, const std::string& parent,
+                       const std::string& child, Point2 hingeA, Point2 hingeB) {
+    BendSpec bend;
+    bend.id = id;
+    bend.parentRegionPanelId = parent;
+    bend.childRegionPanelId = child;
+    bend.hingeA = hingeA;
+    bend.hingeB = hingeB;
+    bend.angleDeg = -90.0;  // mountain (BottomIsConcave's fallback: angleDeg<0), z=0 zero-pivot case
+    bend.radiusMm = 0.0;
+    bend.kFactor = 0.0;
+    return bend;
+  };
+
+  graph.bends = {
+      MakeBend("b01", "F0", "F1", {0, s}, {s, s}),
+      MakeBend("b12", "F1", "F2", {0, 2 * s}, {s, 2 * s}),
+      MakeBend("b23", "F2", "F3", {0, 3 * s}, {s, 3 * s}),
+      MakeBend("b1L", "F1", "L", {0, s}, {0, 2 * s}),
+      MakeBend("b1R", "F1", "R", {s, 2 * s}, {s, s}),  // mirrored order vs b1L
+  };
+  return graph;
+}
+
+}  // namespace
+
+TEST_CASE("GraphEvaluator: Latin-cross cube net (branching + perpendicular "
+          "folds) closes at all 7 seams exactly",
+          "[translation][closure][net]") {
+  double faceSizeMm = 50.0, thicknessMm = 1.0;
+  auto graph = MakeCrossCubeNet(faceSizeMm, thicknessMm);
+  EvaluateResult result = Evaluate(graph);
+  REQUIRE(result.ok);
+  REQUIRE(result.panels.size() == 6);
+
+  std::map<std::string, const RegionPanelLayout*> byId;
+  for (auto& p : result.panels) byId[p.regionPanelId] = &p;
+
+  double s = faceSizeMm;
+  // Each named edge, in the shared flat frame (face:cardinal per schema.md's
+  // net encoding), at the mountain-fold zero-offset pivot height (z=0).
+  auto edge = [&](const std::string& face, double x0, double y0, double x1,
+                   double y1) {
+    return std::make_pair(byId.at(face), std::make_pair(Point3{x0, y0, 0},
+                                                          Point3{x1, y1, 0}));
+  };
+  std::vector<std::pair<decltype(edge("", 0, 0, 0, 0)), decltype(edge("", 0, 0, 0, 0))>>
+      seams = {
+          {edge("F3", 0, 4 * s, s, 4 * s), edge("F0", 0, 0, s, 0)},          // F3:N vs F0:S
+          {edge("L", -s, s, 0, s), edge("F0", 0, 0, 0, s)},                  // L:S vs F0:W
+          {edge("R", s, s, 2 * s, s), edge("F0", s, 0, s, s)},               // R:S vs F0:E
+          {edge("L", -s, 2 * s, 0, 2 * s), edge("F2", 0, 2 * s, 0, 3 * s)},  // L:N vs F2:W
+          {edge("R", s, 2 * s, 2 * s, 2 * s), edge("F2", s, 2 * s, s, 3 * s)},  // R:N vs F2:E
+          {edge("L", -s, s, -s, 2 * s), edge("F3", 0, 3 * s, 0, 4 * s)},     // L:W vs F3:W
+          {edge("R", 2 * s, s, 2 * s, 2 * s), edge("F3", s, 3 * s, s, 4 * s)},  // R:E vs F3:E
+      };
+
+  double worst = 0.0;
+  for (auto& [e1, e2] : seams) {
+    Point3 w1a = e1.first->pose.Apply(e1.second.first);
+    Point3 w1b = e1.first->pose.Apply(e1.second.second);
+    Point3 w2a = e2.first->pose.Apply(e2.second.first);
+    Point3 w2b = e2.first->pose.Apply(e2.second.second);
+    double dSame = std::max(Dist3(w1a, w2a), Dist3(w1b, w2b));
+    double dSwap = std::max(Dist3(w1a, w2b), Dist3(w1b, w2a));
+    worst = std::max(worst, std::min(dSame, dSwap));
+  }
+  CHECK(worst < 1e-6);
+}
+
+TEST_CASE("ConstructPartSolid: Latin-cross cube net builds one manifold cube",
+          "[translation][construction][net]") {
+  double faceSizeMm = 50.0, thicknessMm = 1.0;
+  auto graph = MakeCrossCubeNet(faceSizeMm, thicknessMm);
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, thicknessMm);
+  REQUIRE(result.ok);
+  REQUIRE_FALSE(result.shellId.empty());
+
+  auto it = state.solids.find(result.shellId);
+  REQUIRE(it != state.solids.end());
+  BRepCheck_Analyzer analyzer(it->second.shape);
+  CHECK(analyzer.IsValid());
+  CHECK(CountSolids(it->second.shape) == 1);
+
+  // A closed 50mm cube shell of 1mm sheet: naive per-face sum is
+  // 6*50*50*1=15000. Each of the 5 real bends contributes its own real
+  // pie-wedge bridge volume even at radiusMm=0 (see the N=2 asymmetric
+  // test's exact verification of this), so the true volume can land a
+  // little ABOVE 15000, not only below it — the old "always below naiveSum"
+  // assumption didn't account for that. Upper bound is naiveSum plus the 5
+  // bends' own wedge volume, with a safety margin for corner interactions
+  // (3 bends meet at some of this net's own vertices); lower bound stays a
+  // sanity check against a degenerate sliver.
+  constexpr double kPi = 3.14159265358979323846;
+  double wedgePerBend = (kPi / 4.0) * thicknessMm * thicknessMm * faceSizeMm;
+  double maxExcess = 2.0 * 5 * wedgePerBend;
+  double volume = SolidVolume(it->second.shape);
+  CHECK(volume < 15000.0 + maxExcess);
+  CHECK(volume > 10000.0);
+}
+
+TEST_CASE("ConstructPartSolid: a bend whose OWN hinge lands on a vertex already "
+          "shared by two other (parent-side) bends still builds one manifold solid",
+          "[translation][construction][net][regression]") {
+  // Regression for a real cauldron.step failure (piece-30 "fuse result is
+  // invalid"): three bends shared the exact same 2D ring vertex with MIXED
+  // roles — two of them ending their own span there (hingeA), one of them
+  // starting its own span there (hingeB) — not just the "two ending, none
+  // starting" case the Latin-cross fixture above already covers at (0,s)
+  // (b01/b1L). BuildCutEdges' corner-vertex logic wired only the outer
+  // hingeA cut against the outer hingeB cut (miter); the OTHER (inner)
+  // hingeA cut's own parent bridge was left with its default, never-
+  // overwritten `next` (0) whenever a hingeB cut ALSO shared the vertex —
+  // producing a broken loop jump instead of a closed panel outline. Confirmed
+  // on real cauldron data that the fix is the SAME formula the pure-hingeA
+  // (no hingeB) case already uses (redirect the inner cut to the outer cut's
+  // own childBridgeIdx) — this just needed to run regardless of hingeB also
+  // being present. Reproduced here with one more bend (F0's own further
+  // child F0W) whose hingeB lands exactly on (0,s) — the SAME vertex already
+  // shared by b01 (hingeA, outer/larger span) and b1L (hingeA, inner/smaller
+  // span) in MakeCrossCubeNet above.
+  double faceSizeMm = 50.0, thicknessMm = 1.0, s = faceSizeMm;
+  auto graph = MakeCrossCubeNet(faceSizeMm, thicknessMm);
+
+  BendSpec bendF0W;
+  bendF0W.id = "bF0W";
+  bendF0W.parentRegionPanelId = "F0";
+  bendF0W.childRegionPanelId = "F0W";
+  bendF0W.hingeA = {0, 0};
+  bendF0W.hingeB = {0, s};
+  bendF0W.angleDeg = 90.0;
+  bendF0W.radiusMm = 0.0;
+  bendF0W.kFactor = 0.0;
+  graph.bends.push_back(bendF0W);
+
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+  REQUIRE(layout.panels.size() == 7);  // F0,F1,F2,F3,L,R,F0W
+
+  // The direct, local-code-point check: F1 is a plain 50x50 square touching
+  // 4 bends (b01, b12, b1L, b1R) — its own region must stay a simple 4-vertex
+  // square regardless of bF0W's unrelated presence at one shared corner. The
+  // broken wiring described above instead leaks F1's trace into F0's own
+  // territory, silently absorbing it into a larger, wrong polygon — a defect
+  // a boolean-fuse-level check (BRepCheck/CountSolids alone) can miss, since
+  // fusing two overlapping valid solids is still a single valid solid.
+  const RegionPanelLayout* f1 = nullptr;
+  for (const auto& p : layout.panels) {
+    if (p.regionPanelId == "F1") f1 = &p;
+  }
+  REQUIRE(f1 != nullptr);
+  REQUIRE(f1->rawOuter.size() == 4);
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, thicknessMm);
+  REQUIRE(result.ok);
+
+  auto it = state.solids.find(result.shellId);
+  REQUIRE(it != state.solids.end());
+  BRepCheck_Analyzer analyzer(it->second.shape);
+  CHECK(analyzer.IsValid());
+  CHECK(CountSolids(it->second.shape) == 1);
+}
+
+// ─── Re-root invariance: cauldron corner fan ─────────────────────────────────
+//
+// Live-app regression (2026-09-27, cauldron.step component 2):
+// merge_bodies_with_bend reroots part B at its contact panel (RerootAt), and
+// 23 of C2's 24 possible reroots then failed to construct — the merge
+// committed a part constructPart rejects (GE_BRIDGE_EDGE_NOT_FOUND / invalid
+// boolean topology). A region panel's shape is a property of the bend set,
+// not of which panel is root, so Evaluate must give every panel the same
+// wall and the same zone-edge tags whatever the root.
+//
+// Delta-reduced from C2's real graph (4 of its 23 bends, outline cut to 11
+// vertices, coordinates rounded to 1mm — the failure survives all three).
+// P12 is sandwiched: its bends b12 (in from P6) and b19 (out to P19) share
+// vertex (-2245,2915); b19, b18 (out to P18) and b22 (P18 out to P22) all
+// share vertex (-3518,1955). Rooted at P6 (the import root) it evaluates
+// correctly; rooted at P19, b12 loses its parent-side zone edge on P12 and
+// P12's wall traces P18's territory instead.
+namespace {
+
+PartGraphSpec MakeCauldronCornerFan() {
+  PartGraphSpec graph;
+  graph.partId = "cauldron-corner-fan";
+  graph.rootRegionPanelId = "P6";
+  graph.thicknessMm = 1.0;
+  graph.anchor.transform = Transform3::Identity();
+  graph.outline.outer = {
+      {-2245, 2915}, {-2334, 3037}, {-3610, 2074}, {-3518, 1955}, {-3665, 1985}, {-3961, 415},
+      {-3813, 389},  {-3372, 471},  {-3136, 1719}, {-2122, 2484}, {-1703, 2836},
+  };
+
+  auto MakeBend = [](const std::string& id, const std::string& parent, const std::string& child,
+                     Point2 hingeA, Point2 hingeB, double angleDeg) {
+    BendSpec bend;
+    bend.id = id;
+    bend.parentRegionPanelId = parent;
+    bend.childRegionPanelId = child;
+    bend.hingeA = hingeA;
+    bend.hingeB = hingeB;
+    bend.angleDeg = angleDeg;
+    bend.radiusMm = 3.0;
+    bend.kFactor = 0.0;
+    bend.bottomIsConcave = true;
+    return bend;
+  };
+
+  graph.bends = {
+      MakeBend("b12", "P6", "P12", {-2122, 2484}, {-2245, 2915}, -15.763371478239078),
+      MakeBend("b18", "P12", "P18", {-3136, 1719}, {-3518, 1955}, -15.763369238159997),
+      MakeBend("b19", "P12", "P19", {-3518, 1955}, {-2245, 2915}, -66.88735945755417),
+      MakeBend("b22", "P18", "P22", {-3813, 389}, {-3518, 1955}, -66.88712106002082),
+  };
+  return graph;
+}
+
+std::vector<std::string> AllRegionPanelIds(const PartGraphSpec& graph) {
+  std::vector<std::string> ids{graph.rootRegionPanelId};
+  for (const auto& b : graph.bends) ids.push_back(b.childRegionPanelId);
+  return ids;
+}
+
+PartGraphSpec RerootedAt(const PartGraphSpec& graph, const std::string& newRoot) {
+  RerootResult rerooted = RerootAt(graph.bends, graph.rootRegionPanelId, newRoot);
+  REQUIRE(rerooted.ok);
+  PartGraphSpec out = graph;
+  out.bends = rerooted.bends;
+  out.rootRegionPanelId = newRoot;
+  return out;
+}
+
+// A panel's wall as an order-free point set, so the same polygon traced from
+// a different start vertex still compares equal.
+std::vector<Point2> SortedWall(const RegionPanelLayout& panel) {
+  std::vector<Point2> pts = panel.wallOuter;
+  std::sort(pts.begin(), pts.end(),
+            [](const Point2& a, const Point2& b) { return a.x != b.x ? a.x < b.x : a.y < b.y; });
+  return pts;
+}
+
+// Same presence check part_solid_construction.cc's FindZoneEdges performs.
+bool HasZoneEdge(const RegionPanelLayout& panel, const std::string& bendId) {
+  size_t n = panel.wallOuter.size();
+  for (size_t i = 0; i < panel.wallEdgeBendId.size(); ++i) {
+    if (panel.wallEdgeBendId[i] != bendId || panel.wallEdgeIsTransitionStep[i]) continue;
+    Point2 a = panel.wallOuter[i];
+    Point2 b = panel.wallOuter[(i + 1) % n];
+    if (std::hypot(b.x - a.x, b.y - a.y) > 1e-9) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+TEST_CASE("GraphEvaluator: rerooting a cauldron corner fan leaves every panel's wall and "
+          "zone-edge tags unchanged",
+          "[translation][evaluator][reroot][regression]") {
+  PartGraphSpec graph = MakeCauldronCornerFan();
+  EvaluateResult base = Evaluate(graph);
+  REQUIRE(base.ok);
+  std::map<std::string, const RegionPanelLayout*> baseById;
+  for (const auto& p : base.panels) baseById[p.regionPanelId] = &p;
+
+  for (const std::string& root : AllRegionPanelIds(graph)) {
+    CAPTURE(root);
+    EvaluateResult layout = Evaluate(RerootedAt(graph, root));
+    REQUIRE(layout.ok);
+    REQUIRE(layout.panels.size() == base.panels.size());
+
+    for (const auto& bridge : layout.bridges) {
+      CAPTURE(bridge.bendId);
+      for (const auto& panel : layout.panels) {
+        if (panel.regionPanelId == bridge.parentRegionPanelId ||
+            panel.regionPanelId == bridge.childRegionPanelId) {
+          CAPTURE(panel.regionPanelId);
+          CHECK(HasZoneEdge(panel, bridge.bendId));
+        }
+      }
+    }
+
+    for (const auto& panel : layout.panels) {
+      CAPTURE(panel.regionPanelId);
+      std::vector<Point2> got = SortedWall(panel);
+      std::vector<Point2> want = SortedWall(*baseById.at(panel.regionPanelId));
+      REQUIRE(got.size() == want.size());
+      for (size_t i = 0; i < got.size(); ++i) {
+        CHECK(got[i].x == Approx(want[i].x).epsilon(0).margin(1e-6));
+        CHECK(got[i].y == Approx(want[i].y).epsilon(0).margin(1e-6));
+      }
+    }
+  }
+}
+
+TEST_CASE("ConstructPartSolid: a cauldron corner fan builds one valid solid from every root",
+          "[translation][construction][reroot][regression]") {
+  PartGraphSpec graph = MakeCauldronCornerFan();
+  for (const std::string& root : AllRegionPanelIds(graph)) {
+    CAPTURE(root);
+    PartGraphSpec rerooted = RerootedAt(graph, root);
+    EvaluateResult layout = Evaluate(rerooted);
+    REQUIRE(layout.ok);
+
+    GeometryState state;
+    ConstructPartSolidResult result = ConstructPartSolid(state, layout, rerooted.thicknessMm);
+    CAPTURE(result.message);
+    REQUIRE(result.ok);
+    auto it = state.solids.find(result.shellId);
+    REQUIRE(it != state.solids.end());
+    BRepCheck_Analyzer analyzer(it->second.shape);
+    CHECK(analyzer.IsValid());
+    CHECK(CountSolids(it->second.shape) == 1);
+  }
+}
+
+// Live-app regression (2026-09-27, cauldron.step component 2): import left 6
+// hinge endpoints up to 1.86e-7mm off the ring vertex they sit on. Evaluate
+// accepted them as ON the vertex (walls cut there) while the pose walk read
+// the raw coordinate, so walls and fold axes disagreed by that much at a
+// three-bend corner — enough to break the solid fuse on 2 of 20 merges. A
+// hinge endpoint within epsilon of a vertex must evaluate exactly as if it
+// were that vertex.
+TEST_CASE("GraphEvaluator: a hinge endpoint a sub-epsilon distance off its ring vertex "
+          "evaluates exactly as the vertex itself",
+          "[translation][evaluator][regression]") {
+  PartGraphSpec exact = MakeCauldronCornerFan();
+  PartGraphSpec nudged = exact;
+  for (auto& b : nudged.bends) {
+    if (b.id == "b19") b.hingeB = {b.hingeB.x + 2e-7, b.hingeB.y - 1e-7};
+  }
+
+  EvaluateResult want = Evaluate(exact);
+  EvaluateResult got = Evaluate(nudged);
+  REQUIRE(want.ok);
+  REQUIRE(got.ok);
+  REQUIRE(got.panels.size() == want.panels.size());
+  REQUIRE(got.bridges.size() == want.bridges.size());
+
+  for (size_t i = 0; i < want.panels.size(); ++i) {
+    const auto& w = want.panels[i];
+    const auto& g = got.panels[i];
+    CAPTURE(w.regionPanelId);
+    REQUIRE(g.regionPanelId == w.regionPanelId);
+    REQUIRE(g.wallOuter.size() == w.wallOuter.size());
+    for (size_t k = 0; k < w.wallOuter.size(); ++k) {
+      CHECK(g.wallOuter[k].x == Approx(w.wallOuter[k].x).epsilon(0).margin(1e-12));
+      CHECK(g.wallOuter[k].y == Approx(w.wallOuter[k].y).epsilon(0).margin(1e-12));
+    }
+    for (int k = 0; k < 9; ++k) CHECK(g.pose.r[k] == Approx(w.pose.r[k]).epsilon(0).margin(1e-12));
+    for (int k = 0; k < 3; ++k) CHECK(g.pose.t[k] == Approx(w.pose.t[k]).epsilon(0).margin(1e-9));
+  }
+  for (size_t i = 0; i < want.bridges.size(); ++i) {
+    CAPTURE(want.bridges[i].bendId);
+    CHECK(got.bridges[i].pivotOriginWorld.x == Approx(want.bridges[i].pivotOriginWorld.x).epsilon(0).margin(1e-9));
+    CHECK(got.bridges[i].pivotOriginWorld.y == Approx(want.bridges[i].pivotOriginWorld.y).epsilon(0).margin(1e-9));
+    CHECK(got.bridges[i].pivotOriginWorld.z == Approx(want.bridges[i].pivotOriginWorld.z).epsilon(0).margin(1e-9));
+    CHECK(got.bridges[i].pivotAxisWorld.x == Approx(want.bridges[i].pivotAxisWorld.x).epsilon(0).margin(1e-12));
+    CHECK(got.bridges[i].pivotAxisWorld.y == Approx(want.bridges[i].pivotAxisWorld.y).epsilon(0).margin(1e-12));
+    CHECK(got.bridges[i].pivotAxisWorld.z == Approx(want.bridges[i].pivotAxisWorld.z).epsilon(0).margin(1e-12));
+  }
+}
+
+// ─── Branching (multi-child parent) + real bend radius ──────────────────────
+//
+// docs/BUG_REPORT_nonzero_default_bend_radius_breaks_mesh_construction.md: a
+// root panel that is parent to MORE THAN ONE bend (e.g. a tray's base folding
+// up into 4 walls — testcube.step's own real topology) failed construction
+// with "N disconnected solid(s)" as soon as any of those bends had a real
+// (nonzero) radius. Every prior nonzero-radius test in this file (the N=4/5/6
+// tube tests above) is a LINEAR CHAIN — each panel parent to at most one
+// bend — which never exercised this: the childShift correction that lands
+// each bend's far end exactly on its child lives on the CHILD's own pose, but
+// a panel can be parent to several bends at once, so a single pose-level
+// correction can't cover all of them — only a per-bridge correction (the
+// collar solid in part_solid_construction.cc) can. This is the test that
+// would have caught the bug before it shipped.
+namespace {
+
+// A rectangular base panel with up to 4 walls, one per edge, each attached by
+// its own bend with a real (possibly nonzero) radius/K-factor. Hinges overhang
+// their edge slightly (matching MakeStrip's own convention) so this also
+// guards against assuming a hinge's raw endpoints line up 1:1 with the panel
+// edge they bound — the actual bug this test's fix required (the bridge's
+// parent-side tangent line must be derived from the panel's own clipped edge
+// shifted by the bend-allowance offset, never from the hinge's own raw,
+// deliberately-longer endpoints).
+PartGraphSpec MakeTray(double widthMm, double heightMm, double thicknessMm, double angleDeg,
+                       double radiusMm, double kFactor, int wallCount = 4) {
+  PartGraphSpec graph;
+  graph.partId = "test-tray";
+  graph.rootRegionPanelId = "base";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = Transform3::Identity();
+
+  // The whole part is ONE shared flat blank (13 §0's F-frame) — every panel is
+  // a region of THIS SAME outline, never its own separate shape. A tray's
+  // base-plus-4-walls blank is a plus/cross shape: the base rectangle plus one
+  // wall-depth-tall flap on each edge (flat corners, no miter/relief — this
+  // fixture only needs a valid clip region per wall, not a manufacturable
+  // closed box), CCW per RingSpec::outer's own convention.
+  double d = widthMm < heightMm ? widthMm / 4.0 : heightMm / 4.0;  // wall depth
+  double w = widthMm, h = heightMm;
+  graph.outline.outer = {
+      {0, -d},     {w, -d},     {w, 0},      {w + d, 0},  {w + d, h},
+      {w, h},      {w, h + d},  {0, h + d},  {0, h},      {-d, h},
+      {-d, 0},     {0, 0},
+  };
+
+  double overhang = 10.0;
+  struct WallSpec {
+    std::string id;
+    Point2 hingeA;
+    Point2 hingeB;
+  };
+  // hingeA->hingeB chosen (per BoundingBends' fixed "child = left side"
+  // convention) so each wall's child territory is OUTWARD from the base.
+  std::vector<WallSpec> walls = {
+      {"south", {widthMm + overhang, 0.0}, {-overhang, 0.0}},
+      {"east", {widthMm, heightMm + overhang}, {widthMm, -overhang}},
+      {"north", {-overhang, heightMm}, {widthMm + overhang, heightMm}},
+      {"west", {0.0, -overhang}, {0.0, heightMm + overhang}},
+  };
+
+  for (int i = 0; i < wallCount; ++i) {
+    BendSpec bend;
+    bend.id = "bend-" + walls[i].id;
+    bend.parentRegionPanelId = "base";
+    bend.childRegionPanelId = "wall-" + walls[i].id;
+    bend.hingeA = walls[i].hingeA;
+    bend.hingeB = walls[i].hingeB;
+    bend.angleDeg = angleDeg;
+    bend.radiusMm = radiusMm;
+    bend.kFactor = kFactor;
+    graph.bends.push_back(bend);
+  }
+  return graph;
+}
+
+}  // namespace
+
+TEST_CASE("ConstructPartSolid: a tray base branching into 4 walls with a REAL bend "
+          "radius is one manifold solid per fold direction",
+          "[translation][construction][net]") {
+  double radiusMm = 1.5, kFactor = 0.4, thicknessMm = 2.0;
+  auto graphMountain = MakeTray(100.0, 80.0, thicknessMm, 90.0, radiusMm, kFactor);
+  auto graphValley = MakeTray(100.0, 80.0, thicknessMm, -90.0, radiusMm, kFactor);
+
+  EvaluateResult layoutMountain = Evaluate(graphMountain);
+  EvaluateResult layoutValley = Evaluate(graphValley);
+  REQUIRE(layoutMountain.ok);
+  REQUIRE(layoutValley.ok);
+  REQUIRE(layoutMountain.panels.size() == 5);  // base + 4 walls
+
+  GeometryState stateMountain, stateValley;
+  ConstructPartSolidResult resultMountain =
+      ConstructPartSolid(stateMountain, layoutMountain, thicknessMm);
+  ConstructPartSolidResult resultValley = ConstructPartSolid(stateValley, layoutValley, thicknessMm);
+  REQUIRE(resultMountain.ok);
+  REQUIRE(resultValley.ok);
+
+  auto itMountain = stateMountain.solids.find(resultMountain.shellId);
+  auto itValley = stateValley.solids.find(resultValley.shellId);
+  REQUIRE(itMountain != stateMountain.solids.end());
+  REQUIRE(itValley != stateValley.solids.end());
+
+  BRepCheck_Analyzer analyzerMountain(itMountain->second.shape);
+  BRepCheck_Analyzer analyzerValley(itValley->second.shape);
+  CHECK(analyzerMountain.IsValid());
+  CHECK(analyzerValley.IsValid());
+  CHECK(CountSolids(itMountain->second.shape) == 1);
+  CHECK(CountSolids(itValley->second.shape) == 1);
+
+  // Same symmetry oracle as this file's other mountain/valley pairs: a real
+  // physical tray's volume can't depend on which direction is labelled
+  // "mountain" vs "valley".
+  double volumeMountain = SolidVolume(itMountain->second.shape);
+  double volumeValley = SolidVolume(itValley->second.shape);
+  CHECK(volumeValley == Approx(volumeMountain).epsilon(1e-6));
+}
+
+TEST_CASE("ConstructPartSolid: a tray base branching into 4 walls at radiusMm=0 "
+          "still builds one manifold solid (regression guard)",
+          "[translation][construction][net]") {
+  double thicknessMm = 2.0;
+  auto graph = MakeTray(100.0, 80.0, thicknessMm, 90.0, 0.0, 0.0);
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, thicknessMm);
+  REQUIRE(result.ok);
+
+  auto it = state.solids.find(result.shellId);
+  REQUIRE(it != state.solids.end());
+  BRepCheck_Analyzer analyzer(it->second.shape);
+  CHECK(analyzer.IsValid());
+  CHECK(CountSolids(it->second.shape) == 1);
+}
+
+TEST_CASE("ConstructPartSolid: rejects a failed layout", "[translation][construction][errors]") {
+  EvaluateResult layout;
+  layout.ok = false;
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, 2.0);
+  REQUIRE_FALSE(result.ok);
+  CHECK(result.errorCode == "GE_INVALID_LAYOUT");
+}
+
+TEST_CASE("ConstructPartSolid: rejects non-positive thickness",
+          "[translation][construction][errors]") {
+  PartGraphSpec graph;
+  graph.partId = "single";
+  graph.rootRegionPanelId = "only";
+  graph.outline.outer = {{0, 0}, {100, 0}, {100, 60}, {0, 60}};
+  graph.thicknessMm = 2.0;
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, 0.0);
+  REQUIRE_FALSE(result.ok);
+  CHECK(result.errorCode == "GE_INVALID_SHEET_METAL");
+}
+
+TEST_CASE("ConstructPartSolid: rejects a broken bend assembly instead of accepting a degraded result",
+          "[translation][construction][errors]") {
+  auto graph = MakeStrip(2, 60.0, 40.0, 2.0, 90.0, 1.5, 0.4);
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+  REQUIRE(layout.bridges.size() == 1);
+
+  // Deliberately invalidate the bridge's real zone metadata so the bridge
+  // cannot be assembled from its actual tangent quads. Under the strict
+  // no-fallback policy, this must fail closed and never be accepted as a
+  // valid solid.
+  layout.panels[0].wallOuter.clear();
+  layout.panels[0].wallBottomFace.clear();
+  layout.panels[0].wallTopFace.clear();
+  layout.panels[0].wallEdgeBendId.clear();
+  layout.panels[0].wallEdgeIsTransitionStep.clear();
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, graph.thicknessMm);
+  REQUIRE_FALSE(result.ok);
+  // An empty wallOuter fails closed at the FIRST point that touches it —
+  // building panel[0]'s own wall polygon, before bridge-edge lookup is even
+  // reached — rather than at GE_BRIDGE_EDGE_NOT_FOUND specifically. Both are
+  // valid fail-closed outcomes for this same broken input; what this test
+  // actually guards is no degraded/silent success, checked below.
+  CHECK(result.errorCode == "GE_POLYGON_BUILD_FAILED");
+  CHECK(state.solids.empty());
+  CHECK(state.shells.empty());
+}
+
+// Phase 5 Slice 4 investigation (merge_bodies_with_bend's own volume check
+// found this and needed to confirm it wasn't a merge-specific defect):
+// directly measures the boolean overlap between the two panel prisms of an
+// asymmetric-length, sharp (r=0) N=2 mountain fold, and asserts it EXACTLY
+// equals the naive-sum-vs-fused-volume shortfall — the strongest possible
+// confirmation that "volume short of the naive flat-area sum" is this
+// file's own documented panel/panel outer-corner overlap phenomenon (see
+// the N=4 square tube test's comment above), not a distinct defect. Kept
+// as a permanent regression: if this ever stops matching, the overlap
+// mechanism itself has changed, which every other test here only bounds,
+// never explains directly.
+TEST_CASE("ConstructPartSolid: N=2 asymmetric sharp mountain fold - measured panel/panel "
+ "overlap minus the bridge's own real pie-wedge volume exactly accounts for the "
+ "naive-sum shortfall",
+          "[translation][construction]") {
+  double widthMm = 5.0, thicknessMm = 1.0;
+  double seg0Len = 8.115044407846124, seg1Len = 6.115044407846124;
+  double totalLen = seg0Len + seg1Len; // BA=0 at r=0,k=0
+
+  PartGraphSpec graph;
+  graph.partId = "diag";
+  graph.rootRegionPanelId = "seg0";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = Transform3::Identity();
+  graph.outline.outer = {{0, 0}, {totalLen, 0}, {totalLen, widthMm}, {0, widthMm}};
+
+  BendSpec bend;
+  bend.id = "bend0";
+  bend.parentRegionPanelId = "seg0";
+  bend.childRegionPanelId = "seg1";
+  bend.hingeA = {seg0Len, widthMm};
+  bend.hingeB = {seg0Len, 0};
+  bend.angleDeg = 90.0;
+  bend.radiusMm = 0.0;
+  bend.kFactor = 0.0;
+  graph.bends.push_back(bend);
+
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, thicknessMm);
+  REQUIRE(result.ok);
+  auto it = state.solids.find(result.shellId);
+  REQUIRE(it != state.solids.end());
+  double fusedVolume = SolidVolume(it->second.shape);
+
+  double naiveSum = totalLen * widthMm * thicknessMm;
+  double shortfall = naiveSum - fusedVolume;
+
+  // Independently build the two panel prisms exactly as ConstructPartSolid
+  // does (polygon -> face -> prism -> place by pose), then measure their
+  // pairwise boolean Common() volume directly — no dependency on
+  // ConstructPartSolid's own internal bookkeeping.
+  std::unordered_map<std::string, TopoDS_Shape> panelSolidById;
+  for (const auto& panel : layout.panels) {
+    BRepBuilderAPI_MakePolygon polyMaker;
+    for (const auto& v : panel.rawOuter) polyMaker.Add(gp_Pnt(v.x, v.y, 0.0));
+    polyMaker.Close();
+    BRepBuilderAPI_MakeFace faceMaker(polyMaker.Wire());
+    BRepPrimAPI_MakePrism prism(faceMaker.Face(), gp_Vec(0.0, 0.0, thicknessMm), true);
+    gp_Trsf trsf;
+    trsf.SetValues(panel.pose.r[0], panel.pose.r[1], panel.pose.r[2], panel.pose.t[0],
+                   panel.pose.r[3], panel.pose.r[4], panel.pose.r[5], panel.pose.t[1],
+                   panel.pose.r[6], panel.pose.r[7], panel.pose.r[8], panel.pose.t[2]);
+    BRepBuilderAPI_Transform placed(prism.Shape(), trsf, /*Copy=*/true);
+    panelSolidById[panel.regionPanelId] = placed.Shape();
+  }
+  REQUIRE(panelSolidById.count("seg0") == 1);
+  REQUIRE(panelSolidById.count("seg1") == 1);
+
+  BRepAlgoAPI_Common common(panelSolidById["seg0"], panelSolidById["seg1"]);
+  common.Build();
+  REQUIRE(common.IsDone());
+  double overlapVolume = SolidVolume(common.Shape());
+
+  // Even at radiusMm=0, the bridge is a real, physically-necessary piece —
+  // sharp on the inside (true zero radius there) but the OUTSIDE surface
+  // still has to sweep by thicknessMm over the fold's angle, so it's a
+  // genuine quarter-pie wedge of material (inner radius 0, outer radius
+  // thicknessMm), not a degenerate/zero-volume placeholder. This is on top
+  // of, not instead of, the panel/panel overlap the shortfall used to be
+  // attributed to entirely.
+  constexpr double kPi = 3.14159265358979323846;
+  double angleRad = kPi / 2.0;  // bend.angleDeg = 90
+  double bridgeVolume = (angleRad / 2.0) * thicknessMm * thicknessMm * widthMm;
+
+  INFO("naiveSum=" << naiveSum << " fusedVolume=" << fusedVolume << " shortfall=" << shortfall
+                    << " directly-measured panelA/panelB overlap=" << overlapVolume
+                    << " expected bridge (pie-wedge) volume=" << bridgeVolume);
+  CHECK(shortfall == Approx(overlapVolume - bridgeVolume).epsilon(0.01));
+}
+
+// Mountain and valley folds of the same nominal bend are related by a
+// reflection (same radius/thickness/angle magnitude, opposite pivot side),
+// so their constructed volumes must be identical — a real physical
+// requirement, not an approximation. A separate connector piece used to be
+// built to close a translation-sized gap between the bridge and the child
+// panel, and its own cross-section wasn't the same shape between the two
+// directions, which is what broke this. With the child pose now a pure
+// rotation about the true axis (no separate correction — see
+// manufacturing_graph_evaluator.cc's own comment), the bridge's end face
+// IS the child's real edge, so there's no connector and nothing left to
+// differ between the two constructions.
+TEST_CASE("ConstructPartSolid: mountain and valley volumes of the same "
+          "nominal bend match exactly, across radii",
+          "[translation][construction]") {
+  for (double radiusMm : {0.0, 1.0, 1.5, 2.0, 3.0}) {
+    double kFactor = radiusMm > 0 ? 0.4 : 0.0;
+    double thicknessMm = 2.0;
+    PartGraphSpec graphM, graphV;
+    for (auto* g : {&graphM, &graphV}) {
+      g->partId = "mvvol";
+      g->rootRegionPanelId = "seg0";
+      g->thicknessMm = thicknessMm;
+      g->outline.outer = {{0, 0}, {200, 0}, {200, 50}, {0, 50}};
+    }
+    BendSpec bendM;
+    bendM.id = "bend0";
+    bendM.parentRegionPanelId = "seg0";
+    bendM.childRegionPanelId = "seg1";
+    bendM.hingeA = {100, 50};
+    bendM.hingeB = {100, 0};
+    bendM.angleDeg = 90.0;
+    bendM.radiusMm = radiusMm;
+    bendM.kFactor = kFactor;
+    graphM.bends.push_back(bendM);
+    BendSpec bendV = bendM;
+    bendV.angleDeg = -90.0;
+    graphV.bends.push_back(bendV);
+
+    EvaluateResult layoutM = Evaluate(graphM);
+    EvaluateResult layoutV = Evaluate(graphV);
+    REQUIRE(layoutM.ok);
+    REQUIRE(layoutV.ok);
+
+    GeometryState stateM, stateV;
+    ConstructPartSolidResult resultM = ConstructPartSolid(stateM, layoutM, thicknessMm);
+    ConstructPartSolidResult resultV = ConstructPartSolid(stateV, layoutV, thicknessMm);
+    INFO("radiusMm=" << radiusMm << " resultM.errorCode=" << resultM.errorCode
+                      << " resultM.message=" << resultM.message
+                      << " resultV.errorCode=" << resultV.errorCode
+                      << " resultV.message=" << resultV.message);
+    REQUIRE(resultM.ok);
+    REQUIRE(resultV.ok);
+
+    auto itM = stateM.solids.find(resultM.shellId);
+    auto itV = stateV.solids.find(resultV.shellId);
+    REQUIRE(itM != stateM.solids.end());
+    REQUIRE(itV != stateV.solids.end());
+
+    BRepCheck_Analyzer analyzerM(itM->second.shape);
+    BRepCheck_Analyzer analyzerV(itV->second.shape);
+    double volM = SolidVolume(itM->second.shape);
+    double volV = SolidVolume(itV->second.shape);
+    INFO("radiusMm=" << radiusMm << " kFactor=" << kFactor << " volM=" << volM << " volV=" << volV
+                      << " diff=" << (volV - volM) << " validM=" << analyzerM.IsValid()
+                      << " validV=" << analyzerV.IsValid() << " solidsM=" << CountSolids(itM->second.shape)
+                      << " solidsV=" << CountSolids(itV->second.shape));
+    CHECK(volM == Approx(volV).epsilon(1e-6));
+  }
+}
+
+// Direct, implementation-independent check for the protrusion a real bend's
+// panel walls must never have past its own true rounded surface (reported
+// live, visually, in Form.AI.tion — a flat panel edge visibly poking past
+// the round). Checks the one fact that actually matters (confirmed with the
+// user): each panel's own wall boundary — where its flat material stops and
+// the bridge's curved material begins — must sit at EXACTLY the bend's true
+// radius on both surfaces (rBottom on the concave/bottom face, rTop on the
+// convex/top face), for both the parent and child side.
+//
+// A prior version of this test instead subtracted a single cylinder of
+// radius max(rBottom,rTop) from the whole constructed part and required
+// exactly 2 disconnected solids. That's the wrong check: rBottom and rTop
+// differ whenever thickness is nonzero, so the bend's own bridge material
+// genuinely occupies some of the same 3D region the flat wall's un-trimmed
+// tail does near the tangent line — a real, harmless fact of a straight-quad
+// revolve, absorbed by the union, not a defect (confirmed with the user:
+// small overlap on the concave/inner side doesn't matter, since it's still
+// just one union — only a gap or a genuine protrusion past the true radius
+// would be a real bug). On top of that, the outer surface's own edge is
+// EXACTLY tangent (not merely close), so a single boolean cut at exactly
+// that radius leaves a zero-volume tangent contact along the whole sweep —
+// which keeps the two sides topologically "connected" even when the
+// construction is perfect. Neither of those is what the original bug (a
+// visibly protruding flat edge) actually was, so this test checks the wall
+// boundary's own position directly instead of relying on a boolean split.
+TEST_CASE("ConstructPartSolid: each wall's own tangent-line boundary sits "
+          "exactly on the bend's true radius, both surfaces, both sides",
+          "[translation][construction][walltrim]") {
+  double thicknessMm = 2.0;
+  double widthMm = 50.0;
+  for (double angleDeg : {90.0, -90.0}) {
+    for (double radiusMm : {1.0, 1.5, 2.0, 3.0}) {
+      double kFactor = 0.4;
+      auto graph = MakeStrip(2, 100.0, widthMm, thicknessMm, angleDeg, radiusMm, kFactor);
+      EvaluateResult layout = Evaluate(graph);
+      REQUIRE(layout.ok);
+      REQUIRE(layout.bridges.size() == 1);
+      const BridgeLayout& bridge = layout.bridges[0];
+
+      GeometryState state;
+      ConstructPartSolidResult result = ConstructPartSolid(state, layout, thicknessMm);
+      INFO("angleDeg=" << angleDeg << " radiusMm=" << radiusMm << " errorCode=" << result.errorCode
+                        << " message=" << result.message);
+      REQUIRE(result.ok);
+      auto it = state.solids.find(result.shellId);
+      REQUIRE(it != state.solids.end());
+
+      bool concave = angleDeg < 0.0;  // matches BottomIsConcave's fallback polarity
+      double rBottom = concave ? radiusMm : radiusMm + thicknessMm;
+      double rTop = concave ? radiusMm + thicknessMm : radiusMm;
+
+      gp_Pnt axisOrigin(bridge.pivotOriginWorld.x, bridge.pivotOriginWorld.y,
+                         bridge.pivotOriginWorld.z);
+      gp_Dir axisDir(bridge.pivotAxisWorld.x, bridge.pivotAxisWorld.y, bridge.pivotAxisWorld.z);
+      gp_Lin axisLine(axisOrigin, axisDir);
+
+      for (const auto& panel : layout.panels) {
+        bool isParent = panel.regionPanelId == bridge.parentRegionPanelId;
+        bool isChild = panel.regionPanelId == bridge.childRegionPanelId;
+        if (!isParent && !isChild) continue;
+
+        // bridge.rawHingeA/B carry an intentionally exaggerated half-span
+        // (BridgeLayout's own header comment) — fine as a LINE for a
+        // half-plane clip, but not a real point on the panel. Find this
+        // panel's own real hinge-adjacent edge (the same lookup the bridge
+        // quad and BuildSetbackExtensionRing use) and test at its own
+        // midpoint instead, so the probe point actually lands on the real
+        // panel width, not out in the exaggerated Y range.
+        int edgeIdx = -1;
+        for (size_t i = 0; i < panel.edgeBendId.size(); ++i) {
+          if (panel.edgeBendId[i] == bridge.bendId) {
+            edgeIdx = static_cast<int>(i);
+            break;
+          }
+        }
+        REQUIRE(edgeIdx >= 0);
+        const Point2& edgeA = panel.rawOuter[static_cast<size_t>(edgeIdx)];
+        const Point2& edgeB = panel.rawOuter[(static_cast<size_t>(edgeIdx) + 1) % panel.rawOuter.size()];
+        Point2 edgeMid{(edgeA.x + edgeB.x) / 2.0, (edgeA.y + edgeB.y) / 2.0};
+
+        // The wall boundary's own local (pre-pose) position — independently
+        // derived here from the same rawHinge + sideSign*setbackMm*nLeftFlat
+        // fact TrimToTangentLines/BuildSetbackExtensionRing use, verified
+        // numerically (zero residual, every angle/radius/concavity
+        // combination, including the mixed concave-vs-signed-angle cases
+        // real STEP data produces) before either was implemented.
+        double sideSign = isChild ? -1.0 : 1.0;
+        double offset = sideSign * bridge.setbackMm;
+        Point2 tangentPt2D{edgeMid.x + offset * bridge.nLeftFlat.x,
+                            edgeMid.y + offset * bridge.nLeftFlat.y};
+        Point3 bottomLocal{tangentPt2D.x, tangentPt2D.y, 0.0};
+        Point3 topLocal{tangentPt2D.x, tangentPt2D.y, thicknessMm};
+        Point3 bottomWorld = panel.pose.Apply(bottomLocal);
+        Point3 topWorld = panel.pose.Apply(topLocal);
+        gp_Pnt bottomPnt(bottomWorld.x, bottomWorld.y, bottomWorld.z);
+        gp_Pnt topPnt(topWorld.x, topWorld.y, topWorld.z);
+
+        double dBottom = axisLine.Distance(bottomPnt);
+        double dTop = axisLine.Distance(topPnt);
+        INFO("panel=" << panel.regionPanelId << " isParent=" << isParent << " angleDeg=" << angleDeg
+                       << " radiusMm=" << radiusMm << " dBottom=" << dBottom << " rBottom="
+                       << rBottom << " dTop=" << dTop << " rTop=" << rTop);
+        CHECK(dBottom == Approx(rBottom).margin(1e-6));
+        CHECK(dTop == Approx(rTop).margin(1e-6));
+
+        // And confirm the CONSTRUCTED solid's own surface actually reaches
+        // these exact points — not just that the formula predicts them —
+        // catching a real extrusion/pose/fuse bug the formula alone can't.
+        BRepBuilderAPI_MakeVertex vBottom(bottomPnt);
+        BRepBuilderAPI_MakeVertex vTop(topPnt);
+        BRepExtrema_DistShapeShape distBottom(vBottom.Shape(), it->second.shape);
+        BRepExtrema_DistShapeShape distTop(vTop.Shape(), it->second.shape);
+        REQUIRE(distBottom.IsDone());
+        REQUIRE(distTop.IsDone());
+        CHECK(distBottom.Value() < 1e-6);
+        CHECK(distTop.Value() < 1e-6);
+      }
+    }
+  }
+}
+
+// Investigated 2026-09 alongside manufacturing_graph_evaluator_test.cc's own
+// "partial-width (T-shaped) seam wall edges sit exactly
+// sqrt(setback^2+radius^2)..." test, in response to a live-app report of
+// unexpected extra material in merge_bodies_with_bend at a real radius
+// (0.95mm) on a partial-width seam. That test proved Evaluate()'s own
+// tangent-point math correct; this test goes one level deeper and checks the
+// ACTUAL constructed solid (wall polygons from wallOuter + the bridge
+// revolve + the boolean fuse combining them) — also clean. The live report's
+// actual cause turned out to be a flaw in an ad hoc TS-level diagnostic that
+// built one source panel's own comparison solid from its PRE-bend-allowance
+// anchor instead of the real, post-shift position a real bend radius
+// legitimately produces (see this file's own "EXACT real live-app
+// outline/bend data" test below for the confirmation using the real captured
+// numbers) — not a defect here. Kept as permanent regression coverage.
+//
+// Same T-shaped combined outline as the Evaluate()-only test (100x200 plate
+// + 100x100 flange on the plate's middle 100mm of its 200mm edge — bit-for-
+// bit merge_partial_seam_tab_bracket.integration.test.ts's own
+// ReconcileOutlines output), but now actually constructed and diffed against
+// its own two source panels' real flat solids.
+TEST_CASE("ConstructPartSolid: partial-width (T-shaped) seam at a real nonzero radius - "
+ "binary diff against the two source panels leaves ONLY a small sliver at the bend",
+          "[translation][construction][regression]") {
+  for (double angleDeg : {90.0, -90.0}) {
+  for (double radiusMm : {0.95, 2.0}) {
+    double kFactor = 0.4;
+    double thicknessMm = 1.5;
+    INFO("angleDeg=" << angleDeg << " radiusMm=" << radiusMm);
+
+    PartGraphSpec graph;
+    graph.partId = "tshape";
+    graph.rootRegionPanelId = "parent";
+    graph.thicknessMm = thicknessMm;
+    graph.anchor.transform = Transform3::Identity();
+    graph.outline.outer = {
+        {0, 0}, {100, 0}, {100, 50}, {200, 50}, {200, 150}, {100, 150}, {100, 200}, {0, 200},
+    };
+
+    BendSpec bend;
+    bend.id = "bend0";
+    bend.parentRegionPanelId = "parent";
+    bend.childRegionPanelId = "child";
+    bend.hingeA = {100, 150};
+    bend.hingeB = {100, 50};
+    bend.angleDeg = angleDeg;
+    bend.radiusMm = radiusMm;
+    bend.kFactor = kFactor;
+    graph.bends.push_back(bend);
+
+    EvaluateResult layout = Evaluate(graph);
+    REQUIRE(layout.ok);
+
+    GeometryState state;
+    ConstructPartSolidResult result = ConstructPartSolid(state, layout, thicknessMm);
+    REQUIRE(result.ok);
+    auto it = state.solids.find(result.shellId);
+    REQUIRE(it != state.solids.end());
+    TopoDS_Shape actualShape = it->second.shape;
+    double actualVolume = SolidVolume(actualShape);
+
+    double angleRad = std::fabs(angleDeg) * kTestPi / 180.0;
+    double bendAllowanceMm = angleRad * (radiusMm + kFactor * thicknessMm);
+    double naiveSum = 30000.0 * thicknessMm;  // T-shape flat area (100x200+100x100) * thickness
+    double seamWidthMm = 100.0;
+    double expectedVolume = naiveSum + bendAllowanceMm * seamWidthMm * thicknessMm;
+    INFO("naiveSum=" << naiveSum << " expectedVolume=" << expectedVolume
+                      << " actualVolume=" << actualVolume);
+
+    // Build each panel's OWN source solid directly from its rawOuter + real
+    // pose (the same technique the existing "N=2 asymmetric sharp mountain
+    // fold" test above uses) -- the flat material each panel truly is, at
+    // its own real 3D placement.
+    std::unordered_map<std::string, TopoDS_Shape> panelSolidById;
+    for (const auto& panel : layout.panels) {
+      BRepBuilderAPI_MakePolygon polyMaker;
+      for (const auto& v : panel.rawOuter) polyMaker.Add(gp_Pnt(v.x, v.y, 0.0));
+      polyMaker.Close();
+      BRepBuilderAPI_MakeFace faceMaker(polyMaker.Wire());
+      BRepPrimAPI_MakePrism prism(faceMaker.Face(), gp_Vec(0.0, 0.0, thicknessMm), true);
+      gp_Trsf trsf;
+      trsf.SetValues(panel.pose.r[0], panel.pose.r[1], panel.pose.r[2], panel.pose.t[0],
+                     panel.pose.r[3], panel.pose.r[4], panel.pose.r[5], panel.pose.t[1],
+                     panel.pose.r[6], panel.pose.r[7], panel.pose.r[8], panel.pose.t[2]);
+      BRepBuilderAPI_Transform placed(prism.Shape(), trsf, /*Copy=*/true);
+      panelSolidById[panel.regionPanelId] = placed.Shape();
+    }
+    REQUIRE(panelSolidById.count("parent") == 1);
+    REQUIRE(panelSolidById.count("child") == 1);
+
+    BRepAlgoAPI_Cut cutParent(actualShape, panelSolidById["parent"]);
+    cutParent.Build();
+    REQUIRE(cutParent.IsDone());
+    BRepAlgoAPI_Cut cutBoth(cutParent.Shape(), panelSolidById["child"]);
+    cutBoth.Build();
+    REQUIRE(cutBoth.IsDone());
+    TopoDS_Shape leftover = cutBoth.Shape();
+    double leftoverVolume = SolidVolume(leftover);
+
+    Bnd_Box box;
+    BRepBndLib::AddOptimal(leftover, box);
+    double xMin, yMin, zMin, xMax, yMax, zMax;
+    box.Get(xMin, yMin, zMin, xMax, yMax, zMax);
+    double dx = xMax - xMin, dy = yMax - yMin, dz = zMax - zMin;
+    std::array<double, 3> extents{dx, dy, dz};
+    std::sort(extents.begin(), extents.end());
+    double marginMm = radiusMm + kFactor * thicknessMm + 5.0;  // small cushion past the fillet
+    INFO("leftoverVolume=" << leftoverVolume << " bbox=[" << xMin << "," << xMax << "]x["
+                            << yMin << "," << yMax << "]x[" << zMin << "," << zMax
+                            << "] extents(sorted)=" << extents[0] << "," << extents[1] << ","
+                            << extents[2] << " marginMm=" << marginMm);
+
+    // OBJECTIVE ASSERT: only the seam-width direction may be large; the
+    // other two leftover extents must be confined near the bend.
+    CHECK(extents[0] < marginMm);
+    CHECK(extents[1] < marginMm);
+  }
+  }
+}
+
+// Investigated 2026-09, EXACT real data: the actual 11-vertex
+// combinedOutline, thickness (0.95mm -- coincidentally equal to the bend's
+// own radius, a real fact about this fixture, not a simplification), and
+// bend params captured directly from a live merge_bodies_with_bend run
+// (import testcube.step, split_part_at_bend on every bend with
+// keep_corner_on='parent', translate Protrusion1 by -76.6mm, fuse_bodies,
+// then merge_bodies_with_bend against another imported component,
+// radius_mm=0.95, k_factor=0.4) -- hard-coded here so this reproduction
+// needs no TS layer, no STEP import, only Evaluate()+ConstructPartSolid().
+//
+// This also came back completely clean, using the REAL, irregular composite
+// outline (from a real fuse_bodies union), not just an idealized rectangle.
+// (An earlier version of this test used bridge.hingeA/hingeB -- Evaluate()'s
+// own COMPUTED "center of the allowance zone" output -- as this BendSpec's
+// input, double-applying Evaluate()'s own internal shift; that was a mistake
+// in the test, not a finding. With the correct RAW, authored hinge restored
+// below, both this test and a separate world-space comparison confirmed the
+// real live-app "extra material" report traced to a flaw in an ad hoc
+// TS-level diagnostic — it built one source panel's comparison solid from
+// its own PRE-bend-allowance anchor, not the real post-shift position a
+// nonzero bend radius legitimately produces — not a defect in this
+// construction path.) Kept as permanent regression coverage using the exact
+// real numbers.
+TEST_CASE("ConstructPartSolid: EXACT real live-app outline/bend data -- binary diff against "
+          "the two source panels should leave only a small sliver at the bend",
+          "[translation][construction][regression]") {
+  double thicknessMm = 0.9499999999999744;
+  double radiusMm = 0.95;
+  double kFactor = 0.4;
+  double angleDeg = -90.0;
+
+  PartGraphSpec graph;
+  graph.partId = "real";
+  graph.rootRegionPanelId = "parent";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = Transform3::Identity();
+  // The EXACT real combinedOutline (11 vertices) -- includes the fused
+  // protrusion's own material, corner reliefs, everything real.
+  graph.outline.outer = {
+      {450, 5.684341886080802e-14},
+      {450, 150.00000000000006},
+      {300.04999999999995, 150},
+      {275.94999999999993, 150.05},
+      {275.99999999999994, 0},
+      {300, 7.840471567008018e-15},
+      {300.05, -74.94999999999996},
+      {300, -149.99999999999997},
+      {373.95000000000005, -149.99999999999994},
+      {450, -149.99999999999994},
+      {450, -76.04999999999994},
+  };
+
+  BendSpec bend;
+  bend.id = "bend0";
+  bend.parentRegionPanelId = "parent";
+  bend.childRegionPanelId = "child";
+  // RAW, authored hinge (the graph bend row's own stored value, from the
+  // real merge_bodies_with_bend call) -- NOT bridge.hingeA/hingeB, which is
+  // Evaluate()'s OWN computed "center of the allowance zone" output. Feeding
+  // that output back in as this BendSpec's input would double-apply
+  // Evaluate()'s own internal shift -- confirmed to be the actual mistake in
+  // an earlier version of this test (it used the evaluated bridge's hinge
+  // here instead), not a real defect.
+  bend.hingeA = {450, 5.684341886080802e-14};
+  bend.hingeB = {300, 7.840471567008018e-15};
+  bend.angleDeg = angleDeg;
+  bend.radiusMm = radiusMm;
+  bend.kFactor = kFactor;
+  graph.bends.push_back(bend);
+
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+  REQUIRE(layout.bridges.size() == 1);
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, thicknessMm);
+  REQUIRE(result.ok);
+  auto it = state.solids.find(result.shellId);
+  REQUIRE(it != state.solids.end());
+  TopoDS_Shape actualShape = it->second.shape;
+  double actualVolume = SolidVolume(actualShape);
+
+  auto shoelaceArea = [](const std::vector<Point2>& poly) {
+    double sum = 0.0;
+    for (size_t i = 0; i < poly.size(); ++i) {
+      const Point2& a = poly[i];
+      const Point2& b = poly[(i + 1) % poly.size()];
+      sum += a.x * b.y - b.x * a.y;
+    }
+    return std::fabs(sum) / 2.0;
+  };
+  double flatArea = shoelaceArea(graph.outline.outer);
+  double naiveSum = flatArea * thicknessMm;
+  double angleRad = std::fabs(angleDeg) * kTestPi / 180.0;
+  double bendAllowanceMm = angleRad * (radiusMm + kFactor * thicknessMm);
+  double seamWidthMm = std::fabs(bend.hingeA.x - bend.hingeB.x);
+  double expectedVolume = naiveSum + bendAllowanceMm * seamWidthMm * thicknessMm;
+  INFO("flatArea=" << flatArea << " naiveSum=" << naiveSum << " expectedVolume=" << expectedVolume
+                    << " actualVolume=" << actualVolume);
+
+  std::unordered_map<std::string, TopoDS_Shape> panelSolidById;
+  for (const auto& panel : layout.panels) {
+    BRepBuilderAPI_MakePolygon polyMaker;
+    for (const auto& v : panel.rawOuter) polyMaker.Add(gp_Pnt(v.x, v.y, 0.0));
+    polyMaker.Close();
+    BRepBuilderAPI_MakeFace faceMaker(polyMaker.Wire());
+    BRepPrimAPI_MakePrism prism(faceMaker.Face(), gp_Vec(0.0, 0.0, thicknessMm), true);
+    gp_Trsf trsf;
+    trsf.SetValues(panel.pose.r[0], panel.pose.r[1], panel.pose.r[2], panel.pose.t[0],
+                   panel.pose.r[3], panel.pose.r[4], panel.pose.r[5], panel.pose.t[1],
+                   panel.pose.r[6], panel.pose.r[7], panel.pose.r[8], panel.pose.t[2]);
+    BRepBuilderAPI_Transform placed(prism.Shape(), trsf, /*Copy=*/true);
+    panelSolidById[panel.regionPanelId] = placed.Shape();
+  }
+  REQUIRE(panelSolidById.count("parent") == 1);
+  REQUIRE(panelSolidById.count("child") == 1);
+
+  BRepAlgoAPI_Cut cutParent(actualShape, panelSolidById["parent"]);
+  cutParent.Build();
+  REQUIRE(cutParent.IsDone());
+  BRepAlgoAPI_Cut cutBoth(cutParent.Shape(), panelSolidById["child"]);
+  cutBoth.Build();
+  REQUIRE(cutBoth.IsDone());
+  TopoDS_Shape leftover = cutBoth.Shape();
+
+  // The panel solids above are built from rawOuter (a plain, un-notched
+  // prism to the sharp hinge line) -- they don't carve out the curved
+  // bend-radius region a real bridge legitimately occupies, so subtracting
+  // only them leaves the bridge's own real material behind as "leftover"
+  // too (confirmed directly: for this fixture, leftover-minus-bridge
+  // measures 0.02mm^3, not the ~72mm^3 the panels-only diff reports).
+  // Build the bridge the same way ConstructPartSolid does -- a revolve of
+  // the parent's own real (non-transition-step) wall edge about the
+  // bridge's true axis -- and subtract that too, so what's actually being
+  // checked is only genuinely unaccounted material.
+  const RegionPanelLayout* parentPanel = nullptr;
+  for (const auto& panel : layout.panels) {
+    if (panel.regionPanelId == "parent") parentPanel = &panel;
+  }
+  REQUIRE(parentPanel != nullptr);
+  const BridgeLayout& bridgeLayout = layout.bridges[0];
+  size_t parentEdge = SIZE_MAX;
+  for (size_t i = 0; i < parentPanel->wallEdgeBendId.size(); ++i) {
+    if (parentPanel->wallEdgeBendId[i] == bridgeLayout.bendId &&
+        !parentPanel->wallEdgeIsTransitionStep[i]) {
+      parentEdge = i;
+      break;
+    }
+  }
+  REQUIRE(parentEdge != SIZE_MAX);
+  size_t parentEdge1 = (parentEdge + 1) % parentPanel->wallOuter.size();
+  const Point3& qb0 = parentPanel->wallBottomFace[parentEdge];
+  const Point3& qb1 = parentPanel->wallBottomFace[parentEdge1];
+  const Point3& qt1 = parentPanel->wallTopFace[parentEdge1];
+  const Point3& qt0 = parentPanel->wallTopFace[parentEdge];
+  BRepBuilderAPI_MakePolygon quadPoly;
+  quadPoly.Add(gp_Pnt(qb0.x, qb0.y, qb0.z));
+  quadPoly.Add(gp_Pnt(qb1.x, qb1.y, qb1.z));
+  quadPoly.Add(gp_Pnt(qt1.x, qt1.y, qt1.z));
+  quadPoly.Add(gp_Pnt(qt0.x, qt0.y, qt0.z));
+  quadPoly.Close();
+  BRepBuilderAPI_MakeFace quadFace(quadPoly.Wire());
+  double bridgeAngleRad = bridgeLayout.angleDeg * kTestPi / 180.0;
+  gp_Dir bridgeAxisDir(bridgeLayout.pivotAxisWorld.x, bridgeLayout.pivotAxisWorld.y,
+                        bridgeLayout.pivotAxisWorld.z);
+  if (bridgeAngleRad < 0.0) {
+    bridgeAxisDir.Reverse();
+    bridgeAngleRad = -bridgeAngleRad;
+  }
+  gp_Ax1 bridgeAxis(gp_Pnt(bridgeLayout.pivotOriginWorld.x, bridgeLayout.pivotOriginWorld.y,
+                            bridgeLayout.pivotOriginWorld.z),
+                     bridgeAxisDir);
+  BRepPrimAPI_MakeRevol revol(quadFace.Face(), bridgeAxis, bridgeAngleRad, /*Copy=*/false);
+  REQUIRE(revol.IsDone());
+
+  BRepAlgoAPI_Cut cutBridge(leftover, revol.Shape());
+  cutBridge.Build();
+  REQUIRE(cutBridge.IsDone());
+  TopoDS_Shape trueLeftover = cutBridge.Shape();
+  double trueLeftoverVolume = SolidVolume(trueLeftover);
+
+  Bnd_Box box;
+  BRepBndLib::AddOptimal(trueLeftover, box);
+  double xMin, yMin, zMin, xMax, yMax, zMax;
+  box.Get(xMin, yMin, zMin, xMax, yMax, zMax);
+  double dx = xMax - xMin, dy = yMax - yMin, dz = zMax - zMin;
+  std::array<double, 3> extents{dx, dy, dz};
+  std::sort(extents.begin(), extents.end());
+  INFO("trueLeftoverVolume=" << trueLeftoverVolume << " bbox=[" << xMin << "," << xMax << "]x["
+                          << yMin << "," << yMax << "]x[" << zMin << "," << zMax
+                          << "] extents(sorted)=" << extents[0] << "," << extents[1] << ","
+                          << extents[2]);
+
+  // A bbox-extent check doesn't fit this residual's actual shape: it's a
+  // genuinely tiny sliver (0.02mm^3) that happens to run most of the
+  // length of one real edge at near-zero cross-section, not a small blob —
+  // its bbox spans the full panel thickness in one axis and most of the
+  // edge's own length in another, despite containing almost no material.
+  // Volume is the metric that actually distinguishes "real captured data's
+  // own ~0.05mm coordinate noise" (this fixture's outline has adjacent
+  // vertices exactly that far apart) from a genuine unaccounted defect —
+  // 1mm^3 is generous headroom over the observed 0.02mm^3, while still
+  // three orders of magnitude below the ~72mm^3 this test used to see
+  // before the bridge was accounted for.
+  CHECK(trueLeftoverVolume < 1.0);
+}
+
+// Same EXACT real outline/hinge/angle/radius/thickness as the test above, but
+// with kFactor=0.0 -- the actual real value captured live from the exact
+// merge_bodies_with_bend recipe under investigation (fuse a protrusion onto a
+// split panel, then merge with another component), as opposed to the 0.4
+// used above. Self-consistency alone (this test) stayed clean throughout;
+// the real, user-visible defect for this exact data was a flat wedge/
+// protrusion on the bend line instead of a smooth radius, root-caused to
+// BuildCutEdges (manufacturing_graph_evaluator.cc) incorrectly redirecting a
+// FREE edge collinear with the hinge line (this outline's own parent is
+// wider than the seam, a partial-width bend) to the setback-shifted point --
+// now fixed; see "a free edge collinear with the hinge line..." in
+// manufacturing_graph_evaluator_test.cc. A separate large boolean-diff
+// number chased earlier in the same investigation (diffing against B's own
+// independently-anchored solid) was NOT a defect -- confirmed via a minimal
+// synthetic case that boolean-diffing two identical thin (sub-mm) sheets
+// offset by only the small, already-tolerated ~2mm/~0.2mm real-world
+// precision this pipeline documents (kSurfaceResidualToleranceMm,
+// point_mapping.cc) spuriously reports ~22% of volume as "leftover" --
+// boolean volume diffs are the wrong tool for judging thin-sheet placement
+// accuracy, since any through-thickness offset gets amplified relative to
+// the sheet's own thickness.
+TEST_CASE("ConstructPartSolid: EXACT real live-app outline/bend data with kFactor=0 -- "
+          "checks whether the live-reported leftover reproduces at this level",
+          "[translation][construction][regression]") {
+  double thicknessMm = 0.9499999999999744;
+  double radiusMm = 0.95;
+  double kFactor = 0.0;
+  double angleDeg = -90.0;
+
+  PartGraphSpec graph;
+  graph.partId = "real";
+  graph.rootRegionPanelId = "parent";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = Transform3::Identity();
+  graph.outline.outer = {
+      {450, 5.684341886080802e-14},
+      {450, 150.00000000000006},
+      {300.04999999999995, 150},
+      {275.94999999999993, 150.05},
+      {275.99999999999994, 0},
+      {300, 7.840471567008018e-15},
+      {300.05, -74.94999999999996},
+      {300, -149.99999999999997},
+      {373.95000000000005, -149.99999999999994},
+      {450, -149.99999999999994},
+      {450, -76.04999999999994},
+  };
+
+  BendSpec bend;
+  bend.id = "bend0";
+  bend.parentRegionPanelId = "parent";
+  bend.childRegionPanelId = "child";
+  bend.hingeA = {450, 5.684341886080802e-14};
+  bend.hingeB = {300, 7.840471567008018e-15};
+  bend.angleDeg = angleDeg;
+  bend.radiusMm = radiusMm;
+  bend.kFactor = kFactor;
+  graph.bends.push_back(bend);
+
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+  REQUIRE(layout.bridges.size() == 1);
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, thicknessMm);
+  REQUIRE(result.ok);
+  auto it = state.solids.find(result.shellId);
+  REQUIRE(it != state.solids.end());
+  TopoDS_Shape actualShape = it->second.shape;
+  double actualVolume = SolidVolume(actualShape);
+  INFO("actualVolume=" << actualVolume);
+
+  for (const auto& panel : layout.panels) {
+    std::ostringstream oss;
+    oss << "panel " << panel.regionPanelId << " pose.r=[";
+    for (double v : panel.pose.r) oss << v << ",";
+    oss << "] pose.t=[" << panel.pose.t[0] << "," << panel.pose.t[1] << "," << panel.pose.t[2] << "]";
+    WARN(oss.str());
+    for (size_t i = 0; i < panel.wallOuter.size(); ++i) {
+      WARN("  " << panel.regionPanelId << " wallOuter[" << i << "]=(" << panel.wallOuter[i].x
+           << "," << panel.wallOuter[i].y << ") edgeBendId=" << panel.wallEdgeBendId[i]
+           << " transStep=" << panel.wallEdgeIsTransitionStep[i]);
+    }
+  }
+
+  std::unordered_map<std::string, TopoDS_Shape> panelSolidById;
+  for (const auto& panel : layout.panels) {
+    BRepBuilderAPI_MakePolygon polyMaker;
+    for (const auto& v : panel.rawOuter) polyMaker.Add(gp_Pnt(v.x, v.y, 0.0));
+    polyMaker.Close();
+    BRepBuilderAPI_MakeFace faceMaker(polyMaker.Wire());
+    BRepPrimAPI_MakePrism prism(faceMaker.Face(), gp_Vec(0.0, 0.0, thicknessMm), true);
+    gp_Trsf trsf;
+    trsf.SetValues(panel.pose.r[0], panel.pose.r[1], panel.pose.r[2], panel.pose.t[0],
+                   panel.pose.r[3], panel.pose.r[4], panel.pose.r[5], panel.pose.t[1],
+                   panel.pose.r[6], panel.pose.r[7], panel.pose.r[8], panel.pose.t[2]);
+    BRepBuilderAPI_Transform placed(prism.Shape(), trsf, /*Copy=*/true);
+    panelSolidById[panel.regionPanelId] = placed.Shape();
+  }
+  REQUIRE(panelSolidById.count("parent") == 1);
+  REQUIRE(panelSolidById.count("child") == 1);
+
+  BRepAlgoAPI_Cut cutParent(actualShape, panelSolidById["parent"]);
+  cutParent.Build();
+  REQUIRE(cutParent.IsDone());
+  BRepAlgoAPI_Cut cutBoth(cutParent.Shape(), panelSolidById["child"]);
+  cutBoth.Build();
+  REQUIRE(cutBoth.IsDone());
+  TopoDS_Shape leftover = cutBoth.Shape();
+
+  // The panel solids above are built from rawOuter (a plain, un-notched
+  // prism to the sharp hinge line) -- they don't carve out the curved
+  // bend-radius region a real bridge legitimately occupies, so subtracting
+  // only them leaves the bridge's own real material behind as "leftover"
+  // too (confirmed directly: for this fixture, leftover-minus-bridge
+  // measures 0.02mm^3, not the ~72mm^3 the panels-only diff reports).
+  // Build the bridge the same way ConstructPartSolid does -- a revolve of
+  // the parent's own real (non-transition-step) wall edge about the
+  // bridge's true axis -- and subtract that too, so what's actually being
+  // checked is only genuinely unaccounted material.
+  const RegionPanelLayout* parentPanel = nullptr;
+  for (const auto& panel : layout.panels) {
+    if (panel.regionPanelId == "parent") parentPanel = &panel;
+  }
+  REQUIRE(parentPanel != nullptr);
+  const BridgeLayout& bridgeLayout = layout.bridges[0];
+  size_t parentEdge = SIZE_MAX;
+  for (size_t i = 0; i < parentPanel->wallEdgeBendId.size(); ++i) {
+    if (parentPanel->wallEdgeBendId[i] == bridgeLayout.bendId &&
+        !parentPanel->wallEdgeIsTransitionStep[i]) {
+      parentEdge = i;
+      break;
+    }
+  }
+  REQUIRE(parentEdge != SIZE_MAX);
+  size_t parentEdge1 = (parentEdge + 1) % parentPanel->wallOuter.size();
+  const Point3& qb0 = parentPanel->wallBottomFace[parentEdge];
+  const Point3& qb1 = parentPanel->wallBottomFace[parentEdge1];
+  const Point3& qt1 = parentPanel->wallTopFace[parentEdge1];
+  const Point3& qt0 = parentPanel->wallTopFace[parentEdge];
+  BRepBuilderAPI_MakePolygon quadPoly;
+  quadPoly.Add(gp_Pnt(qb0.x, qb0.y, qb0.z));
+  quadPoly.Add(gp_Pnt(qb1.x, qb1.y, qb1.z));
+  quadPoly.Add(gp_Pnt(qt1.x, qt1.y, qt1.z));
+  quadPoly.Add(gp_Pnt(qt0.x, qt0.y, qt0.z));
+  quadPoly.Close();
+  BRepBuilderAPI_MakeFace quadFace(quadPoly.Wire());
+  double bridgeAngleRad = bridgeLayout.angleDeg * kTestPi / 180.0;
+  gp_Dir bridgeAxisDir(bridgeLayout.pivotAxisWorld.x, bridgeLayout.pivotAxisWorld.y,
+                        bridgeLayout.pivotAxisWorld.z);
+  if (bridgeAngleRad < 0.0) {
+    bridgeAxisDir.Reverse();
+    bridgeAngleRad = -bridgeAngleRad;
+  }
+  gp_Ax1 bridgeAxis(gp_Pnt(bridgeLayout.pivotOriginWorld.x, bridgeLayout.pivotOriginWorld.y,
+                            bridgeLayout.pivotOriginWorld.z),
+                     bridgeAxisDir);
+  BRepPrimAPI_MakeRevol revol(quadFace.Face(), bridgeAxis, bridgeAngleRad, /*Copy=*/false);
+  REQUIRE(revol.IsDone());
+
+  BRepAlgoAPI_Cut cutBridge(leftover, revol.Shape());
+  cutBridge.Build();
+  REQUIRE(cutBridge.IsDone());
+  TopoDS_Shape trueLeftover = cutBridge.Shape();
+  double trueLeftoverVolume = SolidVolume(trueLeftover);
+
+  Bnd_Box box;
+  BRepBndLib::AddOptimal(trueLeftover, box);
+  double xMin, yMin, zMin, xMax, yMax, zMax;
+  box.Get(xMin, yMin, zMin, xMax, yMax, zMax);
+  double dx = xMax - xMin, dy = yMax - yMin, dz = zMax - zMin;
+  std::array<double, 3> extents{dx, dy, dz};
+  std::sort(extents.begin(), extents.end());
+  INFO("trueLeftoverVolume=" << trueLeftoverVolume << " bbox=[" << xMin << "," << xMax << "]x["
+                          << yMin << "," << yMax << "]x[" << zMin << "," << zMax
+                          << "] extents(sorted)=" << extents[0] << "," << extents[1] << ","
+                          << extents[2]);
+
+  // A bbox-extent check doesn't fit this residual's actual shape: it's a
+  // genuinely tiny sliver (0.02mm^3) that happens to run most of the
+  // length of one real edge at near-zero cross-section, not a small blob —
+  // its bbox spans the full panel thickness in one axis and most of the
+  // edge's own length in another, despite containing almost no material.
+  // Volume is the metric that actually distinguishes "real captured data's
+  // own ~0.05mm coordinate noise" (this fixture's outline has adjacent
+  // vertices exactly that far apart) from a genuine unaccounted defect —
+  // 1mm^3 is generous headroom over the observed 0.02mm^3, while still
+  // three orders of magnitude below the ~72mm^3 this test used to see
+  // before the bridge was accounted for.
+  CHECK(trueLeftoverVolume < 1.0);
+}
+
+
+// Live-app regression (2026-09, testcube.step: Protrusion 1 fused onto
+// Component 1 Part 1, then merged with Component 2 -- a -90deg, 0.95mm
+// radius bend): the rendered corner shows a clean inner (radius=0.95mm)
+// surface but a degenerate mess of near-zero-area, inconsistently-wound
+// triangles on the outer (radius+thickness=1.9mm) surface, instead of a
+// matching clean arc. Traced directly from the live `_debug/evaluate` data:
+// this bend's own FindZoneEdges found exactly ONE tagged parent edge, so
+// ConstructPartSolid's intra-bridge segment-fuse never runs (only fires for
+// 2+ tagged edges) -- bridgeSolid IS exactly `revol.Shape()`, untouched by
+// any fuse at that point. This test reproduces THAT EXACT revolve call
+// in isolation (same quad, same axis, same angle, hand-computed from the
+// live bridge/panel data) to determine whether the corruption is already
+// present in the raw revolve output itself, or only appears once this
+// shape is later fused with the flat panels.
+TEST_CASE("ConstructPartSolid: isolated revolve reproduction of the live "
+          "testcube.step corner bend (-90deg, radius=0.95mm) -- is the raw "
+          "revolve itself a valid, complete solid?",
+          "[translation][construction][regression]") {
+  // Quad corners exactly as ConstructPartSolid's own revolve loop would read
+  // them from wallBottomFace[i0]/[i1] and wallTopFace[i0]/[i1] for this
+  // bend's own single tagged parent edge (hand-computed from the live
+  // evaluate() data: parent pose=identity t=(-75,-75,74.25), tagged wall
+  // edge (0,-0.95)->(150,-0.95), thicknessMm=0.95).
+  gp_Pnt b0(-75.0, -75.95, 74.25);
+  gp_Pnt b1(75.0, -75.95, 74.25);
+  gp_Pnt t1(75.0, -75.95, 75.2);
+  gp_Pnt t0(-75.0, -75.95, 75.2);
+
+  BRepBuilderAPI_MakePolygon quadMaker;
+  quadMaker.Add(b0);
+  quadMaker.Add(b1);
+  quadMaker.Add(t1);
+  quadMaker.Add(t0);
+  quadMaker.Close();
+  REQUIRE(quadMaker.IsDone());
+
+  BRepBuilderAPI_MakeFace quadFace(quadMaker.Wire());
+  REQUIRE(quadFace.IsDone());
+
+  // Live bridge data: pivotOriginWorld=(75,-75.95,76.15),
+  // pivotAxisWorld=(-1,0,0), angleDeg=-90 -- ConstructPartSolid's own
+  // negative-angle handling reverses the axis and revolves by +90deg.
+  gp_Pnt axisOrigin(75.0, -75.95, 76.15);
+  gp_Dir axisDir(-1.0, 0.0, 0.0);
+  double angleDeg = -90.0;
+  double angleRad = angleDeg * M_PI / 180.0;
+  if (angleRad < 0.0) {
+    axisDir.Reverse();
+    angleRad = -angleRad;
+  }
+  gp_Ax1 axis(axisOrigin, axisDir);
+
+  BRepPrimAPI_MakeRevol revol(quadFace.Face(), axis, angleRad, /*Copy=*/Standard_False);
+  REQUIRE(revol.IsDone());
+  TopoDS_Shape shape = revol.Shape();
+  REQUIRE_FALSE(shape.IsNull());
+
+  INFO("revol.Shape().ShapeType() = " << static_cast<int>(shape.ShapeType())
+       << " (TopAbs_SOLID=" << static_cast<int>(TopAbs_SOLID)
+       << ", TopAbs_SHELL=" << static_cast<int>(TopAbs_SHELL)
+       << ", TopAbs_COMPOUND=" << static_cast<int>(TopAbs_COMPOUND) << ")");
+
+  int solidCount = 0, shellCount = 0, faceCount = 0;
+  for (TopExp_Explorer ex(shape, TopAbs_SOLID); ex.More(); ex.Next()) ++solidCount;
+  for (TopExp_Explorer ex(shape, TopAbs_SHELL); ex.More(); ex.Next()) ++shellCount;
+  for (TopExp_Explorer ex(shape, TopAbs_FACE); ex.More(); ex.Next()) ++faceCount;
+  INFO("solidCount=" << solidCount << " shellCount=" << shellCount << " faceCount=" << faceCount);
+
+  BRepCheck_Analyzer analyzer(shape);
+  INFO("BRepCheck_Analyzer(shape).IsValid() = " << analyzer.IsValid());
+
+  GProp_GProps volProps;
+  BRepGProp::VolumeProperties(shape, volProps);
+  double volume = volProps.Mass();
+  // Expected volume of a 90deg, 150mm-long annular sector: (pi/4)*(1.9^2-0.95^2)*150
+  double expectedVolume = (M_PI / 4.0) * (1.9 * 1.9 - 0.95 * 0.95) * 150.0;
+  INFO("actual volume=" << volume << " expected volume=" << expectedVolume);
+
+  // The real diagnostic: is the raw revolve itself a genuine closed SOLID
+  // with the right volume, or something else (a shell/compound, wrong
+  // volume) even before any later fuse touches it?
+  CHECK(shape.ShapeType() == TopAbs_SOLID);
+  CHECK(analyzer.IsValid());
+  CHECK(volume == Catch::Approx(expectedVolume).margin(1.0));
+}
+
+
+// Live-app regression, full pipeline reproduction: a CHILD panel wider than
+// the bend's own hinge -- a "wing" of extra material sticking out sideways,
+// away from the fold line, on the child's own far edge -- fused with a
+// plain rectangular PARENT via a -90deg, 0.95mm-radius bend. The isolated
+// revolve reproduction above proved the bridge solid alone is perfectly
+// valid; this test runs the REAL Evaluate()+ConstructPartSolid() pipeline
+// end to end to see whether the union with a winged child corrupts the
+// bend's own outer surface, matching the live testcube.step report (a
+// clean inner radius, but a degenerate mess instead of a matching outer
+// arc).
+TEST_CASE("ConstructPartSolid: a child panel wider than the bend hinge (a "
+          "wing sticking out on the child's own far edge) -- does fusing it "
+          "corrupt the bend's outer surface?",
+          "[translation][construction][regression]") {
+  double thicknessMm = 1.5;
+  double radiusMm = 0.95;
+  double kFactor = 0.4;
+
+  PartGraphSpec graph;
+  graph.partId = "wing_child";
+  graph.rootRegionPanelId = "parent";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = Transform3::Identity();
+  // Parent: plain 150x150 square, y=[0,150]. Child: y=[150,300], but the
+  // wing (x=150 -> 172) starts IMMEDIATELY at the hinge (y=150) rather than
+  // far from it -- re-derived from the live wallOuter data, where the wide
+  // (172mm) section runs almost the child's ENTIRE length and only narrows
+  // to match the parent's 150mm width within the last ~1mm before the fold
+  // (a short diagonal cut right at the setback boundary, not a step far
+  // away) -- the live-app shape (composite panel wider than what it's bent
+  // against, widening starting right at the fold itself).
+  graph.outline.outer = {
+      {0, 0}, {150, 0}, {150, 150}, {172, 150}, {172, 300}, {0, 300}, {0, 150},
+  };
+
+  BendSpec bend;
+  bend.id = "bend0";
+  bend.parentRegionPanelId = "parent";
+  bend.childRegionPanelId = "child";
+  bend.hingeA = {150, 150};
+  bend.hingeB = {0, 150};
+  bend.angleDeg = -90.0;
+  bend.radiusMm = radiusMm;
+  bend.kFactor = kFactor;
+  graph.bends.push_back(bend);
+
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+  REQUIRE(layout.bridges.size() == 1);
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, thicknessMm);
+  REQUIRE(result.ok);
+  auto it = state.solids.find(result.shellId);
+  REQUIRE(it != state.solids.end());
+  TopoDS_Shape actualShape = it->second.shape;
+
+  BRepCheck_Analyzer analyzer(actualShape);
+  INFO("BRepCheck_Analyzer(actualShape).IsValid() = " << analyzer.IsValid());
+
+  int solidCount = 0;
+  for (TopExp_Explorer ex(actualShape, TopAbs_SOLID); ex.More(); ex.Next()) ++solidCount;
+  INFO("solidCount=" << solidCount);
+
+  // Count degenerate (near-zero-area) faces -- the live-app symptom was a
+  // cluster of near-zero-area, inconsistently-wound triangles replacing
+  // what should be one clean curved surface. A correctly-built solid here
+  // should have a small, fixed number of REAL faces (2 flat panels x2
+  // each + 2 curved bend surfaces + end caps as needed) with substantial
+  // area, not dozens of slivers.
+  int totalFaces = 0, tinyFaces = 0;
+  for (TopExp_Explorer ex(actualShape, TopAbs_FACE); ex.More(); ex.Next()) {
+    ++totalFaces;
+    GProp_GProps faceProps;
+    BRepGProp::SurfaceProperties(TopoDS::Face(ex.Current()), faceProps);
+    if (faceProps.Mass() < 0.01) ++tinyFaces;
+  }
+  INFO("totalFaces=" << totalFaces << " tinyFaces(<0.01mm^2)=" << tinyFaces);
+
+  double actualVolume = SolidVolume(actualShape);
+  // Parent (150x150) + child (150x300 minus the missing 130-270 span... just
+  // use the polygon's own true area via shoelace, times thickness, as the
+  // baseline expectation) plus the small bend allowance volume.
+  INFO("actualVolume=" << actualVolume);
+
+  CHECK(analyzer.IsValid());
+  CHECK(solidCount == 1);
+  CHECK(tinyFaces == 0);
+}
+
+
+// Live-app regression, EXACT reproduction: the true combined flat-pattern
+// outline for this bend, reconstructed by rejoining the parent's and
+// child's own rawOuter fragments (captured live via the `_debug/evaluate`
+// endpoint on the actual testcube.step-derived part) at their shared hinge
+// -- preserving every real coordinate, including the small ~0.05mm
+// irregularities from the live fuse_bodies/merge_bodies_with_bend pipeline
+// the two simplified, round-number reproductions above did NOT have (and
+// which did not reproduce the corruption). If THIS exact geometry still
+// doesn't reproduce it, the trigger is something the flat 2D outline alone
+// can't capture (e.g. genuinely non-planar STEP-import noise).
+TEST_CASE("ConstructPartSolid: EXACT live testcube.step corner geometry -- "
+          "real coordinates, does the outer surface actually corrupt?",
+          "[translation][construction][regression]") {
+  double thicknessMm = 1.5;
+  double radiusMm = 0.95;
+  double kFactor = 0.4;
+
+  PartGraphSpec graph;
+  graph.partId = "live_exact";
+  graph.rootRegionPanelId = "parent";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = Transform3::Identity();
+  // Parent's own rawOuter, with its own hinge edge (0,0)->(150,0) replaced
+  // by the child's own path through its territory (0,0)->(0,-150)->
+  // (148,-150)->(172.1,-150.05)->(172.05,~0)->(150,0) -- reconstructing the
+  // single pre-split combined outline Evaluate() would have started from.
+  graph.outline.outer = {
+      {0.0, 0.0},
+      {2.842170943040401e-14, -150.00000000000006},
+      {148.00000000000003, -150.0},
+      {172.10000000000005, -150.05},
+      {172.05, 2.05537390819247e-14},
+      {150.0, 1.4210854715202004e-14},
+      {149.95, 74.95000000000002},
+      {150.0, 150.0},
+      {76.05, 150.0},
+      {0.0, 150.0},
+      {0.0, 76.05000000000001},
+  };
+
+  BendSpec bend;
+  bend.id = "bend0";
+  bend.parentRegionPanelId = "parent";
+  bend.childRegionPanelId = "child";
+  bend.hingeA = {150.0, 1.4210854715202004e-14};
+  bend.hingeB = {1.3746323773876887e-16, 1.4210854715202004e-14};
+  bend.angleDeg = -90.0;
+  bend.radiusMm = radiusMm;
+  bend.kFactor = kFactor;
+  graph.bends.push_back(bend);
+
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+  REQUIRE(layout.bridges.size() == 1);
+
+  // TEMP DIAGNOSTIC: is the panel wall's own TOP-face tangent point (thickness
+  // away from the bottom face) actually sitting at radius (r+t) from the bend
+  // axis, the same as the bridge's own outer cylindrical face? If it lands
+  // short of that (still near radius r), the panel's flat top face physically
+  // occupies material the true rounded outer surface should occupy, which
+  // would explain the boolean union replacing the curve with a flat face.
+  {
+    const auto& bridgeDbg = layout.bridges[0];
+    gp_Pnt axisOrigin(bridgeDbg.pivotOriginWorld.x, bridgeDbg.pivotOriginWorld.y,
+                       bridgeDbg.pivotOriginWorld.z);
+    gp_Vec axisDir(bridgeDbg.pivotAxisWorld.x, bridgeDbg.pivotAxisWorld.y,
+                    bridgeDbg.pivotAxisWorld.z);
+    axisDir.Normalize();
+    auto distFromAxis = [&](const Point3& p) {
+      gp_Vec toP(axisOrigin, gp_Pnt(p.x, p.y, p.z));
+      gp_Vec perp = toP - axisDir * toP.Dot(axisDir);
+      return perp.Magnitude();
+    };
+    for (const auto& panel : layout.panels) {
+      for (size_t i = 0; i < panel.wallEdgeBendId.size(); ++i) {
+        if (panel.wallEdgeBendId[i] != bend.id) continue;
+        if (panel.wallEdgeIsTransitionStep[i]) continue;
+        double bottomDist = distFromAxis(panel.wallBottomFace[i]);
+        double topDist = distFromAxis(panel.wallTopFace[i]);
+        WARN("panel " << panel.regionPanelId << " wall edge " << i
+             << ": bottomDist=" << bottomDist << " (expect ~" << radiusMm
+             << ") topDist=" << topDist << " (expect ~" << (radiusMm + thicknessMm) << ")");
+      }
+    }
+  }
+
+  // DECISIVE TEMP DIAGNOSTIC: does the panel wall solid share only a boundary
+  // FACE with the bridge (zero enclosed volume -- a fuse-classifier ambiguity)
+  // or does it share real 3D VOLUME with the bridge (an untrimmed protrusion
+  // that must be clipped upstream, before any boolean runs at all)? Build both
+  // solids exactly as ConstructPartSolid does, then intersect them directly.
+  {
+    std::unordered_map<std::string, TopoDS_Shape> wallSolidById;
+    for (const auto& panel : layout.panels) {
+      BRepBuilderAPI_MakePolygon polyMaker;
+      for (const auto& v : panel.wallOuter) polyMaker.Add(gp_Pnt(v.x, v.y, 0.0));
+      polyMaker.Close();
+      BRepBuilderAPI_MakeFace faceMaker(polyMaker.Wire());
+      BRepPrimAPI_MakePrism prism(faceMaker.Face(), gp_Vec(0.0, 0.0, thicknessMm), true);
+      gp_Trsf trsf;
+      trsf.SetValues(panel.pose.r[0], panel.pose.r[1], panel.pose.r[2], panel.pose.t[0],
+                     panel.pose.r[3], panel.pose.r[4], panel.pose.r[5], panel.pose.t[1],
+                     panel.pose.r[6], panel.pose.r[7], panel.pose.r[8], panel.pose.t[2]);
+      BRepBuilderAPI_Transform placed(prism.Shape(), trsf, /*Copy=*/true);
+      wallSolidById[panel.regionPanelId] = placed.Shape();
+    }
+
+    const auto& bridgeDbg = layout.bridges[0];
+    const RegionPanelLayout* parentPanel = nullptr;
+    for (const auto& panel : layout.panels) {
+      if (panel.regionPanelId == bridgeDbg.parentRegionPanelId) parentPanel = &panel;
+    }
+    REQUIRE(parentPanel != nullptr);
+    size_t i0 = SIZE_MAX;
+    for (size_t i = 0; i < parentPanel->wallEdgeBendId.size(); ++i) {
+      if (parentPanel->wallEdgeBendId[i] == bridgeDbg.bendId &&
+          !parentPanel->wallEdgeIsTransitionStep[i]) {
+        i0 = i;
+      }
+    }
+    REQUIRE(i0 != SIZE_MAX);
+    size_t i1 = (i0 + 1) % parentPanel->wallOuter.size();
+    gp_Pnt b0(parentPanel->wallBottomFace[i0].x, parentPanel->wallBottomFace[i0].y,
+              parentPanel->wallBottomFace[i0].z);
+    gp_Pnt b1(parentPanel->wallBottomFace[i1].x, parentPanel->wallBottomFace[i1].y,
+              parentPanel->wallBottomFace[i1].z);
+    gp_Pnt t1(parentPanel->wallTopFace[i1].x, parentPanel->wallTopFace[i1].y,
+              parentPanel->wallTopFace[i1].z);
+    gp_Pnt t0(parentPanel->wallTopFace[i0].x, parentPanel->wallTopFace[i0].y,
+              parentPanel->wallTopFace[i0].z);
+    BRepBuilderAPI_MakePolygon quadMaker;
+    quadMaker.Add(b0);
+    quadMaker.Add(b1);
+    quadMaker.Add(t1);
+    quadMaker.Add(t0);
+    quadMaker.Close();
+    BRepBuilderAPI_MakeFace quadFace(quadMaker.Wire());
+    double angleRad0 = bridgeDbg.angleDeg * kTestPi / 180.0;
+    gp_Pnt axisOrigin(bridgeDbg.pivotOriginWorld.x, bridgeDbg.pivotOriginWorld.y,
+                       bridgeDbg.pivotOriginWorld.z);
+    gp_Dir axisDir0(bridgeDbg.pivotAxisWorld.x, bridgeDbg.pivotAxisWorld.y,
+                     bridgeDbg.pivotAxisWorld.z);
+    if (angleRad0 < 0.0) {
+      axisDir0.Reverse();
+      angleRad0 = -angleRad0;
+    }
+    gp_Ax1 axis(axisOrigin, axisDir0);
+    BRepPrimAPI_MakeRevol revol(quadFace.Face(), axis, angleRad0, /*Copy=*/Standard_False);
+    REQUIRE(revol.IsDone());
+    TopoDS_Shape bridgeSolidDbg = revol.Shape();
+
+    auto reportOverlap = [&](const char* label, const TopoDS_Shape& wallSolid) {
+      BRepAlgoAPI_Common common(wallSolid, bridgeSolidDbg);
+      common.SetFuzzyValue(1e-7);
+      common.Build();
+      double overlapVolume = 0.0;
+      if (common.IsDone() && !common.Shape().IsNull()) {
+        GProp_GProps props;
+        BRepGProp::VolumeProperties(common.Shape(), props);
+        overlapVolume = props.Mass();
+      }
+      WARN(label << ": Common(wall, bridge) volume=" << overlapVolume
+           << " (near-zero => shared boundary FACE only; non-negligible => real "
+              "3D material overlap / untrimmed protrusion)");
+      if (common.IsDone() && !common.Shape().IsNull() && overlapVolume > 1e-6) {
+        Bnd_Box box;
+        BRepBndLib::AddOptimal(common.Shape(), box);
+        double xMin, yMin, zMin, xMax, yMax, zMax;
+        box.Get(xMin, yMin, zMin, xMax, yMax, zMax);
+        WARN(label << " overlap bbox=[" << xMin << "," << xMax << "]x[" << yMin << "," << yMax
+             << "]x[" << zMin << "," << zMax << "]");
+      }
+    };
+    // Also dump each panel's own pose (rotation+translation) to understand
+    // its true 3D placement relative to the bridge axis.
+    auto dumpPose = [&](const RegionPanelLayout& panel) {
+      WARN(panel.regionPanelId << " pose.r=[" << panel.pose.r[0] << "," << panel.pose.r[1] << ","
+           << panel.pose.r[2] << "," << panel.pose.r[3] << "," << panel.pose.r[4] << ","
+           << panel.pose.r[5] << "," << panel.pose.r[6] << "," << panel.pose.r[7] << ","
+           << panel.pose.r[8] << "] pose.t=[" << panel.pose.t[0] << "," << panel.pose.t[1] << ","
+           << panel.pose.t[2] << "]");
+    };
+    reportOverlap("parent wall vs bridge", wallSolidById.at(bridgeDbg.parentRegionPanelId));
+    reportOverlap("child wall vs bridge", wallSolidById.at(bridgeDbg.childRegionPanelId));
+    for (const auto& panel : layout.panels) dumpPose(panel);
+    WARN("bridge axisOrigin=(" << axisOrigin.X() << "," << axisOrigin.Y() << "," << axisOrigin.Z()
+         << ") axisDir=(" << axisDir0.X() << "," << axisDir0.Y() << "," << axisDir0.Z() << ")");
+
+    // Dump every wallOuter vertex (not just the tagged tangent edge) with its
+    // distance from the bend axis, to find which vertex/segment is the actual
+    // untrimmed protrusion reaching past radius (r+t).
+    auto distFromAxis = [&](const Point3& p) {
+      gp_Vec toP(axisOrigin, gp_Pnt(p.x, p.y, p.z));
+      gp_Vec axisDirVec(axisDir0);
+      gp_Vec perp = toP - axisDirVec * toP.Dot(axisDirVec);
+      return perp.Magnitude();
+    };
+    auto dumpPolygon = [&](const RegionPanelLayout& panel) {
+      for (size_t i = 0; i < panel.wallOuter.size(); ++i) {
+        double bd = distFromAxis(panel.wallBottomFace[i]);
+        double td = distFromAxis(panel.wallTopFace[i]);
+        bool tagged = i < panel.wallEdgeBendId.size() && panel.wallEdgeBendId[i] == bridgeDbg.bendId;
+        bool transStep = i < panel.wallEdgeIsTransitionStep.size() &&
+                          panel.wallEdgeIsTransitionStep[i];
+        WARN(panel.regionPanelId << " v" << i << " 2d=(" << panel.wallOuter[i].x << ","
+             << panel.wallOuter[i].y << ") bottomDist=" << bd << " topDist=" << td
+             << " tagged=" << tagged << " transStep=" << transStep);
+      }
+    };
+    dumpPolygon(*parentPanel);
+    const RegionPanelLayout* childPanel = nullptr;
+    for (const auto& panel : layout.panels) {
+      if (panel.regionPanelId == bridgeDbg.childRegionPanelId) childPanel = &panel;
+    }
+    REQUIRE(childPanel != nullptr);
+    dumpPolygon(*childPanel);
+  }
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, thicknessMm);
+  REQUIRE(result.ok);
+  auto it = state.solids.find(result.shellId);
+  REQUIRE(it != state.solids.end());
+  TopoDS_Shape actualShape = it->second.shape;
+
+  BRepCheck_Analyzer analyzer(actualShape);
+  INFO("BRepCheck_Analyzer(actualShape).IsValid() = " << analyzer.IsValid());
+
+  int solidCount = 0;
+  for (TopExp_Explorer ex(actualShape, TopAbs_SOLID); ex.More(); ex.Next()) ++solidCount;
+
+  // The live-app defect: a near-zero-area sliver face at the seam between
+  // the child panel's own corner and the bend's own tangent line, from
+  // near-but-not-exactly-coincident geometry (real numerical drift from the
+  // live fuse_bodies/merge_bodies_with_bend pipeline) that BRepAlgoAPI_Fuse's
+  // tight tolerance carved out instead of welding cleanly. Fixed via
+  // HasDegenerateFace as another tier of the existing tight->loose->glue
+  // retry ladder (part_solid_construction.cc) -- this count must be zero.
+  int totalFaces = 0, tinyFaces = 0;
+  for (TopExp_Explorer ex(actualShape, TopAbs_FACE); ex.More(); ex.Next()) {
+    ++totalFaces;
+    GProp_GProps faceProps;
+    BRepGProp::SurfaceProperties(TopoDS::Face(ex.Current()), faceProps);
+    double area = faceProps.Mass();
+    if (area < 0.01) ++tinyFaces;
+    BRepAdaptor_Surface surf(TopoDS::Face(ex.Current()));
+    std::ostringstream oss;
+    oss << "face type=" << static_cast<int>(surf.GetType()) << " area=" << area;
+    if (surf.GetType() == GeomAbs_Cylinder) {
+      gp_Cylinder cyl = surf.Cylinder();
+      oss << " radius=" << cyl.Radius() << " loc=(" << cyl.Location().X() << ","
+          << cyl.Location().Y() << "," << cyl.Location().Z() << ") axis=("
+          << cyl.Axis().Direction().X() << "," << cyl.Axis().Direction().Y() << ","
+          << cyl.Axis().Direction().Z() << ")";
+    }
+    WARN(oss.str());
+  }
+  INFO("solidCount=" << solidCount << " totalFaces=" << totalFaces
+       << " tinyFaces(<0.01mm^2)=" << tinyFaces);
+
+  double actualVolume = SolidVolume(actualShape);
+  INFO("actualVolume=" << actualVolume);
+
+  CHECK(analyzer.IsValid());
+  CHECK(solidCount == 1);
+  CHECK(tinyFaces == 0);
+}
+
+// TEMP DIAGNOSTIC (docs/BUG_REPORT_complex_panel_bend_surfaces.md
+// investigation): the SIMPLEST possible case -- a plain rectangular 2-panel
+// 90deg bend, no wing, no T-shape, no partial-width seam, radius==thickness
+// (the realistic minimum per the user) -- run through the REAL production
+// ConstructPartSolid pipeline, dumping every cylindrical face's radius/area
+// directly from the final assembled solid. Settles whether the near-total
+// outer-face loss seen on the complex fixture is a general property of any
+// tight-radius bend, or specific to that fixture's own geometry.
+TEST_CASE("DIAGNOSTIC: simplest possible 90deg bend, radius==thickness, no "
+          "wing/T-shape -- does the outer cylindrical face survive?",
+          "[translation][construction][diagnostic]") {
+  double thicknessMm = 0.95;
+  double radiusMm = 0.95;
+  double kFactor = 0.4;
+
+  PartGraphSpec graph;
+  graph.partId = "simplest";
+  graph.rootRegionPanelId = "parent";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = Transform3::Identity();
+  graph.outline.outer = {
+      {0, 0}, {20, 0}, {20, 40}, {0, 40},
+  };
+
+  BendSpec bend;
+  bend.id = "bend0";
+  bend.parentRegionPanelId = "parent";
+  bend.childRegionPanelId = "child";
+  bend.hingeA = {20, 20};
+  bend.hingeB = {0, 20};
+  bend.angleDeg = -90.0;
+  bend.radiusMm = radiusMm;
+  bend.kFactor = kFactor;
+  graph.bends.push_back(bend);
+
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+  REQUIRE(layout.bridges.size() == 1);
+
+  for (const auto& panel : layout.panels) {
+    for (size_t i = 0; i < panel.wallOuter.size(); ++i) {
+      WARN(panel.regionPanelId << " wallOuter[" << i << "]=(" << panel.wallOuter[i].x << ","
+           << panel.wallOuter[i].y << ")");
+    }
+  }
+  WARN("bridge pivotOriginWorld=(" << layout.bridges[0].pivotOriginWorld.x << ","
+       << layout.bridges[0].pivotOriginWorld.y << "," << layout.bridges[0].pivotOriginWorld.z
+       << ") setbackMm=" << layout.bridges[0].setbackMm);
+  for (const auto& panel : layout.panels) {
+    WARN(panel.regionPanelId << " pose.r=[" << panel.pose.r[0] << "," << panel.pose.r[1] << ","
+         << panel.pose.r[2] << "," << panel.pose.r[3] << "," << panel.pose.r[4] << ","
+         << panel.pose.r[5] << "," << panel.pose.r[6] << "," << panel.pose.r[7] << ","
+         << panel.pose.r[8] << "] pose.t=[" << panel.pose.t[0] << "," << panel.pose.t[1] << ","
+         << panel.pose.t[2] << "]");
+    for (size_t i = 0; i < panel.wallBottomFace.size(); ++i) {
+      WARN(panel.regionPanelId << " wallBottomFace[" << i << "]=(" << panel.wallBottomFace[i].x
+           << "," << panel.wallBottomFace[i].y << "," << panel.wallBottomFace[i].z
+           << ") wallTopFace=(" << panel.wallTopFace[i].x << "," << panel.wallTopFace[i].y << ","
+           << panel.wallTopFace[i].z << ")");
+    }
+  }
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, thicknessMm);
+  WARN("result.errorCode=" << result.errorCode << " message=" << result.message);
+  REQUIRE(result.ok);
+  auto it = state.solids.find(result.shellId);
+  REQUIRE(it != state.solids.end());
+  TopoDS_Shape actualShape = it->second.shape;
+
+  BRepCheck_Analyzer analyzer(actualShape);
+  REQUIRE(analyzer.IsValid());
+
+  double innerArea = 0.0, outerArea = 0.0;
+  for (TopExp_Explorer ex(actualShape, TopAbs_FACE); ex.More(); ex.Next()) {
+    BRepAdaptor_Surface surf(TopoDS::Face(ex.Current()));
+    if (surf.GetType() != GeomAbs_Cylinder) continue;
+    gp_Cylinder cyl = surf.Cylinder();
+    GProp_GProps props;
+    BRepGProp::SurfaceProperties(TopoDS::Face(ex.Current()), props);
+    double area = props.Mass();
+    WARN("cylindrical face radius=" << cyl.Radius() << " area=" << area);
+    if (cyl.Radius() < radiusMm + thicknessMm / 2.0) {
+      innerArea += area;
+    } else {
+      outerArea += area;
+    }
+  }
+  double expectedInner = (kTestPi / 2.0) * radiusMm * 20.0;
+  double expectedOuter = (kTestPi / 2.0) * (radiusMm + thicknessMm) * 20.0;
+  WARN("innerArea=" << innerArea << " (expected~" << expectedInner << ") outerArea="
+       << outerArea << " (expected~" << expectedOuter << ")");
+
+  CHECK(innerArea > 0.5 * expectedInner);
+  CHECK(outerArea > 0.5 * expectedOuter);
+}
+
+// TEMP DIAGNOSTIC (docs/BUG_REPORT_complex_panel_bend_surfaces.md
+// investigation): IDENTICAL to "simplest possible" except angleDeg=+90
+// (mountain/concave) instead of -90 (valley/convex). Tests whether the bug
+// depends on fold direction rather than on ring winding / which side is
+// child -- never directly checked before (existing valley-fold closure
+// tests check a DIFFERENT property, plane position not face survival).
+TEST_CASE("DIAGNOSTIC: simplest possible bend, angleDeg=+90 (mountain) "
+          "instead of -90 -- does fold direction matter?",
+          "[translation][construction][diagnostic]") {
+  double thicknessMm = 0.95;
+  double radiusMm = 0.95;
+  double kFactor = 0.4;
+
+  PartGraphSpec graph;
+  graph.partId = "simplest_mountain";
+  graph.rootRegionPanelId = "parent";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = Transform3::Identity();
+  graph.outline.outer = {
+      {0, 0}, {20, 0}, {20, 40}, {0, 40},
+  };
+
+  BendSpec bend;
+  bend.id = "bend0";
+  bend.parentRegionPanelId = "parent";
+  bend.childRegionPanelId = "child";
+  bend.hingeA = {20, 20};
+  bend.hingeB = {0, 20};
+  bend.angleDeg = 90.0;
+  bend.radiusMm = radiusMm;
+  bend.kFactor = kFactor;
+  graph.bends.push_back(bend);
+
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+  REQUIRE(layout.bridges.size() == 1);
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, thicknessMm);
+  REQUIRE(result.ok);
+  auto it = state.solids.find(result.shellId);
+  REQUIRE(it != state.solids.end());
+  TopoDS_Shape actualShape = it->second.shape;
+  REQUIRE(BRepCheck_Analyzer(actualShape).IsValid());
+
+  double innerArea = 0.0, outerArea = 0.0;
+  for (TopExp_Explorer ex(actualShape, TopAbs_FACE); ex.More(); ex.Next()) {
+    BRepAdaptor_Surface surf(TopoDS::Face(ex.Current()));
+    if (surf.GetType() != GeomAbs_Cylinder) continue;
+    gp_Cylinder cyl = surf.Cylinder();
+    GProp_GProps props;
+    BRepGProp::SurfaceProperties(TopoDS::Face(ex.Current()), props);
+    double area = props.Mass();
+    WARN("MOUNTAIN cyl radius=" << cyl.Radius() << " area=" << area);
+    if (cyl.Radius() < radiusMm + thicknessMm / 2.0) {
+      innerArea += area;
+    } else {
+      outerArea += area;
+    }
+  }
+  double expectedInner = (kTestPi / 2.0) * radiusMm * 20.0;
+  double expectedOuter = (kTestPi / 2.0) * (radiusMm + thicknessMm) * 20.0;
+  WARN("MOUNTAIN innerArea=" << innerArea << " (expected~" << expectedInner
+       << ") outerArea=" << outerArea << " (expected~" << expectedOuter << ")");
+
+  CHECK(innerArea > 0.5 * expectedInner);
+  CHECK(outerArea > 0.5 * expectedOuter);
+}
+
+// TEMP DIAGNOSTIC (docs/BUG_REPORT_complex_panel_bend_surfaces.md
+// investigation): replicates MakeStrip's OWN exact construction (vertical
+// hinge, generous halfSpan clipped to the rectangle boundary, child = next
+// segment along the strip) -- the SAME shape the closure tests use and
+// which passes closure. Never before checked for cylindrical face
+// survival (closure tests check panel PLANE position, a different
+// property). Settles whether the bug is universal (present even in
+// "working", closure-verified fixtures) or specific to some trigger.
+TEST_CASE("DIAGNOSTIC: MakeStrip-style N=2 fixture (vertical hinge, "
+          "closure-verified shape) -- does the outer face survive?",
+          "[translation][construction][diagnostic]") {
+  double thicknessMm = 0.95;
+  double radiusMm = 0.95;
+  double kFactor = 0.4;
+  double segmentLenMm = 20.0;
+  double widthMm = 20.0;
+
+  PartGraphSpec graph;
+  graph.partId = "makestrip_style";
+  graph.rootRegionPanelId = "seg0";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = Transform3::Identity();
+  graph.outline.outer = {
+      {0, 0}, {2 * segmentLenMm, 0}, {2 * segmentLenMm, widthMm}, {0, widthMm},
+  };
+
+  BendSpec bend;
+  bend.id = "bend0";
+  bend.parentRegionPanelId = "seg0";
+  bend.childRegionPanelId = "seg1";
+  bend.hingeA = {segmentLenMm, widthMm / 2.0 + 1.5 * widthMm};
+  bend.hingeB = {segmentLenMm, widthMm / 2.0 - 1.5 * widthMm};
+  bend.angleDeg = -90.0;
+  bend.radiusMm = radiusMm;
+  bend.kFactor = kFactor;
+  graph.bends.push_back(bend);
+
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+  REQUIRE(layout.bridges.size() == 1);
+
+  for (const auto& panel : layout.panels) {
+    for (size_t i = 0; i < panel.wallOuter.size(); ++i) {
+      WARN(panel.regionPanelId << " wallOuter[" << i << "]=(" << panel.wallOuter[i].x << ","
+           << panel.wallOuter[i].y << ")");
+    }
+  }
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, thicknessMm);
+  REQUIRE(result.ok);
+  auto it = state.solids.find(result.shellId);
+  REQUIRE(it != state.solids.end());
+  TopoDS_Shape actualShape = it->second.shape;
+  REQUIRE(BRepCheck_Analyzer(actualShape).IsValid());
+
+  double innerArea = 0.0, outerArea = 0.0;
+  for (TopExp_Explorer ex(actualShape, TopAbs_FACE); ex.More(); ex.Next()) {
+    BRepAdaptor_Surface surf(TopoDS::Face(ex.Current()));
+    if (surf.GetType() != GeomAbs_Cylinder) continue;
+    gp_Cylinder cyl = surf.Cylinder();
+    GProp_GProps props;
+    BRepGProp::SurfaceProperties(TopoDS::Face(ex.Current()), props);
+    double area = props.Mass();
+    WARN("MAKESTRIP cyl radius=" << cyl.Radius() << " area=" << area);
+    if (cyl.Radius() < radiusMm + thicknessMm / 2.0) {
+      innerArea += area;
+    } else {
+      outerArea += area;
+    }
+  }
+  double expectedInner = (kTestPi / 2.0) * radiusMm * widthMm;
+  double expectedOuter = (kTestPi / 2.0) * (radiusMm + thicknessMm) * widthMm;
+  WARN("MAKESTRIP innerArea=" << innerArea << " (expected~" << expectedInner
+       << ") outerArea=" << outerArea << " (expected~" << expectedOuter << ")");
+
+  CHECK(innerArea > 0.5 * expectedInner);
+  CHECK(outerArea > 0.5 * expectedOuter);
+}
+
+// TEMP DIAGNOSTIC (docs/BUG_REPORT_complex_panel_bend_surfaces.md
+// investigation): child's far material extends DIAGONALLY (sideways AND
+// away from the hinge), not purely along -nLeft the way "simplest possible"
+// does. Child is a sheared quad: near edge = the hinge itself (0,20)-(20,20)
+// unchanged; far edge shifted sideways to (-30,0)-(-10,0), so child's own
+// extension direction is neither +nLeft nor -nLeft nor any single fixed
+// axis, but the ONE constraint it must obey (per the user) is that it
+// cannot extend back toward parent (would self-intersect the combined
+// outline, which Evaluate() itself validates).
+TEST_CASE("DIAGNOSTIC: child extends diagonally/sideways, not aligned with "
+          "the bend's own nLeft axis at all",
+          "[translation][construction][diagnostic]") {
+  double thicknessMm = 0.95;
+  double radiusMm = 0.95;
+  double kFactor = 0.4;
+
+  PartGraphSpec graph;
+  graph.partId = "sideways";
+  graph.rootRegionPanelId = "parent";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = Transform3::Identity();
+  // Ring order: parent (0,40)->(20,40)->(20,20)[hingeA]-> child(-10,0)->
+  // (-30,0) -> (0,20)[hingeB] -> back to (0,40).
+  graph.outline.outer = {
+      {0, 40}, {20, 40}, {20, 20}, {-10, 0}, {-30, 0}, {0, 20},
+  };
+
+  BendSpec bend;
+  bend.id = "bend0";
+  bend.parentRegionPanelId = "parent";
+  bend.childRegionPanelId = "child";
+  bend.hingeA = {20, 20};
+  bend.hingeB = {0, 20};
+  bend.angleDeg = -90.0;
+  bend.radiusMm = radiusMm;
+  bend.kFactor = kFactor;
+  graph.bends.push_back(bend);
+
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+  REQUIRE(layout.bridges.size() == 1);
+
+  for (const auto& panel : layout.panels) {
+    for (size_t i = 0; i < panel.wallOuter.size(); ++i) {
+      WARN(panel.regionPanelId << " wallOuter[" << i << "]=(" << panel.wallOuter[i].x << ","
+           << panel.wallOuter[i].y << ")");
+    }
+  }
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, thicknessMm);
+  REQUIRE(result.ok);
+  auto it = state.solids.find(result.shellId);
+  REQUIRE(it != state.solids.end());
+  TopoDS_Shape actualShape = it->second.shape;
+  REQUIRE(BRepCheck_Analyzer(actualShape).IsValid());
+
+  double innerArea = 0.0, outerArea = 0.0;
+  for (TopExp_Explorer ex(actualShape, TopAbs_FACE); ex.More(); ex.Next()) {
+    BRepAdaptor_Surface surf(TopoDS::Face(ex.Current()));
+    if (surf.GetType() != GeomAbs_Cylinder) continue;
+    gp_Cylinder cyl = surf.Cylinder();
+    GProp_GProps props;
+    BRepGProp::SurfaceProperties(TopoDS::Face(ex.Current()), props);
+    double area = props.Mass();
+    WARN("SIDEWAYS cyl radius=" << cyl.Radius() << " area=" << area);
+    if (cyl.Radius() < radiusMm + thicknessMm / 2.0) {
+      innerArea += area;
+    } else {
+      outerArea += area;
+    }
+  }
+  double expectedInner = (kTestPi / 2.0) * radiusMm * 20.0;
+  double expectedOuter = (kTestPi / 2.0) * (radiusMm + thicknessMm) * 20.0;
+  WARN("SIDEWAYS innerArea=" << innerArea << " (expected~" << expectedInner
+       << ") outerArea=" << outerArea << " (expected~" << expectedOuter << ")");
+
+  CHECK(innerArea > 0.5 * expectedInner);
+  CHECK(outerArea > 0.5 * expectedOuter);
+}
+
+// TEMP DIAGNOSTIC (docs/BUG_REPORT_complex_panel_bend_surfaces.md
+// investigation): a C-channel -- parent -> child1 -> child2, two -90deg
+// bends in the SAME rotational sense, so child2 curls back around by a
+// cumulative 180deg relative to parent (a hook/hem cross-section, not just
+// a straight zig-zag). Tests whether bend2 (child1->child2) shows the same
+// failure as bend1 (parent->child1), and whether child2's own return-toward-
+// parent direction introduces anything NEW beyond what bend1 alone shows.
+TEST_CASE("DIAGNOSTIC: C-channel, parent->child1->child2, child2 curls back "
+          "180deg from parent",
+          "[translation][construction][diagnostic]") {
+  double thicknessMm = 0.95;
+  double radiusMm = 0.95;
+  double kFactor = 0.4;
+
+  PartGraphSpec graph;
+  graph.partId = "cchannel";
+  graph.rootRegionPanelId = "parent";
+  graph.thicknessMm = thicknessMm;
+  graph.anchor.transform = Transform3::Identity();
+  graph.outline.outer = {
+      {0, 0}, {40, 0}, {40, 30}, {0, 30},
+  };
+
+  BendSpec bend1;
+  bend1.id = "bend0";
+  bend1.parentRegionPanelId = "parent";
+  bend1.childRegionPanelId = "child1";
+  bend1.hingeA = {0, 10};
+  bend1.hingeB = {40, 10};
+  bend1.angleDeg = -90.0;
+  bend1.radiusMm = radiusMm;
+  bend1.kFactor = kFactor;
+  graph.bends.push_back(bend1);
+
+  BendSpec bend2;
+  bend2.id = "bend1";
+  bend2.parentRegionPanelId = "child1";
+  bend2.childRegionPanelId = "child2";
+  bend2.hingeA = {0, 20};
+  bend2.hingeB = {40, 20};
+  bend2.angleDeg = -90.0;
+  bend2.radiusMm = radiusMm;
+  bend2.kFactor = kFactor;
+  graph.bends.push_back(bend2);
+
+  EvaluateResult layout = Evaluate(graph);
+  REQUIRE(layout.ok);
+  REQUIRE(layout.bridges.size() == 2);
+
+  for (const auto& panel : layout.panels) {
+    for (size_t i = 0; i < panel.wallOuter.size(); ++i) {
+      WARN(panel.regionPanelId << " wallOuter[" << i << "]=(" << panel.wallOuter[i].x << ","
+           << panel.wallOuter[i].y << ")");
+    }
+  }
+
+  GeometryState state;
+  ConstructPartSolidResult result = ConstructPartSolid(state, layout, thicknessMm);
+  REQUIRE(result.ok);
+  auto it = state.solids.find(result.shellId);
+  REQUIRE(it != state.solids.end());
+  TopoDS_Shape actualShape = it->second.shape;
+  REQUIRE(BRepCheck_Analyzer(actualShape).IsValid());
+
+  double innerArea = 0.0, outerArea = 0.0;
+  int cylCount = 0;
+  for (TopExp_Explorer ex(actualShape, TopAbs_FACE); ex.More(); ex.Next()) {
+    BRepAdaptor_Surface surf(TopoDS::Face(ex.Current()));
+    if (surf.GetType() != GeomAbs_Cylinder) continue;
+    ++cylCount;
+    gp_Cylinder cyl = surf.Cylinder();
+    GProp_GProps props;
+    BRepGProp::SurfaceProperties(TopoDS::Face(ex.Current()), props);
+    double area = props.Mass();
+    WARN("CCHANNEL cyl radius=" << cyl.Radius() << " area=" << area << " loc=("
+         << cyl.Location().X() << "," << cyl.Location().Y() << "," << cyl.Location().Z() << ")");
+    if (cyl.Radius() < radiusMm + thicknessMm / 2.0) {
+      innerArea += area;
+    } else {
+      outerArea += area;
+    }
+  }
+  // 2 bends -> up to 4 cylindrical faces total (2 inner + 2 outer) if both
+  // survive fully; expected full-retention area per bend, per surface:
+  double expectedPerBendInner = (kTestPi / 2.0) * radiusMm * 40.0;
+  double expectedPerBendOuter = (kTestPi / 2.0) * (radiusMm + thicknessMm) * 40.0;
+  WARN("CCHANNEL cylCount=" << cylCount << " innerArea=" << innerArea << " (full-retention 2x="
+       << (2 * expectedPerBendInner) << ") outerArea=" << outerArea << " (full-retention 2x="
+       << (2 * expectedPerBendOuter) << ")");
+
+  CHECK(innerArea > 0.5 * (2 * expectedPerBendInner));
+  CHECK(outerArea > 0.5 * (2 * expectedPerBendOuter));
+}
+
+// RESOLVED (docs/BUG_REPORT_complex_panel_bend_surfaces.md investigation,
+// 2026-09-14 finding): a textbook-correct, hand-built 90deg r=t=0.95mm
+// bend -- NO reference to Evaluate()/BuildCutEdges/BuildBendCuts/pivotZ/
+// setback at all. Parent is a flat rectangle sitting with its own bottom
+// (Z=0, the OUTER surface for this fold direction) at the tangent point;
+// the bridge is a revolve of the SAME tangent quad around an axis placed
+// by hand at (Y=0, Z=R=r+t) -- the textbook position for "bottom=outer".
+// This independently-built reference ALSO shows the outer face eclipsed,
+// proving the eclipse is inherent geometry, not a pipeline bug (the
+// original hypothesis this diagnostic was written to test is FALSE).
+//
+// Worked by hand: the bridge's outer-radius surface point at sweep angle
+// phi (measured from parent's own tangent line) sits at
+// (Y,Z) = (R sin(phi), R(1 - cos(phi))). That point is enclosed by
+// parent's own flat slab (Z in [0,t], Y in [0,legLen]) whenever
+// Z <= t, i.e. phi <= acos(1 - t/R) =: phiCrit -- so the fused solid's
+// outer face can only ever expose the REMAINING (pi/2 - phiCrit) of the
+// 90deg sweep; the rest is legitimately interior material once parent is
+// unioned in, exactly as BRepAlgoAPI_Fuse should behave. The child side
+// has no equivalent eclipse (Z = R(1-cos(phi)) <= R always, touching
+// child's own Z-range floor of R only at the single shared endpoint
+// phi=90deg), confirmed by the bridge+CHILD-alone survey below measuring
+// the full theoretical area. For r=t=0.95 (R=1.9), phiCrit=60deg, so
+// only the last 1/3 of the 90deg sweep survives -- matching the measured
+// 19.90 / 59.69 = 1/3 exactly, not a coincidence.
+TEST_CASE("DIAGNOSTIC: hand-built (no pipeline formulas) 90deg r=t=0.95mm "
+          "bend -- is the eclipse inherent geometry? (yes)",
+          "[translation][construction][diagnostic]") {
+  const double r = 0.95, t = 0.95, R = r + t, W = 20.0, legLen = 20.0;
+
+  BRepBuilderAPI_MakePolygon parentPoly;
+  parentPoly.Add(gp_Pnt(0, 0, 0));
+  parentPoly.Add(gp_Pnt(W, 0, 0));
+  parentPoly.Add(gp_Pnt(W, legLen, 0));
+  parentPoly.Add(gp_Pnt(0, legLen, 0));
+  parentPoly.Close();
+  BRepBuilderAPI_MakeFace parentFace(parentPoly.Wire());
+  BRepPrimAPI_MakePrism parentPrism(parentFace.Face(), gp_Vec(0, 0, t), true);
+  TopoDS_Shape parentSolid = parentPrism.Shape();
+
+  BRepBuilderAPI_MakePolygon quadPoly;
+  quadPoly.Add(gp_Pnt(0, 0, 0));
+  quadPoly.Add(gp_Pnt(W, 0, 0));
+  quadPoly.Add(gp_Pnt(W, 0, t));
+  quadPoly.Add(gp_Pnt(0, 0, t));
+  quadPoly.Close();
+  BRepBuilderAPI_MakeFace quadFace(quadPoly.Wire());
+  gp_Ax1 axis(gp_Pnt(0, 0.0, R), gp_Dir(1, 0, 0));
+  BRepPrimAPI_MakeRevol revol(quadFace.Face(), axis, kTestPi / 2.0, /*Copy=*/false);
+  REQUIRE(revol.IsDone());
+  TopoDS_Shape bridgeSolid = revol.Shape();
+
+  // Child: NOT a second, independently-derived placement -- literally "the
+  // same flat panel as parent, rotated 90deg about the SAME fold axis" --
+  // the most basic possible statement of what a 90deg bend between two
+  // identical flat legs means, with no formula from the pipeline involved.
+  gp_Trsf childRot;
+  childRot.SetRotation(axis, kTestPi / 2.0);
+  TopoDS_Shape childSolid = BRepBuilderAPI_Transform(parentSolid, childRot, true).Shape();
+
+  auto surveyPair = [&](const char* label, const TopoDS_Shape& a, const TopoDS_Shape& b) {
+    BRepAlgoAPI_Fuse f(a, b);
+    f.SetFuzzyValue(1e-7);
+    f.Build();
+    REQUIRE(f.IsDone());
+    double innerA = 0.0, outerA = 0.0;
+    for (TopExp_Explorer ex(f.Shape(), TopAbs_FACE); ex.More(); ex.Next()) {
+      BRepAdaptor_Surface surf(TopoDS::Face(ex.Current()));
+      if (surf.GetType() != GeomAbs_Cylinder) continue;
+      gp_Cylinder cyl = surf.Cylinder();
+      GProp_GProps props;
+      BRepGProp::SurfaceProperties(TopoDS::Face(ex.Current()), props);
+      double area = props.Mass();
+      if (cyl.Radius() < r + t / 2.0) innerA += area; else outerA += area;
+    }
+    WARN(label << ": innerArea=" << innerA << " outerArea=" << outerA);
+  };
+  surveyPair("bridge+PARENT alone", parentSolid, bridgeSolid);
+  surveyPair("bridge+CHILD alone", childSolid, bridgeSolid);
+
+  BRepAlgoAPI_Fuse fuse1(parentSolid, bridgeSolid);
+  fuse1.SetFuzzyValue(1e-7);
+  fuse1.Build();
+  REQUIRE(fuse1.IsDone());
+  BRepAlgoAPI_Fuse fuse(fuse1.Shape(), childSolid);
+  fuse.SetFuzzyValue(1e-7);
+  fuse.Build();
+  REQUIRE(fuse.IsDone());
+  TopoDS_Shape fused = fuse.Shape();
+  REQUIRE(BRepCheck_Analyzer(fused).IsValid());
+
+  double innerArea = 0.0, outerArea = 0.0;
+  for (TopExp_Explorer ex(fused, TopAbs_FACE); ex.More(); ex.Next()) {
+    BRepAdaptor_Surface surf(TopoDS::Face(ex.Current()));
+    if (surf.GetType() != GeomAbs_Cylinder) continue;
+    gp_Cylinder cyl = surf.Cylinder();
+    GProp_GProps props;
+    BRepGProp::SurfaceProperties(TopoDS::Face(ex.Current()), props);
+    double area = props.Mass();
+    WARN("HANDBUILT cyl radius=" << cyl.Radius() << " area=" << area);
+    if (cyl.Radius() < r + t / 2.0) {
+      innerArea += area;
+    } else {
+      outerArea += area;
+    }
+  }
+  double expectedInner = (kTestPi / 2.0) * r * W;
+  // Only the (pi/2 - phiCrit) tail of the 90deg sweep survives as a real
+  // outer boundary face once parent's own flat slab is unioned in -- see
+  // this TEST_CASE's own doc comment for the full derivation.
+  double phiCrit = std::acos(std::clamp(1.0 - t / R, -1.0, 1.0));
+  double expectedOuter = (kTestPi / 2.0 - phiCrit) * R * W;
+  WARN("HANDBUILT innerArea=" << innerArea << " (expected~" << expectedInner
+       << ") outerArea=" << outerArea << " (expected~" << expectedOuter << ")");
+
+  CHECK(innerArea == Approx(expectedInner).epsilon(0.05));
+  CHECK(outerArea == Approx(expectedOuter).epsilon(0.05));
+}

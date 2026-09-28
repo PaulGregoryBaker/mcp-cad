@@ -1,0 +1,5 @@
+{
+  "layer": "invariant",
+  "code": "INV_FOREIGN_ROW",
+  "client": "accept"
+}

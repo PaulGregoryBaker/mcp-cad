@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "0.1",
+  "id": "t0-cauldron-panel-roundtrip",
+  "title": "T0: cauldron skewed-quad panels — mapping roundtrip within budget (the C02 regression)",
+  "level": "C",
+  "tier": "T0",
+  "inventory": ["C02", "C20", "C21"],
+  "toleranceProfile": "default",
+  "expectation": "pass",
+  "fixture": { "kind": "step", "path": "cpp/tests/fixtures/cauldron.step" },
+  "params": { "$harvests": "The panelFrame/shapeDxf dual-derivation regression (v1's worst bug, fixed via ringLocal): skewed quads must roundtrip <1mm where they once erred by 100s-1000s mm." },
+  "ops": [
+    { "op": "import", "path": "cpp/tests/fixtures/cauldron.step" },
+    { "op": "decompose" },
+    { "op": "map_roundtrip_grid", "gridN": 3, "insetMm": 5.0 }
+  ],
+  "oracles": [
+    { "type": "closure", "budgetKey": "probeMm", "$semantics": "Same as t0-lbracket; skew is the point — rectangles hide this bug family (L4)." }
+  ]
+}

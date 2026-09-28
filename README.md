@@ -17,7 +17,7 @@ The MCP CAD System provides "Apply Architecture and Engineering Designs to Speci
 For detailed local setup, see [DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## MVP Acceptance Criteria
-- **Architecture**: Bounded contexts (Geometry Engine in C++, Manufacturing Domain in TypeScript, etc.) properly separated (Verified via `architecture-boundaries.contract.test.ts`).
+- **Architecture**: Bounded contexts (Geometry Engine in C++, Manufacturing Domain in TypeScript, etc.) properly separated.
 - **Functionality**: Full end-to-end extraction, decomposition, and nesting works on canonical test fixtures. Export to DXF files with Job ID queuing passes.
 - **Reliability**: Geometry Engine contains zero memory leaks mapped via AddressSanitizer. Wait-free fallback on asynchronous CAD endpoints behaves reliably.
 - **Coverage**: Total Test Code Coverage > 85%.

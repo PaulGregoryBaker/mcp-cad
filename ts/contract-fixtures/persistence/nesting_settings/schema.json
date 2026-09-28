@@ -1,0 +1,70 @@
+{
+  "$ref": "#/definitions/nesting_settings",
+  "definitions": {
+    "nesting_settings": {
+      "type": "object",
+      "properties": {
+        "sheets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "widthMm": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "heightMm": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 64
+              }
+            },
+            "required": [
+              "widthMm",
+              "heightMm"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1
+        },
+        "safetyGapMm": {
+          "type": "number",
+          "minimum": 0
+        },
+        "sheetMarginMm": {
+          "type": "number",
+          "minimum": 0
+        },
+        "cuttingWidthMm": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "rotationsDeg": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "enum": [
+              0,
+              90,
+              180,
+              270
+            ]
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "sheets",
+        "safetyGapMm",
+        "sheetMarginMm",
+        "cuttingWidthMm",
+        "rotationsDeg"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

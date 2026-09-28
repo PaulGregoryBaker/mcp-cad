@@ -23,6 +23,7 @@ import type {
   ThickenSheetResult,
   ApplyBendResult,
   NapiBendZoneSpec,
+  FlatPanelPlacement,
   BuildShellFromFlatPatternResult,
   PanelFrameResult,
   NestResult,
@@ -42,7 +43,6 @@ import type {
   MassPropertiesResult,
   MeasureResult,
   ExploreResult,
-  FuseResult,
   CutResult,
   IntersectResult,
   TransformResult,
@@ -61,6 +61,35 @@ import type {
   CurvedRebuildResult,
   CloseGapResult,
   PanelValidationResult,
+  PanelThicknessResult,
+  NapiPartGraphSpec,
+  EvaluatePartGraphResult,
+  ConstructPartSolidResult,
+  NapiPoint2,
+  NapiPoint3,
+  MapToWorldResult,
+  MapToFlatResult,
+  DetectContactResult,
+  NapiContactPanelCandidate,
+  NapiOutlineRef,
+  RerootBendsResult,
+  ReconcileOutlinesResult,
+  SplitPartAtBendResult,
+  NapiPanelPieceSpec,
+  ReconcilePiecesResult,
+  PolygonBooleanResult,
+  NestPolygonsResult,
+  NestPolygonInputSpec,
+  NestPolygonOptions,
+  CutPanelResult,
+  NapiTransform3,
+  EvaluateFindingsResult,
+  NapiManufacturingProfile,
+  CloseGapDeltaResult,
+  FlangeOutlineResult,
+  NapiRipEdgeResult,
+  NapiBendSpec,
+  NapiPanelFragment,
 } from './types';
 
 // ─── Addon interface ──────────────────────────────────────────────────────────
@@ -88,15 +117,22 @@ export interface GeometryAddon {
   exportDxf(unfoldId: string): DxfExportResult;
   buildSheetFromDxf?(dxfContent: string): DxfSheetResult;
   thickenSheet?(sheetId: string, thicknessMm: number): ThickenSheetResult;
-  applyBend?(panelAId: string, panelBId: string, innerRadiusMm: number, angleDeg: number, kFactor: number): ApplyBendResult;
-  buildShellFromFlatPattern?(dxfContent: string, bendZones: NapiBendZoneSpec[], thicknessMm: number, referenceShellId?: string): BuildShellFromFlatPatternResult;
+  applyBend?(
+    panelAId: string,
+    panelBId: string,
+    innerRadiusMm: number,
+    angleDeg: number,
+    kFactor: number,
+  ): ApplyBendResult;
+  buildShellFromFlatPattern?(
+    dxfContent: string,
+    bendZones: NapiBendZoneSpec[],
+    thicknessMm: number,
+    explicitPlacement?: FlatPanelPlacement,
+  ): BuildShellFromFlatPatternResult;
   getPanelFrame?(shellId: string): PanelFrameResult;
   exportGlb(shellId: string): Buffer;
-  nestShells(
-    unfoldIds: string[],
-    sheetWidthMm: number,
-    sheetHeightMm: number,
-  ): NestResult;
+  nestShells(unfoldIds: string[], sheetWidthMm: number, sheetHeightMm: number): NestResult;
   createSnapshot(label: string): string;
   restoreSnapshot(snapshotId: string): RestoreResult;
   clearSnapshot(snapshotId: string): void;
@@ -106,7 +142,6 @@ export interface GeometryAddon {
   computeMassProperties(entityId: string, properties?: string[]): MassPropertiesResult;
   measureDistance(entityA: string, entityB: string, measurementType: string): MeasureResult;
   exploreTopology(entityId: string, returnType: string): ExploreResult;
-  fuseBodies(tools: string[], fuzzyTolerance: number): FuseResult;
   cutBodies(blank: string, tools: string[], keepTools: boolean): CutResult;
   intersectBodies(a: string, b: string): IntersectResult;
   translateBody(
@@ -162,7 +197,12 @@ export interface GeometryAddon {
   computeGaps(partAId: string, partBId: string, maxDistanceThresholdMm: number): GapReport;
   trimBodyWithPlane(partId: string, plane: CuttingPlane, keepPositiveSide: boolean): TrimBodyResult;
   splitBodyByPlane(partId: string, plane: CuttingPlane): SplitBodyResult;
-  mergeBodiesWithBend(partAId: string, partBId: string, targetEdges: string[], bendRadiusMm: number): MergeBodyResult;
+  mergeBodiesWithBend(
+    partAId: string,
+    partBId: string,
+    targetEdges: string[],
+    bendRadiusMm: number,
+  ): MergeBodyResult;
   closeGap(partAId: string, partBId: string): CloseGapResult;
   isPanelValid(partId: string): PanelValidationResult;
   extendFaceToTarget(
@@ -174,9 +214,18 @@ export interface GeometryAddon {
     targetPlane: CuttingPlane,
   ): ExtendFaceResult;
   offsetFace(partId: string, faceId: string, distanceMm: number): OffsetFaceResult;
-  addFlange(partId: string, edgeId: string, lengthMm: number, angleDeg: number, bendRadiusMm: number): AddFlangeResult;
+  addFlange(
+    partId: string,
+    edgeId: string,
+    lengthMm: number,
+    angleDeg: number,
+    bendRadiusMm: number,
+  ): AddFlangeResult;
   ripEdge(partId: string, edgeId: string): RipEdgeResult;
-  centerAndAlignBody(partId: string, transactionId: string): {
+  centerAndAlignBody(
+    partId: string,
+    transactionId: string,
+  ): {
     solid_id: string;
     centroid: [number, number, number];
     rotation_matrix: [number, number, number, number, number, number, number, number, number];
@@ -196,9 +245,24 @@ export interface GeometryAddon {
     maxRecursionDepth?: number,
   ): {
     panel_ids: string[];
-    panel_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>;
+    panel_thickness_mm: number[];
+    panel_bboxes: Array<{
+      x_min: number;
+      y_min: number;
+      z_min: number;
+      x_max: number;
+      y_max: number;
+      z_max: number;
+    }>;
     protrusion_ids: string[];
-    protrusion_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>;
+    protrusion_bboxes: Array<{
+      x_min: number;
+      y_min: number;
+      z_min: number;
+      x_max: number;
+      y_max: number;
+      z_max: number;
+    }>;
     protrusion_parents: Array<{ protrusion_id: string; parent_panel_id: string | null }>;
     rollbackToken: string;
     detected_mode: string;
@@ -217,7 +281,14 @@ export interface GeometryAddon {
   ): {
     cleaned_part_id: string;
     protrusion_ids: string[];
-    protrusion_bboxes: Array<{ x_min: number; y_min: number; z_min: number; x_max: number; y_max: number; z_max: number }>;
+    protrusion_bboxes: Array<{
+      x_min: number;
+      y_min: number;
+      z_min: number;
+      x_max: number;
+      y_max: number;
+      z_max: number;
+    }>;
     protrusion_count: number;
     rollbackToken: string;
     shape_history?: Array<{
@@ -249,6 +320,154 @@ export interface GeometryAddon {
   listAssemblyTree(assemblyId: string): ListAssemblyResult;
   validateSheetMetal(partId: string): SheetMetalValidationResult;
   reconstructCurvedBends(partId: string): CurvedRebuildResult;
+  measurePanelThickness(shellId: string): PanelThicknessResult;
+
+  // ── Phase 5 Slice 1: graph-authored construction ──────────────────────────
+  evaluatePartGraph?(graph: NapiPartGraphSpec): EvaluatePartGraphResult;
+  constructPartSolid?(
+    layout: EvaluatePartGraphResult,
+    thicknessMm: number,
+  ): ConstructPartSolidResult;
+
+  // ── Phase 5 Slice 3: forward/reverse point mapping ────────────────────────
+  mapPointToWorld?(
+    graph: NapiPartGraphSpec,
+    layout: EvaluatePartGraphResult,
+    point2d: NapiPoint2,
+    zMm?: number,
+  ): MapToWorldResult;
+  mapPointToFlat?(
+    graph: NapiPartGraphSpec,
+    layout: EvaluatePartGraphResult,
+    point3d: NapiPoint3,
+  ): MapToFlatResult;
+
+  // docs/TASK_SPEC.md §9 step 1 — anchor-driven seam detection, feeding
+  // reconcileOutlines below. No edge refs: the seam is found from every
+  // region panel's own real pose (never a single part-level anchor — see
+  // NapiContactPanelCandidate's own doc comment).
+  detectContact?(
+    outlineA: NapiPoint2[],
+    panelsA: NapiContactPanelCandidate[],
+    outlineB: NapiPoint2[],
+    panelsB: NapiContactPanelCandidate[],
+  ): DetectContactResult;
+
+  // ── Phase 5 Slice 4: merge_bodies_with_bend outline reconciliation ────────
+  reconcileOutlines?(
+    outlineA: NapiPoint2[],
+    a0: NapiOutlineRef,
+    a1: NapiOutlineRef,
+    outlineB: NapiPoint2[],
+    b0: NapiOutlineRef,
+    b1: NapiOutlineRef,
+    carryB: NapiPoint2[],
+  ): ReconcileOutlinesResult;
+
+  rerootBends?(bends: NapiBendSpec[], oldRoot: string, newRoot: string): RerootBendsResult;
+
+  // manufacturing_graph_evaluator.hpp's FlipPart: the same physical part,
+  // described from the other side of the sheet.
+  flipPart?(graph: NapiPartGraphSpec): NapiPartGraphSpec;
+
+  // ── split_part_at_bend: the graph-level inverse of merge_bodies_with_bend ──
+  splitPartAtBend?(
+    outline: NapiPoint2[],
+    bend: NapiBendSpec,
+    thicknessMm: number,
+    keepCornerOn: 'parent' | 'child',
+    childHintPoint: NapiPoint2,
+    childPose: NapiTransform3,
+  ): SplitPartAtBendResult;
+
+  // ── Phase 5 Slice 5: ingest STEP -> graph piece reconciliation ────────────
+  // profile is optional; only its rules.defaultBendRadiusMm is read (the
+  // assumed radius stamped onto every reconciled bend after reconciliation's
+  // own self-consistency replay passes) — see step_reconciliation.hpp's own
+  // header comment for why that's safe.
+  reconcilePieces?(
+    pieces: NapiPanelPieceSpec[],
+    thicknessMm: number,
+    profile?: NapiManufacturingProfile,
+    targetThicknessMm?: number,
+  ): ReconcilePiecesResult;
+
+  // ── Phase 5 Slice 6: fuse_bodies / remove_protrusions polygon boolean ─────
+  polygonUnion?(ringA: NapiPoint2[], ringB: NapiPoint2[]): PolygonBooleanResult;
+  // The part's single combined flat-pattern outline (docs/BUG_REPORT_
+  // outline_never_grows_for_bend_allowance.md) — computed entirely in C++
+  // from an already-evaluated layout, same "layout: EvaluateResult passed
+  // back in" convention as constructPartSolid/mapPointToWorld.
+  buildFlatOutline?(graph: NapiPartGraphSpec, layout: EvaluatePartGraphResult): PolygonBooleanResult;
+  polygonDifference?(ringA: NapiPoint2[], ringB: NapiPoint2[]): PolygonBooleanResult;
+  fuseCoplanarParts?(
+    outlineA: NapiPoint2[],
+    anchorA: NapiTransform3,
+    outlineB: NapiPoint2[],
+    anchorB: NapiTransform3,
+    thicknessMm: number,
+  ): PolygonBooleanResult;
+
+  // ── Nesting (rebuild/21-nesting-libnest2d.md) ────────────────────────
+  nestPolygons?(
+    parts: NestPolygonInputSpec[],
+    sheetWidthMm: number,
+    sheetHeightMm: number,
+    opts?: NestPolygonOptions,
+  ): NestPolygonsResult;
+
+  // ── Phase 5 Slice 9a: cut_panel(kind=circle|polygon) ──────────────────────
+  prepareCircleCut?(
+    center: NapiPoint2,
+    radiusMm: number,
+    candidateRegions: NapiPoint2[][],
+  ): CutPanelResult;
+  preparePolygonCut?(ring: NapiPoint2[], candidateRegions: NapiPoint2[][]): CutPanelResult;
+
+  // ── Phase 5 findings: manufacturability rules engine ────────────────────
+  evaluateFindings?(
+    graph: NapiPartGraphSpec,
+    profile: NapiManufacturingProfile,
+    layout: EvaluatePartGraphResult | null,
+  ): EvaluateFindingsResult;
+
+  // ── Phase 5 Slice 9b: close_gap ───────────────────────────────────────
+  computeCloseGapDelta?(
+    edgeA3d: NapiPoint3[],
+    edgeB3d: NapiPoint3[],
+    panelBPose: NapiTransform3,
+  ): CloseGapDeltaResult;
+
+  // ── Phase 5 Slice 9b: add_flange ───────────────────────────────────────
+  computeFlangeOutline?(
+    outline: NapiPoint2[],
+    edgeIndex: number,
+    flangeLengthMm: number,
+  ): FlangeOutlineResult;
+
+  // ── Phase 5 Slice 9b: rip_edge ────────────────────────────────────────
+  computeRipEdge?(
+    outline: NapiPoint2[],
+    edgeIndex: number,
+    gapMm: number,
+  ): NapiRipEdgeResult;
+
+  // ── Phase 5 Slice 9b: generate_reliefs ──────────────────────────────────
+  computeReliefPolygons?(
+    bends: NapiBendSpec[],
+    reliefType: string,
+    radiusMm: number,
+    thicknessMm: number,
+  ): NapiPoint2[][];
+
+  // ── Phase 5 Slice 9b: split_body_by_plane ──────────────────────────────
+  computeSplitByPlane?(
+    layout: EvaluatePartGraphResult,
+    nx: number,
+    ny: number,
+    nz: number,
+    d: number,
+  ): NapiPanelFragment[];
 }
 
 export const kerfOffsetMm = {
@@ -261,7 +480,20 @@ export const kerfOffsetMm = {
 function resolveAddonPath(): string {
   const envPath = process.env['GEOMETRY_ADDON_PATH'];
   if (envPath !== undefined && envPath.length > 0) {
-    return envPath;
+    // resolve() handles absolute paths (preserved) and relative paths
+    // (resolved against CWD).  Env vars set by CI / VS Code tasks are
+    // often workspace-relative, and require() resolves relative paths
+    // from the calling module, not CWD — so we must absolutify first.
+    const resolved = path.resolve(envPath);
+    if (fs.existsSync(resolved)) {
+      return resolved;
+    }
+    // If CWD differs from the project root (e.g. forked vitest workers),
+    // also try resolving relative to __dirname as a fallback.
+    const fromDirname = path.resolve(__dirname, envPath);
+    if (fs.existsSync(fromDirname)) {
+      return fromDirname;
+    }
   }
 
   // Default locations (relative to dist/ or project root)
@@ -330,6 +562,78 @@ export class GeometryBinding {
 
   hasGetPanelFrame(): boolean {
     return typeof this.addon.getPanelFrame === 'function';
+  }
+
+  hasEvaluatePartGraph(): boolean {
+    return typeof this.addon.evaluatePartGraph === 'function';
+  }
+
+  hasConstructPartSolid(): boolean {
+    return typeof this.addon.constructPartSolid === 'function';
+  }
+
+  hasMapPointToWorld(): boolean {
+    return typeof this.addon.mapPointToWorld === 'function';
+  }
+
+  hasMapPointToFlat(): boolean {
+    return typeof this.addon.mapPointToFlat === 'function';
+  }
+
+  hasDetectContact(): boolean {
+    return typeof this.addon.detectContact === 'function';
+  }
+
+  hasReconcileOutlines(): boolean {
+    return typeof this.addon.reconcileOutlines === 'function';
+  }
+
+  hasReconcilePieces(): boolean {
+    return typeof this.addon.reconcilePieces === 'function';
+  }
+
+  hasPolygonUnion(): boolean {
+    return typeof this.addon.polygonUnion === 'function';
+  }
+
+  hasPolygonDifference(): boolean {
+    return typeof this.addon.polygonDifference === 'function';
+  }
+
+  hasFuseCoplanarParts(): boolean {
+    return typeof this.addon.fuseCoplanarParts === 'function';
+  }
+
+  hasPrepareCircleCut(): boolean {
+    return typeof this.addon.prepareCircleCut === 'function';
+  }
+
+  hasPreparePolygonCut(): boolean {
+    return typeof this.addon.preparePolygonCut === 'function';
+  }
+
+  hasEvaluateFindings(): boolean {
+    return typeof this.addon.evaluateFindings === 'function';
+  }
+
+  hasComputeCloseGapDelta(): boolean {
+    return typeof this.addon.computeCloseGapDelta === 'function';
+  }
+
+  hasComputeFlangeOutline(): boolean {
+    return typeof this.addon.computeFlangeOutline === 'function';
+  }
+
+  hasComputeRipEdge(): boolean {
+    return typeof this.addon.computeRipEdge === 'function';
+  }
+
+  hasComputeReliefPolygons(): boolean {
+    return typeof this.addon.computeReliefPolygons === 'function';
+  }
+
+  hasComputeSplitByPlane(): boolean {
+    return typeof this.addon.computeSplitByPlane === 'function';
   }
 
   loadStep(filePath: string): string {
@@ -453,7 +757,13 @@ export class GeometryBinding {
     }
   }
 
-  applyBend(panelAId: string, panelBId: string, innerRadiusMm: number, angleDeg: number, kFactor: number): ApplyBendResult {
+  applyBend(
+    panelAId: string,
+    panelBId: string,
+    innerRadiusMm: number,
+    angleDeg: number,
+    kFactor: number,
+  ): ApplyBendResult {
     if (!this.addon.applyBend) {
       throw new Error('Geometry addon does not expose applyBend');
     }
@@ -464,12 +774,22 @@ export class GeometryBinding {
     }
   }
 
-  buildShellFromFlatPattern(dxfContent: string, bendZones: NapiBendZoneSpec[], thicknessMm: number, referenceShellId?: string): BuildShellFromFlatPatternResult {
+  buildShellFromFlatPattern(
+    dxfContent: string,
+    bendZones: NapiBendZoneSpec[],
+    thicknessMm: number,
+    explicitPlacement?: FlatPanelPlacement,
+  ): BuildShellFromFlatPatternResult {
     if (!this.addon.buildShellFromFlatPattern) {
       throw new Error('Geometry addon does not expose buildShellFromFlatPattern');
     }
     try {
-      return this.addon.buildShellFromFlatPattern(dxfContent, bendZones, thicknessMm, referenceShellId ?? '');
+      return this.addon.buildShellFromFlatPattern(
+        dxfContent,
+        bendZones,
+        thicknessMm,
+        explicitPlacement,
+      );
     } catch (err) {
       throw toStructuredError(err);
     }
@@ -494,11 +814,7 @@ export class GeometryBinding {
     }
   }
 
-  nestShells(
-    unfoldIds: string[],
-    sheetWidthMm: number,
-    sheetHeightMm: number,
-  ): NestResult {
+  nestShells(unfoldIds: string[], sheetWidthMm: number, sheetHeightMm: number): NestResult {
     try {
       return this.addon.nestShells(unfoldIds, sheetWidthMm, sheetHeightMm);
     } catch (err) {
@@ -561,14 +877,6 @@ export class GeometryBinding {
   exploreTopology(entityId: string, returnType: string): ExploreResult {
     try {
       return this.addon.exploreTopology(entityId, returnType);
-    } catch (err) {
-      throw toStructuredError(err);
-    }
-  }
-
-  fuseBodies(tools: string[], fuzzyTolerance: number): FuseResult {
-    try {
-      return this.addon.fuseBodies(tools, fuzzyTolerance);
     } catch (err) {
       throw toStructuredError(err);
     }
@@ -801,7 +1109,7 @@ export class GeometryBinding {
 
   isPanelValid(partId: string): PanelValidationResult {
     try {
-      const raw = this.addon.validateSheetMetal(partId) as SheetMetalValidationResult;
+      const raw = this.addon.validateSheetMetal(partId);
       const errors = (raw.validation_errors ?? []).map((msg: string) => {
         const colonIdx = msg.indexOf(':');
         const code = colonIdx > 0 ? msg.substring(0, colonIdx).trim() : 'GE_PANEL_INVALID';
@@ -829,7 +1137,12 @@ export class GeometryBinding {
   ): ExtendFaceResult {
     try {
       return this.addon.extendFaceToTarget(
-        partId, faceId, targetType, targetPartId, targetFaceId, targetPlane,
+        partId,
+        faceId,
+        targetType,
+        targetPartId,
+        targetFaceId,
+        targetPlane,
       );
     } catch (err) {
       throw toStructuredError(err);
@@ -866,7 +1179,10 @@ export class GeometryBinding {
     }
   }
 
-  centerAndAlignBody(partId: string, transactionId: string): AlignmentResult & { rollbackToken: string } {
+  centerAndAlignBody(
+    partId: string,
+    transactionId: string,
+  ): AlignmentResult & { rollbackToken: string } {
     try {
       const res = this.addon.centerAndAlignBody(partId, transactionId);
       return {
@@ -891,11 +1207,16 @@ export class GeometryBinding {
   ): SplitBodyByBendsResult & { rollbackToken: string } {
     try {
       const res = this.addon.splitBodyByBends(
-        partId, angleThresholdDeg, maxThicknessMm, defaultThicknessMm, maxRecursionDepth,
+        partId,
+        angleThresholdDeg,
+        maxThicknessMm,
+        defaultThicknessMm,
+        maxRecursionDepth,
       );
       return {
         panel_ids: res.panel_ids,
         panel_count: res.panel_ids.length,
+        panel_thickness_mm: res.panel_thickness_mm,
         panel_bboxes: res.panel_bboxes,
         protrusion_ids: res.protrusion_ids,
         protrusion_count: res.protrusion_ids.length,
@@ -918,7 +1239,12 @@ export class GeometryBinding {
     algorithm?: 'loop_traversal' | 'legacy_volumetric',
   ): RemoveProtrusionsResult & { rollbackToken: string } {
     try {
-      const res = this.addon.removeProtrusions(partId, angleThresholdDeg, maxThicknessMm, algorithm);
+      const res = this.addon.removeProtrusions(
+        partId,
+        angleThresholdDeg,
+        maxThicknessMm,
+        algorithm,
+      );
       return {
         cleaned_part_id: res.cleaned_part_id,
         protrusion_ids: res.protrusion_ids,
@@ -1003,6 +1329,14 @@ export class GeometryBinding {
     }
   }
 
+  measurePanelThickness(shellId: string): PanelThicknessResult {
+    try {
+      return this.addon.measurePanelThickness(shellId);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
   reconstructCurvedBends(partId: string): CurvedRebuildResult {
     try {
       const res = this.addon.reconstructCurvedBends(partId);
@@ -1012,6 +1346,348 @@ export class GeometryBinding {
         rollback_token: (res as any).rollbackToken,
         shape_history: (res as any).shape_history,
       };
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  evaluatePartGraph(graph: NapiPartGraphSpec): EvaluatePartGraphResult {
+    if (!this.addon.evaluatePartGraph) {
+      throw new Error('Geometry addon does not expose evaluatePartGraph');
+    }
+    try {
+      return this.addon.evaluatePartGraph(graph);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  constructPartSolid(
+    layout: EvaluatePartGraphResult,
+    thicknessMm: number,
+  ): ConstructPartSolidResult {
+    if (!this.addon.constructPartSolid) {
+      throw new Error('Geometry addon does not expose constructPartSolid');
+    }
+    try {
+      return this.addon.constructPartSolid(layout, thicknessMm);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  mapPointToWorld(
+    graph: NapiPartGraphSpec,
+    layout: EvaluatePartGraphResult,
+    point2d: NapiPoint2,
+    zMm?: number,
+  ): MapToWorldResult {
+    if (!this.addon.mapPointToWorld) {
+      throw new Error('Geometry addon does not expose mapPointToWorld');
+    }
+    try {
+      return this.addon.mapPointToWorld(graph, layout, point2d, zMm);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  mapPointToFlat(
+    graph: NapiPartGraphSpec,
+    layout: EvaluatePartGraphResult,
+    point3d: NapiPoint3,
+  ): MapToFlatResult {
+    if (!this.addon.mapPointToFlat) {
+      throw new Error('Geometry addon does not expose mapPointToFlat');
+    }
+    try {
+      return this.addon.mapPointToFlat(graph, layout, point3d);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  detectContact(
+    outlineA: NapiPoint2[],
+    panelsA: NapiContactPanelCandidate[],
+    outlineB: NapiPoint2[],
+    panelsB: NapiContactPanelCandidate[],
+  ): DetectContactResult {
+    if (!this.addon.detectContact) {
+      throw new Error('Geometry addon does not expose detectContact');
+    }
+    try {
+      return this.addon.detectContact(outlineA, panelsA, outlineB, panelsB);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  reconcileOutlines(
+    outlineA: NapiPoint2[],
+    a0: NapiOutlineRef,
+    a1: NapiOutlineRef,
+    outlineB: NapiPoint2[],
+    b0: NapiOutlineRef,
+    b1: NapiOutlineRef,
+    carryB: NapiPoint2[],
+  ): ReconcileOutlinesResult {
+    if (!this.addon.reconcileOutlines) {
+      throw new Error('Geometry addon does not expose reconcileOutlines');
+    }
+    try {
+      return this.addon.reconcileOutlines(outlineA, a0, a1, outlineB, b0, b1, carryB);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  flipPart(graph: NapiPartGraphSpec): NapiPartGraphSpec {
+    if (!this.addon.flipPart) {
+      throw new Error('Geometry addon does not expose flipPart');
+    }
+    try {
+      return this.addon.flipPart(graph);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  rerootBends(bends: NapiBendSpec[], oldRoot: string, newRoot: string): RerootBendsResult {
+    if (!this.addon.rerootBends) {
+      throw new Error('Geometry addon does not expose rerootBends');
+    }
+    try {
+      return this.addon.rerootBends(bends, oldRoot, newRoot);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  splitPartAtBend(
+    outline: NapiPoint2[],
+    bend: NapiBendSpec,
+    thicknessMm: number,
+    keepCornerOn: 'parent' | 'child',
+    childHintPoint: NapiPoint2,
+    childPose: NapiTransform3,
+  ): SplitPartAtBendResult {
+    if (!this.addon.splitPartAtBend) {
+      throw new Error('Geometry addon does not expose splitPartAtBend');
+    }
+    try {
+      return this.addon.splitPartAtBend(
+        outline,
+        bend,
+        thicknessMm,
+        keepCornerOn,
+        childHintPoint,
+        childPose,
+      );
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  /** `targetThicknessMm` (spec 010 R-009): re-stamp the result at a chosen
+   * thickness about the measured mid-plane; reconciliation still runs at the
+   * measured `thicknessMm`. */
+  reconcilePieces(
+    pieces: NapiPanelPieceSpec[],
+    thicknessMm: number,
+    profile?: NapiManufacturingProfile,
+    targetThicknessMm?: number,
+  ): ReconcilePiecesResult {
+    if (!this.addon.reconcilePieces) {
+      throw new Error('Geometry addon does not expose reconcilePieces');
+    }
+    try {
+      return this.addon.reconcilePieces(pieces, thicknessMm, profile, targetThicknessMm);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  polygonUnion(ringA: NapiPoint2[], ringB: NapiPoint2[]): PolygonBooleanResult {
+    if (!this.addon.polygonUnion) {
+      throw new Error('Geometry addon does not expose polygonUnion');
+    }
+    try {
+      return this.addon.polygonUnion(ringA, ringB);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  buildFlatOutline(graph: NapiPartGraphSpec, layout: EvaluatePartGraphResult): PolygonBooleanResult {
+    if (!this.addon.buildFlatOutline) {
+      throw new Error('Geometry addon does not expose buildFlatOutline');
+    }
+    try {
+      return this.addon.buildFlatOutline(graph, layout);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  polygonDifference(ringA: NapiPoint2[], ringB: NapiPoint2[]): PolygonBooleanResult {
+    if (!this.addon.polygonDifference) {
+      throw new Error('Geometry addon does not expose polygonDifference');
+    }
+    try {
+      return this.addon.polygonDifference(ringA, ringB);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  fuseCoplanarParts(
+    outlineA: NapiPoint2[],
+    anchorA: NapiTransform3,
+    outlineB: NapiPoint2[],
+    anchorB: NapiTransform3,
+    thicknessMm: number,
+  ): PolygonBooleanResult {
+    if (!this.addon.fuseCoplanarParts) {
+      throw new Error('Geometry addon does not expose fuseCoplanarParts');
+    }
+    try {
+      return this.addon.fuseCoplanarParts(outlineA, anchorA, outlineB, anchorB, thicknessMm);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  nestPolygons(
+    parts: NestPolygonInputSpec[],
+    sheetWidthMm: number,
+    sheetHeightMm: number,
+    opts?: NestPolygonOptions,
+  ): NestPolygonsResult {
+    if (!this.addon.nestPolygons) {
+      throw new Error('Geometry addon does not expose nestPolygons');
+    }
+    try {
+      return this.addon.nestPolygons(parts, sheetWidthMm, sheetHeightMm, opts);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  prepareCircleCut(
+    center: NapiPoint2,
+    radiusMm: number,
+    candidateRegions: NapiPoint2[][],
+  ): CutPanelResult {
+    if (!this.addon.prepareCircleCut) {
+      throw new Error('Geometry addon does not expose prepareCircleCut');
+    }
+    try {
+      return this.addon.prepareCircleCut(center, radiusMm, candidateRegions);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  preparePolygonCut(ring: NapiPoint2[], candidateRegions: NapiPoint2[][]): CutPanelResult {
+    if (!this.addon.preparePolygonCut) {
+      throw new Error('Geometry addon does not expose preparePolygonCut');
+    }
+    try {
+      return this.addon.preparePolygonCut(ring, candidateRegions);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  evaluateFindings(
+    graph: NapiPartGraphSpec,
+    profile: NapiManufacturingProfile,
+    layout: EvaluatePartGraphResult | null,
+  ): EvaluateFindingsResult {
+    if (!this.addon.evaluateFindings) {
+      throw new Error('Geometry addon does not expose evaluateFindings');
+    }
+    try {
+      return this.addon.evaluateFindings(graph, profile, layout);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  computeCloseGapDelta(
+    edgeA3d: NapiPoint3[],
+    edgeB3d: NapiPoint3[],
+    panelBPose: NapiTransform3,
+  ): CloseGapDeltaResult {
+    if (!this.addon.computeCloseGapDelta) {
+      throw new Error('Geometry addon does not expose computeCloseGapDelta');
+    }
+    try {
+      return this.addon.computeCloseGapDelta(edgeA3d, edgeB3d, panelBPose);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  computeFlangeOutline(
+    outline: NapiPoint2[],
+    edgeIndex: number,
+    flangeLengthMm: number,
+  ): FlangeOutlineResult {
+    if (!this.addon.computeFlangeOutline) {
+      throw new Error('Geometry addon does not expose computeFlangeOutline');
+    }
+    try {
+      return this.addon.computeFlangeOutline(outline, edgeIndex, flangeLengthMm);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  computeRipEdge(
+    outline: NapiPoint2[],
+    edgeIndex: number,
+    gapMm: number,
+  ): NapiRipEdgeResult {
+    if (!this.addon.computeRipEdge) {
+      throw new Error('Geometry addon does not expose computeRipEdge');
+    }
+    try {
+      return this.addon.computeRipEdge(outline, edgeIndex, gapMm);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  computeReliefPolygons(
+    bends: NapiBendSpec[],
+    reliefType: string,
+    radiusMm: number,
+    thicknessMm: number,
+  ): NapiPoint2[][] {
+    if (!this.addon.computeReliefPolygons) {
+      throw new Error('Geometry addon does not expose computeReliefPolygons');
+    }
+    try {
+      return this.addon.computeReliefPolygons(bends, reliefType, radiusMm, thicknessMm);
+    } catch (err) {
+      throw toStructuredError(err);
+    }
+  }
+
+  computeSplitByPlane(
+    layout: EvaluatePartGraphResult,
+    nx: number,
+    ny: number,
+    nz: number,
+    d: number,
+  ): NapiPanelFragment[] {
+    if (!this.addon.computeSplitByPlane) {
+      throw new Error('Geometry addon does not expose computeSplitByPlane');
+    }
+    try {
+      return this.addon.computeSplitByPlane(layout, nx, ny, nz, d);
     } catch (err) {
       throw toStructuredError(err);
     }
